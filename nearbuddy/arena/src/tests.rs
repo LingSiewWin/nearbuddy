@@ -377,6 +377,9 @@ fn resolve_scores_25_bps_and_slashes() {
     let duel = c.get_duel(U64(d)).unwrap();
     assert!(duel.resolved);
     assert_eq!(duel.pool.0, 0);
+    let o = duel.outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b, o.slashed.0), (25, -25, slashed));
+    assert_eq!(o.winner.unwrap().0, key(1).1);
 }
 
 #[test]
@@ -533,4 +536,25 @@ fn resolve_zero_close_price_rejected() {
     let (mut c, oracle, ..) = setup();
     let d = open(&mut c);
     resolve_at_close(&mut c, &oracle, res(d, OPEN, 0));
+}
+
+#[test]
+fn migrate_duels_rewrites_old_layout() {
+    use near_sdk::borsh::BorshDeserialize;
+    let (mut c, oracle, ..) = setup();
+    let d = open(&mut c);
+    // overwrite duel d with the pre-outcome layout, as deploys 1-4 stored it
+    let cur = c.get_duel(U64(d)).unwrap();
+    let old = OldDuel { id: cur.id, a: cur.a, b: cur.b, symbol: cur.symbol, open_at: cur.open_at, close_at: cur.close_at, pool: cur.pool, injections: cur.injections, resolved: cur.resolved, last_intent_a: None, last_intent_b: None };
+    let mut key = near_sdk::borsh::to_vec(&StorageKey::Duels).unwrap();
+    key.extend_from_slice(&d.to_le_bytes());
+    env::storage_write(&key, &near_sdk::borsh::to_vec(&old).unwrap());
+    assert!(Duel::try_from_slice(&env::storage_read(&key).unwrap()).is_err());
+    ctx(OWNER, 0);
+    assert_eq!(c.migrate_duels(U64(0), U64(5)), 1);
+    assert_eq!(c.migrate_duels(U64(0), U64(5)), 0); // idempotent
+    let migrated = Duel::try_from_slice(&env::storage_read(&key).unwrap()).unwrap();
+    assert!(migrated.outcome.is_none() && !migrated.resolved);
+    // and the duel still resolves afterwards
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
 }

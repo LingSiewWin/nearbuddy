@@ -81,6 +81,21 @@ pub struct Duel {
     pub resolved: bool,
     pub last_intent_a: Option<Intent>,
     pub last_intent_b: Option<Intent>,
+    /// Filled by `resolve`: scored pnl per side and the slashed amount, so a page can show the
+    /// outcome without parsing logs.
+    pub outcome: Option<Outcome>,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug)]
+pub struct Outcome {
+    pub open_price: U64,
+    pub close_price: U64,
+    pub pnl_a: i64,
+    pub pnl_b: i64,
+    /// `Some(a)` / `Some(b)` pk of the winner, `None` on a tie.
+    pub winner: Option<Base64VecU8>,
+    pub slashed: U128,
 }
 
 /// A follower's bound on what the solver may settle against their vault for one agent.
@@ -126,4 +141,21 @@ pub struct Config {
     pub min_chaos_deposit: U128,
     pub next_duel: U64,
     pub owner_fees: U128,
+}
+
+/// `Duel` layout before `outcome` was added (deploys 1-4). Read only by `migrate_duels`.
+#[near(serializers = [borsh])]
+#[derive(Clone)]
+pub struct OldDuel {
+    pub id: U64,
+    pub a: Base64VecU8,
+    pub b: Base64VecU8,
+    pub symbol: String,
+    pub open_at: U64,
+    pub close_at: U64,
+    pub pool: U128,
+    pub injections: Vec<Injection>,
+    pub resolved: bool,
+    pub last_intent_a: Option<Intent>,
+    pub last_intent_b: Option<Intent>,
 }

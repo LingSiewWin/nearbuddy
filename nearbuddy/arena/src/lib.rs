@@ -127,6 +127,44 @@ impl Contract {
         }
     }
 
+    // ---------------------------------------------------------------- migration
+
+    /// Duels written before `Duel.outcome` existed are borsh-incompatible (positional). Re-encode a
+    /// range of them in the new layout. Owner-only, idempotent, run once per deploy that adds fields.
+    pub fn migrate_duels(&mut self, from: U64, to: U64) -> u32 {
+        self.only_owner();
+        use near_sdk::borsh::BorshDeserialize;
+        let prefix = near_sdk::borsh::to_vec(&StorageKey::Duels).expect("borsh");
+        let mut n = 0;
+        for id in from.0..=to.0 {
+            // store::LookupMap key = prefix || borsh(key); read raw so a layout mismatch cannot panic.
+            let mut key = prefix.clone();
+            key.extend_from_slice(&id.to_le_bytes());
+            let Some(raw) = env::storage_read(&key) else { continue };
+            if Duel::try_from_slice(&raw).is_ok() {
+                continue;
+            }
+            let Ok(o) = OldDuel::try_from_slice(&raw) else { env::panic_str("unknown duel layout") };
+            let d = Duel {
+                id: o.id,
+                a: o.a,
+                b: o.b,
+                symbol: o.symbol,
+                open_at: o.open_at,
+                close_at: o.close_at,
+                pool: o.pool,
+                injections: o.injections,
+                resolved: o.resolved,
+                last_intent_a: o.last_intent_a,
+                last_intent_b: o.last_intent_b,
+                outcome: None,
+            };
+            env::storage_write(&key, &near_sdk::borsh::to_vec(&d).expect("borsh"));
+            n += 1;
+        }
+        n
+    }
+
     // ---------------------------------------------------------------- config
 
     fn only_owner(&self) {
@@ -216,6 +254,7 @@ impl Contract {
                 resolved: false,
                 last_intent_a: None,
                 last_intent_b: None,
+                outcome: None,
             },
         );
         self.next_duel += 1;
@@ -290,6 +329,14 @@ impl Contract {
         duel.pool = U128(0);
 
         let slash_bps = self.slash_bps as u128;
+        let mut outcome = Outcome {
+            open_price: resolution.open_price,
+            close_price: resolution.close_price,
+            pnl_a,
+            pnl_b,
+            winner: None,
+            slashed: U128(0),
+        };
         {
             let a = self.agents.get_mut(&pk_a).expect("agent missing");
             a.alpha_bps += pnl_a;
@@ -310,11 +357,14 @@ impl Contract {
             let slashed = l.bond.0 * slash_bps / 10_000;
             l.bond.0 -= slashed;
             pool += slashed;
+            outcome.winner = Some(Base64VecU8(winner.clone()));
+            outcome.slashed = U128(slashed);
             let survived = injections.iter().filter(|i| i.target.0 == *winner).count() as u32;
             let w = self.agents.get_mut(winner).unwrap();
             w.bond.0 += pool;
             w.shield += survived;
         }
+        self.duels.get_mut(&resolution.duel_id.0).expect("duel missing").outcome = Some(outcome);
         env::log_str(&format!(
             r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.0.0","event":"resolve","data":{{"duel_id":{},"pnl_a":{pnl_a},"pnl_b":{pnl_b},"open":{},"close":{}}}}}"#,
             resolution.duel_id.0, resolution.open_price.0, resolution.close_price.0
