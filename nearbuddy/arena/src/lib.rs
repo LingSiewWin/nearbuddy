@@ -78,8 +78,11 @@ fn nonce_key(pk: &[u8], nonce: u64) -> Vec<u8> {
     k
 }
 
-fn fill_key(follower: &AccountId, nonce: u64) -> Vec<u8> {
-    let mut k = follower.as_bytes().to_vec();
+/// `agent_pk || follower || nonce_le`: one fill per intent per follower, scoped to the agent that
+/// posted the intent so two agents using the same nonce never collide.
+fn fill_key(agent_pk: &[u8], follower: &AccountId, nonce: u64) -> Vec<u8> {
+    let mut k = agent_pk.to_vec();
+    k.extend_from_slice(follower.as_bytes());
     k.extend_from_slice(&nonce.to_le_bytes());
     k
 }
@@ -143,6 +146,15 @@ impl Contract {
     pub fn add_solver(&mut self, account_id: AccountId) {
         self.only_owner();
         self.solvers.insert(account_id);
+    }
+
+    /// Contract owner collects accrued settlement fees.
+    pub fn withdraw_fees(&mut self) -> Promise {
+        self.only_owner();
+        let amt = self.owner_fees;
+        require!(amt > 0, "insufficient");
+        self.owner_fees = 0;
+        Promise::new(self.owner.clone()).transfer(NearToken::from_yoctonear(amt))
     }
 
     // ---------------------------------------------------------------- agents
@@ -264,6 +276,7 @@ impl Contract {
     pub fn resolve(&mut self, resolution: Resolution, oracle_sig: Base64VecU8) {
         self.only_solver();
         require!(verify(&self.oracle_pk, &resolution_message(&resolution), &oracle_sig.0), "bad signature");
+        require!(resolution.open_price.0 > 0, "bad price");
         let duel = self.duels.get_mut(&resolution.duel_id.0).expect("duel missing");
         require!(!duel.resolved, "resolved");
         require!(env::block_timestamp() >= duel.close_at.0, "duel open");
@@ -375,7 +388,7 @@ impl Contract {
         if !self.used_nonces.contains(&nonce_key(agent_pk, f.intent_nonce.0)) {
             return Err("nonce unknown");
         }
-        let fkey = fill_key(follower, f.intent_nonce.0);
+        let fkey = fill_key(agent_pk, follower, f.intent_nonce.0);
         if self.settled_fills.contains(&fkey) {
             return Err("duplicate fill");
         }
@@ -433,6 +446,7 @@ impl Contract {
             fee_bps: self.fee_bps,
             min_chaos_deposit: U128(self.min_chaos_deposit),
             next_duel: U64(self.next_duel),
+            owner_fees: U128(self.owner_fees),
         }
     }
 

@@ -125,4 +125,5 @@ pub struct Config {
     pub fee_bps: u16,
     pub min_chaos_deposit: U128,
     pub next_duel: U64,
+    pub owner_fees: U128,
 }

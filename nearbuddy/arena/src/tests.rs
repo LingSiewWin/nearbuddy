@@ -469,3 +469,60 @@ fn withdraw_bond_after_resolve_ok() {
     let board = c.leaderboard();
     assert_eq!(board.len(), 2);
 }
+
+// ---------------------------------------------------------------- review fixes
+
+#[test]
+#[should_panic(expected = "bad price")]
+fn resolve_zero_open_price_rejected() {
+    let (mut c, oracle, ..) = setup();
+    let d = open(&mut c);
+    resolve_at_close(&mut c, &oracle, res(d, 0, UP));
+}
+
+#[test]
+fn same_nonce_on_two_agents_settles_both() {
+    // follower follows A and B; both post nonce 1; both fills settle (fill key is agent-scoped)
+    let (mut c, _, ska, skb) = setup();
+    let d = open(&mut c);
+    ctx(SOLVER, 0);
+    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Long, 5_000, 1)));
+    c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Short, 5_000, 1)));
+    ctx(FOLLOWER, 1_000);
+    c.deposit();
+    ctx(FOLLOWER, 0);
+    c.follow(Base64VecU8(key(1).1), mandate(100, 1_000, vec![]));
+    c.follow(Base64VecU8(key(2).1), mandate(100, 1_000, vec![]));
+    ctx(SOLVER, 0);
+    let ra = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+    let rb = c.settle_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+    assert_eq!((ra.settled, rb.settled), (1, 1));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 900);
+}
+
+#[test]
+fn owner_withdraws_fees() {
+    let (oracle, oracle_pk) = key(9);
+    let _ = oracle;
+    ctx(OWNER, 0);
+    let mut c = Contract::init(OWNER.parse().unwrap(), Base64VecU8(oracle_pk), 1_000, 100, U128(MIN_CHAOS)); // fee 1%
+    c.add_solver(SOLVER.parse().unwrap());
+    ctx(OPERATOR, BOND);
+    c.register_agent(Base64VecU8(key(1).1), "m".into());
+    ctx(OPERATOR, BOND);
+    c.register_agent(Base64VecU8(key(2).1), "m".into());
+    let d = open(&mut c);
+    ctx(SOLVER, 0);
+    c.post_intent(sign(&key(1).0, &intent(&key(1).1, d, Side::Long, 5_000, 1)));
+    ctx(FOLLOWER, 10_000);
+    c.deposit();
+    ctx(FOLLOWER, 0);
+    c.follow(Base64VecU8(key(1).1), mandate(1_000, 10_000, vec![]));
+    ctx(SOLVER, 0);
+    c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 1_000)]);
+    assert_eq!(c.get_config().owner_fees.0, 10);
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 10_000 - 1_010);
+    ctx(OWNER, 0);
+    let _ = c.withdraw_fees();
+    assert_eq!(c.get_config().owner_fees.0, 0);
+}
