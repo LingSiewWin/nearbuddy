@@ -304,3 +304,168 @@ fn list_followers_and_withdraw() {
     c.withdraw(U128(400));
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 600);
 }
+
+// ---------------------------------------------------------------- task 4: chaos and resolve
+
+const OPEN: u64 = 100_000_00000000; // 8 decimals
+const UP: u64 = 100_500_00000000;
+
+fn res(d: u64, open: u64, close: u64) -> Resolution {
+    Resolution { duel_id: U64(d), open_price: U64(open), close_price: U64(close) }
+}
+
+fn post(c: &mut Contract, sk: &SigningKey, pk: &[u8], d: u64, side: Side, nonce: u64) {
+    ctx(SOLVER, 0);
+    c.post_intent(sign(sk, &intent(pk, d, side, 5_000, nonce)));
+}
+
+fn inject(c: &mut Contract, d: u64, target: &[u8], deposit: u128) {
+    ctx(OPERATOR, deposit);
+    c.inject_chaos(U64(d), Base64VecU8(target.to_vec()), "fake_news".into(), Base64VecU8(vec![3u8; 32]));
+}
+
+fn resolve_at_close(c: &mut Contract, oracle: &SigningKey, r: Resolution) {
+    ctx_at(SOLVER, 0, CLOSE);
+    let sig = sign_res(oracle, &r);
+    c.resolve(r, sig);
+}
+
+#[test]
+#[should_panic(expected = "chaos deposit too small")]
+fn inject_requires_min_deposit() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    inject(&mut c, d, &key(1).1, MIN_CHAOS - 1);
+}
+
+#[test]
+#[should_panic(expected = "bad target")]
+fn inject_bad_target() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    inject(&mut c, d, &key(5).1, MIN_CHAOS);
+}
+
+#[test]
+#[should_panic(expected = "chaos full")]
+fn inject_33rd_panics() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    for _ in 0..33 {
+        inject(&mut c, d, &key(1).1, MIN_CHAOS);
+    }
+}
+
+#[test]
+fn resolve_scores_25_bps_and_slashes() {
+    let (mut c, oracle, ska, skb) = setup();
+    let d = open(&mut c);
+    post(&mut c, &ska, &key(1).1, d, Side::Long, 1);
+    post(&mut c, &skb, &key(2).1, d, Side::Short, 1);
+    inject(&mut c, d, &key(1).1, MIN_CHAOS);
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
+    let a = c.get_agent(Base64VecU8(key(1).1)).unwrap();
+    let b = c.get_agent(Base64VecU8(key(2).1)).unwrap();
+    assert_eq!(a.alpha_bps, 25);
+    assert_eq!(b.alpha_bps, -25);
+    let slashed = BOND * 1_000 / 10_000;
+    assert_eq!(b.bond.0, BOND - slashed);
+    assert_eq!(a.bond.0, BOND + slashed + MIN_CHAOS);
+    assert_eq!(a.shield, 1);
+    assert_eq!(b.shield, 0);
+    assert!(a.in_duel.is_none() && b.in_duel.is_none());
+    let duel = c.get_duel(U64(d)).unwrap();
+    assert!(duel.resolved);
+    assert_eq!(duel.pool.0, 0);
+}
+
+#[test]
+fn resolve_no_intent_scores_zero_and_loses() {
+    let (mut c, oracle, ska, _) = setup();
+    let d = open(&mut c);
+    post(&mut c, &ska, &key(1).1, d, Side::Long, 1);
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
+    let b = c.get_agent(Base64VecU8(key(2).1)).unwrap();
+    assert_eq!(b.alpha_bps, 0);
+    assert_eq!(b.bond.0, BOND - BOND * 1_000 / 10_000);
+}
+
+#[test]
+fn resolve_tie_splits_pool_remainder_to_a() {
+    let (mut c, oracle, ska, skb) = setup();
+    let d = open(&mut c);
+    post(&mut c, &ska, &key(1).1, d, Side::Long, 1);
+    post(&mut c, &skb, &key(2).1, d, Side::Long, 1);
+    inject(&mut c, d, &key(2).1, MIN_CHAOS + 1); // odd pool: 101
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
+    let a = c.get_agent(Base64VecU8(key(1).1)).unwrap();
+    let b = c.get_agent(Base64VecU8(key(2).1)).unwrap();
+    assert_eq!(a.alpha_bps, 25);
+    assert_eq!(b.alpha_bps, 25);
+    assert_eq!(a.bond.0, BOND + 51);
+    assert_eq!(b.bond.0, BOND + 50);
+    assert_eq!(a.shield + b.shield, 0);
+}
+
+#[test]
+fn resolve_shield_counts_injections_at_winner() {
+    let (mut c, oracle, ska, skb) = setup();
+    let d = open(&mut c);
+    post(&mut c, &ska, &key(1).1, d, Side::Long, 1);
+    post(&mut c, &skb, &key(2).1, d, Side::Short, 1);
+    inject(&mut c, d, &key(1).1, MIN_CHAOS);
+    inject(&mut c, d, &key(1).1, MIN_CHAOS);
+    inject(&mut c, d, &key(2).1, MIN_CHAOS);
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
+    assert_eq!(c.get_agent(Base64VecU8(key(1).1)).unwrap().shield, 2);
+}
+
+#[test]
+#[should_panic(expected = "resolved")]
+fn resolve_twice_panics() {
+    let (mut c, oracle, ..) = setup();
+    let d = open(&mut c);
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
+}
+
+#[test]
+#[should_panic(expected = "bad signature")]
+fn resolve_bad_oracle_sig() {
+    let (mut c, _, ska, _) = setup();
+    let d = open(&mut c);
+    resolve_at_close(&mut c, &ska, res(d, OPEN, UP));
+}
+
+#[test]
+#[should_panic(expected = "duel open")]
+fn resolve_before_close_panics() {
+    let (mut c, oracle, ..) = setup();
+    let d = open(&mut c);
+    ctx(SOLVER, 0);
+    let r = res(d, OPEN, UP);
+    let sig = sign_res(&oracle, &r);
+    c.resolve(r, sig);
+}
+
+#[test]
+#[should_panic(expected = "in duel")]
+fn withdraw_bond_in_duel_panics() {
+    let (mut c, ..) = setup();
+    open(&mut c);
+    ctx(OPERATOR, 0);
+    c.withdraw_bond(Base64VecU8(key(1).1), U128(1));
+}
+
+#[test]
+fn withdraw_bond_after_resolve_ok() {
+    let (mut c, oracle, ..) = setup();
+    let d = open(&mut c);
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
+    ctx(OPERATOR, 0);
+    c.withdraw_bond(Base64VecU8(key(1).1), U128(BOND / 2));
+    let a = c.get_agent(Base64VecU8(key(1).1)).unwrap();
+    assert!(a.bond.0 < BOND); // whatever the tie rule left, half is gone
+    let board = c.leaderboard();
+    assert_eq!(board.len(), 2);
+}

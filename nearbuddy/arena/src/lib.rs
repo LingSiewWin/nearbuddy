@@ -242,6 +242,72 @@ impl Contract {
         ));
     }
 
+    // ---------------------------------------------------------------- chaos and resolve
+
+    /// Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver
+    /// delivers the payload to the runner. Deposit joins the duel pool.
+    #[payable]
+    pub fn inject_chaos(&mut self, duel_id: U64, target: Base64VecU8, kind: String, payload_hash: Base64VecU8) {
+        let deposit = env::attached_deposit().as_yoctonear();
+        require!(deposit >= self.min_chaos_deposit, "chaos deposit too small");
+        require!(payload_hash.0.len() == 32, "payload_hash length");
+        let duel = self.duels.get_mut(&duel_id.0).expect("duel missing");
+        require!(!duel.resolved && env::block_timestamp() < duel.close_at.0, "duel closed");
+        require!(target.0 == duel.a.0 || target.0 == duel.b.0, "bad target");
+        require!(duel.injections.len() < MAX_INJECTIONS, "chaos full");
+        duel.pool = U128(duel.pool.0 + deposit);
+        duel.injections.push(Injection { kind, payload_hash, target, block: U64(env::block_height()) });
+    }
+
+    /// Oracle-signed close. Scores both agents, slashes the loser into the pool, pays the pool to
+    /// the winner, counts the injections the winner survived, frees both agents.
+    pub fn resolve(&mut self, resolution: Resolution, oracle_sig: Base64VecU8) {
+        self.only_solver();
+        require!(verify(&self.oracle_pk, &resolution_message(&resolution), &oracle_sig.0), "bad signature");
+        let duel = self.duels.get_mut(&resolution.duel_id.0).expect("duel missing");
+        require!(!duel.resolved, "resolved");
+        require!(env::block_timestamp() >= duel.close_at.0, "duel open");
+        let close_at = duel.close_at.0;
+        let pnl_a = pnl_bps(duel.last_intent_a.as_ref(), close_at, resolution.open_price.0, resolution.close_price.0);
+        let pnl_b = pnl_bps(duel.last_intent_b.as_ref(), close_at, resolution.open_price.0, resolution.close_price.0);
+        let (pk_a, pk_b) = (duel.a.0.clone(), duel.b.0.clone());
+        let mut pool = duel.pool.0;
+        let injections = duel.injections.clone();
+        duel.resolved = true;
+        duel.pool = U128(0);
+
+        let slash_bps = self.slash_bps as u128;
+        {
+            let a = self.agents.get_mut(&pk_a).expect("agent missing");
+            a.alpha_bps += pnl_a;
+            a.in_duel = None;
+        }
+        {
+            let b = self.agents.get_mut(&pk_b).expect("agent missing");
+            b.alpha_bps += pnl_b;
+            b.in_duel = None;
+        }
+        if pnl_a == pnl_b {
+            let half = pool / 2;
+            self.agents.get_mut(&pk_a).unwrap().bond.0 += half + pool % 2;
+            self.agents.get_mut(&pk_b).unwrap().bond.0 += half;
+        } else {
+            let (winner, loser) = if pnl_a > pnl_b { (&pk_a, &pk_b) } else { (&pk_b, &pk_a) };
+            let l = self.agents.get_mut(loser).unwrap();
+            let slashed = l.bond.0 * slash_bps / 10_000;
+            l.bond.0 -= slashed;
+            pool += slashed;
+            let survived = injections.iter().filter(|i| i.target.0 == *winner).count() as u32;
+            let w = self.agents.get_mut(winner).unwrap();
+            w.bond.0 += pool;
+            w.shield += survived;
+        }
+        env::log_str(&format!(
+            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.0.0","event":"resolve","data":{{"duel_id":{},"pnl_a":{pnl_a},"pnl_b":{pnl_b},"open":{},"close":{}}}}}"#,
+            resolution.duel_id.0, resolution.open_price.0, resolution.close_price.0
+        ));
+    }
+
     // ---------------------------------------------------------------- followers
 
     /// Follower locks NEAR here. Solvers are repaid from it only inside a mandate.
@@ -394,6 +460,18 @@ impl Contract {
     pub fn resolution_message_hex(&self, resolution: Resolution) -> String {
         hex(&resolution_message(&resolution))
     }
+}
+
+/// Signed basis points earned by one intent over the duel. No intent, or one that expired before
+/// `close_at`, scores 0. Integer order matters: multiply before divide, in i128.
+fn pnl_bps(intent: Option<&Intent>, close_at: u64, open: u64, close: u64) -> i64 {
+    let Some(i) = intent else { return 0 };
+    if i.expires_at.0 < close_at {
+        return 0;
+    }
+    let sign: i128 = if i.side == Side::Long { 1 } else { -1 };
+    let v = sign * (close as i128 - open as i128) * i.size_bps as i128 / open as i128;
+    v as i64
 }
 
 fn hex(b: &[u8]) -> String {
