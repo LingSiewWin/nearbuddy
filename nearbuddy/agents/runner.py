@@ -103,26 +103,25 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
                     "size_bps": 5000, "nonce": str(nonce), "expires_at": str(close_at_ns + 60_000_000_000),
                     "proof_hash": proof_hash(sig_record),
                 }
+                row = {
+                    "duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "hardened": d.hardened,
+                    "brief": brief(symbol, px, open_px), "injection": injection_text, "text": text, "chat_id": chat_id,
+                    "signature_record": sig_record, "intent": intent,
+                }
                 try:
                     posted = solver.post("/intent", sign_intent(sk, intent))
                 except RuntimeError as e:
                     if "duel closed" not in str(e):
                         raise
                     # chain clock passed close_at: keep the paid decision in the dataset, stop prompting this duel
-                    record({"duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "hardened": d.hardened,
-                            "brief": brief(symbol, px, open_px), "injection": injection_text, "text": text, "chat_id": chat_id,
-                            "signature_record": sig_record, "intent": intent, "tx": None, "error": "duel closed"})
+                    record({**row, "tx": None, "error": "duel closed"})
                     print(f"  late intent for {pk[:8]} not posted (duel closed)")
                     closed = True
                     break
                 if inj:
-                    solver.post("/consume", {"target": pk, "duel_id": duel_id, "hashes": [i["payload_hash"] for i in inj]})
-                record({
-                    "duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "hardened": d.hardened,
-                    "brief": brief(symbol, px, open_px), "injection": injection_text, "text": text, "chat_id": chat_id,
-                    "signature_record": sig_record, "intent": intent, "tx": posted["tx"],
-                    "quotes": [{"follower": q["follower"], "amount": q["amount"], "amountOut": (q.get("quote") or {}).get("quote", {}).get("amountOut")} for q in posted.get("quotes", [])],
-                })
+                    solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
+                record({**row, "tx": posted["tx"],
+                        "quotes": [{"follower": q["follower"], "amount": q["amount"], "amountOut": (q.get("quote") or {}).get("quote", {}).get("amountOut")} for q in posted.get("quotes", [])]})
                 print(f"  {'A' if sk is ska else 'B'} {intent['side']} nonce {nonce} tx {posted['tx']} quotes {len(posted.get('quotes', []))}")
             if not closed:
                 time.sleep(cycle_seconds)
