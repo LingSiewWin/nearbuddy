@@ -3,13 +3,13 @@
 // through 1Click (dry, mainnet prices), settles one fill inside the cap and shows a second fill over
 // the cap being rejected on chain, then the oracle resolves the duel.
 //   pnpm arena-demo            (solver must be running: pnpm solver)
+import "../../protocol/src/env.ts";
 import { createPrivateKey, createPublicKey, sign as edSign } from "node:crypto";
 import { KeyPair, teraToGas } from "near-api-js";
 import { b64 } from "../../protocol/src/index.ts";
 import { ZERO_PROOF, intentMessage, signResolution, type Intent, type SignedIntent } from "../../protocol/src/intent.ts";
 import { ARENA, NEAR, arenaView, explorerTx, fmtNear, loadAccount } from "../../protocol/src/chain.ts";
 
-try { process.loadEnvFile(new URL("../../../.env", import.meta.url).pathname); } catch { /* optional */ }
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const FOLLOWER_ID = process.env.FOLLOWER_ID ?? "nearbuddy-owner.testnet";
 const CAP = NEAR / 5n; // 0.2 NEAR per fill
@@ -25,7 +25,7 @@ const skA = keyFromSeed(seedA), skB = keyFromSeed(seedB);
 const pkA = pkOf(skA), pkB = pkOf(skB);
 
 const post = async (path: string, body: unknown) => {
-  const r = await fetch(`${SOLVER_URL}${path}`, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
+  const r = await fetch(`${SOLVER_URL}${path}`, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json", "x-arena-key": process.env.ARENA_SECRET ?? "" } });
   const j = await r.json();
   if (!r.ok) throw new Error(`${path}: ${JSON.stringify(j)}`);
   return j as Record<string, any>;

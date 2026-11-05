@@ -92,7 +92,8 @@ export default function Page() {
       {top("EVENTS (observed by this page)")}{"\n"}
       {log.length ? log.map((l) => `│ ${l.padEnd(W - 4)} │`).join("\n") : row("", "run `CALLS=100 pnpm demo` in nearbuddy/ and watch this fill")}{"\n"}
       {bottom()}{"\n\n"}
-      <span className="dim">how it works: agent (keypair, 0 NEAR) → GET → 402 → signs IOU → solver underwrites in ms → 200 … ×N → solver settle_batch = 1 tx</span>
+      <span className="dim">how it works: agent (keypair, 0 NEAR) → GET → 402 → signs IOU → solver underwrites in ms → 200 … ×N → solver settle_batch = 1 tx</span>{"\n"}
+      <span className="dim">arena (models duel, get attacked, get followed under mandates): </span><a href="/arena" className="hi">/arena</a>
     </pre>
   );
 }
