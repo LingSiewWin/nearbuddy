@@ -14,8 +14,11 @@ import argparse
 import base64
 import json
 import os
+import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # run from any cwd: `python agents/runner.py`
 from typing import Any
 
 from dotenv import dotenv_values
