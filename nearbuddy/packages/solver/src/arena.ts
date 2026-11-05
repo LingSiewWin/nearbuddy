@@ -52,7 +52,17 @@ export class Arena {
   ) {}
 
   private async call(methodName: string, args: Record<string, unknown>, deposit = 0n): Promise<{ tx: string; value: unknown }> {
-    const r = await this.solver.callFunctionRaw({ contractId: ARENA, methodName, args, gas: GAS, deposit });
+    // Public RPCs rate-limit (-429); retry with backoff before failing the route.
+    let r!: Awaited<ReturnType<Account["callFunctionRaw"]>>;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        r = await this.solver.callFunctionRaw({ contractId: ARENA, methodName, args, gas: GAS, deposit });
+        break;
+      } catch (e) {
+        if (attempt >= 4 || !/429|Rate limit|timeout/i.test(String(e))) throw e;
+        await new Promise((res) => setTimeout(res, 1500 * 2 ** attempt));
+      }
+    }
     const st = r.status as { SuccessValue?: string; Failure?: unknown };
     if (st.SuccessValue === undefined) throw new Error(`${methodName} failed: ${JSON.stringify(st.Failure ?? r.status).slice(0, 300)}`);
     const raw = Buffer.from(st.SuccessValue, "base64").toString();
