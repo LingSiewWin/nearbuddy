@@ -52,6 +52,11 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | `settle_follow` rejections on chain: over cap, token not allowed, duplicate fill | [`EaefxJxR…CN7F`](https://testnet.nearblocks.io/txns/EaefxJxRb6m9pPZ1nXG3GnYXsixqVBG5QL4eNq2LCN7F) |
 | Duel 3 resolved | [`CZWSgmeN…Z1Kx`](https://testnet.nearblocks.io/txns/CZWSgmeNfSU17gKXvLwGo3AAxiTPj4KXasGtUdu8Z1Kx) |
 
+Known limits, on purpose for the hackathon: one trusted oracle key signs resolutions (Pyth-on-NEAR read is the
+upgrade); follower withdrawals are instant, so the solver carries exposure between its swap and `settle_follow`
+(the vault contract's delayed withdraw is the upgrade); the solver's POST routes are gated by a shared secret, not
+per-agent keys; contract storage is paid from the same balance as bonds and vaults (no storage staking yet).
+
 Not yet proven: a NEAR AI Cloud completion with its `/v1/signature/{chat_id}` record (needs `NEAR_AI_API_KEY`), and
 one real 1Click swap reported through `settle_follow` (needs a funded mainnet account). Both seams are built and
 tested offline; the README will carry their hashes when they run.
