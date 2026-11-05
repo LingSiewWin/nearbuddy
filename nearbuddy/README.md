@@ -272,12 +272,14 @@ Research behind it: `docs/issuer-surface.md` (no issuer exposes a third-party pr
 
 ```
 nearbuddy/
-  contract/                 Rust, near-sdk 5.29. One file: contract/src/lib.rs
-  packages/protocol/        IOU type, borsh encoding, Agent (keypair) sign/verify, chain helpers
+  arena/                    Rust, near-sdk 5.29: the arena contract (arena/src/lib.rs, types.rs, tests.rs; tests/ sandbox run)
+  contract/                 Rust, near-sdk 5.29: the vault / clearinghouse contract (contract/src/lib.rs)
+  packages/protocol/        IOU, cert and intent types, borsh encoding byte-identical to the contracts, sign/verify, chain helpers
   packages/resource-server/ a paid API speaking HTTP 402
-  packages/solver/          underwriter: /verify in ms, /settle in one tx
-  packages/demo/            terminal demo (the proof above)
-  web/                      Next.js 16 live dashboard, terminal styling, one API route (/api/state)
+  packages/solver/          underwriter + arena solver: /verify, /settle, /guarantee, /pull, /duel, /intent, /chaos, /resolve, /settle_follow
+  packages/demo/            terminal demos: pnpm demo (IOUs), pnpm guarantor (cards), pnpm arena-demo (follow + chaos + settle), pnpm real-swap
+  agents/                   Python runner: model duelists (NEAR AI Cloud or stub), intent signing, prices, dataset, summary
+  web/                      Next.js 16: / dashboard (vault + solver) and /arena (standings, duels, chaos, followers), two API routes
 ```
 
 ## Contract API (`nearbuddy-vault.testnet`)
@@ -307,15 +309,32 @@ IOU signing bytes: `"nearbuddy-iou-v1" || borsh(Iou{owner, agent_pk, payee, amou
 - **Shortfall**: if a vault is still short at settlement, the payee is paid from the solver's stake. The solver's
   off-chain policy in this repo only underwrites what the vault already covers, so stake is never at risk by default.
 
+## Arena contract API (`arena.nearbuddy-solver.testnet`)
+
+| Method | Who | What |
+| --- | --- | --- |
+| `register_agent(agent_pk, model_id)` payable | agent operator | bond = deposit; `withdraw_bond(agent_pk, amount)` when not in a duel |
+| `open_duel(a, b, symbol, close_at)` | contract owner (solver) | pair two idle agents; returns `duel_id` |
+| `post_intent(signed)` | registered solver | agent-signed `Intent{agent_pk, duel_id, side, size_bps, nonce, expires_at, proof_hash}`; nonce burned; refused at or after `close_at` |
+| `inject_chaos(duel_id, target, kind, payload_hash)` payable | anyone (≥ `min_chaos_deposit`) | attack one agent; deposit joins the pool; 32 per duel |
+| `resolve(resolution, oracle_sig)` | registered solver | oracle-signed `(duel_id, open_price, close_price)`; scores, slashes, pays the pool, counts shield, records `outcome` |
+| `deposit()` payable / `withdraw(amount)` | follower | arena vault |
+| `follow(agent_pk, mandate)` / `unfollow(agent_pk)` | follower | `Mandate{allowance, spent, per_tx_cap, allowed_tokens, expires_at, revoked}` |
+| `settle_follow(agent_pk, follower, fills)` | registered solver | per-fill mandate checks; rejections reported, never panicked |
+| `get_config`, `get_agent`, `get_duel`, `get_vault`, `get_follow`, `list_followers`, `leaderboard`, `intent_message_hex`, `resolution_message_hex` | anyone | views |
+
+Signing bytes: `"nearbuddy-intent-v1" || borsh(Intent)` and `"nearbuddy-resolve-v1" || borsh(Resolution)`; the Rust test,
+the TypeScript test and the Python test pin the same hex.
+
 ## What is deliberately not here (yet)
 
-- **USDC settlement via NEAR Intents.** The vault holds NEAR for the MVP. The next step is a NEP-141 vault and
-  settlement in USDC through NEAR Intents so payees on other chains can be paid from one NEAR batch.
-- **TEE-attested agents on NEAR AI Cloud.** Run the agent's reasoning and IOU signing inside NEAR AI Cloud's TEE
-  and let solvers require the attestation before underwriting. That turns "trust the agent key" into
-  "trust the enclave".
-- **Solver market.** One solver here. The contract already supports many; the open question is routing/auction.
+- **USDC settlement for the clearinghouse.** The vault holds NEAR. The arena already quotes and (by hand) swaps
+  through NEAR Intents 1Click; moving IOU settlement to USDC through the same rail is the next step.
+- **Attestation checks in the solver.** The arena hashes NEAR AI Cloud's TEE signature into every intent; the solver
+  does not yet verify the attestation chain before underwriting (the verifier repo linked in the docs does).
+- **Solver market.** One solver here. Both contracts already support many; routing and auction are open.
+- **Delayed follower withdrawals, storage staking, per-agent solver keys**: see "Known limits" above.
 
 ## Status
 
-Working MVP on NEAR testnet, see proof above. Not audited. Testnet only.
+Working on NEAR testnet, see the two proof tables above. Not audited. Testnet only; the one mainnet leg is the 1Click swap.
