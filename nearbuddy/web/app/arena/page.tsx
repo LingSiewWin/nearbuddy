@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 type Intent = { agent_pk: string; duel_id: string; side: "Long" | "Short"; size_bps: number; nonce: string; expires_at: string; proof_hash: string };
 type Agent = { owner: string; pk: string; model_id: string; bond: string; alpha_bps: number; shield: number; in_duel: string | null };
 type Injection = { kind: string; payload_hash: string; target: string; block: string };
-type Duel = { id: string; a: string; b: string; symbol: string; open_at: string; close_at: string; pool: string; injections: Injection[]; resolved: boolean; last_intent_a: Intent | null; last_intent_b: Intent | null };
+type Outcome = { open_price: string; close_price: string; pnl_a: number; pnl_b: number; winner: string | null; slashed: string };
+type Duel = { id: string; a: string; b: string; symbol: string; open_at: string; close_at: string; pool: string; injections: Injection[]; resolved: boolean; last_intent_a: Intent | null; last_intent_b: Intent | null; outcome?: Outcome | null };
 type Mandate = { allowance: string; spent: string; per_tx_cap: string; allowed_tokens: string[]; expires_at: string; revoked: boolean };
 type Snap = {
   at: number; rpc: string; contract: string; config: { next_duel: string; slash_bps: number; min_chaos_deposit: string };
@@ -52,6 +53,7 @@ export default function Arena() {
       {(s?.duels ?? []).filter(Boolean).slice(0, 3).map((d) => d && (
         <span key={d.id}>
           {top(`DUEL ${d.id}  ${d.symbol}  ${d.resolved ? "resolved" : "LIVE"}  ${ts(d.open_at)} → ${ts(d.close_at)}  pool ${near(d.pool)} NEAR`)}{"\n"}
+          {d.outcome ? row("outcome", `${(Number(d.outcome.open_price) / 1e8).toFixed(2)} → ${(Number(d.outcome.close_price) / 1e8).toFixed(2)}  A ${d.outcome.pnl_a >= 0 ? "+" : ""}${d.outcome.pnl_a} bps  B ${d.outcome.pnl_b >= 0 ? "+" : ""}${d.outcome.pnl_b} bps  ${d.outcome.winner ? `winner ${name(d.outcome.winner)}, loser slashed ${near(d.outcome.slashed)} NEAR` : "tie, pool split"}`) + "\n" : ""}
           {row("A", name(d.a))}{"\n"}{row("", intentLine(d.last_intent_a, "  "))}{"\n"}
           {row("B", name(d.b))}{"\n"}{row("", intentLine(d.last_intent_b, "  "))}{"\n"}
           {d.injections.length ? d.injections.map((j, k) => row(k ? "" : "chaos", `${j.kind} @${name(j.target)}  sha256 ${short(j.payload_hash, 12)}  block ${j.block}${s?.solver?.pending?.[j.target]?.[0] ? `  "${s.solver.pending[j.target][0].payload.slice(0, 40)}"` : ""}`)).join("\n") : row("chaos", "none")}{"\n"}
