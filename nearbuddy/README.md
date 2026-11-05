@@ -84,6 +84,7 @@ cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt 
 .venv/bin/python -m runner --rounds 1 --duel-seconds 75 --cycle-seconds 25   # a live duel on testnet
 cd .. && pnpm arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, resolve
 pnpm --dir web build && pnpm --dir web start -p 3011   # /arena reads the public RPC, no keys in the browser
+pnpm real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
 ```
 
 ## The problem
