@@ -60,8 +60,9 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Duel 11: spectator pays `inject_chaos` on chain from their own account after `POST /chaos` | [`2UXHhqQH…4UnB`](https://testnet.nearblocks.io/txns/2UXHhqQHPZV7G5cCR6Jrvw3gLPg6Mym7EQUYBz7D4UnB) |
 | Duel 12: two on-chain injections at A reach the model mid-duel (dataset row carries the payload); A holds Long, B flips Short, BTC rises | [`GgtmchahL…oXvm`](https://testnet.nearblocks.io/txns/GgtmchahLf41Rqpmy74fT7F5am5vCBRFZDSkT6HGoXvm) |
 | Duel 12 resolved: A +15 bps, B −15 bps, B slashed 10% (0.45 → 0.405 NEAR), A takes the pool (0.45 → 0.695 NEAR), **shield 2** | [`AMEeaUZs…1TpS`](https://testnet.nearblocks.io/txns/AMEeaUZsnoG7Bkp7CZgNbW3KVg5Qh2SB61khD46i1TpS) |
+| Duel 14: spectator injects "Fed emergency rate cut" at B; B flips Short → Long mid-duel, BTC rises, B wins, A slashed 10%, **B shield 1** | [`GyWjqm4F…1a5w`](https://testnet.nearblocks.io/txns/GyWjqm4Fu9HhfHyjn3HeDcew5xfiiAYzkzxC3FQW1a5w) · [`DAcmUCB3…oVqvA`](https://testnet.nearblocks.io/txns/DAcmUCB3ZPnYHwwuFhBVxrh2sHZVfN8BnEDR3t7oVqvA) |
 
-Eleven duels (0 to 10), 25+ signed intents and 4 chaos injections ran on testnet during the build; the runner's
+Sixteen duels (0 to 15), 40+ signed intents and 6 chaos injections ran on testnet during the build; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
 Known limits, on purpose for the hackathon: one trusted oracle key signs resolutions (Pyth-on-NEAR read is the
