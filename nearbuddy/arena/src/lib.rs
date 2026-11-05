@@ -345,10 +345,8 @@ impl Contract {
 
     pub fn unfollow(&mut self, agent_pk: Base64VecU8) {
         let who = env::predecessor_account_id();
-        if let Some(list) = self.follows.get_mut(&agent_pk.0) {
-            if let Some(slot) = list.iter_mut().find(|(f, _)| *f == who) {
-                slot.1.revoked = true;
-            }
+        if let Some(slot) = self.follows.get_mut(&agent_pk.0).and_then(|l| l.iter_mut().find(|(f, _)| *f == who)) {
+            slot.1.revoked = true;
         }
     }
 

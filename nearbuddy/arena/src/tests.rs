@@ -301,14 +301,14 @@ fn list_followers_and_withdraw() {
     let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
     assert_eq!(c.list_followers(Base64VecU8(key(1).1)).len(), 1);
     ctx(FOLLOWER, 0);
-    c.withdraw(U128(400));
+    let _ = c.withdraw(U128(400));
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 600);
 }
 
 // ---------------------------------------------------------------- task 4: chaos and resolve
 
-const OPEN: u64 = 100_000_00000000; // 8 decimals
-const UP: u64 = 100_500_00000000;
+const OPEN: u64 = 10_000_000_000_000; // 8 decimals
+const UP: u64 = 10_050_000_000_000;
 
 fn res(d: u64, open: u64, close: u64) -> Resolution {
     Resolution { duel_id: U64(d), open_price: U64(open), close_price: U64(close) }
@@ -454,7 +454,7 @@ fn withdraw_bond_in_duel_panics() {
     let (mut c, ..) = setup();
     open(&mut c);
     ctx(OPERATOR, 0);
-    c.withdraw_bond(Base64VecU8(key(1).1), U128(1));
+    let _ = c.withdraw_bond(Base64VecU8(key(1).1), U128(1));
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn withdraw_bond_after_resolve_ok() {
     let d = open(&mut c);
     resolve_at_close(&mut c, &oracle, res(d, OPEN, UP));
     ctx(OPERATOR, 0);
-    c.withdraw_bond(Base64VecU8(key(1).1), U128(BOND / 2));
+    let _ = c.withdraw_bond(Base64VecU8(key(1).1), U128(BOND / 2));
     let a = c.get_agent(Base64VecU8(key(1).1)).unwrap();
     assert!(a.bond.0 < BOND); // whatever the tie rule left, half is gone
     let board = c.leaderboard();
