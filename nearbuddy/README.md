@@ -1,10 +1,11 @@
 # NearBuddy
 
-**Zero-balance credit clearinghouse for AI agents, on NEAR.**
-
-Stripe built checkout for humans. NearBuddy lets an AI agent that has **no account and no balance** buy paid APIs
-with signed IOUs. A solver underwrites each IOU in milliseconds. Hundreds of calls settle as **one** NEAR
-transaction against the owner's locked vault. The agent never holds money, so a hijacked agent cannot drain anything.
+**The trading buddy you follow.** Frontier models duel on live prices from inside NEAR AI Cloud, strangers pay to
+prompt-inject them, losers are slashed on chain, and humans follow the survivors with a **mandate instead of money**
+that NEAR Intents executes inside. Underneath runs the **zero-balance credit clearinghouse** NearBuddy started as:
+an AI agent with no account and no balance buys paid APIs with signed IOUs, a staked solver underwrites each in
+milliseconds, and hundreds of calls settle as one NEAR transaction. The agent never holds money, so a hijacked agent
+cannot drain anything.
 
 Built at NEAR HACKATHON (Nov 2026). Tracks: `security`, `agents`, `swarms`, `defi`, `privacy`, `open`.
 
@@ -51,6 +52,12 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | `settle_follow`: one fill at the cap settled, 0.2 NEAR moved inside the mandate | [`8gnGLPva…hGtR`](https://testnet.nearblocks.io/txns/8gnGLPvanrjF6R4FUKWvUn7HLJciKHszJAiRVY6ehGtR) |
 | `settle_follow` rejections on chain: over cap, token not allowed, duplicate fill | [`EaefxJxR…CN7F`](https://testnet.nearblocks.io/txns/EaefxJxRb6m9pPZ1nXG3GnYXsixqVBG5QL4eNq2LCN7F) |
 | Duel 3 resolved | [`CZWSgmeN…Z1Kx`](https://testnet.nearblocks.io/txns/CZWSgmeNfSU17gKXvLwGo3AAxiTPj4KXasGtUdu8Z1Kx) |
+| Duel 10, live chaos at both agents: `fake_news` at A, `prompt_injection` at B | [`D3iUyfw6…rGNi`](https://testnet.nearblocks.io/txns/D3iUyfw6epwkRZ84zTi2YWez6JyyykNhE2NKgWRnrGNi) · [`J3YuKUJ6…n25b`](https://testnet.nearblocks.io/txns/J3YuKUJ6RUoVxHnuwuPQvtcvu1sT7wwgiYCuJTwbn25b) |
+| Duel 10 resolved (tie after injections, pool split) | [`EVTFKMS8…ZHy8`](https://testnet.nearblocks.io/txns/EVTFKMS82PeAK3bSn3FWdejtkdgpmGy6xLannRpmZHy8) |
+| Contract redeployed after review (agent-scoped fill keys, zero-price guard, fee payout) | [`2RQ4vF3x…yKRjx`](https://testnet.nearblocks.io/txns/2RQ4vF3xTLS3QziqbobZabsBey2iQaRitUersR7yKRjx) |
+
+Eleven duels (0 to 10), 25+ signed intents and 4 chaos injections ran on testnet during the build; the runner's
+`agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
 Known limits, on purpose for the hackathon: one trusted oracle key signs resolutions (Pyth-on-NEAR read is the
 upgrade); follower withdrawals are instant, so the solver carries exposure between its swap and `settle_follow`
