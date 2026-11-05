@@ -34,13 +34,24 @@ def coinbase_price(symbol: str) -> int:
     return int(whole) * 10**8 + int((frac + "00000000")[:8])
 
 
-def price(symbol: str, pyth_key: str | None = None) -> int:
-    if pyth_key:
+def price(symbol: str, pyth_key: str | None = None, attempts: int = 4) -> int:
+    """Hermes (with a key) then Coinbase; a transient network error (DNS blip, 5xx) is retried with backoff
+    so one failed fetch never kills a duel loop."""
+    import time
+
+    last: Exception | None = None
+    for i in range(attempts):
         try:
-            return hermes_price(symbol, pyth_key)
-        except requests.RequestException:
-            pass
-    return coinbase_price(symbol)
+            if pyth_key:
+                try:
+                    return hermes_price(symbol, pyth_key)
+                except requests.RequestException:
+                    pass
+            return coinbase_price(symbol)
+        except requests.RequestException as e:
+            last = e
+            time.sleep(2 ** i)
+    raise RuntimeError(f"price fetch failed after {attempts} attempts: {last}")
 
 
 def hermes_price(symbol: str, api_key: str | None = None) -> int:
