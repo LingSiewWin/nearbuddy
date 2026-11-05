@@ -68,7 +68,7 @@ Counts move while the runner is on: as of 2026-11-06 03:40 (UTC+8) 20 duels, 50+
 ran on testnet. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
-Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test test_arena_sandbox -- --nocapture`):
+Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test test_arena_sandbox -- --ignored --nocapture`; needs cargo-near, downloads the sandbox once):
 
 | Call | TGas |
 |---|---|
