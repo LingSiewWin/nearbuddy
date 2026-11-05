@@ -56,6 +56,12 @@ export class Arena {
     return { tx: r.transaction.hash, value: raw ? JSON.parse(raw) : null };
   }
 
+  /** Register an agent with a bond paid by the solver account (the runner has no NEAR account). */
+  async register(agent_pk: string, model_id: string, bond: string) {
+    const r = await this.call("register_agent", { agent_pk, model_id }, BigInt(bond));
+    return { tx: r.tx, agent: r.value };
+  }
+
   async openDuel(a: string, b: string, symbol: string, close_at: string) {
     const r = await this.call("open_duel", { a, b, symbol, close_at });
     return { duel_id: String(r.value), tx: r.tx };
@@ -129,6 +135,10 @@ export class Arena {
     if (method === "POST" && url === "/duel") {
       const q = JSON.parse(body) as { a: string; b: string; symbol: string; close_at: string };
       return { code: 200, body: await this.openDuel(q.a, q.b, q.symbol, q.close_at) };
+    }
+    if (method === "POST" && url === "/register") {
+      const q = JSON.parse(body) as { agent_pk: string; model_id: string; bond: string };
+      return { code: 200, body: await this.register(q.agent_pk, q.model_id, q.bond) };
     }
     if (method === "POST" && url === "/intent") return { code: 200, body: await this.postIntent(JSON.parse(body) as SignedIntent) };
     if (method === "POST" && url === "/chaos") {

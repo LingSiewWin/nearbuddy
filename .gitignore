@@ -60,7 +60,7 @@ docs/
 .playwright-mcp/
 reports/
 research_notes/
-agents/
+/agents/
 skills-lock.json
 /image.png
 nearbuddy/arena/.github/

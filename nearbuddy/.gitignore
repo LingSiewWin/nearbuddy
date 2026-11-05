@@ -7,3 +7,7 @@ target/
 *.log
 .solver-ledger.json
 .secrets/
+.venv/
+agents/data/
+__pycache__/
+.pytest_cache/

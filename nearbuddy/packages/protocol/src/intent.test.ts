@@ -22,6 +22,12 @@ test("intent bytes: domain prefix and borsh length", () => {
   assert.equal(m[19 + 36 + 8], 1); // Short = 1
 });
 
+// Printed by `cargo test intent_message_len_matches_ts -- --nocapture` (INTENT_HEX); the Python test pins the same string.
+const RUST_HEX = "6e65617262756464792d696e74656e742d76312000000001010101010101010101010101010101010101010101010101010101010101010700000000000000018813030000000000000000002a36fe9c9717200000000000000000000000000000000000000000000000000000000000000000000000";
+test("intent bytes match the Rust contract byte for byte", () => {
+  assert.equal(hex(intentMessage({ ...fixture, expires_at: "1700000000000000000" })), RUST_HEX);
+});
+
 test("resolution bytes length", () => {
   const m = resolutionMessage(resolution);
   assert.equal(m.length, RESOLVE_DOMAIN.length + 8 + 8 + 8);
