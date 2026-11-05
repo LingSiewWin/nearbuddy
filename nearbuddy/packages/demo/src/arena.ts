@@ -49,7 +49,7 @@ line("follow A", await call("follow", {
   mandate: { allowance: NEAR.toString(), spent: "0", per_tx_cap: CAP.toString(), allowed_tokens: ["nep141:wrap.near"], expires_at: ((Date.now() + 86_400_000) * 1_000_000).toString(), revoked: false },
 }), `cap ${fmtNear(CAP)} NEAR, allowance 1 NEAR, wNEAR only`);
 
-// 2. open a duel, spectator injects chaos at A (solver pays the deposit)
+// 2. open a duel; a spectator pays the deposit on chain to inject chaos at A
 const closeAt = (Math.floor(Date.now() / 1000) + DUEL_SECONDS) * 1_000_000_000;
 const duel = await post("/duel", { a: pkA, b: pkB, symbol: "BTC/USD", close_at: String(closeAt) });
 line("open duel", duel.tx, `duel ${duel.duel_id}`);
