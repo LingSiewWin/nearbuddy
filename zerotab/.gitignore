@@ -1,0 +1,9 @@
+node_modules/
+target/
+*.wasm
+.env
+.env.*
+!.env.example
+*.log
+.solver-ledger.json
+.secrets/
