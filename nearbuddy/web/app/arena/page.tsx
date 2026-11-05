@@ -25,6 +25,13 @@ const W = 100;
 const row = (k: string, v: string) => `│ ${k.padEnd(16)} ${v.padEnd(W - 20).slice(0, W - 20)} │`;
 const top = (t: string) => `┌─ ${t} ${"─".repeat(Math.max(0, W - t.length - 5))}┐`;
 const bottom = () => `└${"─".repeat(W - 2)}┘`;
+/** `row()` with the tx hash rendered as a nearblocks link; padding and border stay intact. */
+const linkRow = (k: string, before: string, tx: string, after: string) => {
+  const label = short(tx, 10);
+  const line = row(k, `${before}${label}${after}`);
+  const i = line.indexOf(label);
+  return i < 0 ? <>{line}</> : <>{line.slice(0, i)}<a className="hi" href={`https://testnet.nearblocks.io/txns/${tx}`} target="_blank" rel="noreferrer">{label}</a>{line.slice(i + label.length)}</>;
+};
 const ts = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(11, 19);
 
 export default function Arena() {
@@ -65,9 +72,10 @@ export default function Arena() {
       {bottom()}{"\n\n"}
       {top("SOLVER (1Click dry quotes and settled fills; optional, local)")}{"\n"}
       {s?.solver ? [
-        ...s.solver.intents.slice(-5).map((i) => <span key={i.tx}>{`│ ${"intent".padEnd(16)} ${i.side.padEnd(5)} ${short(i.agent_pk, 6)} nonce ${i.nonce}  tx `}<a className="hi" href={`https://testnet.nearblocks.io/txns/${i.tx}`} target="_blank" rel="noreferrer">{short(i.tx, 10)}</a>{`  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${q.quote?.quote.amountOutFormatted ?? "?"} USDC`).join("; ") || "no followers"}`}{"\n"}</span>),
-        ...s.solver.fills.slice(-5).map((f) => <span key={f.tx}>{`│ ${"settle".padEnd(16)} ${f.follower}  settled ${f.report.settled}  rejected ${f.report.rejected.map((r) => r[1]).join(", ") || "none"}  tx `}<a className="hi" href={`https://testnet.nearblocks.io/txns/${f.tx}`} target="_blank" rel="noreferrer">{short(f.tx, 10)}</a>{"\n"}</span>),
-      ] : row("", "solver offline: page runs on RPC alone")}
+        ...s.solver.intents.slice(-5).map((i) => <span key={i.tx}>{linkRow("intent", `${i.side.padEnd(5)} ${short(i.agent_pk, 6)} nonce ${i.nonce}  tx `, i.tx, `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${q.quote?.quote.amountOutFormatted ?? "?"} USDC`).join("; ") || "no followers"}`)}{"\n"}</span>),
+        ...s.solver.fills.slice(-5).map((f) => <span key={f.tx}>{linkRow("settle", `${f.follower}  settled ${f.report.settled}  rejected ${f.report.rejected.map((r) => r[1]).join(", ") || "none"}  tx `, f.tx, "")}{"\n"}</span>),
+        ...(s.solver.intents.length + s.solver.fills.length ? [] : [<span key="none">{row("", "no activity yet")}{"\n"}</span>]),
+      ] : row("", "solver offline: page runs on RPC alone") + "\n"}
       {bottom()}{"\n\n"}
       <span className="dim">how it works: model → decision (TEE-signed on NEAR AI Cloud) → signed intent on chain → followers quoted via NEAR Intents inside their mandate → oracle resolves → loser slashed, winner paid, survivors gain shield</span>
     </pre>
