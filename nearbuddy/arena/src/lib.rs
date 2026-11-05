@@ -55,7 +55,7 @@ pub struct Contract {
     /// Followers per agent. ponytail: linear scan per agent; nested IterableMap when an agent has
     /// more followers than fit in one read.
     follows: LookupMap<Vec<u8>, Vec<(AccountId, Mandate)>>,
-    /// `follower || nonce_le` of every settled fill.
+    /// `agent_pk || follower || nonce_le` of every settled fill (see `fill_key`).
     settled_fills: LookupSet<Vec<u8>>,
     owner_fees: u128,
 }
@@ -276,7 +276,7 @@ impl Contract {
     pub fn resolve(&mut self, resolution: Resolution, oracle_sig: Base64VecU8) {
         self.only_solver();
         require!(verify(&self.oracle_pk, &resolution_message(&resolution), &oracle_sig.0), "bad signature");
-        require!(resolution.open_price.0 > 0, "bad price");
+        require!(resolution.open_price.0 > 0 && resolution.close_price.0 > 0, "bad price");
         let duel = self.duels.get_mut(&resolution.duel_id.0).expect("duel missing");
         require!(!duel.resolved, "resolved");
         require!(env::block_timestamp() >= duel.close_at.0, "duel open");
@@ -389,7 +389,10 @@ impl Contract {
             return Err("nonce unknown");
         }
         let fkey = fill_key(agent_pk, follower, f.intent_nonce.0);
-        if self.settled_fills.contains(&fkey) {
+        // Fills settled before the key became agent-scoped (first deploy) live under `follower || nonce`.
+        let mut legacy = follower.as_bytes().to_vec();
+        legacy.extend_from_slice(&f.intent_nonce.0.to_le_bytes());
+        if self.settled_fills.contains(&fkey) || self.settled_fills.contains(&legacy) {
             return Err("duplicate fill");
         }
         let list = self.follows.get_mut(agent_pk).ok_or("no mandate")?;

@@ -526,3 +526,11 @@ fn owner_withdraws_fees() {
     let _ = c.withdraw_fees();
     assert_eq!(c.get_config().owner_fees.0, 0);
 }
+
+#[test]
+#[should_panic(expected = "bad price")]
+fn resolve_zero_close_price_rejected() {
+    let (mut c, oracle, ..) = setup();
+    let d = open(&mut c);
+    resolve_at_close(&mut c, &oracle, res(d, OPEN, 0));
+}
