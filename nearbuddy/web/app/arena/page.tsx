@@ -65,9 +65,9 @@ export default function Arena() {
       {bottom()}{"\n\n"}
       {top("SOLVER (1Click dry quotes and settled fills; optional, local)")}{"\n"}
       {s?.solver ? [
-        ...s.solver.intents.slice(-5).map((i) => row("intent", `${i.side} ${short(i.agent_pk, 6)} nonce ${i.nonce}  tx ${short(i.tx, 10)}  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${q.quote?.quote.amountOutFormatted ?? "?"} USDC`).join("; ") || "no followers"}`)),
-        ...s.solver.fills.slice(-5).map((f) => row("settle", `${f.follower}  settled ${f.report.settled}  rejected ${f.report.rejected.map((r) => r[1]).join(", ") || "none"}  tx ${short(f.tx, 10)}`)),
-      ].join("\n") || row("", "no activity yet") : row("", "solver offline: page runs on RPC alone")}{"\n"}
+        ...s.solver.intents.slice(-5).map((i) => <span key={i.tx}>{`│ ${"intent".padEnd(16)} ${i.side.padEnd(5)} ${short(i.agent_pk, 6)} nonce ${i.nonce}  tx `}<a className="hi" href={`https://testnet.nearblocks.io/txns/${i.tx}`} target="_blank" rel="noreferrer">{short(i.tx, 10)}</a>{`  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${q.quote?.quote.amountOutFormatted ?? "?"} USDC`).join("; ") || "no followers"}`}{"\n"}</span>),
+        ...s.solver.fills.slice(-5).map((f) => <span key={f.tx}>{`│ ${"settle".padEnd(16)} ${f.follower}  settled ${f.report.settled}  rejected ${f.report.rejected.map((r) => r[1]).join(", ") || "none"}  tx `}<a className="hi" href={`https://testnet.nearblocks.io/txns/${f.tx}`} target="_blank" rel="noreferrer">{short(f.tx, 10)}</a>{"\n"}</span>),
+      ] : row("", "solver offline: page runs on RPC alone")}
       {bottom()}{"\n\n"}
       <span className="dim">how it works: model → decision (TEE-signed on NEAR AI Cloud) → signed intent on chain → followers quoted via NEAR Intents inside their mandate → oracle resolves → loser slashed, winner paid, survivors gain shield</span>
     </pre>
