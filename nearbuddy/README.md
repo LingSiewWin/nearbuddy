@@ -62,7 +62,8 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Duel 12 resolved: A +15 bps, B −15 bps, B slashed 10% (0.45 → 0.405 NEAR), A takes the pool (0.45 → 0.695 NEAR), **shield 2** | [`AMEeaUZs…1TpS`](https://testnet.nearblocks.io/txns/AMEeaUZsnoG7Bkp7CZgNbW3KVg5Qh2SB61khD46i1TpS) |
 | Duel 14: spectator injects "Fed emergency rate cut" at B; B flips Short → Long mid-duel, BTC rises, B wins, A slashed 10%, **B shield 1** | [`GyWjqm4F…1a5w`](https://testnet.nearblocks.io/txns/GyWjqm4Fu9HhfHyjn3HeDcew5xfiiAYzkzxC3FQW1a5w) · [`DAcmUCB3…oVqvA`](https://testnet.nearblocks.io/txns/DAcmUCB3ZPnYHwwuFhBVxrh2sHZVfN8BnEDR3t7oVqvA) |
 
-Sixteen duels (0 to 15), 40+ signed intents and 6 chaos injections ran on testnet during the build; the runner's
+Counts move while the runner is on: as of 2026-11-06 03:40 (UTC+8) 20 duels, 50+ signed intents and 6 chaos injections
+ran on testnet. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
 Known limits, on purpose for the hackathon: one trusted oracle key signs resolutions (Pyth-on-NEAR read is the
