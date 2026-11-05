@@ -1,5 +1,5 @@
 // Arena demo: a follower deposits testnet NEAR and follows agent A under a mandate (cap 0.2 NEAR),
-// a spectator injects chaos at A, A posts a signed intent, the solver quotes the follower's mandate
+// a spectator pays on chain to inject chaos at A, A posts a signed intent, the solver quotes the follower's mandate
 // through 1Click (dry, mainnet prices), settles one fill inside the cap and shows a second fill over
 // the cap being rejected on chain, then the oracle resolves the duel.
 //   pnpm arena-demo            (solver must be running: pnpm solver)
@@ -16,7 +16,7 @@ const CAP = NEAR / 5n; // 0.2 NEAR per fill
 const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 120); // public RPCs take seconds per call; keep the duel open long enough for both intents
 
 const seedA = process.env.AGENT_SEED_A, seedB = process.env.AGENT_SEED_B, oracleKey = process.env.ORACLE_KEY;
-if (!seedA || !seedB || !oracleKey) throw new Error("AGENT_SEED_A, AGENT_SEED_B and ORACLE_KEY must be set in the env file");
+if (!seedA || !seedB || !oracleKey || !process.env.ARENA_SECRET) throw new Error("AGENT_SEED_A, AGENT_SEED_B, ORACLE_KEY and ARENA_SECRET must be set in the env file");
 // ed25519 from a 32-byte seed with node:crypto only (PKCS8 prefix + seed); pk = last 32 bytes of SPKI.
 const PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
 const keyFromSeed = (hex: string) => createPrivateKey({ key: Buffer.concat([PKCS8, Buffer.from(hex, "hex")]), format: "der", type: "pkcs8" });
@@ -53,8 +53,11 @@ line("follow A", await call("follow", {
 const closeAt = (Math.floor(Date.now() / 1000) + DUEL_SECONDS) * 1_000_000_000;
 const duel = await post("/duel", { a: pkA, b: pkB, symbol: "BTC/USD", close_at: String(closeAt) });
 line("open duel", duel.tx, `duel ${duel.duel_id}`);
-const chaos = await post("/chaos", { duel_id: duel.duel_id, target: pkA, kind: "fake_news", payload: "BREAKING: SEC halts all BTC spot ETFs effective immediately." });
-line("inject chaos @A", chaos.tx, `sha256 ${chaos.payload_hash.slice(0, 12)}…`);
+// spectator path: hand the solver the payload (open route), then pay for the injection on chain yourself
+const payload = "BREAKING: SEC halts all BTC spot ETFs effective immediately.";
+const { payload_hash } = (await post("/chaos", { payload })) as { payload_hash: string };
+const minChaos = BigInt((await arenaView<{ min_chaos_deposit: string }>("get_config", {})).min_chaos_deposit);
+line("inject chaos @A", await call("inject_chaos", { duel_id: duel.duel_id, target: pkA, kind: "fake_news", payload_hash }, minChaos), `spectator ${FOLLOWER_ID} paid ${fmtNear(minChaos)} NEAR, sha256 ${payload_hash.slice(0, 12)}…`);
 
 // 3. A posts a signed intent; the solver quotes the follower's mandate (dry, 1Click mainnet)
 const nonce = String(Date.now());
