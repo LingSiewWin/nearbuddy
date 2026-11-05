@@ -4,11 +4,16 @@
 # Needs .env (copy .env.example), agents/.venv (see agents/README.md), and testnet keys for the solver account.
 set -e
 cd "$(dirname "$0")/.."
+( cd web && pnpm build ) > .web.log 2>&1 || { echo "web build failed, see .web.log"; exit 1; }
 pnpm solver > .solver.log 2>&1 &
 SOLVER=$!
-( cd web && pnpm build > /dev/null && pnpm start -p 3011 > ../.web.log 2>&1 ) &
+( cd web && exec pnpm start -p 3011 ) >> .web.log 2>&1 &
 WEB=$!
 trap 'kill $SOLVER $WEB 2>/dev/null' EXIT
-sleep 8
+for i in $(seq 1 30); do
+  curl -sf http://127.0.0.1:4020/ledger > /dev/null 2>&1 && break
+  sleep 1
+done
+curl -sf http://127.0.0.1:4020/ledger > /dev/null 2>&1 || { echo "solver did not come up, see .solver.log"; exit 1; }
 echo "solver :4020  web http://127.0.0.1:3011/arena  logs .solver.log .web.log"
-agents/.venv/bin/python -u -m runner --rounds "${1:-3}" --duel-seconds "${2:-90}" --cycle-seconds 30
+cd agents && .venv/bin/python -u -m runner --rounds "${1:-3}" --duel-seconds "${2:-90}" --cycle-seconds 30
