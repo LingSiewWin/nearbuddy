@@ -95,6 +95,8 @@ export async function executeSwap(account: Account, amountYocto: bigint, log: (s
   await account.callFunctionRaw({ contractId: "wrap.near", methodName: "storage_deposit", args: {}, gas: teraToGas("30"), deposit: 1_250_000_000_000_000_000_000n });
   const wrap = await account.callFunctionRaw({ contractId: "wrap.near", methodName: "near_deposit", args: {}, gas: teraToGas("30"), deposit: amountYocto });
   log(`wrapped ${amountYocto} yocto: ${wrap.transaction.hash}`);
+  // the deposit address must hold a wNEAR storage slot before it can receive
+  await account.callFunctionRaw({ contractId: "wrap.near", methodName: "storage_deposit", args: { account_id: dep }, gas: teraToGas("30"), deposit: 1_250_000_000_000_000_000_000n });
   const xfer = await account.callFunctionRaw({
     contractId: "wrap.near", methodName: "ft_transfer", args: { receiver_id: dep, amount: amountYocto.toString() }, gas: teraToGas("30"), deposit: 1n,
   });
@@ -106,5 +108,6 @@ export async function executeSwap(account: Account, amountYocto: bigint, log: (s
     st = await status(dep);
     log(`status ${st.status}`);
   }
+  if (st.status !== "SUCCESS") throw new Error(`swap ended ${st.status} (deposit tx ${xfer.transaction.hash}); not a proof`);
   return { quote: q, wrapTx: wrap.transaction.hash, depositTx: xfer.transaction.hash, status: st.status, amountOut: (st.swapDetails as { amountOut?: string } | undefined)?.amountOut };
 }
