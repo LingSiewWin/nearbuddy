@@ -4,7 +4,6 @@
 //   POST /duel     {a, b, symbol, close_at}                  -> {duel_id, tx}
 //   POST /intent   SignedIntent                              -> {tx, quotes:[{follower, amount, quote}]}
 //   POST /chaos    {payload}  (open)                         -> {payload_hash}; spectator then calls inject_chaos on chain
-//   POST /chaos_paid {duel_id, target, kind, payload}        -> {tx, payload_hash}  (solver pays; demo only)
 //   POST /resolve  {resolution, oracle_sig}                  -> {tx}
 //   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}
 //   GET  /arena                                              -> snapshot incl. pending injections with payloads
@@ -23,7 +22,6 @@ export interface Injection { duel_id: string; target: string; kind: string; payl
 export interface FollowerQuote { follower: string; amount: string; quote?: Quote; error?: string }
 interface IntentRecord { signed: SignedIntent; tx: string; quotes: FollowerQuote[]; at: number }
 
-export const CHAOS_DEPOSIT = BigInt(process.env.CHAOS_DEPOSIT ?? "100000000000000000000000");
 /// Shared secret for the POST routes: every one of them spends the solver's NEAR or debits a follower.
 /// Unset = routes refuse all POSTs (the on-chain gate trusts this account, so the port must not be open).
 export const ARENA_SECRET = process.env.ARENA_SECRET ?? "";
@@ -158,13 +156,6 @@ export class Arena {
     }
   }
 
-  /** Operator path (secret): the solver pays the deposit itself. Kept for the runner-less demo. */
-  async injectChaos(duel_id: string, target: string, kind: string, payload: string) {
-    const { payload_hash } = this.stash(payload);
-    const r = await this.call("inject_chaos", { duel_id, target, kind, payload_hash }, CHAOS_DEPOSIT);
-    return { tx: r.tx, payload_hash };
-  }
-
   async resolve(resolution: Resolution, oracle_sig: string) {
     const tx = (await this.call("resolve", { resolution, oracle_sig })).tx;
     this.openDuels.delete(resolution.duel_id);
@@ -216,7 +207,7 @@ export class Arena {
   async route(method: string | undefined, url: string | undefined, body: string, headers: Record<string, string | string[] | undefined> = {}): Promise<{ code: number; body: unknown } | null> {
     if (url === "/arena") return { code: 200, body: await this.snapshot() };
     if (method === "POST" && url === "/chaos") return { code: 200, body: this.stash((JSON.parse(body) as { payload: string }).payload) };
-    const mine = ["/duel", "/register", "/intent", "/chaos_paid", "/resolve", "/settle_follow", "/consume"].includes(url ?? "");
+    const mine = ["/duel", "/register", "/intent", "/resolve", "/settle_follow", "/consume"].includes(url ?? "");
     if (!mine) return null;
     if (method !== "POST") return { code: 405, body: { error: "POST only" } };
     if (!keyOk(headers["x-arena-key"])) return { code: 401, body: { error: "x-arena-key required" } };
@@ -229,10 +220,6 @@ export class Arena {
       return { code: 200, body: await this.register(q.agent_pk, q.model_id, q.bond) };
     }
     if (method === "POST" && url === "/intent") return { code: 200, body: await this.postIntent(JSON.parse(body) as SignedIntent) };
-    if (method === "POST" && url === "/chaos_paid") {
-      const q = JSON.parse(body) as { duel_id: string; target: string; kind: string; payload: string };
-      return { code: 200, body: await this.injectChaos(q.duel_id, q.target, q.kind, q.payload) };
-    }
     if (method === "POST" && url === "/resolve") {
       const q = JSON.parse(body) as { resolution: Resolution; oracle_sig: string };
       return { code: 200, body: await this.resolve(q.resolution, q.oracle_sig) };
