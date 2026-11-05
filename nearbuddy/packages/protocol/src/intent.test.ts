@@ -44,3 +44,12 @@ test("resolution sign/verify", () => {
   assert.ok(verifyResolution(resolution, sig, pk));
   assert.ok(!verifyResolution({ ...resolution, close_price: "1" }, sig, pk));
 });
+
+// On-chain parity: the deployed arena contract must produce the same bytes. Set ARENA_DEPLOYED=1.
+test("intent and resolution bytes match the deployed arena contract", { skip: !process.env.ARENA_DEPLOYED }, async () => {
+  const { arenaView } = await import("./chain.ts");
+  const onChain = await arenaView<string>("intent_message_hex", { intent: fixture });
+  assert.equal(onChain, hex(intentMessage(fixture)));
+  const onChainR = await arenaView<string>("resolution_message_hex", { resolution });
+  assert.equal(onChainR, hex(resolutionMessage(resolution)));
+});

@@ -47,7 +47,7 @@ export const fmtNear = (yocto: string | bigint, digits = 5) => {
 export const explorerTx = (hash: string) => `https://testnet.nearblocks.io/txns/${hash}`;
 
 // ---- arena -----------------------------------------------------------------------------------
-export const ARENA = process.env.ARENA_CONTRACT ?? "nearbuddy-arena.testnet";
+export const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
 export async function arenaView<T>(method: string, args: Record<string, unknown>): Promise<T> {
   return (await provider.callFunction({ contractId: ARENA, method, args })) as T;
 }
