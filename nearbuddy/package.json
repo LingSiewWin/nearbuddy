@@ -8,7 +8,8 @@
     "demo": "tsx packages/demo/src/index.ts",
     "test": "tsx --test packages/protocol/src/*.test.ts packages/solver/src/*.test.ts",
     "web": "pnpm --dir web dev",
-    "guarantor": "tsx packages/demo/src/guarantor.ts"
+    "guarantor": "tsx packages/demo/src/guarantor.ts",
+    "arena-demo": "tsx packages/demo/src/arena.ts"
   },
   "dependencies": {
     "borsh": "2.0.0",
