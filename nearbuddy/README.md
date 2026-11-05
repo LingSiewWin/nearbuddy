@@ -99,6 +99,7 @@ cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt 
 cd .. && pnpm arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, resolve
 pnpm --dir web build && pnpm --dir web start -p 3011   # /arena reads the public RPC, no keys in the browser
 pnpm real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
+sh scripts/arena-up.sh 3 90               # or all at once: solver + web + three 90-second duels
 ```
 
 ## The problem
