@@ -47,8 +47,13 @@ test("route: unknown path is null; pending = on-chain injections whose payload w
   const snap = (await arena.route("GET", "/arena", ""))!.body as { pending: Record<string, { payload: string }[]> };
   assert.equal(snap.pending.A.length, 1);
   assert.equal(snap.pending.A[0].payload, "BTC banned");
-  arena.consume("A", "1", ["H1"]);
+  arena.consume("A", "1", ["1"]);
   assert.equal(Object.keys(await arena.pending()).length, 0);
+});
+
+test("/chaos caps the payload size", async () => {
+  const arena = new Arena({} as never, "s.testnet");
+  await assert.rejects(arena.route("POST", "/chaos", JSON.stringify({ payload: "x".repeat(2049) }), {}), /payload over 2048/);
 });
 
 test("/chaos is open and returns the sha256 of the payload", async () => {

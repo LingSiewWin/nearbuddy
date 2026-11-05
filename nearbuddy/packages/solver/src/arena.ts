@@ -9,6 +9,8 @@
 //   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}
 //   GET  /arena                                              -> snapshot incl. pending injections with payloads
 import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { teraToGas, type Account } from "near-api-js";
 import { b64 } from "../../protocol/src/index.ts";
 import { verifyIntent, type Resolution, type SignedIntent } from "../../protocol/src/intent.ts";
@@ -25,6 +27,9 @@ export const CHAOS_DEPOSIT = BigInt(process.env.CHAOS_DEPOSIT ?? "10000000000000
 /// Shared secret for the POST routes: every one of them spends the solver's NEAR or debits a follower.
 /// Unset = routes refuse all POSTs (the on-chain gate trusts this account, so the port must not be open).
 export const ARENA_SECRET = process.env.ARENA_SECRET ?? "";
+export const MAX_PAYLOAD = 2048;
+export const MAX_PAYLOADS = 2000;
+const PAYLOAD_FILE = process.env.ARENA_PAYLOADS ?? new URL("../../../.arena-payloads.json", import.meta.url).pathname;
 function keyOk(h: string | string[] | undefined): boolean {
   if (!ARENA_SECRET || typeof h !== "string") return false;
   const a = Buffer.from(h), b = Buffer.from(ARENA_SECRET);
@@ -121,10 +126,36 @@ export class Arena {
    *  `inject_chaos(duel_id, target, kind, payload_hash)` on chain with their own deposit; the runner only
    *  sees the injection once it is on chain (see `pending`). ponytail: in-memory store, capped. */
   stash(payload: string): { payload_hash: string } {
+    if (payload.length > MAX_PAYLOAD) throw new Error(`payload over ${MAX_PAYLOAD} bytes`);
     const payload_hash = b64.enc(createHash("sha256").update(payload).digest());
     this.payloads.set(payload_hash, payload);
-    if (this.payloads.size > 500) this.payloads.delete(this.payloads.keys().next().value!);
+    while (this.payloads.size > MAX_PAYLOADS) this.payloads.delete(this.payloads.keys().next().value!);
+    this.persist();
     return { payload_hash };
+  }
+
+  /** Payloads survive a restart (a spectator pays on chain after handing us the text). */
+  private persist() {
+    try {
+      mkdirSync(dirname(PAYLOAD_FILE), { recursive: true });
+      writeFileSync(PAYLOAD_FILE, JSON.stringify([...this.payloads.entries()]));
+    } catch { /* best effort */ }
+  }
+
+  /** Rebuild `openDuels` from chain and `payloads` from disk after a restart. */
+  async bootstrap() {
+    try {
+      if (existsSync(PAYLOAD_FILE)) for (const [h, p] of JSON.parse(readFileSync(PAYLOAD_FILE, "utf8")) as [string, string][]) this.payloads.set(h, p);
+      const cfg = await arenaView<{ next_duel: string }>("get_config", {});
+      const n = Number(cfg.next_duel);
+      for (let id = n - 1; id >= Math.max(0, n - 20); id--) {
+        const d = await (this.deps.getDuel ?? ((x: string) => arenaView<{ resolved: boolean; injections: never[] }>("get_duel", { duel_id: x })))(String(id));
+        if (d && !d.resolved) this.openDuels.add(String(id));
+      }
+      console.log(`[arena] bootstrap: ${this.openDuels.size} open duels, ${this.payloads.size} payloads`);
+    } catch (e) {
+      console.log(`[arena] bootstrap skipped: ${String(e).slice(0, 120)}`);
+    }
   }
 
   /** Operator path (secret): the solver pays the deposit itself. Kept for the runner-less demo. */
@@ -147,23 +178,31 @@ export class Arena {
     return { tx: r.tx, report: r.value };
   }
 
-  /** Injections on chain for open duels whose payload this solver holds and the runner has not prompted yet. */
+  private pendingMemo: { at: number; v: Record<string, Injection[]> } | null = null;
+  /** Injections on chain for open duels whose payload this solver holds and the runner has not prompted yet.
+   *  One view per open duel, in parallel, memoised for 3 s; an RPC error skips that duel for this call. */
   async pending(): Promise<Record<string, Injection[]>> {
-    const out: Record<string, Injection[]> = {};
+    if (this.pendingMemo && Date.now() - this.pendingMemo.at < 3000) return this.pendingMemo.v;
     const getDuel = this.deps.getDuel ?? ((id: string) => arenaView<{ injections: { kind: string; payload_hash: string; target: string; block: string }[]; resolved: boolean }>("get_duel", { duel_id: id }));
-    for (const duel_id of this.openDuels) {
-      const d = await getDuel(duel_id);
-      if (!d || d.resolved) { this.openDuels.delete(duel_id); continue; }
+    const out: Record<string, Injection[]> = {};
+    await Promise.all([...this.openDuels].map(async (duel_id) => {
+      let d: Awaited<ReturnType<typeof getDuel>>;
+      try { d = await getDuel(duel_id); } catch { return; }
+      if (!d) return;
+      if (d.resolved) { this.openDuels.delete(duel_id); return; }
       for (const j of d.injections) {
         const payload = this.payloads.get(j.payload_hash);
-        if (payload === undefined || this.consumed.has(`${duel_id}:${j.target}:${j.payload_hash}`)) continue;
+        if (payload === undefined || this.consumed.has(`${duel_id}:${j.target}:${j.block}`)) continue;
         (out[j.target] ??= []).push({ duel_id, target: j.target, kind: j.kind, payload, payload_hash: j.payload_hash, block: j.block });
       }
-    }
+    }));
+    this.pendingMemo = { at: Date.now(), v: out };
     return out;
   }
-  consume(target: string, duel_id: string, hashes: string[]) {
-    for (const h of hashes) this.consumed.add(`${duel_id}:${target}:${h}`);
+  /** Keyed by block, so two spectators injecting the same text are two prompts. */
+  consume(target: string, duel_id: string, blocks: string[]) {
+    for (const b of blocks) this.consumed.add(`${duel_id}:${target}:${b}`);
+    this.pendingMemo = null;
   }
 
   async snapshot() {
@@ -203,8 +242,8 @@ export class Arena {
       return { code: 200, body: await this.settleFollow(q.agent_pk, q.follower, q.fills) };
     }
     if (method === "POST" && url === "/consume") {
-      const q = JSON.parse(body) as { target: string; duel_id: string; hashes: string[] };
-      this.consume(q.target, q.duel_id, q.hashes ?? []);
+      const q = JSON.parse(body) as { target: string; duel_id: string; blocks: string[] };
+      this.consume(q.target, q.duel_id, q.blocks ?? []);
       return { code: 200, body: { ok: true } };
     }
     return null;

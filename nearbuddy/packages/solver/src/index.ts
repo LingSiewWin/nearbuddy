@@ -27,6 +27,7 @@ const account = loadAccount(SOLVER_ID);
 const guarantor = new Guarantor(account, SOLVER_ID);
 // Arena: POST /duel, /intent, /chaos, /resolve, /settle_follow, GET /arena (see arena.ts).
 const arena = new Arena(account, SOLVER_ID);
+void arena.bootstrap();
 
 // ---- persisted state -------------------------------------------------------------------------
 type Carried = { s: SignedIou; at: number };
@@ -139,7 +140,11 @@ if (process.argv[1]?.endsWith("solver/src/index.ts")) {
   }, 5_000).unref();
 
   createServer(async (req, res) => {
-    const body = await new Promise<string>((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b)); });
+    const body = await new Promise<string>((r, rej) => {
+      let b = "";
+      req.on("data", (c) => { b += c; if (b.length > 65_536) { rej(new Error("body over 64 KiB")); req.destroy(); } });
+      req.on("end", () => r(b));
+    });
     try {
       if (req.method === "POST" && req.url === "/verify") {
         const v = JSON.parse(body) as VerifyRequest;
