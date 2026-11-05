@@ -12,3 +12,7 @@ agents/data/
 __pycache__/
 .pytest_cache/
 .vercel
+.arena-payloads.json
+.arena-history.json
+.solver.log
+.web.log
