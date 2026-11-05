@@ -2,7 +2,7 @@
 import { JsonRpcProvider } from "near-api-js";
 
 
-const RPC = process.env.NEAR_RPC ?? "https://test.rpc.fastnear.com";
+const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org";
 const CONTRACT = process.env.NEARBUDDY_CONTRACT ?? "nearbuddy-vault.testnet";
 const OWNER = process.env.OWNER_ID ?? "nearbuddy-owner.testnet";
 const SOLVER = process.env.SOLVER_ID ?? "nearbuddy-solver.testnet";

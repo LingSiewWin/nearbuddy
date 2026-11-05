@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { Account, JsonRpcProvider, type KeyPairString } from "near-api-js";
 import type { Iou } from "./index.ts";
 
-export const RPC = process.env.NEAR_RPC ?? "https://test.rpc.fastnear.com";
+export const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org"; // one default everywhere; see .env.example
 export const CONTRACT = process.env.NEARBUDDY_CONTRACT ?? "nearbuddy-vault.testnet";
 export const provider = new JsonRpcProvider({ url: RPC });
 

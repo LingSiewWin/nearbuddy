@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 
 type Snap = {
-  at: number; contract: string; owner: string; solverId: string; api: string;
+  at: number; rpc: string; contract: string; owner: string; solverId: string; api: string;
   config: { fee_bps: number; withdraw_delay_ns: string; min_solver_stake: string; max_batch: number } | null;
   vault: { balance: string; pending_withdraw: [string, string] | null } | null;
   solver: { stake: string; fees_earned: string; ious_settled: number } | null;
@@ -57,7 +57,7 @@ export default function Page() {
   return (
     <pre>
       <span className="hi">NEARBUDDY</span> <span className="dim">· zero-balance credit clearinghouse for AI agents · NEAR testnet · live</span>{"\n"}
-      <span className="dim">{s ? `snapshot ${new Date(s.at).toISOString()}  rpc test.rpc.fastnear.com` : "connecting"}</span><span className="cursor" />{"\n\n"}
+      <span className="dim">{s ? `snapshot ${new Date(s.at).toISOString()}  rpc ${new URL(s.rpc).host}` : "connecting"}</span><span className="cursor" />{"\n\n"}
       {top("CONTRACT")}{"\n"}
       {row("account", s?.contract ?? "-")}{"\n"}
       {row("fee", s?.config ? `${s.config.fee_bps} bps of settled volume -> solver` : "-")}{"\n"}
