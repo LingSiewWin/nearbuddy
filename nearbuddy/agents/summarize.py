@@ -7,14 +7,18 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
+import os
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
+from dotenv import dotenv_values
 
-RPC = "https://test.rpc.fastnear.com"  # read-only, low volume; rpc.testnet.near.org is deprecated
-ARENA = "arena.nearbuddy-solver.testnet"
+ROOT = Path(__file__).resolve().parents[1]
+ENV = {**dotenv_values(ROOT / ".env"), **os.environ}
+RPC = ENV.get("NEAR_RPC", "https://near-testnet.drpc.org")
+ARENA = ENV.get("ARENA_CONTRACT", "arena.nearbuddy-solver.testnet")
 DATA = Path(__file__).resolve().parent / "data" / "decisions.jsonl"
 
 
@@ -22,9 +26,13 @@ def view(method: str, args: dict) -> dict | list | None:
     body = {"jsonrpc": "2.0", "id": 1, "method": "query", "params": {
         "request_type": "call_function", "finality": "final", "account_id": ARENA, "method_name": method,
         "args_base64": base64.b64encode(json.dumps(args).encode()).decode()}}
-    r = requests.post(RPC, json=body, timeout=30).json()
-    if "error" in r or "error" in r.get("result", {}):
-        return None
+    resp = requests.post(RPC, json=body, headers={"User-Agent": "nearbuddy/1"}, timeout=30)
+    resp.raise_for_status()
+    r = resp.json()
+    if "error" in r:
+        raise RuntimeError(f"{RPC} {method}: {r['error'].get('message', r['error'])}")
+    if "error" in r.get("result", {}):
+        return None  # contract-level: no such duel
     return json.loads(bytes(r["result"]["result"]))
 
 
@@ -34,8 +42,11 @@ def main() -> None:
     for r in rows:
         by_duel[r["duel_id"]].append(r)
     print(f"{'duel':>4}  {'open':>10} -> {'close':>10}  {'A last':6} {'B last':6}  inj  outcome")
-    for duel_id in sorted(by_duel, key=int):
-        d = view("get_duel", {"duel_id": duel_id})
+    ids = sorted(by_duel, key=int)
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        duels = dict(zip(ids, ex.map(lambda i: view("get_duel", {"duel_id": i}), ids)))
+    for duel_id in ids:
+        d = duels[duel_id]
         if not d:
             print(f"{duel_id:>4}  (not on chain)")
             continue
@@ -45,10 +56,6 @@ def main() -> None:
                 side = r["intent"]["side"]
                 last["A" if r.get("hardened") else "B"] = side
         inj = len(d["injections"])
-        a_pnl = b_pnl = None
-        price = ""
-        # outcome from the dataset is not stored; infer from the resolve event is not available via view,
-        # so show resolved flag and the two last calls; alpha deltas are in `leaderboard`.
         status = "resolved" if d["resolved"] else "OPEN"
         print(f"{duel_id:>4}  {'':>10}    {'':>10}  {last['A']:6} {last['B']:6}  {inj:3}  {status}")
     board = view("leaderboard", {}) or []
