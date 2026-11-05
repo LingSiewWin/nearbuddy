@@ -1,0 +1,65 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.near-credentials/
+neardev/
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+.vercel/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Rust / NEAR contracts
+target/
+res/
+out/
+Cargo.lock.bak
+*.wasm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Editors / OS
+.zed/
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Claude Code
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Logs
+*.log
+
+# Founder rule (2026-11-05): only code + README.md in the repo
+*.md
+!README.md
+.claude/
+docs/
+.secrets/
+.playwright-mcp/
+reports/
+research_notes/
+agents/
+skills-lock.json
+/image.png
