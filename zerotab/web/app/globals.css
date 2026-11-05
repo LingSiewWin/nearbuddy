@@ -1,0 +1,10 @@
+:root { --bg: #0b0f0c; --fg: #c8f5c8; --dim: #5f8a5f; --hi: #eaffea; --warn: #f5d76e; --bad: #ff7b72; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); }
+body { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 16px; }
+pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+.hi { color: var(--hi); } .dim { color: var(--dim); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+a { color: var(--fg); }
+.cursor::after { content: "█"; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-color-scheme: light) { :root { --bg: #f4fbf4; --fg: #163816; --dim: #5f8a5f; --hi: #000; } }
