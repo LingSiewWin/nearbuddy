@@ -1,0 +1,75 @@
+ZeroTab guarantor loss model  trials=200000 seed=7 runtime=2.3s  (python3 -I, stdlib)
+
+ASSUMPTIONS
+  trials                     200000                 default per scenario; argv[1] overrides
+  seed                       7                      argv[2] overrides
+  latency_sigma              0.5                    ESTIMATE lognormal sigma for block inclusion jitter; pending Track 2 measurement
+  near_settle_s              1.2                    NEAR finality ~1.2 s, https://docs.near.org/concepts/basics/transactions/overview
+  near_settle_gas_usd        0.0001                 0.498 TGas/IOU measured at 100-IOU batch (agents/finance-ops.md); 1 TGas = 1e-4 NEAR, NEAR ~ $2 ESTIMATE -> ~$0.0001
+  amount_median_usd          40.0                   ESTIMATE card ticket median; lognormal
+  amount_sigma               1.0                    ESTIMATE; mean ticket = median*exp(sigma^2/2) ~ $66
+  balance_median_usd         500.0                  ESTIMATE self-custody card wallet balance; lognormal
+  balance_sigma              0.8                    ESTIMATE
+  allowance                  inf                    ESTIMATE allowance >= balance, so ledger bound = balance
+  cards_per_wallet           5                      ESTIMATE K; shared wallet backing several agent cards
+  swipes_per_card_per_day    50.0                   ESTIMATE lambda; agentic cards swipe often
+  p_adv_grid                 (1e-05, 0.0001, 0.001) ESTIMATE range. Ceiling analog: e-commerce chargeback rate 0.6-1.0%, friendly fraud ~44% of chargebacks, https://chargebacks911.com/chargeback-statistics/
+  adv_react_median_s         3.0                    ESTIMATE human reaction: open wallet, sign drain; lognormal sigma 1.0
+  adv_react_sigma            1.0                    ESTIMATE
+  recovery_rate              0.0                    ESTIMATE r; later recovery from wallet not modeled
+  book_swipes_per_day        10000.0                ESTIMATE guarantor-wide swipe volume, drives concurrent exposure
+  stake_yield_apr            0.08                   ESTIMATE target yield on staked USDC
+  exposure_percentile        0.99                   stake covers p99 of concurrent outstanding $
+  insurable_bps              25.0                   product target: fee floor <= 25 bps
+  chain:base                 incl=('lognormal', 2.0, None) final_extra_s=0.0 gas_pull_usd=0.001  2 s block, accept at block; https://docs.base.org/base-chain/network-information/transaction-finality; gas ESTIMATE
+  chain:solana               incl=('lognormal', 0.4, None) final_extra_s=12.4 gas_pull_usd=0.0007  400 ms slot, ~12.8 s finalized; https://solana.com/docs/core/transactions/confirmation; gas 5000 lamports + priority ESTIMATE
+  chain:ethereum             incl=('lognormal', 12.0, None) final_extra_s=768.0 gas_pull_usd=1.0  12 s slot, ~13 min finality; https://ethereum.org/en/developers/docs/consensus-mechanisms/pos/#finality; gas $0.50-2 ESTIMATE, mid $1
+  chain:bitcoin_chainsig     incl=('shiftexp', 3.5, 600.0) final_extra_s=0.0 gas_pull_usd=1.5  ~10 min exponential block wait + MPC sign 2-5 s ESTIMATE, accept 1 conf (ESTIMATE); https://docs.near.org/chain-abstraction/chain-signatures; BTC fee ESTIMATE
+  chain:base_preconf         incl=('lognormal', 0.2, None) final_extra_s=0.0 gas_pull_usd=0.001  200 ms flashblock preconf, same Base doc; sequencer equivocation risk set to 0 (ESTIMATE)
+  chain:base_l1              incl=('lognormal', 2.0, None) final_extra_s=118.0 gas_pull_usd=0.001  2 s block + wait for L1 batch ~2 min, same Base doc
+
+SCENARIOS  (loss and floor in bps of guaranteed volume; p99 exposure = stake S in $)
+chain              ledger   p_adv   loss_bps  gas_bps  p99_exp_$  cap_bps  floor_bps  floor+cap
+base               on       1e-05     0.0092   0.1657        284  0.00094     0.1749     0.1759
+base               on       1e-04     0.0917   0.1657        284  0.00094     0.2574     0.2584
+base               on       1e-03     0.9167   0.1657        284  0.00094     1.0825     1.0834
+base               off      1e-05     1.9636   0.1657        284  0.00094     2.1294     2.1303
+base               off      1e-04     2.0462   0.1657        284  0.00094     2.2119     2.2128
+base               off      1e-03     2.8712   0.1657        284  0.00094     3.0370     3.0379
+solana             on       1e-05     0.0007   0.1215        541  0.00180     0.1222     0.1240
+solana             on       1e-04     0.0071   0.1215        541  0.00180     0.1286     0.1304
+solana             on       1e-03     0.0710   0.1215        541  0.00180     0.1925     0.1943
+solana             off      1e-05     0.3797   0.1215        541  0.00180     0.5012     0.5030
+solana             off      1e-04     0.3861   0.1215        541  0.00180     0.5076     0.5094
+solana             off      1e-03     0.4501   0.1215        541  0.00180     0.5715     0.5733
+ethereum           on       1e-05     0.0320 151.2446       8508  0.02820   151.2767   151.3049
+ethereum           on       1e-04     0.3202 151.2446       8508  0.02820   151.5649   151.5931
+ethereum           on       1e-03     3.2022 151.2446       8508  0.02820   154.4469   154.4751
+ethereum           off      1e-05    11.5596 151.2446       8508  0.02820   162.8043   162.8325
+ethereum           off      1e-04    11.8478 151.2446       8508  0.02820   163.0925   163.1207
+ethereum           off      1e-03    14.7299 151.2446       8508  0.02820   165.9745   166.0027
+bitcoin_chainsig   on       1e-05     0.0496 226.7854      21450  0.07107   226.8351   226.9062
+bitcoin_chainsig   on       1e-04     0.4963 226.7854      21450  0.07107   227.2818   227.3529
+bitcoin_chainsig   on       1e-03     4.9634 226.7854      21450  0.07107   231.7489   231.8200
+bitcoin_chainsig   off      1e-05   519.1509 226.7854      21450  0.07107   745.9364   746.0075
+bitcoin_chainsig   off      1e-04   519.5976 226.7854      21450  0.07107   746.3831   746.4542
+bitcoin_chainsig   off      1e-03   524.0647 226.7854      21450  0.07107   750.8502   750.9213
+
+LEDGER VALUE  (race loss removed by the reservation ledger; same events become declines)
+  base               race_loss_off=1.9545 bps  declines_with_ledger=0.013% of swipes
+  solana             race_loss_off=0.3790 bps  declines_with_ledger=0.003% of swipes
+  ethereum           race_loss_off=11.5276 bps  declines_with_ledger=0.077% of swipes
+  bitcoin_chainsig   race_loss_off=519.1013 bps  declines_with_ledger=4.021% of swipes
+
+SENSITIVITY  Base: what the guarantor waits for (p_adv=1e-4, ledger on)
+  base_preconf   loss=0.0016 bps  p99_exp=$211  cap=0.00070 bps  floor+cap=0.1693 bps
+  base           loss=0.0917 bps  p99_exp=$284  cap=0.00094 bps  floor+cap=0.2584 bps
+  base_l1        loss=0.0902 bps  p99_exp=$1980  cap=0.00658 bps  floor+cap=0.2637 bps
+
+SENSITIVITY  bot adversary (zero reaction time, drain races pull head-on), ledger on, p_adv=1e-4
+  base               P(drain wins|attempt): human=0.092 bot=0.499  floor+cap bot=0.6656 bps
+  solana             P(drain wins|attempt): human=0.007 bot=0.501  floor+cap bot=0.6245 bps
+  ethereum           P(drain wins|attempt): human=0.320 bot=0.502  floor+cap bot=151.7747 bps
+  bitcoin_chainsig   P(drain wins|attempt): human=0.496 bot=0.500  floor+cap bot=227.3568 bps
+
+INSURABLE at <= 25 bps with ledger on, worst p_adv=1e-03: base, solana
