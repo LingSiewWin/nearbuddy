@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { quote, sellNearForUsdc, USDC_NEAR, WNEAR, type Quote } from "./oneclick.ts";
+import { quote, sellNearForUsdc, sellNearForUsdcOnChain, USDC_NEAR, WNEAR, type Quote } from "./oneclick.ts";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 
@@ -24,4 +24,12 @@ test("fixture replay parses the fields the arena uses", async () => {
 test("non-2xx surfaces the status", async () => {
   const fetchFn = (async () => new Response("nope", { status: 400 })) as unknown as typeof fetch;
   await assert.rejects(quote(sellNearForUsdc(1n, "x.near"), fetchFn), /1click quote 400/);
+});
+
+test("on-chain request is non-dry with origin-chain deposit and destination-chain recipient", () => {
+  const r = sellNearForUsdcOnChain(5n * 10n ** 23n, "someone.near");
+  assert.equal(r.dry, false);
+  assert.equal(r.depositType, "ORIGIN_CHAIN");
+  assert.equal(r.recipientType, "DESTINATION_CHAIN");
+  assert.equal(r.amount, "500000000000000000000000");
 });

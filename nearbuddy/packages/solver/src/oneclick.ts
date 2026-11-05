@@ -2,6 +2,8 @@
 // (https://1click.chaindefuser.com/docs/v0/openapi.yaml, read 2026-11-05). Mainnet only: there is
 // no 1Click testnet. Dry quotes are free and keyless; without a partner key a real swap carries a
 // 25 bps platform fee. `swap` is the only paid path and is never called by the arena loop.
+import { teraToGas, type Account } from "near-api-js";
+
 export const ONECLICK_URL = process.env.ONECLICK_URL ?? "https://1click.chaindefuser.com";
 export const ONECLICK_JWT = process.env.ONECLICK_JWT;
 export const WNEAR = "nep141:wrap.near";
@@ -67,4 +69,43 @@ export async function status(depositAddress: string, fetchFn: typeof fetch = fet
   const r = await fetchFn(`${ONECLICK_URL}/v0/status?depositAddress=${encodeURIComponent(depositAddress)}`, { headers: headers() });
   if (!r.ok) throw new Error(`1click status ${r.status}`);
   return (await r.json()) as { status: SwapStatus; swapDetails?: Record<string, unknown> };
+}
+
+// ---- the one paid path ------------------------------------------------------------------------
+// Real swap on mainnet: wrap NEAR, quote (non-dry, ORIGIN_CHAIN deposit), ft_transfer wNEAR to the
+// quote's depositAddress, report the tx, poll until SUCCESS. Run by hand (`pnpm real-swap`), never by
+// the arena loop. Needs a funded mainnet account in the legacy keychain.
+import { teraToGas, type Account } from "near-api-js";
+
+export function sellNearForUsdcOnChain(amountYocto: bigint, account: string): QuoteRequest {
+  return {
+    dry: false, swapType: "EXACT_INPUT", slippageTolerance: 100, originAsset: WNEAR, depositType: "ORIGIN_CHAIN",
+    destinationAsset: USDC_NEAR, amount: amountYocto.toString(), refundTo: account, refundType: "ORIGIN_CHAIN",
+    recipient: account, recipientType: "DESTINATION_CHAIN", deadline: new Date(Date.now() + 15 * 60_000).toISOString(),
+  };
+}
+
+export interface SwapResult { quote: Quote; wrapTx: string; depositTx: string; status: SwapStatus; amountOut?: string }
+
+export async function executeSwap(account: Account, amountYocto: bigint, log: (s: string) => void = () => {}): Promise<SwapResult> {
+  const q = await quote(sellNearForUsdcOnChain(amountYocto, account.accountId));
+  const dep = q.quote.depositAddress;
+  if (!dep) throw new Error("quote has no depositAddress (dry?)");
+  log(`quote ${q.quote.amountInFormatted} wNEAR -> ${q.quote.amountOutFormatted} USDC, deposit to ${dep}, deadline ${q.quote.deadline}`);
+  // wrap: near_deposit mints wNEAR 1:1 (storage_deposit first in case the account is new to wrap.near)
+  await account.callFunctionRaw({ contractId: "wrap.near", methodName: "storage_deposit", args: {}, gas: teraToGas("30"), deposit: 1_250_000_000_000_000_000_000n });
+  const wrap = await account.callFunctionRaw({ contractId: "wrap.near", methodName: "near_deposit", args: {}, gas: teraToGas("30"), deposit: amountYocto });
+  log(`wrapped ${amountYocto} yocto: ${wrap.transaction.hash}`);
+  const xfer = await account.callFunctionRaw({
+    contractId: "wrap.near", methodName: "ft_transfer", args: { receiver_id: dep, amount: amountYocto.toString() }, gas: teraToGas("30"), deposit: 1n,
+  });
+  log(`ft_transfer to deposit address: ${xfer.transaction.hash}`);
+  await submitDeposit(xfer.transaction.hash, dep);
+  let st = await status(dep);
+  for (let i = 0; i < 40 && !["SUCCESS", "REFUNDED", "FAILED"].includes(st.status); i++) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    st = await status(dep);
+    log(`status ${st.status}`);
+  }
+  return { quote: q, wrapTx: wrap.transaction.hash, depositTx: xfer.transaction.hash, status: st.status, amountOut: (st.swapDetails as { amountOut?: string } | undefined)?.amountOut };
 }
