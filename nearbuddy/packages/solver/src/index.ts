@@ -4,6 +4,8 @@
 // GET  /ledger                                                      -> what the solver is carrying
 // GET  /supported                                                   -> {kinds:[{x402Version, scheme, network}]}
 // Carried IOUs persist to a JSON file so a restart loses nothing. Auto-settles on batch size, age, or owner withdrawal.
+// Secrets and arena settings come from the gitignored env file next to package.json (optional).
+try { process.loadEnvFile(new URL("../../../.env", import.meta.url).pathname); } catch { /* no env file */ }
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -14,6 +16,7 @@ import {
   CONTRACT, getMandate, getVault, loadAccount, type Mandate, type SettlementReport, type Vault,
 } from "../../protocol/src/chain.ts";
 import { Guarantor } from "./guarantor.ts";
+import { Arena } from "./arena.ts";
 
 const SOLVER_ID = process.env.SOLVER_ID ?? "nearbuddy-solver.testnet";
 const PORT = Number(process.env.SOLVER_PORT ?? 4020);
@@ -23,6 +26,8 @@ const AUTO_AGE_MS = Number(process.env.SOLVER_AUTO_AGE_MS ?? 60_000); // or when
 const account = loadAccount(SOLVER_ID);
 // Guarantor layer: POST /guarantee, POST /pull, POST /settle_pulls, GET /guarantor (see guarantor.ts).
 const guarantor = new Guarantor(account, SOLVER_ID);
+// Arena: POST /duel, /intent, /chaos, /resolve, /settle_follow, GET /arena (see arena.ts).
+const arena = new Arena(account, SOLVER_ID);
 
 // ---- persisted state -------------------------------------------------------------------------
 type Carried = { s: SignedIou; at: number };
@@ -158,6 +163,8 @@ if (process.argv[1]?.endsWith("solver/src/index.ts")) {
       if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: X402_VERSION, scheme: SCHEME, network: NETWORK }] });
       const g = await guarantor.route(req.method, req.url, body);
       if (g) return json(res, g.code, g.body);
+      const a = await arena.route(req.method, req.url, body);
+      if (a) return json(res, a.code, a.body);
       json(res, 404, { error: "not found" });
     } catch (e) {
       json(res, 500, { error: String(e) });
