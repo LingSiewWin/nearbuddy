@@ -21,6 +21,9 @@ export interface FollowerQuote { follower: string; amount: string; quote?: Quote
 interface IntentRecord { signed: SignedIntent; tx: string; quotes: FollowerQuote[]; at: number }
 
 export const CHAOS_DEPOSIT = BigInt(process.env.CHAOS_DEPOSIT ?? "100000000000000000000000");
+/// Shared secret for the POST routes: every one of them spends the solver's NEAR or debits a follower.
+/// Unset = routes refuse all POSTs (the on-chain gate trusts this account, so the port must not be open).
+export const ARENA_SECRET = process.env.ARENA_SECRET ?? "";
 const GAS = teraToGas("100");
 
 /** Pick the mandate-bounded amount to quote for one follower: min(cap, allowance - spent). */
@@ -82,17 +85,15 @@ export class Arena {
     const list = await (this.deps.listFollowers ?? ((pk) => arenaView<[string, Mandate][]>("list_followers", { agent_pk: pk })))(agent_pk);
     const now = (this.deps.now ?? (() => BigInt(Date.now()) * 1_000_000n))();
     const q = this.deps.quote ?? quote;
-    const out: FollowerQuote[] = [];
-    for (const [follower, m] of list) {
-      if (!mandateOpen(m, now)) continue;
+    const account = this.solverId.replace(/\.testnet$/, ".near");
+    return Promise.all(list.filter(([, m]) => mandateOpen(m, now)).map(async ([follower, m]): Promise<FollowerQuote> => {
       const amount = quoteAmount(m);
       try {
-        out.push({ follower, amount: amount.toString(), quote: await q(sellNearForUsdc(amount, this.solverId.replace(/\.testnet$/, ".near"))) });
+        return { follower, amount: amount.toString(), quote: await q(sellNearForUsdc(amount, account)) };
       } catch (e) {
-        out.push({ follower, amount: amount.toString(), error: String(e).slice(0, 200) });
+        return { follower, amount: amount.toString(), error: String(e).slice(0, 200) };
       }
-    }
-    return out;
+    }));
   }
 
   async injectChaos(duel_id: string, target: string, kind: string, payload: string) {
@@ -118,9 +119,13 @@ export class Arena {
     for (const i of this.injections) (out[i.target] ??= []).push(i);
     return out;
   }
-  consume(target: string, duel_id: string) {
-    for (let i = this.injections.length - 1; i >= 0; i--)
-      if (this.injections[i].target === target && this.injections[i].duel_id === duel_id) this.injections.splice(i, 1);
+  /** Drop only the injections the runner says it prompted (by payload hash), never ones that arrived later. */
+  consume(target: string, duel_id: string, hashes: string[]) {
+    const drop = new Set(hashes);
+    for (let i = this.injections.length - 1; i >= 0; i--) {
+      const j = this.injections[i];
+      if (j.target === target && j.duel_id === duel_id && drop.has(j.payload_hash)) this.injections.splice(i, 1);
+    }
   }
 
   snapshot() {
@@ -131,8 +136,13 @@ export class Arena {
     };
   }
 
-  async route(method: string | undefined, url: string | undefined, body: string): Promise<{ code: number; body: unknown } | null> {
-    if (method === "POST" && url === "/duel") {
+  async route(method: string | undefined, url: string | undefined, body: string, headers: Record<string, string | string[] | undefined> = {}): Promise<{ code: number; body: unknown } | null> {
+    if (url === "/arena") return { code: 200, body: this.snapshot() };
+    const mine = ["/duel", "/register", "/intent", "/chaos", "/resolve", "/settle_follow", "/consume"].includes(url ?? "");
+    if (!mine) return null;
+    if (method !== "POST") return { code: 405, body: { error: "POST only" } };
+    if (!ARENA_SECRET || headers["x-arena-key"] !== ARENA_SECRET) return { code: 401, body: { error: "x-arena-key required" } };
+    if (url === "/duel") {
       const q = JSON.parse(body) as { a: string; b: string; symbol: string; close_at: string };
       return { code: 200, body: await this.openDuel(q.a, q.b, q.symbol, q.close_at) };
     }
@@ -154,11 +164,10 @@ export class Arena {
       return { code: 200, body: await this.settleFollow(q.agent_pk, q.follower, q.fills) };
     }
     if (method === "POST" && url === "/consume") {
-      const q = JSON.parse(body) as { target: string; duel_id: string };
-      this.consume(q.target, q.duel_id);
+      const q = JSON.parse(body) as { target: string; duel_id: string; hashes: string[] };
+      this.consume(q.target, q.duel_id, q.hashes ?? []);
       return { code: 200, body: { ok: true } };
     }
-    if (url === "/arena") return { code: 200, body: this.snapshot() };
     return null;
   }
 }

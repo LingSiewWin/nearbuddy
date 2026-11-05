@@ -43,8 +43,15 @@ test("route: unknown path is null; /arena snapshot; pending injections by target
   arena.injections.push({ duel_id: "1", target: "A", kind: "fake_news", payload: "BTC banned", payload_hash: "x", tx: "t", at: 0 });
   const snap = (await arena.route("GET", "/arena", ""))!.body as { pending: Record<string, unknown[]> };
   assert.equal(snap.pending.A.length, 1);
-  await arena.route("POST", "/consume", JSON.stringify({ target: "A", duel_id: "1" }));
+  arena.consume("A", "1", ["x"]);
   assert.equal(Object.keys(arena.pending()).length, 0);
+});
+
+test("POST routes need the shared secret; GET /arena does not", async () => {
+  const arena = new Arena({} as never, "s.testnet");
+  const r = await arena.route("POST", "/duel", "{}", {});
+  assert.equal(r?.code, 401);
+  assert.equal((await arena.route("GET", "/arena", ""))?.code, 200);
 });
 
 test("payload hash is sha256 of the payload bytes", () => {

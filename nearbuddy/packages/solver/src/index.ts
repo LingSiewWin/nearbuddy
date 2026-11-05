@@ -4,8 +4,7 @@
 // GET  /ledger                                                      -> what the solver is carrying
 // GET  /supported                                                   -> {kinds:[{x402Version, scheme, network}]}
 // Carried IOUs persist to a JSON file so a restart loses nothing. Auto-settles on batch size, age, or owner withdrawal.
-// Secrets and arena settings come from the gitignored env file next to package.json (optional).
-try { process.loadEnvFile(new URL("../../../.env", import.meta.url).pathname); } catch { /* no env file */ }
+import "../../protocol/src/env.ts";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -163,7 +162,7 @@ if (process.argv[1]?.endsWith("solver/src/index.ts")) {
       if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: X402_VERSION, scheme: SCHEME, network: NETWORK }] });
       const g = await guarantor.route(req.method, req.url, body);
       if (g) return json(res, g.code, g.body);
-      const a = await arena.route(req.method, req.url, body);
+      const a = await arena.route(req.method, req.url, body, req.headers);
       if (a) return json(res, a.code, a.body);
       json(res, 404, { error: "not found" });
     } catch (e) {
