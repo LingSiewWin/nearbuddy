@@ -1,6 +1,7 @@
 //! Sandbox run of the real wasm: a full duel with the maximum 32 injections, an oracle-signed
 //! resolve, and a 10-fill settle_follow. Prints gas burnt per call so the README can quote it.
-//!   cargo test --test test_arena_sandbox -- --nocapture
+//!   cargo test --test test_arena_sandbox -- --ignored --nocapture
+//! Ignored by default: it needs the cargo-near binary and downloads near-sandbox on first run.
 use ed25519_dalek::{Signer, SigningKey};
 use near_api::{AccountId, NearGas, NearToken};
 use near_sdk::base64::{prelude::BASE64_STANDARD, Engine};
@@ -23,6 +24,7 @@ async fn create_subaccount(sandbox: &near_sandbox::Sandbox, name: &str) -> testr
 }
 
 #[tokio::test]
+#[ignore = "needs cargo-near and a near-sandbox download; run with -- --ignored"]
 async fn full_duel_with_max_chaos_and_settlement() -> testresult::TestResult<()> {
     let wasm_path = cargo_near_build::build_with_cli(Default::default())?;
     let wasm = std::fs::read(wasm_path)?;
@@ -60,12 +62,12 @@ async fn full_duel_with_max_chaos_and_settlement() -> testresult::TestResult<()>
     }
 
     // close in ~40 blocks (sandbox blocks are ~1 s; fast_forward below jumps past it)
-    let head: Value = reqwest_block(&sandbox).await?;
-    let now = head["result"]["header"]["timestamp"].as_u64().unwrap();
+    let block = near_api::Chain::block().at(near_api::types::Reference::Final).fetch_from(&net).await?;
+    let now: u64 = block.header.timestamp;
     let close_at = now + 40_000_000_000;
     let r = call("open_duel", json!({"a": b64(&pka), "b": b64(&pkb), "symbol": "BTC/USD", "close_at": close_at.to_string()}), &solver, NearToken::from_yoctonear(0)).await?.assert_success();
     println!("GAS open_duel {:.2} TGas", gas_of(&r) as f64 / 1e12);
-    let duel_id: u64 = 0;
+    let duel_id: u64 = r.json::<U64>()?.0;
 
     let mk = |sk: &SigningKey, pk: &[u8], side: Side, nonce: u64| {
         let i = Intent { agent_pk: Base64VecU8(pk.to_vec()), duel_id: U64(duel_id), side, size_bps: 5_000, nonce: U64(nonce), expires_at: U64(close_at), proof_hash: Base64VecU8(vec![0u8; 32]) };
@@ -110,13 +112,4 @@ async fn full_duel_with_max_chaos_and_settlement() -> testresult::TestResult<()>
     assert_eq!(duel["outcome"]["pnl_b"], -25);
     assert_eq!(duel["outcome"]["winner"], Value::String(b64(&pka)));
     Ok(())
-}
-
-/// Latest block header through the sandbox RPC (near-api has no block view in this version's public API).
-async fn reqwest_block(sandbox: &near_sandbox::Sandbox) -> testresult::TestResult<Value> {
-    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "block", "params": {"finality": "final"}});
-    let out = std::process::Command::new("curl")
-        .args(["-s", "-H", "content-type: application/json", "-d", &body.to_string(), &sandbox.rpc_addr])
-        .output()?;
-    Ok(near_sdk::serde_json::from_slice(&out.stdout)?)
 }
