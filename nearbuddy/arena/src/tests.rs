@@ -1,0 +1,306 @@
+use super::*;
+use ed25519_dalek::{Signer, SigningKey};
+use near_sdk::test_utils::VMContextBuilder;
+use near_sdk::testing_env;
+
+pub const OWNER: &str = "solver.testnet"; // contract owner = solver account in the hackathon deploy
+pub const SOLVER: &str = "solver.testnet";
+pub const OPERATOR: &str = "operator.testnet";
+pub const FOLLOWER: &str = "follower.testnet";
+pub const NOW: u64 = 1_700_000_000_000_000_000;
+pub const CLOSE: u64 = NOW + 60_000_000_000; // +60 s
+pub const BOND: u128 = 1_000_000;
+pub const MIN_CHAOS: u128 = 100;
+
+pub fn ctx_at(pred: &str, deposit: u128, ts: u64) {
+    let mut b = VMContextBuilder::new();
+    b.predecessor_account_id(pred.parse().unwrap())
+        .attached_deposit(NearToken::from_yoctonear(deposit))
+        .block_timestamp(ts);
+    testing_env!(b.build());
+}
+pub fn ctx(pred: &str, deposit: u128) {
+    ctx_at(pred, deposit, NOW)
+}
+
+pub fn key(seed: u8) -> (SigningKey, Vec<u8>) {
+    let sk = SigningKey::from_bytes(&[seed; 32]);
+    let pk = sk.verifying_key().to_bytes().to_vec();
+    (sk, pk)
+}
+
+pub fn intent(pk: &[u8], duel: u64, side: Side, size: u16, nonce: u64) -> Intent {
+    Intent {
+        agent_pk: Base64VecU8(pk.to_vec()),
+        duel_id: U64(duel),
+        side,
+        size_bps: size,
+        nonce: U64(nonce),
+        expires_at: U64(CLOSE),
+        proof_hash: Base64VecU8(vec![0u8; 32]),
+    }
+}
+
+pub fn sign(sk: &SigningKey, i: &Intent) -> SignedIntent {
+    SignedIntent { intent: i.clone(), signature: Base64VecU8(sk.sign(&intent_message(i)).to_bytes().to_vec()) }
+}
+
+pub fn sign_res(sk: &SigningKey, r: &Resolution) -> Base64VecU8 {
+    Base64VecU8(sk.sign(&resolution_message(r)).to_bytes().to_vec())
+}
+
+/// Contract with oracle key seed 9, solver registered, agents A (seed 1) and B (seed 2) bonded.
+pub fn setup() -> (Contract, SigningKey, SigningKey, SigningKey) {
+    let (oracle, oracle_pk) = key(9);
+    let (ska, pka) = key(1);
+    let (skb, pkb) = key(2);
+    ctx(OWNER, 0);
+    let mut c = Contract::init(OWNER.parse().unwrap(), Base64VecU8(oracle_pk), 1_000, 0, U128(MIN_CHAOS));
+    c.add_solver(SOLVER.parse().unwrap());
+    ctx(OPERATOR, BOND);
+    c.register_agent(Base64VecU8(pka), "model-a".into());
+    ctx(OPERATOR, BOND);
+    c.register_agent(Base64VecU8(pkb), "model-b".into());
+    ctx(OWNER, 0);
+    (c, oracle, ska, skb)
+}
+
+pub fn open(c: &mut Contract) -> u64 {
+    ctx(OWNER, 0);
+    c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "BTC/USD".into(), U64(CLOSE)).0
+}
+
+// ---------------------------------------------------------------- task 2: agents, duels, intents
+
+#[test]
+#[should_panic(expected = "agent exists")]
+fn register_twice_panics() {
+    let (mut c, ..) = setup();
+    ctx(OPERATOR, BOND);
+    c.register_agent(Base64VecU8(key(1).1), "again".into());
+}
+
+#[test]
+#[should_panic(expected = "in duel")]
+fn open_duel_requires_free_agents() {
+    let (mut c, ..) = setup();
+    open(&mut c);
+    open(&mut c);
+}
+
+#[test]
+fn post_intent_stores_last_intent() {
+    let (mut c, _, ska, _) = setup();
+    let d = open(&mut c);
+    ctx(SOLVER, 0);
+    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Long, 5_000, 1)));
+    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Short, 2_500, 2)));
+    let duel = c.get_duel(U64(d)).unwrap();
+    let last = duel.last_intent_a.unwrap();
+    assert_eq!(last.side, Side::Short);
+    assert_eq!(last.nonce.0, 2);
+    assert!(duel.last_intent_b.is_none());
+}
+
+#[test]
+#[should_panic(expected = "nonce used")]
+fn post_intent_replay_panics() {
+    let (mut c, _, ska, _) = setup();
+    let d = open(&mut c);
+    ctx(SOLVER, 0);
+    let s = sign(&ska, &intent(&key(1).1, d, Side::Long, 5_000, 1));
+    c.post_intent(s.clone());
+    c.post_intent(s);
+}
+
+#[test]
+#[should_panic(expected = "duel closed")]
+fn post_intent_at_close_panics() {
+    let (mut c, _, ska, _) = setup();
+    let d = open(&mut c);
+    ctx_at(SOLVER, 0, CLOSE);
+    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Long, 5_000, 1)));
+}
+
+#[test]
+#[should_panic(expected = "bad size")]
+fn post_intent_bad_size_panics() {
+    let (mut c, _, ska, _) = setup();
+    let d = open(&mut c);
+    ctx(SOLVER, 0);
+    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Long, 10_001, 1)));
+}
+
+#[test]
+#[should_panic(expected = "bad signature")]
+fn post_intent_bad_sig_panics() {
+    let (mut c, _, _, skb) = setup();
+    let d = open(&mut c);
+    ctx(SOLVER, 0);
+    // signed by B's key but claims A's pk
+    c.post_intent(sign(&skb, &intent(&key(1).1, d, Side::Long, 5_000, 1)));
+}
+
+#[test]
+#[should_panic(expected = "not solver")]
+fn non_solver_cannot_post() {
+    let (mut c, _, ska, _) = setup();
+    let d = open(&mut c);
+    ctx(OPERATOR, 0);
+    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Long, 5_000, 1)));
+}
+
+#[test]
+fn intent_message_len_matches_ts() {
+    // Mirrors packages/protocol/src/intent.test.ts: domain + (4+32) + 8 + 1 + 2 + 8 + 8 + (4+32).
+    let i = Intent {
+        agent_pk: Base64VecU8(vec![1u8; 32]),
+        duel_id: U64(7),
+        side: Side::Short,
+        size_bps: 5_000,
+        nonce: U64(3),
+        expires_at: U64(NOW),
+        proof_hash: Base64VecU8(vec![0u8; 32]),
+    };
+    let m = intent_message(&i);
+    assert_eq!(m.len(), 19 + 36 + 8 + 1 + 2 + 8 + 8 + 36);
+    assert_eq!(m[19 + 36 + 8], 1);
+    println!("INTENT_HEX {}", hex(&m));
+    let r = Resolution { duel_id: U64(7), open_price: U64(10_000_000_000_000), close_price: U64(10_050_000_000_000) };
+    assert_eq!(resolution_message(&r).len(), 20 + 24);
+}
+
+// ---------------------------------------------------------------- task 3: vault, mandates, settle_follow
+
+pub fn mandate(cap: u128, allowance: u128, tokens: Vec<&str>) -> Mandate {
+    Mandate {
+        allowance: U128(allowance),
+        spent: U128(0),
+        per_tx_cap: U128(cap),
+        allowed_tokens: tokens.into_iter().map(String::from).collect(),
+        expires_at: U64(NOW + 1_000_000),
+        revoked: false,
+    }
+}
+
+pub fn fill(nonce: u64, token: &str, amount: u128) -> Fill {
+    Fill { intent_nonce: U64(nonce), token: token.into(), amount_in: U128(amount), amount_out: U128(1), swap_tx: "0xabc".into() }
+}
+
+/// setup + duel + A posts nonce 1 + follower deposits 1000 and follows A with the given mandate.
+pub fn setup_follow(m: Mandate) -> (Contract, SigningKey, u64) {
+    let (mut c, oracle, ska, _) = setup();
+    let d = open(&mut c);
+    ctx(SOLVER, 0);
+    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Long, 5_000, 1)));
+    ctx(FOLLOWER, 1_000);
+    c.deposit();
+    ctx(FOLLOWER, 0);
+    c.follow(Base64VecU8(key(1).1), m);
+    ctx(SOLVER, 0);
+    (c, oracle, d)
+}
+
+fn settle(c: &mut Contract, fills: Vec<Fill>) -> SettleReport {
+    ctx(SOLVER, 0);
+    c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), fills)
+}
+
+#[test]
+fn fill_at_cap_ok_over_cap_rejected() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
+    let r = settle(&mut c, vec![fill(1, "usdc", 100)]);
+    assert_eq!(r.settled, 1);
+    assert_eq!(r.debited.0, 100);
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 900);
+    assert_eq!(c.get_vault(SOLVER.parse().unwrap()).0, 100);
+}
+
+// Separate test: unit-test storage is global per test, so a second Contract in the same test
+// would see the first one's used_nonces.
+#[test]
+fn fill_over_cap_rejected() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
+    let r = settle(&mut c, vec![fill(1, "usdc", 101)]);
+    assert_eq!(r.settled, 0);
+    assert_eq!(r.rejected[0].1, "over cap");
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 1_000);
+}
+
+#[test]
+fn fill_wrong_token_rejected() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec!["usdc"]));
+    let r = settle(&mut c, vec![fill(1, "wbtc", 50)]);
+    assert_eq!(r.rejected[0].1, "token not allowed");
+}
+
+#[test]
+fn fill_after_expiry_rejected() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
+    ctx_at(SOLVER, 0, NOW + 1_000_000);
+    let r = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+    assert_eq!(r.rejected[0].1, "mandate expired");
+}
+
+#[test]
+fn fill_after_revoke_rejected() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
+    ctx(FOLLOWER, 0);
+    c.unfollow(Base64VecU8(key(1).1));
+    let r = settle(&mut c, vec![fill(1, "usdc", 50)]);
+    assert_eq!(r.rejected[0].1, "mandate revoked");
+}
+
+#[test]
+fn duplicate_fill_noop() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
+    settle(&mut c, vec![fill(1, "usdc", 50)]);
+    let r = settle(&mut c, vec![fill(1, "usdc", 50)]);
+    assert_eq!(r.rejected[0].1, "duplicate fill");
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 950);
+}
+
+#[test]
+fn foreign_nonce_rejected() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
+    let r = settle(&mut c, vec![fill(99, "usdc", 50)]);
+    assert_eq!(r.rejected[0].1, "nonce unknown");
+}
+
+#[test]
+#[should_panic(expected = "not solver")]
+fn non_solver_cannot_settle() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
+    ctx(OPERATOR, 0);
+    c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+}
+
+#[test]
+fn insufficient_vault_rejected() {
+    let (mut c, _, _) = setup_follow(mandate(5_000, 10_000, vec![]));
+    let r = settle(&mut c, vec![fill(1, "usdc", 1_001)]);
+    assert_eq!(r.rejected[0].1, "insufficient");
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 1_000);
+}
+
+#[test]
+fn allowance_exhausted_rejected() {
+    let (mut c, _, d) = setup_follow(mandate(100, 150, vec![]));
+    settle(&mut c, vec![fill(1, "usdc", 100)]);
+    // A posts a second intent (nonce 2), then a fill against it exceeds the remaining allowance
+    let (_, ska, _, _) = (0, key(1).0, 0, 0);
+    ctx(SOLVER, 0);
+    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Short, 5_000, 2)));
+    let r = settle(&mut c, vec![fill(2, "usdc", 60)]);
+    assert_eq!(r.rejected[0].1, "allowance exhausted");
+    assert_eq!(c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap()).unwrap().spent.0, 100);
+}
+
+#[test]
+fn list_followers_and_withdraw() {
+    let (mut c, _, _) = setup_follow(mandate(100, 1_000, vec![]));
+    assert_eq!(c.list_followers(Base64VecU8(key(1).1)).len(), 1);
+    ctx(FOLLOWER, 0);
+    c.withdraw(U128(400));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 600);
+}
