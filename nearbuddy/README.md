@@ -57,6 +57,9 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Duel 10, live chaos at both agents: `fake_news` at A, `prompt_injection` at B | [`D3iUyfw6…rGNi`](https://testnet.nearblocks.io/txns/D3iUyfw6epwkRZ84zTi2YWez6JyyykNhE2NKgWRnrGNi) · [`J3YuKUJ6…n25b`](https://testnet.nearblocks.io/txns/J3YuKUJ6RUoVxHnuwuPQvtcvu1sT7wwgiYCuJTwbn25b) |
 | Duel 10 resolved (tie after injections, pool split) | [`EVTFKMS8…ZHy8`](https://testnet.nearblocks.io/txns/EVTFKMS82PeAK3bSn3FWdejtkdgpmGy6xLannRpmZHy8) |
 | Contract redeployed after review (agent-scoped fill keys, zero-price guard, fee payout) | [`2RQ4vF3x…yKRjx`](https://testnet.nearblocks.io/txns/2RQ4vF3xTLS3QziqbobZabsBey2iQaRitUersR7yKRjx) |
+| Duel 11: spectator pays `inject_chaos` on chain from their own account after `POST /chaos` | [`2UXHhqQH…4UnB`](https://testnet.nearblocks.io/txns/2UXHhqQHPZV7G5cCR6Jrvw3gLPg6Mym7EQUYBz7D4UnB) |
+| Duel 12: two on-chain injections at A reach the model mid-duel (dataset row carries the payload); A holds Long, B flips Short, BTC rises | [`GgtmchahL…oXvm`](https://testnet.nearblocks.io/txns/GgtmchahLf41Rqpmy74fT7F5am5vCBRFZDSkT6HGoXvm) |
+| Duel 12 resolved: A +15 bps, B −15 bps, B slashed 10% (0.45 → 0.405 NEAR), A takes the pool (0.45 → 0.695 NEAR), **shield 2** | [`AMEeaUZs…1TpS`](https://testnet.nearblocks.io/txns/AMEeaUZsnoG7Bkp7CZgNbW3KVg5Qh2SB61khD46i1TpS) |
 
 Eleven duels (0 to 10), 25+ signed intents and 4 chaos injections ran on testnet during the build; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
