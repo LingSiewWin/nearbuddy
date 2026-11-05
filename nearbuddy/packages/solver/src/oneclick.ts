@@ -75,7 +75,6 @@ export async function status(depositAddress: string, fetchFn: typeof fetch = fet
 // Real swap on mainnet: wrap NEAR, quote (non-dry, ORIGIN_CHAIN deposit), ft_transfer wNEAR to the
 // quote's depositAddress, report the tx, poll until SUCCESS. Run by hand (`pnpm real-swap`), never by
 // the arena loop. Needs a funded mainnet account in the legacy keychain.
-import { teraToGas, type Account } from "near-api-js";
 
 export function sellNearForUsdcOnChain(amountYocto: bigint, account: string): QuoteRequest {
   return {

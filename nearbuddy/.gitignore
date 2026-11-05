@@ -11,3 +11,4 @@ target/
 agents/data/
 __pycache__/
 .pytest_cache/
+.vercel
