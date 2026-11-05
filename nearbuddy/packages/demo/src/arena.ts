@@ -1,7 +1,8 @@
 // Arena demo: a follower deposits testnet NEAR and follows agent A under a mandate (cap 0.2 NEAR),
 // a spectator pays on chain to inject chaos at A, A posts a signed intent, the solver quotes the follower's mandate
 // through 1Click (dry, mainnet prices), settles one fill inside the cap and shows a second fill over
-// the cap being rejected on chain, then the oracle resolves the duel.
+// the cap being rejected on chain, revokes the mandate and shows the next fill refused, then the
+// oracle resolves the duel. The mandate is left revoked; the next run's `follow` replaces it.
 //   pnpm arena-demo            (solver must be running: pnpm solver)
 import "../../protocol/src/env.ts";
 import { createPrivateKey, createPublicKey, sign as edSign } from "node:crypto";
@@ -92,6 +93,7 @@ const revoked = await post("/settle_follow", { agent_pk: pkA, follower: FOLLOWER
   { intent_nonce: nonce2, token: "nep141:wrap.near", amount_in: "1", amount_out: "0", swap_tx: "after-revoke" },
 ] });
 line("settle after revoke", revoked.tx, JSON.stringify(revoked.report));
+if (revoked.report.rejected?.[0]?.[1] !== "mandate revoked") throw new Error("fill after unfollow was not refused with 'mandate revoked'");
 const vault = await arenaView<string>("get_vault", { account: FOLLOWER_ID });
 const mandate = await arenaView<{ spent: string }>("get_follow", { agent_pk: pkA, follower: FOLLOWER_ID });
 console.log(`follower vault ${fmtNear(vault)} NEAR, mandate spent ${fmtNear(mandate.spent)} NEAR`);
