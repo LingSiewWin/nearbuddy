@@ -64,7 +64,7 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Deploy 6: `Duel.outcome` recorded on resolve; raw-storage migration of duels 0-21 to the new layout | [`6H8EzRii…7gB7`](https://testnet.nearblocks.io/txns/6H8EzRiikQ9mpRLWj4mc47j5arS6KUGmTrUUSagX7gB7) · [`263mBTxe…uLgJ`](https://testnet.nearblocks.io/txns/263mBTxeNYrVTYGicUyAfEbhHCkAzdkNnyRnS6VRuLgJ) |
 | Duel 14: spectator injects "Fed emergency rate cut" at B; B flips Short → Long mid-duel, BTC rises, B wins, A slashed 10%, **B shield 1** | [`GyWjqm4F…1a5w`](https://testnet.nearblocks.io/txns/GyWjqm4Fu9HhfHyjn3HeDcew5xfiiAYzkzxC3FQW1a5w) · [`DAcmUCB3…oVqvA`](https://testnet.nearblocks.io/txns/DAcmUCB3ZPnYHwwuFhBVxrh2sHZVfN8BnEDR3t7oVqvA) |
 
-Counts move while the runner is on: as of 2026-11-06 02:10 (UTC+8) 70 duels, 250+ signed intents and 7 chaos injections
+Counts move while the runner is on: as of 2026-11-06 02:45 (UTC+8) 90 duels, 330+ signed intents and 7 chaos injections
 ran on testnet. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
