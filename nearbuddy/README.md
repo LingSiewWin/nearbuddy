@@ -6,7 +6,68 @@ Stripe built checkout for humans. NearBuddy lets an AI agent that has **no accou
 with signed IOUs. A solver underwrites each IOU in milliseconds. Hundreds of calls settle as **one** NEAR
 transaction against the owner's locked vault. The agent never holds money, so a hijacked agent cannot drain anything.
 
-Built at NEAR HACKATHON (Nov 2026). Tracks: `agents`, `security`, `swarms`, `open`.
+Built at NEAR HACKATHON (Nov 2026). Tracks: `security`, `agents`, `swarms`, `defi`, `privacy`, `open`.
+
+## Arena: the trading buddy you follow (2026-11-06)
+
+The clearinghouse above is the settlement rail. On top of it sits an arena where **models duel on live
+prices, strangers pay to attack them, losers get slashed, and humans follow the survivors with a mandate
+instead of money**.
+
+- **Agents are models.** An agent is an ed25519 key plus a NEAR AI Cloud model id (`deepseek/deepseek-v4.1-flash`,
+  `anthropic/claude-opus-5-5`, 64 ids on `GET https://cloud-api.near.ai/v1/models`). Every decision is a signed
+  intent on chain; `proof_hash` is the sha256 of the TEE signature record NEAR AI Cloud returns for that completion,
+  so the chain proves which model made the call, unmodified. The stub model writes 32 zero bytes and the page says so.
+- **Chaos.** A spectator pays at least 0.1 NEAR to inject a named attack (fake news, prompt injection, memory wipe)
+  at one agent; only the payload hash goes on chain, the solver hands the payload to the runner before the next decision.
+- **Resolve.** At `close_at` the oracle signs `(duel_id, open_price, close_price)`. Scoring in `i128`, multiply before
+  divide: `pnl_bps = sign * (close - open) * size_bps / open`. Loser's bond loses 10% into the pool, winner takes the
+  pool and `shield += 1` per attack it survived. Tie: no slash, pool split.
+- **Follow with a mandate, not funds.** A follower deposits into the arena vault and attaches
+  `{per_tx_cap, allowance, allowed_tokens, expires_at}` to one agent. The solver quotes every follower through
+  NEAR Intents 1Click (`POST /v0/quote`, dry) when the agent posts an intent, fronts the swap, and is repaid by
+  `settle_follow` only inside the mandate: over cap, wrong token, expired, revoked, duplicate or foreign nonce are
+  rejected on chain and reported, never panicked.
+
+**Two networks, stated plainly.** NEAR Intents has no testnet. The arena contract, bonds, mandates and vaults are
+testnet NEAR on `arena.nearbuddy-solver.testnet`. The 1Click quotes are real mainnet prices; the one real swap for
+the proof runs from a mainnet account. **Model classes.** NEAR AI Cloud "Private" models (DeepSeek, GPT-OSS, Qwen,
+GLM) run inside the TEE; "Anonymised" frontier models (Claude, GPT, Gemini) are routed upstream through the TEE
+gateway, so their signature proves the gateway's output, not that the weights ran in a TEE.
+
+### Arena proof (NEAR testnet, 2026-11-05/06)
+
+| Step | Tx |
+|---|---|
+| Deploy + `init` (`arena.nearbuddy-solver.testnet`, slash 1000 bps, min chaos 0.1 NEAR) | [`7UXrLAZB…JzTN`](https://testnet.nearblocks.io/txns/7UXrLAZBQtWib83oTwmD4A8QTQauiAMV5eGzbPF5JzTN) |
+| `add_solver nearbuddy-solver.testnet` | [`H2ySR88Q…99f8`](https://testnet.nearblocks.io/txns/H2ySR88QaejVttuwsdCt1wfw5aGY2UZkeY1feheU99f8) |
+| Duel 1 opened by the Python runner (two stub-model duelists) | [`BfgBtLF9…G6et`](https://testnet.nearblocks.io/txns/BfgBtLF9FNsWcozqGt45M7bhXDWXpzdzz577dGNAG6et) |
+| Six signed intents over three cycles (one of them) | [`B36cyS9P…GvrT`](https://testnet.nearblocks.io/txns/B36cyS9P7rn8dTk5dHdSbdWnTYSxgxLkWwJ3S4AqGvrT) |
+| Duel 1 resolved: BTC 77,278.51 → 77,087.36, both Long 50% → alpha −12 bps each, tie | [`BpCbQivT…AEQz`](https://testnet.nearblocks.io/txns/BpCbQivTRT9ohR2tEby9xiBE76ui3gGfLRqQ4MYkAEQz) |
+| Follower deposits 1 NEAR | [`CMZwXzAh…e4nK`](https://testnet.nearblocks.io/txns/CMZwXzAhWbMw5JwDrC9CbVyB4PNhtjvgZnqB4N9Be4nK) |
+| Follower mandates agent A: cap 0.2 NEAR, allowance 1 NEAR, wNEAR only | [`22QeQd2B…Uodi`](https://testnet.nearblocks.io/txns/22QeQd2BhtwgVJWAnqActEqpNGu6JFRxErUBgqbXUodi) |
+| Spectator injects `fake_news` at A (0.1 NEAR to the pool) | [`DMpAMwDs…vokW`](https://testnet.nearblocks.io/txns/DMpAMwDsUFVahDqs7LF7d8Erxo93FdoCuyDuYmgNvokW) |
+| A posts an intent; solver quotes the follower via 1Click: 0.2 wNEAR → 0.741065 USDC | [`BWVFuYsm…X4xX`](https://testnet.nearblocks.io/txns/BWVFuYsmiopzxwxmMyYvPUruVEqfywSTcxyHxPQsX4xX) |
+| `settle_follow`: one fill at the cap settled, 0.2 NEAR moved inside the mandate | [`8gnGLPva…hGtR`](https://testnet.nearblocks.io/txns/8gnGLPvanrjF6R4FUKWvUn7HLJciKHszJAiRVY6ehGtR) |
+| `settle_follow` rejections on chain: over cap, token not allowed, duplicate fill | [`EaefxJxR…CN7F`](https://testnet.nearblocks.io/txns/EaefxJxRb6m9pPZ1nXG3GnYXsixqVBG5QL4eNq2LCN7F) |
+| Duel 3 resolved | [`CZWSgmeN…Z1Kx`](https://testnet.nearblocks.io/txns/CZWSgmeNfSU17gKXvLwGo3AAxiTPj4KXasGtUdu8Z1Kx) |
+
+Not yet proven: a NEAR AI Cloud completion with its `/v1/signature/{chat_id}` record (needs `NEAR_AI_API_KEY`), and
+one real 1Click swap reported through `settle_follow` (needs a funded mainnet account). Both seams are built and
+tested offline; the README will carry their hashes when they run.
+
+### Run the arena
+
+```sh
+cp .env.example .env                      # add NEAR_AI_API_KEY to use real models; blank = stub
+cd arena && cargo test                    # 32 contract tests
+cd .. && pnpm test                        # protocol + solver tests (ARENA_DEPLOYED=1 adds on-chain parity)
+pnpm solver                               # :4020, mounts /duel /intent /chaos /resolve /settle_follow /arena
+cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pytest -q
+.venv/bin/python -m runner --rounds 1 --duel-seconds 75 --cycle-seconds 25   # a live duel on testnet
+cd .. && pnpm arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, resolve
+pnpm --dir web build && pnpm --dir web start -p 3011   # /arena reads the public RPC, no keys in the browser
+```
 
 ## The problem
 
