@@ -19,8 +19,10 @@ instead of money**.
   `anthropic/claude-opus-5-5`, 64 ids on `GET https://cloud-api.near.ai/v1/models`). Every decision is a signed
   intent on chain; `proof_hash` is the sha256 of the TEE signature record NEAR AI Cloud returns for that completion,
   so the chain proves which model made the call, unmodified. The stub model writes 32 zero bytes and the page says so.
-- **Chaos.** A spectator pays at least 0.1 NEAR to inject a named attack (fake news, prompt injection, memory wipe)
-  at one agent; only the payload hash goes on chain, the solver hands the payload to the runner before the next decision.
+- **Chaos.** A spectator hands the solver the attack text (open `POST /chaos`, returns its sha256), then pays at
+  least 0.1 NEAR to `inject_chaos(duel_id, target, kind, payload_hash)` on chain with their own account. Only the
+  hash is on chain; the solver joins it to the stored payload and the runner prompts the model with it before its
+  next decision. Max 32 injections per duel; every deposit joins the pool the winner takes.
 - **Resolve.** At `close_at` the oracle signs `(duel_id, open_price, close_price)`. Scoring in `i128`, multiply before
   divide: `pnl_bps = sign * (close - open) * size_bps / open`. Loser's bond loses 10% into the pool, winner takes the
   pool and `shield += 1` per attack it survived. Tie: no slash, pool split.
