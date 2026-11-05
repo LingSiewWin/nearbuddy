@@ -86,6 +86,12 @@ const over = await post("/settle_follow", { agent_pk: pkA, follower: FOLLOWER_ID
   { intent_nonce: nonce, token: "nep141:wrap.near", amount_in: q.amount, amount_out: q.quote.quote.amountOut, swap_tx: "replay" },
 ] });
 line("settle rejected", over.tx, JSON.stringify(over.report));
+// revoke: the follower unfollows, and the very next fill is refused on chain
+line("unfollow A", await call("unfollow", { agent_pk: pkA }));
+const revoked = await post("/settle_follow", { agent_pk: pkA, follower: FOLLOWER_ID, fills: [
+  { intent_nonce: nonce2, token: "nep141:wrap.near", amount_in: "1", amount_out: "0", swap_tx: "after-revoke" },
+] });
+line("settle after revoke", revoked.tx, JSON.stringify(revoked.report));
 const vault = await arenaView<string>("get_vault", { account: FOLLOWER_ID });
 const mandate = await arenaView<{ spent: string }>("get_follow", { agent_pk: pkA, follower: FOLLOWER_ID });
 console.log(`follower vault ${fmtNear(vault)} NEAR, mandate spent ${fmtNear(mandate.spent)} NEAR`);
