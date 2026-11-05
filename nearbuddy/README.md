@@ -67,6 +67,16 @@ Counts move while the runner is on: as of 2026-11-06 03:40 (UTC+8) 20 duels, 50+
 ran on testnet. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
+Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test test_arena_sandbox -- --nocapture`):
+
+| Call | TGas |
+|---|---|
+| `open_duel` | 2.51 |
+| `post_intent` (ed25519 verify + nonce burn) | 2.68 |
+| `inject_chaos` (32nd of 32) | 2.56 |
+| `settle_follow` with 10 fills | 4.96 |
+| `resolve` scoring a duel with 32 injections | 3.44 |
+
 Known limits, on purpose for the hackathon: one trusted oracle key signs resolutions (Pyth-on-NEAR read is the
 upgrade); follower withdrawals are instant, so the solver carries exposure between its swap and `settle_follow`
 (the vault contract's delayed withdraw is the upgrade); the solver's POST routes are gated by a shared secret, not
