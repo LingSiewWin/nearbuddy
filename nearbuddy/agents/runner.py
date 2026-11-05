@@ -61,7 +61,9 @@ def resolve_duel(solver: Solver, duel_id: str, open_px: int, close_px: int) -> d
 
 
 def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str) -> list[dict[str, Any]]:
-    solver = Solver(solver_url, ENV.get("ARENA_SECRET", ""))
+    if not ENV.get("ARENA_SECRET"):
+        raise SystemExit("ARENA_SECRET missing in the env file: the solver refuses every POST without it")
+    solver = Solver(solver_url, ENV["ARENA_SECRET"])
     oracle = key_from_near_secret(ENV["ORACLE_KEY"])
     model_a, model_b = client_from_env(ENV, "A"), client_from_env(ENV, "B")
     a, ska, ca = make_duelist("A", model_a, hardened=True)
@@ -80,7 +82,8 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
         duel_id = str(opened["duel_id"])
         open_px = price(symbol, ENV.get('PYTH_API_KEY'))
         print(f"[round {rnd}] duel {duel_id} open {open_px / 1e8:,.2f} tx {opened['tx']}")
-        while time.time_ns() < close_at_ns - 15_000_000_000:  # leave 15 s for model + chain round trip
+        closed = False
+        while not closed and time.time_ns() < close_at_ns - 15_000_000_000:  # leave 15 s for model + chain round trip
             px = price(symbol, ENV.get('PYTH_API_KEY'))
             pending = solver.get("/arena")["pending"]
             for d, sk, comp, model in ((a, ska, ca, model_a), (b, skb, cb, model_b)):
@@ -103,10 +106,15 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
                 try:
                     posted = solver.post("/intent", sign_intent(sk, intent))
                 except RuntimeError as e:
-                    if "duel closed" in str(e):
-                        print(f"  late intent for {pk[:8]} skipped (duel closed)")
-                        break
-                    raise
+                    if "duel closed" not in str(e):
+                        raise
+                    # chain clock passed close_at: keep the paid decision in the dataset, stop prompting this duel
+                    record({"duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "hardened": d.hardened,
+                            "brief": brief(symbol, px, open_px), "injection": injection_text, "text": text, "chat_id": chat_id,
+                            "signature_record": sig_record, "intent": intent, "tx": None, "error": "duel closed"})
+                    print(f"  late intent for {pk[:8]} not posted (duel closed)")
+                    closed = True
+                    break
                 if inj:
                     solver.post("/consume", {"target": pk, "duel_id": duel_id, "hashes": [i["payload_hash"] for i in inj]})
                 record({
@@ -116,7 +124,8 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
                     "quotes": [{"follower": q["follower"], "amount": q["amount"], "amountOut": (q.get("quote") or {}).get("quote", {}).get("amountOut")} for q in posted.get("quotes", [])],
                 })
                 print(f"  {'A' if sk is ska else 'B'} {intent['side']} nonce {nonce} tx {posted['tx']} quotes {len(posted.get('quotes', []))}")
-            time.sleep(cycle_seconds)
+            if not closed:
+                time.sleep(cycle_seconds)
         while time.time_ns() < close_at_ns + 1_000_000_000:
             time.sleep(1)
         close_px = price(symbol, ENV.get('PYTH_API_KEY'))
