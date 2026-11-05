@@ -37,14 +37,24 @@ test("quotesFor quotes each open follower with the mandate amount", async () => 
   assert.equal(out[0].quote?.quote.amountOut, "3744739");
 });
 
-test("route: unknown path is null; /arena snapshot; pending injections by target", async () => {
-  const arena = new Arena({} as never, "s.testnet");
+test("route: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {
+  const arena = new Arena({} as never, "s.testnet", {
+    getDuel: async () => ({ resolved: false, injections: [{ kind: "fake_news", payload_hash: "H1", target: "A", block: "1" }, { kind: "x", payload_hash: "UNKNOWN", target: "A", block: "2" }] }),
+  });
   assert.equal(await arena.route("GET", "/nope", ""), null);
-  arena.injections.push({ duel_id: "1", target: "A", kind: "fake_news", payload: "BTC banned", payload_hash: "x", tx: "t", at: 0 });
-  const snap = (await arena.route("GET", "/arena", ""))!.body as { pending: Record<string, unknown[]> };
+  arena.openDuels.add("1");
+  arena.payloads.set("H1", "BTC banned");
+  const snap = (await arena.route("GET", "/arena", ""))!.body as { pending: Record<string, { payload: string }[]> };
   assert.equal(snap.pending.A.length, 1);
-  arena.consume("A", "1", ["x"]);
-  assert.equal(Object.keys(arena.pending()).length, 0);
+  assert.equal(snap.pending.A[0].payload, "BTC banned");
+  arena.consume("A", "1", ["H1"]);
+  assert.equal(Object.keys(await arena.pending()).length, 0);
+});
+
+test("/chaos is open and returns the sha256 of the payload", async () => {
+  const arena = new Arena({} as never, "s.testnet");
+  const r = (await arena.route("POST", "/chaos", JSON.stringify({ payload: "BTC banned" }), {}))!.body as { payload_hash: string };
+  assert.equal(r.payload_hash, createHash("sha256").update("BTC banned").digest("base64"));
 });
 
 test("POST routes need the shared secret; GET /arena does not", async () => {
