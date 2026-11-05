@@ -13,7 +13,7 @@ from pathlib import Path
 
 import requests
 
-RPC = "https://rpc.testnet.near.org"
+RPC = "https://test.rpc.fastnear.com"  # read-only, low volume; rpc.testnet.near.org is deprecated
 ARENA = "arena.nearbuddy-solver.testnet"
 DATA = Path(__file__).resolve().parent / "data" / "decisions.jsonl"
 
