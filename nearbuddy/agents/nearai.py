@@ -54,8 +54,11 @@ class NearAiClient:
         return r.json()
 
 
-def client_from_env(env: dict[str, str]):
+def client_from_env(env: dict[str, str], which: str = "") -> "StubClient | NearAiClient":
+    """`which` = "A" or "B" picks NEAR_AI_MODEL_A / NEAR_AI_MODEL_B when set, so a headline duel can pit two
+    different models (e.g. anthropic/claude-opus-5-5 vs deepseek/deepseek-v4.1-flash). No key = stub."""
     key = env.get("NEAR_AI_API_KEY", "").strip()
     if not key:
         return StubClient()
-    return NearAiClient(key, env.get("NEAR_AI_MODEL", "deepseek/deepseek-v4.1-flash"))
+    model = env.get(f"NEAR_AI_MODEL_{which}", "").strip() or env.get("NEAR_AI_MODEL", "deepseek/deepseek-v4.1-flash")
+    return NearAiClient(key, model, base_url=env.get("NEAR_AI_BASE", NEAR_AI_BASE))

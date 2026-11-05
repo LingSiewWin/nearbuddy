@@ -63,12 +63,12 @@ def resolve_duel(solver: Solver, duel_id: str, open_px: int, close_px: int) -> d
 def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str) -> list[dict[str, Any]]:
     solver = Solver(solver_url, ENV.get("ARENA_SECRET", ""))
     oracle = key_from_near_secret(ENV["ORACLE_KEY"])
-    model = client_from_env(ENV)
-    a, ska, ca = make_duelist("A", model, hardened=True)
-    b, skb, cb = make_duelist("B", model, hardened=False)
-    for sk in (ska, skb):
+    model_a, model_b = client_from_env(ENV, "A"), client_from_env(ENV, "B")
+    a, ska, ca = make_duelist("A", model_a, hardened=True)
+    b, skb, cb = make_duelist("B", model_b, hardened=False)
+    for sk, m in ((ska, model_a), (skb, model_b)):
         try:
-            solver.post("/register", {"agent_pk": pk_b64(sk), "model_id": model.model_id, "bond": bond})
+            solver.post("/register", {"agent_pk": pk_b64(sk), "model_id": m.model_id, "bond": bond})
         except RuntimeError as e:
             if "agent exists" not in str(e):
                 raise
@@ -83,7 +83,7 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
         while time.time_ns() < close_at_ns - 15_000_000_000:  # leave 15 s for model + chain round trip
             px = price(symbol, ENV.get('PYTH_API_KEY'))
             pending = solver.get("/arena")["pending"]
-            for d, sk, comp in ((a, ska, ca), (b, skb, cb)):
+            for d, sk, comp, model in ((a, ska, ca, model_a), (b, skb, cb, model_b)):
                 pk = pk_b64(sk)
                 inj = [i for i in pending.get(pk, []) if i["duel_id"] == duel_id]
                 injection_text = "\n".join(i["payload"] for i in inj) or None
