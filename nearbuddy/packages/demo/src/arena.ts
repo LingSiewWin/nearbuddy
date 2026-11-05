@@ -13,7 +13,7 @@ import { ARENA, NEAR, arenaView, explorerTx, fmtNear, loadAccount } from "../../
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const FOLLOWER_ID = process.env.FOLLOWER_ID ?? "nearbuddy-owner.testnet";
 const CAP = NEAR / 5n; // 0.2 NEAR per fill
-const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 45);
+const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 120); // public RPCs take seconds per call; keep the duel open long enough for both intents
 
 const seedA = process.env.AGENT_SEED_A, seedB = process.env.AGENT_SEED_B, oracleKey = process.env.ORACLE_KEY;
 if (!seedA || !seedB || !oracleKey) throw new Error("AGENT_SEED_A, AGENT_SEED_B and ORACLE_KEY must be set in the env file");
