@@ -60,6 +60,7 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Duel 11: spectator pays `inject_chaos` on chain from their own account after `POST /chaos` | [`2UXHhqQH…4UnB`](https://testnet.nearblocks.io/txns/2UXHhqQHPZV7G5cCR6Jrvw3gLPg6Mym7EQUYBz7D4UnB) |
 | Duel 12: two on-chain injections at A reach the model mid-duel (dataset row carries the payload); A holds Long, B flips Short, BTC rises | [`GgtmchahL…oXvm`](https://testnet.nearblocks.io/txns/GgtmchahLf41Rqpmy74fT7F5am5vCBRFZDSkT6HGoXvm) |
 | Duel 12 resolved: A +15 bps, B −15 bps, B slashed 10% (0.45 → 0.405 NEAR), A takes the pool (0.45 → 0.695 NEAR), **shield 2** | [`AMEeaUZs…1TpS`](https://testnet.nearblocks.io/txns/AMEeaUZsnoG7Bkp7CZgNbW3KVg5Qh2SB61khD46i1TpS) |
+| Deploy 6: `Duel.outcome` recorded on resolve; raw-storage migration of duels 0-21 to the new layout | [`6H8EzRii…7gB7`](https://testnet.nearblocks.io/txns/6H8EzRiikQ9mpRLWj4mc47j5arS6KUGmTrUUSagX7gB7) · [`263mBTxe…uLgJ`](https://testnet.nearblocks.io/txns/263mBTxeNYrVTYGicUyAfEbhHCkAzdkNnyRnS6VRuLgJ) |
 | Duel 14: spectator injects "Fed emergency rate cut" at B; B flips Short → Long mid-duel, BTC rises, B wins, A slashed 10%, **B shield 1** | [`GyWjqm4F…1a5w`](https://testnet.nearblocks.io/txns/GyWjqm4Fu9HhfHyjn3HeDcew5xfiiAYzkzxC3FQW1a5w) · [`DAcmUCB3…oVqvA`](https://testnet.nearblocks.io/txns/DAcmUCB3ZPnYHwwuFhBVxrh2sHZVfN8BnEDR3t7oVqvA) |
 
 Counts move while the runner is on: as of 2026-11-06 03:40 (UTC+8) 20 duels, 50+ signed intents and 6 chaos injections
