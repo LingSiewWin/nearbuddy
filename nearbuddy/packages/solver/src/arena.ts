@@ -8,7 +8,7 @@
 //   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}
 //   GET  /arena                                              -> snapshot incl. pending injections with payloads
 import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { teraToGas, type Account } from "near-api-js";
 import { b64 } from "../../protocol/src/index.ts";
@@ -29,6 +29,14 @@ export const MAX_PAYLOAD = 2048;
 export const MAX_PAYLOADS = 2000;
 const PAYLOAD_FILE = process.env.ARENA_PAYLOADS ?? new URL("../../../.arena-payloads.json", import.meta.url).pathname;
 const HISTORY_FILE = process.env.ARENA_HISTORY ?? new URL("../../../.arena-history.json", import.meta.url).pathname;
+/** Write to a temp file and rename, so a crash mid-write never leaves a truncated JSON file. */
+function writeAtomic(file: string, data: string) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(`${file}.tmp`, data);
+    renameSync(`${file}.tmp`, file);
+  } catch { /* best effort */ }
+}
 function keyOk(h: string | string[] | undefined): boolean {
   if (!ARENA_SECRET || typeof h !== "string") return false;
   const a = Buffer.from(h), b = Buffer.from(ARENA_SECRET);
@@ -102,7 +110,7 @@ export class Arena {
     const rec: IntentRecord = { signed, tx: r.tx, quotes, at: Date.now() };
     this.intents.push(rec);
     if (this.intents.length > 500) this.intents.shift();
-    this.persist();
+    this.persistHistory();
     return { tx: r.tx, quotes };
   }
 
@@ -130,29 +138,33 @@ export class Arena {
     const payload_hash = b64.enc(createHash("sha256").update(payload).digest());
     this.payloads.set(payload_hash, payload);
     while (this.payloads.size > MAX_PAYLOADS) this.payloads.delete(this.payloads.keys().next().value!);
-    this.persist();
+    this.persistPayloads();
     return { payload_hash };
   }
 
-  /** Payloads survive a restart (a spectator pays on chain after handing us the text); so do the
-   *  last 50 intents and fills, which only exist here (the page's SOLVER panel reads them). */
-  private persist() {
-    try {
-      mkdirSync(dirname(PAYLOAD_FILE), { recursive: true });
-      writeFileSync(PAYLOAD_FILE, JSON.stringify([...this.payloads.entries()]));
-      writeFileSync(HISTORY_FILE, JSON.stringify({ intents: this.intents.slice(-50), fills: this.fills.slice(-50) }));
-    } catch { /* best effort */ }
+  /** Payloads survive a restart (a spectator pays on chain after handing us the text). */
+  private persistPayloads() {
+    writeAtomic(PAYLOAD_FILE, JSON.stringify([...this.payloads.entries()]));
+  }
+  /** The last 50 intents and fills only exist here (the page's SOLVER panel reads them). */
+  private persistHistory() {
+    writeAtomic(HISTORY_FILE, JSON.stringify({ intents: this.intents.slice(-50), fills: this.fills.slice(-50) }));
   }
 
   /** Rebuild `openDuels` from chain and `payloads` from disk after a restart. */
   async bootstrap() {
+    // Local files first, each on its own: a corrupt file must never block the on-chain rebuild below.
     try {
       if (existsSync(PAYLOAD_FILE)) for (const [h, p] of JSON.parse(readFileSync(PAYLOAD_FILE, "utf8")) as [string, string][]) this.payloads.set(h, p);
+    } catch (e) { console.log(`[arena] payload file ignored: ${String(e).slice(0, 80)}`); }
+    try {
       if (existsSync(HISTORY_FILE)) {
-        const h = JSON.parse(readFileSync(HISTORY_FILE, "utf8")) as { intents: IntentRecord[]; fills: Arena["fills"] };
-        this.intents.push(...(h.intents ?? []));
-        this.fills.push(...(h.fills ?? []));
+        const h = JSON.parse(readFileSync(HISTORY_FILE, "utf8")) as { intents?: IntentRecord[]; fills?: Arena["fills"] } | null;
+        this.intents.push(...(h?.intents ?? []));
+        this.fills.push(...(h?.fills ?? []));
       }
+    } catch (e) { console.log(`[arena] history file ignored: ${String(e).slice(0, 80)}`); }
+    try {
       const cfg = await arenaView<{ next_duel: string }>("get_config", {});
       const n = Number(cfg.next_duel);
       for (let id = n - 1; id >= Math.max(0, n - 20); id--) {
@@ -175,7 +187,7 @@ export class Arena {
   async settleFollow(agent_pk: string, follower: string, fills: Fill[]) {
     const r = await this.call("settle_follow", { agent_pk, follower, fills });
     this.fills.push({ agent_pk, follower, report: r.value, tx: r.tx });
-    this.persist();
+    this.persistHistory();
     return { tx: r.tx, report: r.value };
   }
 

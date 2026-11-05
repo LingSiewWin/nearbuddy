@@ -2,8 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Arena, mandateOpen, quoteAmount, type Mandate } from "./arena.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Quote } from "./oneclick.ts";
+
+// Keep the unit tests away from the solver's real state files.
+const scratch = mkdtempSync(join(tmpdir(), "arena-test-"));
+process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
+process.env.ARENA_HISTORY = join(scratch, "history.json");
+const { Arena, mandateOpen, quoteAmount } = await import("./arena.ts");
+type Mandate = import("./arena.ts").Mandate;
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 const NOW = 1_700_000_000_000_000_000n;
