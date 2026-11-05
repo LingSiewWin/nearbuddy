@@ -61,7 +61,7 @@ def resolve_duel(solver: Solver, duel_id: str, open_px: int, close_px: int) -> d
 
 
 def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str) -> list[dict[str, Any]]:
-    solver = Solver(solver_url)
+    solver = Solver(solver_url, ENV.get("ARENA_SECRET", ""))
     oracle = key_from_near_secret(ENV["ORACLE_KEY"])
     model = client_from_env(ENV)
     a, ska, ca = make_duelist("A", model, hardened=True)
@@ -80,7 +80,7 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
         duel_id = str(opened["duel_id"])
         open_px = price(symbol, ENV.get('PYTH_API_KEY'))
         print(f"[round {rnd}] duel {duel_id} open {open_px / 1e8:,.2f} tx {opened['tx']}")
-        while time.time_ns() < close_at_ns - 5_000_000_000:
+        while time.time_ns() < close_at_ns - 15_000_000_000:  # leave 15 s for model + chain round trip
             px = price(symbol, ENV.get('PYTH_API_KEY'))
             pending = solver.get("/arena")["pending"]
             for d, sk, comp in ((a, ska, ca), (b, skb, cb)):
@@ -100,9 +100,15 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
                     "size_bps": 5000, "nonce": str(nonce), "expires_at": str(close_at_ns + 60_000_000_000),
                     "proof_hash": proof_hash(sig_record),
                 }
-                posted = solver.post("/intent", sign_intent(sk, intent))
+                try:
+                    posted = solver.post("/intent", sign_intent(sk, intent))
+                except RuntimeError as e:
+                    if "duel closed" in str(e):
+                        print(f"  late intent for {pk[:8]} skipped (duel closed)")
+                        break
+                    raise
                 if inj:
-                    solver.post("/consume", {"target": pk, "duel_id": duel_id})
+                    solver.post("/consume", {"target": pk, "duel_id": duel_id, "hashes": [i["payload_hash"] for i in inj]})
                 record({
                     "duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "hardened": d.hardened,
                     "brief": brief(symbol, px, open_px), "injection": injection_text, "text": text, "chat_id": chat_id,
@@ -132,7 +138,7 @@ if __name__ == "__main__":
     args = p.parse_args()
     if args.resolve:
         px = price(args.symbol, ENV.get("PYTH_API_KEY"))
-        print(json.dumps(resolve_duel(Solver(ENV.get("SOLVER_URL", "http://127.0.0.1:4020")), args.resolve, px, px)))
+        print(json.dumps(resolve_duel(Solver(ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), ENV.get("ARENA_SECRET", "")), args.resolve, px, px)))
         raise SystemExit(0)
     out = run(args.rounds, args.duel_seconds, args.cycle_seconds, args.symbol, ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), args.bond)
     print(json.dumps(out, indent=2))

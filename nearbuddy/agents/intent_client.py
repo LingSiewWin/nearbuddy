@@ -80,16 +80,18 @@ def proof_hash(record: dict[str, Any] | None) -> str:
         return base64.b64encode(ZERO_PROOF).decode()
     h = hashlib.sha256()
     for k in ("text", "signature", "signing_address"):
-        h.update(str(record.get(k, "")).encode())
+        v = str(record.get(k, "")).encode()
+        h.update(struct.pack("<I", len(v)) + v)  # length-framed so field boundaries are unambiguous
     return base64.b64encode(h.digest()).decode()
 
 
 @dataclass
 class Solver:
     url: str
+    secret: str = ""
 
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        r = requests.post(f"{self.url}{path}", data=json.dumps(body), headers={"content-type": "application/json"}, timeout=180)
+        r = requests.post(f"{self.url}{path}", data=json.dumps(body), headers={"content-type": "application/json", "x-arena-key": self.secret}, timeout=180)
         if r.status_code != 200:
             raise RuntimeError(f"solver {path} {r.status_code}: {r.text[:300]}")
         return r.json()

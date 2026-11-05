@@ -41,7 +41,9 @@ def test_sign_verify_roundtrip():
 def test_proof_hash():
     assert proof_hash(None) == base64.b64encode(bytes(32)).decode()
     rec = {"text": "t", "signature": "s", "signing_address": "a"}
-    assert proof_hash(rec) == base64.b64encode(hashlib.sha256(b"tsa").digest()).decode()
+    framed = b"\x01\x00\x00\x00t" + b"\x01\x00\x00\x00s" + b"\x01\x00\x00\x00a"
+    assert proof_hash(rec) == base64.b64encode(hashlib.sha256(framed).digest()).decode()
+    assert proof_hash({"text": "ab", "signature": "c", "signing_address": ""}) != proof_hash({"text": "a", "signature": "bc", "signing_address": ""})
 
 
 def test_stub_is_deterministic():
