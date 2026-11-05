@@ -34,7 +34,7 @@ export default function Arena() {
       try { const j = (await (await fetch("/api/arena", { cache: "no-store" })).json()) as Snap; if (alive) setS(j); } catch { /* keep last */ }
     };
     tick();
-    const id = setInterval(tick, 4000);
+    const id = setInterval(tick, 8000); // one snapshot = 2 + N views; keep public RPC happy
     return () => { alive = false; clearInterval(id); };
   }, []);
   const name = (pk: string) => { const a = s?.leaderboard.find((x) => x.pk === pk); return a ? `${a.model_id} ${short(pk, 6)}` : short(pk); };

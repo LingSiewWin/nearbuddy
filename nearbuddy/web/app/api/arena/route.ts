@@ -3,7 +3,7 @@
 // the page renders without it.
 import { JsonRpcProvider } from "near-api-js";
 
-const RPC = process.env.NEAR_RPC ?? "https://test.rpc.fastnear.com";
+const RPC = process.env.NEAR_RPC ?? "https://rpc.testnet.near.org"; // fastnear rate-limits anonymous bursts
 const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const provider = new JsonRpcProvider({ url: RPC });
