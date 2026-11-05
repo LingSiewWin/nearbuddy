@@ -389,10 +389,7 @@ impl Contract {
             return Err("nonce unknown");
         }
         let fkey = fill_key(agent_pk, follower, f.intent_nonce.0);
-        // Fills settled before the key became agent-scoped (first deploy) live under `follower || nonce`.
-        let mut legacy = follower.as_bytes().to_vec();
-        legacy.extend_from_slice(&f.intent_nonce.0.to_le_bytes());
-        if self.settled_fills.contains(&fkey) || self.settled_fills.contains(&legacy) {
+        if self.settled_fills.contains(&fkey) {
             return Err("duplicate fill");
         }
         let list = self.follows.get_mut(agent_pk).ok_or("no mandate")?;
