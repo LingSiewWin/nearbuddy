@@ -45,6 +45,11 @@ export const unread = (duels: (ScoredDuel | null)[], noReveal: boolean) =>
 export const isVoid = (o: { open_price?: string | number; close_price?: string | number } | null | undefined) =>
   !!o && Number(o.open_price) === 0 && Number(o.close_price) === 0;
 
+/** The label for a duel marked resolved with no outcome: the first testnet duels (#0-21, pre-migration layouts)
+ *  were closed without one, so they were never scored and add nothing to alpha or W/T/L. */
+export const NO_OUTCOME = "resolved (no outcome recorded)";
+export const noOutcome = (d: { resolved: boolean; outcome?: unknown }) => d.resolved && !d.outcome;
+
 /** `duels` = scored duels (wins + ties + losses); voided duels are counted apart and add nothing. */
 export type Tally = { alpha_bps: number; wins: number; ties: number; losses: number; voids: number; duels: number };
 

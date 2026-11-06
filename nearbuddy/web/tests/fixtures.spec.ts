@@ -508,3 +508,86 @@ test("agent: a voided duel is counted as void, not a tie; the pre-API frame uses
   await expect(page.locator('span[title="duel #301 void"]')).toHaveText("·");
   await expect(page.locator('span[title="duel #301 void"]')).toHaveClass("dim");
 });
+
+// testnet duels #0-21: resolved, but closed without an outcome (pre-migration layout)
+const legacyDuel = { ...duel, id: "7", symbol: "BTC/USD", resolved: true, outcome: null, open_price: null };
+
+test("agent: a resolved duel without an outcome is labelled, not open, and stays out of W/T/L", async ({ page }) => {
+  const row = (id: string, result: string, pnl: number | null) => ({
+    id,
+    opponent: PK_B,
+    symbol: "BTC/USD",
+    open_at: NS(now - 600_000),
+    close_at: NS(now - 300_000),
+    resolved: true,
+    result,
+    pnl,
+    side: "Long",
+    size_bps: 5000,
+    proof_hash: ZERO,
+    open_price: null,
+    close_price: null,
+    slashed: "0",
+    attacks: 0,
+    attacks_on_me: null,
+  });
+  const body = (era: string) => ({
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    next_duel: 412,
+    slash_bps: 1000,
+    min_chaos_deposit: "10000000000000000000000",
+    agent: agent(PK_A, "stub/deterministic", -10),
+    followers: [],
+    execution: null,
+    era,
+    scanned: era === "operator" ? 257 : 155,
+    eras: {
+      from: 257,
+      complete: true,
+      unread: 0,
+      oracle: tallyOf(0, 0, 0, 0),
+      operator: { alpha_bps: -10, duels: 257, mine: era === "operator" ? 2 : null },
+    },
+    duels: era === "operator" ? [row("22", "tie", 0), row("7", "no_outcome", null)] : [],
+  });
+  await page.route("**/api/agent**", (r) =>
+    r.fulfill({
+      json: body(r.request().url().includes("era=operator") ? "operator" : "oracle"),
+      headers: { "cache-control": "no-store" },
+    }),
+  );
+  await page.goto(`/agent/${encodeURIComponent(PK_A)}`);
+  await page.getByRole("button", { name: /show operator era/ }).click();
+  const page_ = page.locator("body");
+  await expect(page_).toContainText("0 win  1 tie  0 loss   net +0 bps");
+  await expect(page_).toContainText("1 resolved (no outcome recorded): pre-migration duels, not scored");
+  await expect(
+    page.locator('span[title="resolved (no outcome recorded): a pre-migration duel, never scored"]'),
+  ).toHaveText("n/a   ");
+  await expect(page.locator('span[title="duel #7 resolved (no outcome recorded)"]')).toHaveText("?");
+  await expect(page.locator("span.open", { hasText: /^open\s+$/ })).toHaveCount(0); // no row reads "open"
+});
+
+test("duel: a resolved duel without an outcome says so instead of pending", async ({ page }) => {
+  await stub(page, "events", events(null));
+  await stub(page, "duel", {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    oracle: "price-oracle.testnet",
+    config: { next_duel: "412" },
+    no_reveal: null,
+    duel: legacyDuel,
+    a: agent(PK_A, "stub/deterministic", -10),
+    b: agent(PK_B, "stub/deterministic", -1),
+  });
+  await page.goto("/duel/7");
+  const body = page.locator("body");
+  await expect(page.locator("pre.wrap").first()).toContainText("resolved (no outcome recorded)");
+  await expect(body).toContainText("resolved (no outcome recorded): a pre-migration duel, never scored");
+  await expect(body).toContainText("none recorded");
+  await expect(body).not.toContainText("pending: anyone can resolve");
+  await expect(body).not.toContainText("undecided");
+});

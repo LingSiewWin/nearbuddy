@@ -12,6 +12,7 @@ import {
   revealCell,
   timelineCells,
 } from "../../cells";
+import { NO_OUTCOME, noOutcome } from "../../eras";
 import {
   addrHref,
   agentHref,
@@ -139,10 +140,13 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
   const contract = r?.contract ?? NET.arena;
   const oracle = r?.oracle ?? NET.oracle;
   const nowNs = BigInt(Date.now()) * 1_000_000n;
+  const unscored = !!d && noOutcome(d); // a pre-migration duel closed without an outcome
   const state = !d
     ? null
     : d.resolved
-      ? { t: "resolved", c: "tie" }
+      ? unscored
+        ? { t: NO_OUTCOME, c: "dim" }
+        : { t: "resolved", c: "tie" }
       : BigInt(d.close_at) < nowNs
         ? { t: "CLOSED, awaiting oracle", c: "open" }
         : { t: "LIVE", c: "open" };
@@ -281,7 +285,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                 `${price8(o?.open_price ?? d?.open_price)} USD`,
                 { t: "   snapshotted by the Outlayer TEE oracle right after open", c: "dim" },
               ]
-            : [{ t: "pending oracle callback", c: "dim" }],
+            : [{ t: unscored ? "none recorded" : "pending oracle callback", c: "dim" }],
         )}
         {"\n"}
         {rowx(
@@ -291,7 +295,9 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                 `${price8(o.close_price)} USD`,
                 { t: `   fetched by the oracle at resolve, after ${d ? ts(d.close_at) : "-"}`, c: "dim" },
               ]
-            : [{ t: d ? `pending: anyone can resolve after ${ts(d.close_at)} UTC` : "-", c: "dim" }],
+            : unscored
+              ? [{ t: `${NO_OUTCOME}: a pre-migration duel, never scored`, c: "dim" }]
+              : [{ t: d ? `pending: anyone can resolve after ${ts(d.close_at)} UTC` : "-", c: "dim" }],
         )}
         {"\n"}
         {rowx(
@@ -311,7 +317,10 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                 { t: `${bps(pb)} bps`, c: pnlc(pb) },
                 { t: "   bar: |pnl A| vs |pnl B|", c: "dim" },
               ]
-            : [...meter([], 0), { t: "  scored at resolve: side × size × price move", c: "dim" }],
+            : [
+                ...meter([], 0),
+                { t: unscored ? "  not scored" : "  scored at resolve: side × size × price move", c: "dim" },
+              ],
         )}
         {"\n"}
         {rowx(
@@ -323,7 +332,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                   { t: "   pool paid to the winner", c: "dim" },
                 ]
               : [{ t: "tie, pool split", c: "tie" }]
-            : [{ t: "undecided", c: "dim" }],
+            : [{ t: unscored ? NO_OUTCOME : "undecided", c: "dim" }],
         )}
         {"\n"}
         {rowx(

@@ -108,9 +108,10 @@ async function build(pk: string, era: "oracle" | "operator"): Promise<string> {
     const isA = d.a === pk;
     const it = isA ? d.last_intent_a : d.last_intent_b;
     const pnl = d.outcome ? (isA ? d.outcome.pnl_a : d.outcome.pnl_b) : null;
-    const result =
-      !d.resolved || !d.outcome
-        ? "open"
+    const result = !d.resolved
+      ? "open"
+      : !d.outcome
+        ? "no_outcome" // resolved without an outcome (pre-migration duels): never scored
         : isVoid(d.outcome)
           ? "void"
           : d.outcome.winner === null

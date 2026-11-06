@@ -4,7 +4,7 @@
 // in that era with the proof hash and attacks, and how to list your own.
 import { use, useEffect, useState } from "react";
 import { age, type Fill, followerQuality, sbps, vsCell } from "../../cells";
-import { pageEraFrom, type Tally } from "../../eras";
+import { NO_OUTCOME, pageEraFrom, type Tally } from "../../eras";
 import {
   addrHref,
   agentHref,
@@ -45,7 +45,7 @@ type DuelRow = {
   open_at: string;
   close_at: string;
   resolved: boolean;
-  result: "open" | "tie" | "win" | "loss" | "void";
+  result: "open" | "tie" | "win" | "loss" | "void" | "no_outcome";
   pnl: number | null;
   side: "Long" | "Short" | null;
   size_bps: number | null;
@@ -80,8 +80,10 @@ type Rec = {
 };
 type Era = "oracle" | "operator";
 
-const glyph = { win: "█", tie: "▄", loss: "▁", open: "▒", void: "·" } as const;
-const resultClass = (r: DuelRow["result"]) => (r === "void" ? "dim" : r); // a void was never scored
+const glyph = { win: "█", tie: "▄", loss: "▁", open: "▒", void: "·", no_outcome: "?" } as const;
+// a void and a duel without an outcome were never scored
+const resultClass = (r: DuelRow["result"]) => (r === "void" || r === "no_outcome" ? "dim" : r);
+const resultWord = (r: DuelRow["result"]) => (r === "no_outcome" ? "n/a" : r); // fits the 6-wide column
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
 const proven = (d: DuelRow) => !!d.proof_hash && d.proof_hash !== ZERO;
 
@@ -135,6 +137,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const losses = done.filter((d) => d.result === "loss").length;
   const ties = done.filter((d) => d.result === "tie").length;
   const voids = done.filter((d) => d.result === "void").length;
+  const unscored = done.filter((d) => d.result === "no_outcome").length;
   const net = done.reduce((s, d) => s + (d.pnl ?? 0), 0);
   const verified = duels.filter(proven).length;
   const attacks = duels.reduce((s, d) => s + d.attacks, 0);
@@ -176,7 +179,11 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           ? { t: `${bps(d.pnl)} bps`.padStart(8), c: d.pnl > 0 ? "win" : d.pnl < 0 ? "loss" : "tie" }
           : "   - bps",
         `  ${String(d.attacks).padStart(3)}  `,
-        { t: d.result.padEnd(6), c: resultClass(d.result) },
+        {
+          t: resultWord(d.result).padEnd(6),
+          c: resultClass(d.result),
+          title: d.result === "no_outcome" ? `${NO_OUTCOME}: a pre-migration duel, never scored` : undefined,
+        },
         "  ",
         proven(d)
           ? {
@@ -362,13 +369,23 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           `   slashed ${near(slashed)} NEAR`,
         ])}
         {"\n"}
+        {unscored ? (
+          <>
+            {rowx("", [{ t: `${unscored} ${NO_OUTCOME}: pre-migration duels, not scored`, c: "dim" }])}
+            {"\n"}
+          </>
+        ) : null}
         {duels.length
           ? rowx(
               "timeline",
               duels
                 .slice()
                 .reverse()
-                .map((d) => ({ t: glyph[d.result], c: resultClass(d.result), title: `duel #${d.id} ${d.result}` })),
+                .map((d) => ({
+                  t: glyph[d.result],
+                  c: resultClass(d.result),
+                  title: `duel #${d.id} ${d.result === "no_outcome" ? NO_OUTCOME : d.result}`,
+                })),
             )
           : rowx("timeline", [{ t: "no duels in this window", c: "dim" }])}
         {"\n"}
@@ -382,6 +399,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           { t: "▒ open", c: "open" },
           "  ",
           { t: "· void", c: "dim" },
+          unscored ? { t: "  ? no outcome", c: "dim" } : "",
           { t: "   oldest → newest", c: "dim" },
         ])}
         {"\n"}

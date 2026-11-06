@@ -6,6 +6,8 @@ import {
   eraSplit,
   isOracleEra,
   isVoid,
+  NO_OUTCOME,
+  noOutcome,
   ORACLE_ERA_FROM,
   operatorIds,
   oracleEraFrom,
@@ -36,6 +38,8 @@ const scored = (id: number, a: string, b: string, pnl_a: number, pnl_b: number, 
 const DUELS: Record<string, unknown> = {
   "255": scored(255, P, Q, 70, -70, P),
   "256": scored(256, Q, P, 0, 0, null),
+  // shaped like testnet #0-21: resolved, but closed with no outcome (pre-migration layout)
+  "254": { ...scored(254, P, Q, 0, 0, null), outcome: null, open_price: null },
   "257": scored(257, P, Q, 30, -30, P),
   "258": scored(258, Q, P, 20, -20, Q),
   "259": scored(259, P, Q, 0, 0, null),
@@ -138,6 +142,21 @@ describe("eras", () => {
       [Q]: { oracle: { alpha_bps: -10, wins: 1, ties: 1, losses: 1, voids: 0, duels: 3 }, operator_alpha_bps: -30 },
     });
   });
+  test("a resolved duel without an outcome is labelled, and stays out of alpha and W/T/L", () => {
+    const legacy = DUELS["254"] as ScoredDuel;
+    expect(noOutcome(legacy)).toBe(true);
+    expect(noOutcome(DUELS["260"] as ScoredDuel)).toBe(false); // open, not resolved
+    expect(noOutcome(DUELS["255"] as ScoredDuel)).toBe(false);
+    expect(NO_OUTCOME).toBe("resolved (no outcome recorded)");
+    expect(tally(P, [legacy, DUELS["255"] as ScoredDuel])).toEqual({
+      alpha_bps: 70,
+      wins: 1,
+      ties: 0,
+      losses: 0,
+      voids: 0,
+      duels: 1,
+    });
+  });
   test("a voided duel (both prices 0, as void_duel writes it) is counted apart, not as a tie", () => {
     const base = scored(300, P, Q, 0, 0, null);
     const voided = { ...base, outcome: { ...base.outcome, open_price: "0", close_price: "0" } } as ScoredDuel;
@@ -186,8 +205,12 @@ describe("routes", () => {
     expect(j.eras.operator).toEqual({ alpha_bps: 90, duels: 257, mine: null });
     const op = await (await GET(new Request(`http://x/api/agent?pk=${encodeURIComponent(P)}&era=operator`))).json();
     expect(op.era).toBe("operator");
-    expect(op.duels.map((d: { id: string; result: string }) => `${d.id} ${d.result}`)).toEqual(["256 tie", "255 win"]);
-    expect(op.eras).toEqual({ ...j.eras, operator: { alpha_bps: 90, duels: 257, mine: 2 } });
+    expect(op.duels.map((d: { id: string; result: string }) => `${d.id} ${d.result}`)).toEqual([
+      "256 tie",
+      "255 win",
+      "254 no_outcome", // not "open": it is resolved
+    ]);
+    expect(op.eras).toEqual({ ...j.eras, operator: { alpha_bps: 90, duels: 257, mine: 3 } }); // 254 counts as one of its duels, never scored
     expect(calls).not.toContain("agent_duels:"); // the live index is truncated: eras come from the duel scan
   });
   test("a failed get_duel answers 200 with the split marked incomplete, then completes once the read succeeds", async () => {
