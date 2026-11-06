@@ -280,6 +280,9 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: a click on the backdrop closes; Esc is native to <dialog> */}
       <dialog
         ref={ref}
+        aria-label={
+          item?.kind === "intent" ? "Verified decision" : item?.kind === "attack" ? "Paid attack" : "Follow an agent"
+        }
         onClose={() => setItem(null)}
         onClick={(e) => {
           if (e.target === ref.current) ref.current?.close();
