@@ -65,7 +65,7 @@ export function Headline({
         <b>
           {move >= 0 ? "up" : "down"} {Math.abs(move).toFixed(2)}%
         </b>{" "}
-        since the duel opened.{" "}
+        on Coinbase since the duel opened.{" "}
         {lead && loser ? (
           <>
             If it ends now, {lead === "a" ? B : A} pays {lead === "a" ? A : B}{" "}
@@ -119,7 +119,7 @@ export function Headline({
           {f.live
             ? left > 0
               ? `left in duel ${f.duel}`
-              : "bell rang, waiting for the oracle"
+              : "duel closed, waiting for the oracle"
             : `duel ${f.duel} closed`}
         </small>
         <div className="prog">
@@ -208,7 +208,7 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
         <div className="d">
           {move == null
             ? "waiting for trades"
-            : `${move >= 0 ? "up" : "down"} ${Math.abs(move).toFixed(2)}% since the duel opened`}
+            : `${move >= 0 ? "up" : "down"} ${Math.abs(move).toFixed(2)}% on Coinbase since the duel opened`}
         </div>
       </div>
       <div className="trk chart">
@@ -256,7 +256,7 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
           );
         })}
         <div className="axis">
-          <span>bell</span>
+          <span>open</span>
           <span>close</span>
         </div>
       </div>
