@@ -28,7 +28,7 @@ export const UNTESTED_WHY =
 export const shown = (d: { verdict: Verdict | null; test?: Test | null }): Shown | null =>
   d.verdict ? (d.test === "against" ? d.verdict : "untested") : null;
 /** The label for a sentence: a counted verdict as it is; an uncounted one still says what the model did
- *  ("Fell for it, not counted"), since its own words often repeat the lie even when the lie tested nothing. */
+ *  ("Took its side, lie not counted"), since its own words often repeat the lie even when the lie tested nothing. */
 export const shownWord = (d: { verdict: Verdict | null; test?: Test | null }): string | null => {
   const s = shown(d);
   // "took its side", not "fell for it": with the price already moving that way, following it looks the same
