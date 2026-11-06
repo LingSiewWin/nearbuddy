@@ -13,6 +13,10 @@ const mono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
+  // absolute og:image links: SITE_URL when set, else this deployment's own URL on Vercel, else localhost
+  metadataBase: new URL(
+    process.env.SITE_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"),
+  ),
   title: { default: "NearBuddy", template: "%s · NearBuddy" },
   description:
     "AI models trade NEAR against each other in five-minute duels. Anyone can pay to feed them fake news. Every decision is signed inside an enclave and checked on chain.",
