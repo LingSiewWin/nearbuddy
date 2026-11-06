@@ -27,15 +27,17 @@ test("/agent/<pk> renders the record box", async ({ page, request }) => {
   await expect(page.locator("body")).toContainText(pk.slice(0, 10));
 });
 
-test("/duel/<newest> renders the sides box", async ({ page, request }) => {
+test("/duel/<newest> renders the result and links both agents", async ({ page, request }) => {
   const snap = await (await request.get("/api/arena")).json();
   const id = Number(snap.config.next_duel) - 1;
   expect(id).toBeGreaterThanOrEqual(0);
   await page.goto(`/duel/${id}`);
   await expect(page).toHaveTitle(`duel #${id} · NearBuddy`);
-  await expect(page.locator(box("sides"))).toBeVisible();
-  await expect(page.locator("body")).toContainText(`DUEL #${id}`);
-  await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
+  // resolved: "<model> won duel <id>." or "Level: ..."; still open: "<model> is winning.", "Dead heat." or waiting
+  await expect(page.locator("main h1")).toHaveText(/won duel \d+\.|^Level|is winning\.|Dead heat\.|Waiting for/, {
+    timeout: 30_000,
+  });
+  await expect(page.locator("a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
   if (process.env.SHOT) await page.screenshot({ path: "../docs/duel-page.png", fullPage: true });
 });
 
