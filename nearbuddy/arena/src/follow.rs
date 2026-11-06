@@ -218,6 +218,8 @@ impl Contract {
             let bal = self.vaults.get(&who).copied().unwrap_or(0);
             require!(bal >= cost, "insufficient");
             self.vaults.insert(who.clone(), bal - cost);
+            // the storage NEAR left the vault, so it leaves the counted total too (deploy 16)
+            self.vault_total = self.vault_total.saturating_sub(cost);
         }
         follow_event("follow", &agent_pk.0, &who);
     }

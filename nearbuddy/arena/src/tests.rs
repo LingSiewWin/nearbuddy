@@ -1527,6 +1527,54 @@ fn deposits_stop_at_the_vault_cap() {
 }
 
 #[test]
+fn follow_storage_leaves_vault_total_with_the_vault() {
+    // red team V2: the vault paid the follow's storage, the total did not move
+    let (c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    assert_eq!(c.get_config().vault_total.0, v);
+}
+
+#[test]
+fn reconcile_vault_total_sets_the_sum_of_the_listed_vaults() {
+    let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(OPERATOR, 2 * NEAR);
+    let o = c.deposit().0;
+    // deploy-15 drift: pretend the total is off both ways
+    c.vault_total = 1;
+    ctx(OWNER, 1);
+    let accounts: Vec<AccountId> = [FOLLOWER, OPERATOR, SPECTATOR]
+        .iter()
+        .map(|a| a.parse().unwrap())
+        .collect();
+    assert_eq!(c.reconcile_vault_total(accounts).0, v + o);
+    assert_eq!(c.get_config().vault_total.0, v + o);
+    c.vault_total = u128::MAX;
+    assert_eq!(c.reconcile_vault_total(vec![]).0, 0);
+}
+
+#[test]
+fn reconcile_vault_total_refusals() {
+    let mut c = fresh(0);
+    let f: AccountId = FOLLOWER.parse().unwrap();
+    let refuse = |c: &mut Contract, who: &str, yocto: u128, accounts: Vec<AccountId>| {
+        ctx(who, yocto);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.reconcile_vault_total(accounts)
+        }));
+        panic_msg(r.unwrap_err())
+    };
+    assert_eq!(refuse(&mut c, FOLLOWER, 1, vec![]), "not owner");
+    assert!(refuse(&mut c, OWNER, 0, vec![]).contains("exactly 1 yoctoNEAR"));
+    assert_eq!(
+        refuse(&mut c, OWNER, 1, vec![f.clone(), f.clone()]),
+        "duplicate account"
+    );
+    let many: Vec<AccountId> = (0..=crate::state::MAX_RECONCILE)
+        .map(|i| format!("a{i}.testnet").parse().unwrap())
+        .collect();
+    assert_eq!(refuse(&mut c, OWNER, 1, many), "too many accounts");
+}
+
+#[test]
 fn vault_total_follows_deposits_and_withdrawals() {
     let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
     let total = c.get_config().vault_total.0;

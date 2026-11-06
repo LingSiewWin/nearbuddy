@@ -2,7 +2,8 @@
 //! mandate limits, duel finality and slash arithmetic; from deploy 15 also verified settlement
 //! (fills credited only against delivered, unaccounted output; sum(holdings) == accounted per token),
 //! `withdraw_token` (debit first, exact re-credit on a failed transfer), the vault delay (never paid
-//! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted).
+//! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted);
+//! from deploy 16 `vault_total == sum(vaults)`.
 //!
 //! Every operation runs like a transaction on chain: the contract is read from the mocked trie,
 //! the method runs, and on success the struct is written back and the collections flushed. A
@@ -410,6 +411,7 @@ struct Snap {
     shields: [Option<u32>; AGENTS],
     in_duel: [Option<u64>; AGENTS],
     vaults: [u128; 4],
+    vault_total: u128,
     duels: Vec<Duel>,
     fees: u128,
     open_duels: u64,
@@ -658,6 +660,7 @@ impl World {
                 let id: AccountId = ACCOUNTS[i].parse().unwrap();
                 c.vaults.get(&id).copied().unwrap_or(0)
             }),
+            vault_total: c.vault_total,
             duels: (0..c.next_duel)
                 .map(|d| c.duels.get(&d).expect("duel").clone())
                 .collect(),
@@ -1644,6 +1647,12 @@ impl World {
                 "vault {i} above its ledger"
             );
         }
+        // 2b. every vault starts in this deploy's accounting, so the counted total is exact (deploy 16)
+        assert_eq!(
+            post.vault_total,
+            post.vaults.iter().sum::<u128>(),
+            "vault_total != sum(vaults)"
+        );
         // 3. no mandate over its allowance (generated mandates start within it)
         for (a, w, m) in &post.mandates {
             assert!(

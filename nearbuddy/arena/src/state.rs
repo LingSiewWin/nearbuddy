@@ -34,6 +34,9 @@ pub(crate) enum StorageKey {
     SelfChaos,
 }
 
+/// Most accounts one `reconcile_vault_total` reads, so the call stays inside one transaction's gas.
+pub const MAX_RECONCILE: usize = 100;
+
 /// Default `withdraw_delay_ns`: twice a generous settle lag. `set_withdraw_delay` changes it.
 pub const DEFAULT_WITHDRAW_DELAY_NS: u64 = 900 * 1_000_000_000;
 
@@ -124,8 +127,9 @@ pub struct Contract {
     pub(crate) paused: bool,
     /// `deposit` is refused once `vault_total` would exceed this.
     pub(crate) max_vault_total: u128,
-    /// NEAR deposited minus NEAR withdrawn through vaults, from deploy 15 on (vaults funded before
-    /// it are not counted; withdrawals saturate at 0).
+    /// Sum of `vaults` for accounting from deploy 16 on: deposits minus withdrawals, fees and follow
+    /// storage. Deploy 15 left drift (follow storage not subtracted, pre-15 vaults not counted,
+    /// withdrawals saturating at 0); `reconcile_vault_total` resets it to the real sum.
     pub(crate) vault_total: u128,
     /// Duel id to the intent lock it was opened under (ns), kept after the duel finishes so its lock
     /// stays checkable through `duel_lock` (the opener paid for the entry). Duels opened before
@@ -459,6 +463,27 @@ impl Contract {
     pub fn set_vault_cap(&mut self, max_vault_total: U128) {
         self.only_owner_yocto();
         self.max_vault_total = max_vault_total.0;
+    }
+
+    /// Recompute `vault_total` as the sum of `accounts`' vaults. `vaults` is not iterable, so the
+    /// owner supplies every vault holder (from deposit events); this clears the drift deploys 15 and
+    /// earlier left (follow storage not subtracted, pre-15 vaults not counted). Omitting a holder
+    /// only undercounts, which loosens the cap the owner can set anyway; no NEAR moves. Returns the
+    /// new total. Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "too many accounts"
+    /// (over `MAX_RECONCILE`), "duplicate account".
+    #[payable]
+    pub fn reconcile_vault_total(&mut self, accounts: Vec<AccountId>) -> U128 {
+        self.only_owner_yocto();
+        require!(accounts.len() <= MAX_RECONCILE, "too many accounts");
+        let mut seen = accounts.clone();
+        seen.sort();
+        seen.dedup();
+        require!(seen.len() == accounts.len(), "duplicate account");
+        self.vault_total = accounts
+            .iter()
+            .map(|a| self.vaults.get(a).copied().unwrap_or(0))
+            .sum();
+        U128(self.vault_total)
     }
 
     /// How long `withdraw` waits after `request_withdraw`; at least twice the solver's settle lag.

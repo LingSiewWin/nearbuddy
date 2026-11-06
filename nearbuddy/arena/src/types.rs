@@ -262,7 +262,7 @@ pub struct Config {
     pub paused: bool,
     /// `deposit` refused once `vault_total` would pass this.
     pub max_vault_total: U128,
-    /// NEAR deposited into vaults minus NEAR withdrawn, counted from deploy 15 on.
+    /// Sum of all vaults (exact for accounting from deploy 16 on; see `reconcile_vault_total`).
     pub vault_total: U128,
     /// `follows` is being re-keyed by `migrate_follows`; follow and settle are refused meanwhile.
     pub migrating: bool,
