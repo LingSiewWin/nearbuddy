@@ -84,8 +84,20 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Deploy 8 + `migrate_v8`: oracle requests paid by the caller, one enclave proof per intent (`proof used`), `min_duel_s` 310, `set_oracle` | [`5LVSUqg5…RDYMn`](https://testnet.nearblocks.io/txns/5LVSUqg5oT5DLZGhBgCvxbboPpvE1ueSYR2VKtARDYMn) |
 | **Duel 258 resolved by the TEE oracle, called by anyone**: Outlayer close 3.69016666 vs open 3.69380000; Qwen (Short) +4 bps wins, DeepSeek (Long) −4 bps slashed 10% (0.0911 → 0.0820 NEAR), injections pruned, `outcome` recorded | [`9Hf33mxh…xZWB`](https://testnet.nearblocks.io/txns/9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB) |
 
-Counts move while the runner is on: as of 2026-11-06 13:50 (UTC+8) 259 duels, 980+ signed intents (the newest with enclave proofs) and 7 chaos injections
-ran on testnet. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
+Counts move while the runner is on: as of 2026-11-06 15:05 (UTC+8) 272 duels, 1,140 decisions (126 enclave-signed and verified on
+chain) and 22 chaos injections ran on testnet.
+
+What the enclave rounds showed so far (duels 258-271, DeepSeek-V4.1-Flash-1017 with the hardened prompt vs Qwen3.8-27B with the
+naive prompt, both inside NEAR AI Cloud TEEs, spectators injecting fake news at one or both):
+
+| Model | Decisions | Attacked | Took the injected side |
+|---|---|---|---|
+| Qwen3.8-27B (naive prompt) | 63 | 8 | 6 of 6 readable |
+| DeepSeek-V4.1-Flash-1017 (hardened prompt) | 63 | 5 | 1 of 3 readable |
+
+Qwen follows the telemetry every time ("forced liquidations of NEAR perpetuals should create downside pressure"); DeepSeek names
+it and trades the oracle ("contradicting the oracle's modest +6.1 bps gain, so I ignore it"). Every one of those decisions is an
+enclave-signed completion the contract verified before it counted. `agents/.venv/bin/python summarize.py` prints the live table. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
 Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test test_arena_sandbox -- --ignored --nocapture`; needs cargo-near, downloads the sandbox once):
