@@ -5,7 +5,8 @@
 //   POST /duel     {a, b, symbol, close_at}                  -> {duel_id, tx}   (symbol = oracle asset id, e.g. wrap.near)
 //   POST /intent   {signed: SignedIntent, tee?: TeeProof}    -> {tx, quotes:[{follower, amount, quote}]}
 //   POST /chaos    {payload}  (open)                         -> {payload_hash}; spectator then calls inject_chaos on chain
-//   POST /resolve  {duel_id}                                 -> {tx}  (permissionless on chain; the oracle callback finishes the duel)
+//   POST /resolve  {duel_id}                                 -> {tx, sent}  (permissionless on chain; the oracle callback finishes the duel)
+//   POST /open_price {duel_id}                               -> {tx}  (re-ask the oracle for a missing open price)
 //   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}
 //   GET  /arena                                              -> snapshot incl. pending injections with payloads
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -44,9 +45,17 @@ function keyOk(h: string | string[] | undefined): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 const GAS = teraToGas("100");
-/** open_duel: oracle_call deposit (0.02 NEAR, mostly refunded by the oracle) plus the duel record's storage. */
 const OPEN_DUEL_GAS = teraToGas("250");
-const OPEN_DUEL_DEPOSIT = 35_000_000_000_000_000_000_000n;
+/** Storage margin added on top of the on-chain `oracle_deposit` for open_duel (a duel record is ~1 KB = 0.01 NEAR). */
+const OPEN_DUEL_STORAGE = 15_000_000_000_000_000_000_000n;
+let oracleDepositMemo: { at: number; v: bigint } | null = null;
+/** `oracle_deposit` from get_config, memoised for a minute; the owner can change it with set_oracle. */
+async function oracleDeposit(): Promise<bigint> {
+  if (oracleDepositMemo && Date.now() - oracleDepositMemo.at < 60_000) return oracleDepositMemo.v;
+  const cfg = await arenaView<{ oracle_deposit: string }>("get_config", {});
+  oracleDepositMemo = { at: Date.now(), v: BigInt(cfg.oracle_deposit) };
+  return oracleDepositMemo.v;
+}
 
 /** Pick the mandate-bounded amount to quote for one follower: min(cap, allowance - spent). */
 export function quoteAmount(m: Mandate): bigint {
@@ -107,7 +116,7 @@ export class Arena {
   async openDuel(a: string, b: string, symbol: string, close_at: string) {
     let r: { tx: string; value: unknown };
     try {
-      r = await this.call("open_duel", { a, b, symbol, close_at }, OPEN_DUEL_DEPOSIT, OPEN_DUEL_GAS);
+      r = await this.call("open_duel", { a, b, symbol, close_at }, (await oracleDeposit()) + OPEN_DUEL_STORAGE, OPEN_DUEL_GAS);
     } catch (e) {
       // the oracle yield inside open_duel makes the tx take several seconds; public RPCs sometimes drop the wait
       // with "Internal server error" after the tx landed. Never resend (the agents would be "in duel"): look it up.
@@ -214,20 +223,27 @@ export class Arena {
     }
   }
 
-  /** Ask the oracle for the close price. The contract finishes the duel when the oracle calls back;
-   *  `pending()` drops the duel once `get_duel` reports it resolved. */
+  /** Ask the oracle for the close price, paying its deposit. The contract finishes the duel when the oracle
+   *  calls back; `pending()` drops the duel once `get_duel` reports it resolved. `sent: false` means the RPC
+   *  dropped the wait and the caller should check `get_duel` and retry rather than wait. */
   async resolve(duel_id: string) {
-    let tx = "";
+    let tx = "", sent = true;
     try {
-      tx = (await this.call("resolve_duel", { duel_id }, 0n, OPEN_DUEL_GAS)).tx;
+      tx = (await this.call("resolve_duel", { duel_id }, await oracleDeposit(), OPEN_DUEL_GAS)).tx;
     } catch (e) {
       // same RPC wait issue as open_duel; the request is detached on chain, so a landed tx has done its job.
       // resolve_duel is idempotent until the oracle answers, so the caller may simply retry.
       if (!/Internal server error|timeout|Timeout/i.test(String(e))) throw e;
+      sent = false;
       console.log(`[arena] resolve_duel rpc wait failed (${String(e).slice(0, 60)}); the oracle callback will finish duel ${duel_id} if the tx landed`);
     }
     for (const k of this.consumed) if (k.startsWith(`${duel_id}:`)) this.consumed.delete(k);
-    return { tx };
+    return { tx, sent };
+  }
+
+  /** Re-ask the oracle for a duel whose open price never landed, paying its deposit. */
+  async requestOpenPrice(duel_id: string) {
+    return { tx: (await this.call("request_open_price", { duel_id }, await oracleDeposit(), OPEN_DUEL_GAS)).tx };
   }
 
   async settleFollow(agent_pk: string, follower: string, fills: Fill[]) {
@@ -275,7 +291,7 @@ export class Arena {
   async route(method: string | undefined, url: string | undefined, body: string, headers: Record<string, string | string[] | undefined> = {}): Promise<{ code: number; body: unknown } | null> {
     if (url === "/arena") return { code: 200, body: await this.snapshot() };
     if (method === "POST" && url === "/chaos") return { code: 200, body: this.stash((JSON.parse(body) as { payload: string }).payload) };
-    const mine = ["/duel", "/register", "/intent", "/resolve", "/settle_follow", "/consume"].includes(url ?? "");
+    const mine = ["/duel", "/register", "/intent", "/resolve", "/open_price", "/settle_follow", "/consume"].includes(url ?? "");
     if (!mine) return null;
     if (method !== "POST") return { code: 405, body: { error: "POST only" } };
     if (!keyOk(headers["x-arena-key"])) return { code: 401, body: { error: "x-arena-key required" } };
@@ -296,6 +312,10 @@ export class Arena {
     if (method === "POST" && url === "/resolve") {
       const q = JSON.parse(body) as { duel_id: string };
       return { code: 200, body: await this.resolve(String(q.duel_id)) };
+    }
+    if (method === "POST" && url === "/open_price") {
+      const q = JSON.parse(body) as { duel_id: string };
+      return { code: 200, body: await this.requestOpenPrice(String(q.duel_id)) };
     }
     if (method === "POST" && url === "/settle_follow") {
       const q = JSON.parse(body) as { agent_pk: string; follower: string; fills: Fill[] };
