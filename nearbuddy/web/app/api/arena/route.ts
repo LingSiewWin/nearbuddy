@@ -8,7 +8,7 @@
 // ponytail: reads every oracle-era duel on a cold start; a per-era tally in the contract or an indexer
 // when that runs into thousands.
 import { proven as hasProof } from "../../cells";
-import { eraSplit, ORACLE_ERA_FROM, oracleIds, type ScoredDuel } from "../../eras";
+import { eraSplit, ORACLE_ERA_FROM, oracleIds, type ScoredDuel, unread } from "../../eras";
 import { chunked, readDuel } from "../duels";
 import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
 
@@ -45,12 +45,30 @@ export async function GET() {
   }
 }
 
+type Board = { pk: string; alpha_bps: number }[];
+const PAGE = 100; // deploy 15 pages `leaderboard` at <= 100; deploy 14 ignores {from, limit} and returns everyone
+/** Every registered agent, in the contract's (lifetime) order: the era ranking needs the whole board, since an
+ *  agent strong from duel 257 on can sit past the first page by lifetime alpha. */
+async function fullBoard(): Promise<Board> {
+  const all: Board = [];
+  const seen = new Set<string>();
+  for (let from = 0; ; from += PAGE) {
+    const page = (await view("leaderboard", { from, limit: PAGE })) as Board;
+    const fresh = page.filter((a) => !seen.has(a.pk));
+    for (const a of fresh) {
+      seen.add(a.pk);
+      all.push(a);
+    }
+    if (page.length < PAGE || !fresh.length) return all; // a short page, or args ignored (same page again)
+  }
+}
+
 async function build(): Promise<string> {
   const config = (await view("get_config", {})) as { next_duel: string; no_reveal_bps?: number };
   const n = Number(config.next_duel);
   const ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => String(n - 1 - i));
   const [leaderboard, solver] = await Promise.all([
-    view("leaderboard", {}) as Promise<{ pk: string; alpha_bps: number }[]>,
+    fullBoard(),
     fetch(`${SOLVER_URL}/arena`, { cache: "no-store" })
       .then((r) => r.json())
       .catch(() => null),
@@ -60,8 +78,11 @@ async function build(): Promise<string> {
   const byId = new Map(want.map((id, i) => [id, read[i] ?? null]));
   const scanned = ids.map((id) => byId.get(id) ?? null);
   const oracle = oracleIds(n).map((id) => byId.get(id) ?? null);
+  const missing = unread(oracle, config.no_reveal_bps != null);
   const eras = {
     from: ORACLE_ERA_FROM,
+    complete: missing === 0, // false: rank by lifetime until every oracle-era duel is read
+    unread: missing,
     operator_duels: Math.min(ORACLE_ERA_FROM, n),
     oracle_duels: oracle.filter((d) => d?.resolved).length,
     by_agent: eraSplit(

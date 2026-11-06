@@ -2,8 +2,11 @@
 // oracle. The contract keeps one lifetime alpha per agent, so the oracle-era figures are summed here from
 // the duels themselves and the operator-era alpha is the remainder. Read side only.
 
-/** First duel scored by the Outlayer TEE oracle; duels 0..ORACLE_ERA_FROM-1 were scored by the operator key. */
-export const ORACLE_ERA_FROM = 257;
+/** First duel scored by the Outlayer TEE oracle for a NEAR_NETWORK: the testnet arena's duels 0-256 were scored
+ *  by the operator key; a mainnet arena is oracle-scored from duel 0. */
+export const oracleEraFrom = (network: string | undefined) => (network === "mainnet" ? 0 : 257);
+/** This deploy's boundary. Server side only: the browser bundle has no NEAR_NETWORK, so pages take `eras.from`. */
+export const ORACLE_ERA_FROM = oracleEraFrom(process.env.NEAR_NETWORK);
 
 export const isOracleEra = (id: string | number) => Number(id) >= ORACLE_ERA_FROM;
 
@@ -25,6 +28,11 @@ export type ScoredDuel = {
   outcome?: { pnl_a: number; pnl_b: number; winner: string | null } | null;
   no_reveal?: [boolean, boolean] | null; // get_no_reveal, deploy 14 on
 };
+/** Oracle-era duels a split cannot trust yet: a failed read (null), or a resolved duel whose `no_reveal` read
+ *  failed when the contract has commit-reveal. Any of these would shift alpha into the operator remainder. */
+export const unread = (duels: (ScoredDuel | null)[], noReveal: boolean) =>
+  duels.filter((d) => !d || (noReveal && d.resolved && d.no_reveal === undefined)).length;
+
 export type Tally = { alpha_bps: number; wins: number; ties: number; losses: number; duels: number };
 
 /** One agent's alpha and record over resolved duels, credited as `finish` does: a side that left a

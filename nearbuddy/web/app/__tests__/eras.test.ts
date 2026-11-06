@@ -1,8 +1,18 @@
 // The scoring-era split: the pure tally, then GET /api/arena and GET /api/agent against a fake contract
-// (../api/near mocked), so the routes' id ranges and remainder maths are checked end to end without RPC.
-// Run: `cd web && bun test app`.
-import { describe, expect, mock, test } from "bun:test";
-import { eraSplit, isOracleEra, ORACLE_ERA_FROM, operatorIds, oracleIds, type ScoredDuel, tally } from "../eras";
+// (../api/near mocked), so the routes' id ranges, remainder maths, failed reads and leaderboard paging are
+// checked end to end without RPC. Run: `cd web && bun test app`.
+import { afterAll, describe, expect, mock, setSystemTime, test } from "bun:test";
+import {
+  eraSplit,
+  isOracleEra,
+  ORACLE_ERA_FROM,
+  operatorIds,
+  oracleEraFrom,
+  oracleIds,
+  type ScoredDuel,
+  tally,
+  unread,
+} from "../eras";
 
 const P = "UGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=";
 const Q = "UWJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=";
@@ -29,24 +39,54 @@ const DUELS: Record<string, unknown> = {
   "259": scored(259, P, Q, 0, 0, null),
   "260": { ...scored(260, Q, P, 0, 0, null), resolved: false, outcome: null },
 };
-const AGENTS = [
-  { owner: "o.testnet", pk: P, model_id: "m/p", bond: "1", alpha_bps: 100, shield: 1, in_duel: "260", tee: true },
-  { owner: "o.testnet", pk: Q, model_id: "m/q", bond: "1", alpha_bps: -40, shield: 0, in_duel: "260", tee: true },
-];
+const agentOf = (pk: string, alpha_bps: number) => ({
+  owner: "o.testnet",
+  pk,
+  model_id: `m/${pk.slice(0, 4)}`,
+  bond: "1",
+  alpha_bps,
+  shield: 0,
+  in_duel: null,
+  tee: true,
+});
+const AGENTS = [agentOf(P, 100), agentOf(Q, -40)];
+
+// knobs the tests turn
+const fake = {
+  next: 261,
+  commitReveal: false, // get_config carries no_reveal_bps (deploy 14)
+  failDuel: new Set<string>(), // get_duel throws for these ids
+  failNoReveal: new Set<string>(), // get_no_reveal throws for these ids
+  board: "ignore-args" as "ignore-args" | "paged", // deploy 14 ignores {from, limit}; deploy 15 pages at 100
+  extra: [] as ReturnType<typeof agentOf>[], // filler agents below P and Q
+};
 const calls: string[] = [];
 const fakeView = async (method: string, args: Record<string, unknown>): Promise<unknown> => {
-  calls.push(`${method}:${String(args.duel_id ?? "")}`);
+  calls.push(`${method}:${String(args.duel_id ?? args.from ?? "")}`);
+  const board = [...AGENTS, ...fake.extra];
   switch (method) {
     case "get_config":
-      return { next_duel: "261", slash_bps: 1000, min_chaos_deposit: "1" };
-    case "leaderboard":
-      return AGENTS;
+      return {
+        next_duel: String(fake.next),
+        slash_bps: 1000,
+        min_chaos_deposit: "1",
+        ...(fake.commitReveal ? { commit_reveal: true, no_reveal_bps: 500 } : {}),
+      };
+    case "leaderboard": {
+      if (fake.board === "ignore-args") return board;
+      const from = Number(args.from);
+      return board.slice(from, from + Math.min(100, Number(args.limit)));
+    }
     case "list_followers":
       return [];
     case "get_agent":
-      return AGENTS.find((a) => a.pk === args.agent_pk) ?? null;
+      return board.find((a) => a.pk === args.agent_pk) ?? null;
     case "get_duel":
+      if (fake.failDuel.has(String(args.duel_id))) throw new Error("rpc 429");
       return DUELS[String(args.duel_id)] ?? null;
+    case "get_no_reveal":
+      if (fake.failNoReveal.has(String(args.duel_id))) throw new Error("rpc 429");
+      return [false, false];
     default:
       throw new Error(`no view ${method}`);
   }
@@ -61,12 +101,25 @@ mock.module("../api/near", () => ({
   json: (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "application/json" } }),
 }));
 
+// the arena route caches its body 20 s: each build steps the clock past that
+let clock = Date.UTC(2026, 10, 6, 12);
+const arena = async () => {
+  clock += 21_000;
+  setSystemTime(new Date(clock));
+  const { GET } = await import("../api/arena/route");
+  return (await GET()).json();
+};
+afterAll(() => setSystemTime());
+
 describe("eras", () => {
-  test("one named boundary", () => {
+  test("one named boundary, per network", () => {
+    expect(oracleEraFrom(undefined)).toBe(257);
+    expect(oracleEraFrom("testnet")).toBe(257);
+    expect(oracleEraFrom("mainnet")).toBe(0); // a mainnet arena is oracle-scored from duel 0
+    expect(ORACLE_ERA_FROM).toBe(oracleEraFrom(process.env.NEAR_NETWORK));
     expect(operatorIds(3)).toEqual(["2", "1", "0"]);
     expect(operatorIds(400)).toHaveLength(257);
     expect(operatorIds(400)[0]).toBe("256");
-    expect(ORACLE_ERA_FROM).toBe(257);
     expect(isOracleEra("256")).toBe(false);
     expect(isOracleEra(257)).toBe(true);
     expect(oracleIds(261)).toEqual(["260", "259", "258", "257"]);
@@ -83,15 +136,19 @@ describe("eras", () => {
       [Q]: { oracle: { alpha_bps: -10, wins: 1, ties: 1, losses: 1, duels: 3 }, operator_alpha_bps: -30 },
     });
   });
+  test("unread: a failed read, or a resolved duel without no_reveal once the contract has commit-reveal", () => {
+    const d = DUELS["257"] as ScoredDuel;
+    const open = DUELS["260"] as ScoredDuel;
+    expect(unread([d, null, open], false)).toBe(1);
+    expect(unread([d, open], true)).toBe(1); // resolved 257 lacks no_reveal; the open duel has none to read
+    expect(unread([{ ...d, no_reveal: [false, false] }, open], true)).toBe(0);
+  });
 });
 
 describe("routes", () => {
   test("GET /api/arena: per-agent split over every oracle-era duel and the excluded operator-era count", async () => {
-    const { GET } = await import("../api/arena/route");
-    const j = await (await GET()).json();
-    expect(j.eras.from).toBe(257);
-    expect(j.eras.operator_duels).toBe(257);
-    expect(j.eras.oracle_duels).toBe(3);
+    const j = await arena();
+    expect(j.eras).toMatchObject({ from: 257, complete: true, unread: 0, operator_duels: 257, oracle_duels: 3 });
     expect(j.eras.by_agent[P]).toEqual({
       oracle: { alpha_bps: 10, wins: 1, ties: 1, losses: 1, duels: 3 },
       operator_alpha_bps: 90,
@@ -105,6 +162,7 @@ describe("routes", () => {
     const j = await (await GET(new Request(`http://x/api/agent?pk=${encodeURIComponent(P)}`))).json();
     expect(j.era).toBe("oracle");
     expect(j.duels.map((d: { id: string }) => d.id)).toEqual(["260", "259", "258", "257"]);
+    expect(j.eras).toMatchObject({ complete: true, unread: 0 });
     expect(j.eras.oracle).toEqual({ alpha_bps: 10, wins: 1, ties: 1, losses: 1, duels: 3 });
     expect(j.eras.operator).toEqual({ alpha_bps: 90, duels: 257, mine: null });
     const op = await (await GET(new Request(`http://x/api/agent?pk=${encodeURIComponent(P)}&era=operator`))).json();
@@ -112,5 +170,49 @@ describe("routes", () => {
     expect(op.duels.map((d: { id: string; result: string }) => `${d.id} ${d.result}`)).toEqual(["256 tie", "255 win"]);
     expect(op.eras).toEqual({ ...j.eras, operator: { alpha_bps: 90, duels: 257, mine: 2 } });
     expect(calls).not.toContain("agent_duels:"); // the live index is truncated: eras come from the duel scan
+  });
+  test("a failed get_duel answers 200 with the split marked incomplete, then completes once the read succeeds", async () => {
+    DUELS["261"] = scored(261, P, Q, 40, -40, P); // P's lifetime moves to +140 with it
+    AGENTS[0]!.alpha_bps = 140;
+    AGENTS[1]!.alpha_bps = -80;
+    fake.next = 262;
+    fake.failDuel.add("261");
+    const j = await arena();
+    expect(j.eras).toMatchObject({ complete: false, unread: 1 });
+    expect(j.leaderboard).toHaveLength(2); // the rest of the board still renders
+    fake.failDuel.clear();
+    const k = await arena();
+    expect(k.eras).toMatchObject({ complete: true, unread: 0 });
+    expect(k.eras.by_agent[P]).toEqual({
+      oracle: { alpha_bps: 50, wins: 2, ties: 1, losses: 1, duels: 4 },
+      operator_alpha_bps: 90, // unchanged: the late read lands in the oracle era, not the remainder
+    });
+  });
+  test("a failed get_no_reveal is never cached as 'no forfeit': the duel is re-read next build", async () => {
+    fake.commitReveal = true; // the contract upgraded: every kept duel needs its no_reveal now
+    fake.failNoReveal.add("258");
+    const j = await arena();
+    expect(j.eras).toMatchObject({ complete: false, unread: 1 });
+    const before = calls.filter((c) => c === "get_no_reveal:258").length;
+    fake.failNoReveal.clear();
+    const k = await arena();
+    expect(k.eras).toMatchObject({ complete: true, unread: 0 });
+    expect(calls.filter((c) => c === "get_no_reveal:258").length).toBe(before + 1);
+    await arena();
+    expect(calls.filter((c) => c === "get_no_reveal:258").length).toBe(before + 1); // kept once it read
+  });
+  test("leaderboard: every page is read (deploy 15), and a contract that ignores the args is read once", async () => {
+    fake.extra = Array.from({ length: 150 }, (_, i) => agentOf(btoa(`filler-${String(i).padStart(3, "0")}`), -100));
+    fake.board = "paged";
+    calls.length = 0;
+    const paged = await arena();
+    expect(paged.leaderboard).toHaveLength(152);
+    expect(calls.filter((c) => c.startsWith("leaderboard:"))).toEqual(["leaderboard:0", "leaderboard:100"]);
+    fake.board = "ignore-args"; // deploy 14 returns everyone whatever {from, limit} says
+    calls.length = 0;
+    const all = await arena();
+    expect(all.leaderboard).toHaveLength(152);
+    expect(calls.filter((c) => c.startsWith("leaderboard:"))).toEqual(["leaderboard:0", "leaderboard:100"]); // stops: no new agents
+    fake.extra = [];
   });
 });

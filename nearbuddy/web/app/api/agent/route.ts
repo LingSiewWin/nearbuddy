@@ -6,7 +6,7 @@
 // ponytail: scans every duel of the era (memoised once resolved); a per-agent era tally in the contract or
 // an indexer when duel counts reach the thousands.
 import type { Fill } from "../../cells";
-import { ORACLE_ERA_FROM, operatorIds, oracleIds, type ScoredDuel, tally } from "../../eras";
+import { ORACLE_ERA_FROM, operatorIds, oracleIds, type ScoredDuel, tally, unread } from "../../eras";
 import { chunked, readDuel } from "../duels";
 import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
 
@@ -83,16 +83,19 @@ async function build(pk: string, era: "oracle" | "operator"): Promise<string> {
   // Era ranges are scanned, not read from agent_duels: the live index holds only an agent's recent duels
   // (8dPZ: 20 ids from #324 against 63 oracle-era duels), so it cannot carry a per-era sum. Resolved duels
   // are memoised in ../duels, shared with /api/arena, so a warm process reads only the open ones.
-  const read = (list: string[]) =>
-    chunked(list, 8, (id) => readDuel<Duel>(id, config.no_reveal_bps != null)).then((ds) =>
-      ds.filter((d): d is Duel => !!d && (d.a === pk || d.b === pk)),
-    );
+  const nr = config.no_reveal_bps != null;
+  const readAll = (list: string[]) => chunked(list, 8, (id) => readDuel<Duel>(id, nr));
+  const ours = (ds: (Duel | null)[]) => ds.filter((d): d is Duel => !!d && (d.a === pk || d.b === pk));
   const ids = era === "oracle" ? oracleIds(n) : operatorIds(n);
-  const oracleDuels = await read(oracleIds(n));
-  const mine = era === "oracle" ? oracleDuels : await read(ids);
+  const oracleReads = await readAll(oracleIds(n));
+  const oracleDuels = ours(oracleReads);
+  const mine = era === "oracle" ? oracleDuels : ours(await readAll(ids));
   const oracle = tally(pk, oracleDuels);
+  const missing = unread(oracleReads, nr); // a failed read may be one of this agent's: the split waits for it
   const eras = {
     from: ORACLE_ERA_FROM,
+    complete: missing === 0,
+    unread: missing,
     oracle,
     operator: {
       // lifetime alpha minus the oracle-era sum: what the operator-scored duels left in the contract's alpha

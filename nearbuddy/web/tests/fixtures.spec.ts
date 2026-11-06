@@ -357,6 +357,27 @@ test("arena: standings rank by alpha from duel 257 on, lifetime one click away",
   await shot(page, "arena-eras");
 });
 
+test("arena: an incomplete era split ranks by lifetime and says so in the note row", async ({ page }) => {
+  await stub(page, "arena", { ...arena(false), eras: { ...eras, complete: false, unread: 3 } });
+  await page.goto("/arena");
+  const body = page.locator("body");
+  await expect(body).toContainText("ranked by lifetime alpha, then shield");
+  await expect(body).toContainText("era split incomplete (3 oracle-era duels unread, retrying): lifetime alpha");
+  await expect(page.locator("pre a[href^='/agent/']").first()).toHaveAttribute(
+    "href",
+    `/agent/${encodeURIComponent(PK_A)}`,
+  ); // +140 lifetime leads; the split (B first) is held back
+  await expect(page.getByRole("button", { name: "show lifetime" })).toHaveCount(0);
+});
+
+test("arena: a mainnet arena (oracle era from duel 0) shows no operator era", async ({ page }) => {
+  await stub(page, "arena", { ...arena(false), eras: { ...eras, from: 0, operator_duels: 0 } });
+  await page.goto("/arena");
+  await expect(page.locator("body")).toContainText("every duel on this arena was scored by the TEE oracle");
+  await expect(page.locator("body")).toContainText("ranked by lifetime alpha, then shield");
+  await expect(page.getByRole("button", { name: "show lifetime" })).toHaveCount(0);
+});
+
 test("agent: record from duel 257 on, operator era behind a toggle", async ({ page }) => {
   const row = (id: string, result: string, pnl: number) => ({
     id,

@@ -68,7 +68,13 @@ type Rec = {
   duels: DuelRow[];
   execution?: Fill[] | null; // fills of this agent's followers; absent when the solver is offline
   era?: "oracle" | "operator";
-  eras?: { from: number; oracle: Tally; operator: { alpha_bps: number | null; duels: number; mine: number | null } };
+  eras?: {
+    from: number;
+    complete?: boolean; // false: an oracle-era duel is unread, the split is not shown
+    unread?: number;
+    oracle: Tally;
+    operator: { alpha_bps: number | null; duels: number; mine: number | null };
+  };
 };
 type Era = "oracle" | "operator";
 
@@ -109,8 +115,12 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   };
 
   const a = r?.agent ?? null;
-  const eras = r?.eras ?? null;
-  const from = eras?.from ?? ORACLE_ERA_FROM;
+  const allEras = r?.eras ?? null;
+  // an incomplete split (an oracle-era duel unread) would shift alpha into the remainder: lifetime headline instead
+  const eras = allEras && allEras.complete !== false ? allEras : null;
+  const unreadDuels = allEras?.complete === false ? (allEras.unread ?? 0) : null;
+  const from = allEras?.from ?? ORACLE_ERA_FROM;
+  const hasOperator = from > 0; // a mainnet arena is oracle-scored from duel 0
   // headline alpha: the oracle era when the route split it, else the contract's lifetime figure
   const alpha = eras ? eras.oracle.alpha_bps : (a?.alpha_bps ?? 0);
   const opAlpha = eras?.operator.alpha_bps;
@@ -188,9 +198,18 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
         {"\n"}
         {a ? (
           <>
-            <span className="dim">{eras ? `alpha from duel ${from} on (TEE oracle) ` : "lifetime: alpha "}</span>
+            <span className="dim">
+              {eras
+                ? hasOperator
+                  ? `alpha from duel ${from} on (TEE oracle) `
+                  : "alpha (TEE oracle) "
+                : "lifetime: alpha "}
+            </span>
             <span className={pnlc(alpha)}>{bps(alpha)} bps</span>
-            {eras ? (
+            {unreadDuels != null ? (
+              <span className="warn"> · era split incomplete ({unreadDuels} oracle-era duels unread, retrying)</span>
+            ) : null}
+            {eras && hasOperator ? (
               <span className="dim">
                 {" "}
                 · operator era (#0-{from - 1}, {opDuels} duels{opMine != null ? `, ${opMine} of them this agent's` : ""}
@@ -272,7 +291,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
               </span>
             ))}
             {legend(
-              `alpha = pnl summed over duels ${from}+, scored by the TEE oracle (0-${from - 1}: operator key), 1 bps = 0.01 % · shield = attacks survived in won duels · bond = NEAR at stake${quality.length ? " · execution = solver fills vs the TEE oracle mid, + better for the follower" : ""}`,
+              `alpha = pnl summed over duels ${from}+, scored by the TEE oracle${hasOperator ? ` (0-${from - 1}: operator key)` : ""}, 1 bps = 0.01 % · shield = attacks survived in won duels · bond = NEAR at stake${quality.length ? " · execution = solver fills vs the TEE oracle mid, + better for the follower" : ""}`,
             )}
             {"\n"}
           </>
@@ -291,19 +310,23 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           `${era === "oracle" ? `oracle-scored, duels ${from}+` : `operator-scored, duels 0-${from - 1}`} · ${duels.length} duels`,
         )}
         {"\n"}
-        {rowx("era", [
-          era === "oracle"
-            ? { t: `TEE oracle, duels ${from}+`, c: "ok" }
-            : { t: `operator key, duels 0-${from - 1}`, c: "unv" },
-          { t: "   ", c: "dim" },
-          era === "oracle"
-            ? {
-                t: `show operator era (#0-${from - 1}, excluded above)`,
-                onClick: () => pick("operator"),
-              }
-            : { t: "back to the oracle era", onClick: () => pick("oracle") },
-        ])}
-        {"\n"}
+        {hasOperator ? (
+          <>
+            {rowx("era", [
+              era === "oracle"
+                ? { t: `TEE oracle, duels ${from}+`, c: "ok" }
+                : { t: `operator key, duels 0-${from - 1}`, c: "unv" },
+              { t: "   ", c: "dim" },
+              era === "oracle"
+                ? {
+                    t: `show operator era (#0-${from - 1}, excluded above)`,
+                    onClick: () => pick("operator"),
+                  }
+                : { t: "back to the oracle era", onClick: () => pick("oracle") },
+            ])}
+            {"\n"}
+          </>
+        ) : null}
         {rowx("verified", [
           ...meter([[verified, "ok"]], duels.length),
           `  ${verified}/${duels.length} duels enclave-signed`,

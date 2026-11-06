@@ -101,7 +101,15 @@ type Snap = {
   leaderboard: Agent[];
   duels: (Duel | null)[];
   stats: { scanned: number; verified_decisions: number; attacks: number };
-  eras?: { from: number; operator_duels: number; oracle_duels: number; by_agent: EraSplit }; // absent: lifetime only
+  // absent: lifetime only. `complete` false: some oracle-era duel is unread, so the split is not shown
+  eras?: {
+    from: number;
+    complete?: boolean;
+    unread?: number;
+    operator_duels: number;
+    oracle_duels: number;
+    by_agent: EraSplit;
+  };
   followers: Record<string, [string, Mandate][]>;
   solver: null | {
     intents: (Intent & {
@@ -151,13 +159,15 @@ export default function Arena() {
 
   const lb = s?.leaderboard ?? [];
   const eras = s?.eras;
-  const byEra = !!eras && !lifetime;
+  // the split ranks only when complete (an unread duel would shift alpha) and when there is an operator era at all
+  const split = !!eras && eras.complete !== false && eras.from > 0;
+  const byEra = split && !lifetime;
   // default: alpha and rank from the oracle era; the contract's leaderboard order is the lifetime order
-  const alphaOf = (a: Agent) => (byEra ? (eras.by_agent[a.pk]?.oracle.alpha_bps ?? a.alpha_bps) : a.alpha_bps);
+  const alphaOf = (a: Agent) => (byEra ? (eras?.by_agent[a.pk]?.oracle.alpha_bps ?? a.alpha_bps) : a.alpha_bps);
   const ranked = byEra ? [...lb].sort((x, y) => alphaOf(y) - alphaOf(x) || y.shield - x.shield) : lb;
   const shown = all ? ranked : ranked.filter((a) => !stub(a));
   const eraTitle = (a: Agent) => {
-    const e = eras?.by_agent[a.pk];
+    const e = split ? eras?.by_agent[a.pk] : undefined;
     return e
       ? `duels ${eras?.from}+ ${bps(e.oracle.alpha_bps)} bps · operator era ${bps(e.operator_alpha_bps)} bps · lifetime ${bps(a.alpha_bps)} bps`
       : `lifetime ${bps(a.alpha_bps)} bps`;
@@ -302,15 +312,28 @@ export default function Arena() {
         ) : null}
         {eras ? (
           <>
-            {rowx("era", [
-              {
-                t: byEra
-                  ? `alpha from duel ${eras.from} on (TEE oracle), ${eras.operator_duels} operator-scored duels excluded · `
-                  : `lifetime alpha, incl. ${eras.operator_duels} operator-scored duels (#0-${eras.from - 1}) · `,
-                c: "dim",
-              },
-              { t: byEra ? "show lifetime" : "oracle era only", onClick: () => setLifetime(!lifetime) },
-            ])}
+            {rowx(
+              "era",
+              eras.complete === false
+                ? [
+                    {
+                      t: `era split incomplete (${eras.unread ?? "?"} oracle-era duels unread, retrying): lifetime alpha`,
+                      c: "warn",
+                      title: "an unread duel would move alpha into the operator-era remainder, so the ranking waits",
+                    },
+                  ]
+                : eras.from === 0
+                  ? [{ t: "every duel on this arena was scored by the TEE oracle", c: "dim" }]
+                  : [
+                      {
+                        t: byEra
+                          ? `alpha from duel ${eras.from} on (TEE oracle), ${eras.operator_duels} operator-scored duels excluded · `
+                          : `lifetime alpha, incl. ${eras.operator_duels} operator-scored duels (#0-${eras.from - 1}) · `,
+                        c: "dim",
+                      },
+                      { t: byEra ? "show lifetime" : "oracle era only", onClick: () => setLifetime(!lifetime) },
+                    ],
+            )}
             {"\n"}
           </>
         ) : null}
