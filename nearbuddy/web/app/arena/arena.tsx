@@ -10,6 +10,7 @@ import {
   type Fill,
   type FollowerQuote,
   fillCells,
+  isStubModel,
   lastFills,
   legs,
   type Pair,
@@ -128,7 +129,7 @@ type Snap = {
 };
 
 const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
-const stub = (a: Agent) => a.model_id.startsWith("stub/");
+const stub = (a: Agent) => isStubModel(a.model_id);
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
 const head = `${"#".padStart(2)}  ${"model".padEnd(32)}  ${"alpha".padStart(9)}  ${"shield".padStart(6)}  ${"bond NEAR".padStart(9)}  ${"verified".padEnd(8)}  status`;
 
@@ -182,7 +183,8 @@ export default function Arena() {
   const live = duels.find((d) => !d.resolved && countdown(d.close_at, now));
   const txOf = new Map((s?.solver?.intents ?? []).map((i) => [`${i.agent_pk}:${i.nonce}`, i.tx]));
   const agent = (pk: string) => lb.find((x) => x.pk === pk);
-  const pairs = shownPairs(s?.stats.pairs); // the newest running pairs, pair 1 = started first; [] unless 2+
+  // the newest running pairs, pair 1 = started first; [] unless 2+. Stub pairs follow the standings toggle
+  const pairs = shownPairs(s?.stats.pairs, all ? undefined : (pk) => isStubModel(agent(pk)?.model_id));
   /** Model name without its org: "z-ai/glm-5.3-flash" → "glm-5.3-flash". */
   const model = (pk: string) => agent(pk)?.model_id.split("/").pop() ?? short(pk, 8);
   const who = (pk: string): Cell[] => {

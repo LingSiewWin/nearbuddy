@@ -239,10 +239,19 @@ export const pairsOf = (duels: { id: string; a: string; b: string }[]): Pair[] =
   return [...by.values()].sort((x, y) => y.last - x.last);
 };
 
-/** The pairs box 2 lists: running pairs only (a one-off duel is a probe, not a pair), the `max` most recently
- *  active kept, then shown oldest first so "pair 1" is the one that started first. Empty unless 2+ are running. */
-export const shownPairs = (pairs: Pair[] | null | undefined, max = 3): Pair[] => {
-  const running = (pairs ?? []).filter((p) => p.n > 1);
+/** A stub agent (no model, no proof: "stub/deterministic", "redteam/stub"). Standings hide these behind a toggle,
+ *  and pair rows skip a pair with one in it. An unknown model id is not a stub. */
+export const isStubModel = (modelId: string | null | undefined) => !!modelId?.includes("stub");
+
+/** The pairs box 2 lists: running pairs only (a one-off duel is a probe, not a pair), without pairs where `hide`
+ *  is true for either agent (stubs), the `max` most recently active kept, then shown oldest first so "pair 1" is
+ *  the one that started first. Empty unless 2+ are left. */
+export const shownPairs = (
+  pairs: Pair[] | null | undefined,
+  hide: (pk: string) => boolean = () => false,
+  max = 3,
+): Pair[] => {
+  const running = (pairs ?? []).filter((p) => p.n > 1 && !hide(p.a) && !hide(p.b));
   if (running.length < 2) return [];
   return running
     .sort((x, y) => y.last - x.last)

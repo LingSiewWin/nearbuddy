@@ -574,9 +574,17 @@ test("arena: a second duel pair gets one row per pair in the duels box; a single
   const PK_G = "Z2xtLTUuMy1mbGFzaC1hZ2VudC1rZXktZml4dHVyZTA=";
   const PK_W = "cXdlbjMuNi0zNWItYWdlbnQta2V5LWZpeHR1cmUwMDA=";
   const two = arena(false);
-  two.leaderboard.push(agent(PK_G, "z-ai/glm-5.3-flash", 37), agent(PK_W, "Qwen/Qwen3.6-35B-A3B-FP8", 37));
+  const PK_R = "cmVkdGVhbS1zdHViLWFnZW50LWtleS1maXh0dXJlMDA=";
+  const PK_S = "cmVkdGVhbS1zdHViLWFnZW50LWtleS1maXh0dXJlMDE=";
+  two.leaderboard.push(
+    agent(PK_G, "z-ai/glm-5.3-flash", 37),
+    agent(PK_W, "Qwen/Qwen3.6-35B-A3B-FP8", 37),
+    agent(PK_R, "redteam/stub", 0),
+    agent(PK_S, "redteam/stub", 0),
+  );
   Object.assign(two.stats, {
     pairs: [
+      { a: PK_R, b: PK_S, first: 355, last: 359, n: 2 }, // the red-team stub pair: no row, it is not an arena pair
       { a: PK_G, b: PK_W, first: 350, last: 358, n: 9 },
       { a: PK_A, b: PK_B, first: 319, last: 357, n: 31 },
       { a: PK_A, b: PK_G, first: 356, last: 356, n: 1 }, // a one-off probe: no row
@@ -592,6 +600,10 @@ test("arena: a second duel pair gets one row per pair in the duels box; a single
     "href",
     `/agent/${encodeURIComponent(PK_G)}`,
   );
+  // one stub rule for standings and pairs: "redteam/stub" agents are hidden too, and "show all" brings both back
+  await expect(body).toContainText("2 stub agents hidden (no model, no proof) · show all");
+  await page.getByRole("button", { name: /show all/ }).click();
+  await expect(body).toContainText("pair 3           stub vs stub  #355-#359 · 2 of last 40");
   const one = arena(false);
   Object.assign(one.stats, { pairs: [{ a: PK_A, b: PK_B, first: 319, last: 357, n: 40 }] });
   await stub(page, "arena", one);

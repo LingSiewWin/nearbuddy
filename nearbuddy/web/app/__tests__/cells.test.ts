@@ -11,6 +11,7 @@ import {
   type Fill,
   fillCells,
   followerQuality,
+  isStubModel,
   lastFills,
   legs,
   NO_REVEAL_RULE,
@@ -174,6 +175,32 @@ describe("pairs", () => {
     expect(shownPairs([...four, pair("probe", 363, 363, 1)]).map((p) => p.a)).toEqual(["p1", "p2", "p3"]);
     expect(shownPairs([pair("p1", 320, 365), pair("probe", 363, 363, 1)])).toEqual([]); // one running pair: no rows
     expect(shownPairs(undefined)).toEqual([]);
+  });
+  test("stub agents: one rule for standings and pairs; a pair with a stub in it gets no row", () => {
+    expect(isStubModel("stub/deterministic")).toBe(true);
+    expect(isStubModel("redteam/stub")).toBe(true); // the red-team probe pair
+    expect(isStubModel("z-ai/glm-5.3-flash")).toBe(false);
+    expect(isStubModel(undefined)).toBe(false); // unknown agent: shown
+    const pair = (a: string, b: string, first: number, last: number) => ({ a, b, first, last, n: 5 });
+    const models: Record<string, string> = {
+      q: "Qwen/Qwen3.8-27B",
+      d: "deepseek-ai/DeepSeek-V4.1",
+      g: "z-ai/glm-5.3-flash",
+      w: "Qwen/Qwen3.6-35B",
+      s: "redteam/stub",
+      t: "redteam/stub",
+    };
+    const hide = (pk: string) => isStubModel(models[pk]);
+    const live = [
+      pair("q", "d", 335, 373),
+      pair("g", "w", 350, 374),
+      pair("s", "t", 363, 375),
+      pair("s", "q", 370, 371),
+    ];
+    expect(shownPairs(live, hide).map((p) => `${p.a}${p.b}`)).toEqual(["qd", "gw"]); // newest stub pair dropped first
+    // no rule: the three last active (st #375, gw #374, qd #373; sq #371 drops), listed by first duel
+    expect(shownPairs(live).map((p) => `${p.a}${p.b}`)).toEqual(["qd", "gw", "st"]);
+    expect(shownPairs([pair("q", "d", 1, 9), pair("s", "t", 2, 8)], hide)).toEqual([]); // one real pair left: no rows
   });
 });
 
