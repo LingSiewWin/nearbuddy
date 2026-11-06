@@ -51,7 +51,9 @@ async function recheck(ev: Intent): Promise<Check[]> {
   const out: Check[] = [];
   // the chain checks need only FastNEAR; the byte checks also need the published request and response
   const [pub, t] = await Promise.all([
-    fetch(`/api/v1/decisions/${tx}`).then((r) => (r.ok ? r.json() : null)) as Promise<{
+    fetch(`/api/v1/decisions/${tx}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null) as Promise<{
       request: string;
       response: string;
     } | null>,
@@ -59,9 +61,20 @@ async function recheck(ev: Intent): Promise<Check[]> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ tx_hashes: [tx] }),
-    }).then((r) => r.json()),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
   ]);
-  const txd = t.transactions?.[0];
+  const txd = t?.transactions?.[0];
+  // FastNEAR busy (429) or a fresh call not indexed yet: say so, never "mismatch" on a valid proof
+  if (!txd)
+    return [
+      {
+        label: "The transaction on NEAR",
+        ok: null,
+        detail: `not readable from ${TX_HOST} yet (busy, or this call is seconds old); try again in a moment`,
+      },
+    ];
   const fc = txd?.transaction?.actions?.find((a: { FunctionCall?: unknown }) => a.FunctionCall)?.FunctionCall;
   const args = fc ? JSON.parse(atob(fc.args)) : null;
   // the call shown must be what the transaction carries: right contract, right method, same side and duel
