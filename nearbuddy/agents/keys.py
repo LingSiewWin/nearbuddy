@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from collections.abc import Callable
+from typing import Any
 
 from nacl.signing import SigningKey
 
 from config import ENV
 
-REGISTER_DOMAIN = b"nearbuddy-register-v1"
+REGISTER_DOMAIN = b"nearbuddy-register-v1"  # deploy 14 and before; deploy 15 signs v2 with the contract id
 
 
 def pk_b64(sk: SigningKey) -> str:
@@ -40,6 +42,20 @@ def key_tag(pair_tag: str, swap: bool) -> str:
     return (f"pair:{pair_tag}:" if pair_tag else "") + ("swap" if swap else "")
 
 
-def register_sig(sk: SigningKey, owner: str) -> str:
-    """Proof of key possession for `register_agent`: ed25519 over `"nearbuddy-register-v1" || owner`."""
-    return base64.b64encode(sk.sign(REGISTER_DOMAIN + owner.encode()).signature).decode()
+def register_message(owner: str, view: Callable[[str, dict[str, Any]], Any] | None = None) -> bytes:
+    """The exact bytes the deployed contract verifies for `register_agent` by `owner`, from its `register_message`
+    view (v1 `domain || owner` up to deploy 14, v2 `domain || contract || 0x00 || owner` from deploy 15). When the
+    view cannot be read, the v1 bytes: a deploy-15 contract then refuses the registration, it never misreads it."""
+    if view is None:
+        from chain import view as chain_view
+
+        view = chain_view
+    try:
+        return base64.b64decode(view("register_message", {"owner": owner}))
+    except Exception:  # noqa: BLE001 - any RPC failure falls back to the deploy-14 bytes
+        return REGISTER_DOMAIN + owner.encode()
+
+
+def register_sig(sk: SigningKey, owner: str, view: Callable[[str, dict[str, Any]], Any] | None = None) -> str:
+    """Proof of key possession for `register_agent`: ed25519 over `register_message(owner)`."""
+    return base64.b64encode(sk.sign(register_message(owner, view)).signature).decode()

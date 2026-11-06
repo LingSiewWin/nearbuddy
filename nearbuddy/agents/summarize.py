@@ -97,7 +97,7 @@ def main() -> None:
         inj = len(d["injections"])
         status = "resolved" if d["resolved"] else "OPEN"
         print(f"{duel_id:>4}  {'':>10}    {'':>10}  {last['A']:6} {last['B']:6}  {inj:3}  {status}")
-    board = view("leaderboard", {}) or []
+    board = view("leaderboard", {"from": 0, "limit": 100}) or []  # paged from deploy 15; ignored before
     print("\nleaderboard")
     for a in board:
         print(
