@@ -5,15 +5,18 @@
 //   POST /duel     {a, b, symbol, close_at, sig_a?, sig_b?}  -> {duel_id, tx}   (symbol = oracle asset id, e.g. wrap.near;
 //                  with both sigs: open_duel_consented, each agent's ed25519 over consentMessage)
 //   POST /intent   {signed: SignedIntent, tee?: TeeProof}    -> {tx, quotes:[{follower, amount, quote}]}
+//                  once the intent landed the route answers 200; a quote failure comes back as quote_error
 //   POST /commit   {duel_id, agent_pk, commitment, sig}      -> {tx}  (commit_intent; no quotes, the call is still hidden)
 //   POST /reveal   {signed, salt, tee?}                      -> {tx, quotes}  (reveal_intent; followers are quoted here)
 //   POST /chaos    {payload}  (open)                         -> {payload_hash}; spectator then calls inject_chaos on chain
 //   POST /resolve  {duel_id}                                 -> {tx, sent}  (permissionless on chain; the oracle callback finishes the duel)
 //   POST /open_price {duel_id}                               -> {tx}  (re-ask the oracle for a missing open price)
-//   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}
+//   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}  (deploy 15: no dry-quote fills; testnet
+//                  stand-in: stub_credit the outputs to the arena first)
 //   GET  /arena                                              -> snapshot incl. pending injections with payloads
 //   GET  /pairing                                            -> {every_s, next_at, last:[{duel_id, a, b, tx, at}]}  (PAIR_EVERY_S loop)
 //   GET  /agent_duel?pk=<base64>                             -> {agent_pk, registered, duel_id|null}  (a self-hosted runner finds its duel)
+//   GET  /followers?pk=<base64>                              -> [[follower, mandate]]  (list_followers, or get_follow per known follower)
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -53,6 +56,8 @@ export interface Mandate {
   allowed_tokens: string[];
   expires_at: string;
   revoked: boolean;
+  /** Deploy 15: output units per NEAR in the fill must reach; "0" or absent = no floor. */
+  min_out_per_near?: string;
 }
 export interface Fill {
   intent_nonce: string;
@@ -146,7 +151,11 @@ const OPEN_DUEL_STORAGE = 15_000_000_000_000_000_000_000n;
 export interface ArenaConfig {
   oracle_deposit: string;
   require_consent?: boolean;
+  /** Present from deploy 15 on (verified settlement): where fill outputs land and `settle_follow` reads balances. */
+  intents_account?: string;
 }
+/** Deploy 15 (verified settlement) or later: `get_config` names the intents account. */
+export const verifiedSettlement = (c: ArenaConfig | null): boolean => typeof c?.intents_account === "string";
 let configMemo: { at: number; v: ArenaConfig } | null = null;
 /** get_config memoised for a minute; the owner can change it (set_oracle, consent and commit-reveal switches). */
 async function arenaConfig(): Promise<ArenaConfig> {
@@ -156,14 +165,24 @@ async function arenaConfig(): Promise<ArenaConfig> {
 }
 const oracleDeposit = async () => BigInt((await arenaConfig()).oracle_deposit);
 
-/** Whose intents.near balance a fill's output lands in. `follower` (mainnet default, blocker B14): the follower's
- *  own balance, so the solver never holds a follower's proceeds. `solver` (testnet default): dry quotes only,
+/** Whose intents.near balance a fill's output lands in. `arena` (default from deploy 15): the arena contract's own
+ *  balance, which `settle_follow` reads as the receipt; the follower withdraws through `withdraw_token`. Before
+ *  deploy 15: `follower` (mainnet, blocker B14), the follower's own balance; `solver` (testnet), dry quotes only,
  *  nothing is owed. FILL_RECIPIENT overrides; any other value is refused. */
-export function fillRecipient(solverId: string): "solver" | "follower" {
-  const v = process.env.FILL_RECIPIENT || (solverId.endsWith(".testnet") ? "solver" : "follower");
-  if (v !== "solver" && v !== "follower") throw new Error(`FILL_RECIPIENT must be solver or follower, not ${v}`);
+export function fillRecipient(solverId: string, verified = false): "solver" | "follower" | "arena" {
+  const v = process.env.FILL_RECIPIENT || (verified ? "arena" : solverId.endsWith(".testnet") ? "solver" : "follower");
+  if (v !== "solver" && v !== "follower" && v !== "arena")
+    throw new Error(`FILL_RECIPIENT must be solver, follower or arena, not ${v}`);
   return v;
 }
+
+/** Followers to look up with `get_follow` once `list_followers` is gone (deploy 15): FOLLOWERS (comma-separated)
+ *  plus every follower this solver has settled for. ponytail: a configured list; an event indexer when followers
+ *  arrive unannounced. */
+const FOLLOWERS = (process.env.FOLLOWERS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 /** Pick the mandate-bounded amount to quote for one follower: min(cap, allowance - spent). */
 export function quoteAmount(m: Mandate): bigint {
@@ -212,6 +231,8 @@ export class Arena {
     readonly solverId: string,
     private readonly deps: {
       listFollowers?: (agent_pk: string) => Promise<[string, Mandate][]>;
+      /** `get_follow` (deploy 15 reads followers one by one). */
+      getFollow?: (agent_pk: string, follower: string) => Promise<Mandate | null>;
       getDuel?: (duel_id: string) => Promise<{
         injections: { kind: string; payload_hash: string; target: string; block: string }[];
         resolved: boolean;
@@ -240,7 +261,10 @@ export class Arena {
       console.log("[arena] pairing skipped: require_consent is on and the loop holds no agent consent");
       return [];
     }
-    const agents = await (this.deps.leaderboard ?? (() => arenaView<AgentView[]>("leaderboard", {})))();
+    // deploy 15 pages the leaderboard; the arg-less view before it ignores the args
+    const agents = await (
+      this.deps.leaderboard ?? (() => arenaView<AgentView[]>("leaderboard", { from: 0, limit: 100 }))
+    )();
     const opened: string[] = [];
     for (const [a, b] of pairIdle(agents, PAIR_MIN_BOND, PAIR_EXCLUDE)) {
       const close_at = (BigInt(Date.now()) * 1_000_000n + BigInt(DUEL_SECONDS) * 1_000_000_000n).toString();
@@ -291,12 +315,13 @@ export class Arena {
     args: Record<string, unknown>,
     deposit = 0n,
     gas = GAS,
+    contractId = ARENA,
   ): Promise<{ tx: string; value: unknown }> {
     // Public RPCs rate-limit (-429); retry with backoff before failing the route.
     let r!: Awaited<ReturnType<Account["callFunctionRaw"]>>;
     for (let attempt = 0; ; attempt++) {
       try {
-        r = await this.solver.callFunctionRaw({ contractId: ARENA, methodName, args, gas, deposit });
+        r = await this.solver.callFunctionRaw({ contractId, methodName, args, gas, deposit });
         break;
       } catch (e) {
         if (attempt >= 4 || !/429|Rate limit/i.test(String(e))) throw e; // never resend on timeout: the tx may have landed
@@ -388,32 +413,67 @@ export class Arena {
       if (!verifyTeeProof(tee, agent.model_id, signed.intent.proof_hash)) throw new Error("bad tee proof");
     }
     const r = await this.call(method, { signed, ...extra, tee: tee ?? null });
-    const quotes = await this.quotesFor(signed.intent.agent_pk, signed.intent.side);
-    const mid = quotes.some((x) => x.quote) ? await (this.deps.oracleMid ?? oracleMid)(signed.intent.duel_id) : null;
-    this.quality.push(...executionRecords(signed.intent, quotes, mid));
-    this.quality.splice(0, Math.max(0, this.quality.length - MAX_EXECUTION));
+    // The intent has landed: from here a failure is reported in the body, never as an error. A 500 for a landed tx
+    // makes the runner retry a used nonce or re-reveal a deleted commitment.
+    let quotes: FollowerQuote[] = [];
+    let quote_error: string | undefined;
+    try {
+      quotes = await this.quotesFor(signed.intent.agent_pk, signed.intent.side);
+      const mid = quotes.some((x) => x.quote) ? await (this.deps.oracleMid ?? oracleMid)(signed.intent.duel_id) : null;
+      this.quality.push(...executionRecords(signed.intent, quotes, mid));
+      this.quality.splice(0, Math.max(0, this.quality.length - MAX_EXECUTION));
+    } catch (e) {
+      quote_error = String(e).slice(0, 200);
+      console.log(`[arena] ${method} landed (${r.tx}) but follower quotes failed: ${quote_error}`);
+    }
     const rec: IntentRecord = { signed, tx: r.tx, quotes, at: Date.now() };
     this.intents.push(rec);
     if (this.intents.length > 500) this.intents.shift();
     this.persistHistory();
-    return { tx: r.tx, quotes };
+    return quote_error === undefined ? { tx: r.tx, quotes } : { tx: r.tx, quotes, quote_error };
+  }
+
+  /** Every follower of `agent_pk` with its mandate. Before deploy 15: the `list_followers` view. From deploy 15
+   *  (`follows` keyed per pair, not enumerable on chain): `get_follow` for FOLLOWERS plus the followers this
+   *  solver has settled for. */
+  async followersOf(agent_pk: string): Promise<[string, Mandate][]> {
+    if (this.deps.listFollowers) return this.deps.listFollowers(agent_pk);
+    if (!verifiedSettlement(await this.config())) return arenaView<[string, Mandate][]>("list_followers", { agent_pk });
+    const known = [...new Set([...FOLLOWERS, ...this.fills.map((f) => f.follower)])];
+    const get =
+      this.deps.getFollow ??
+      ((pk: string, follower: string) => arenaView<Mandate | null>("get_follow", { agent_pk: pk, follower }));
+    const found = await Promise.all(known.map(async (f) => [f, await get(agent_pk, f)] as const));
+    return found.filter((x): x is [string, Mandate] => x[1] !== null);
+  }
+
+  /** `get_config` (memoised); null when the RPC fails, which the callers read as "before deploy 15". */
+  private async config(): Promise<ArenaConfig | null> {
+    try {
+      return await (this.deps.config ?? arenaConfig)();
+    } catch {
+      return null;
+    }
   }
 
   /** Dry 1Click quotes for the open follower mandates, sized by the mandate in NEAR, in the agent's direction: Short
    *  sells NEAR for USDC, Long buys NEAR with USDC. Never a real swap. BATCH_RFQ (default on): one quote for the sum,
    *  split pro rata at one price (rfq.ts); BATCH_RFQ=0, or FILL_RECIPIENT=follower (a quote has one recipient): one
-   *  quote per follower. */
+   *  quote per follower. From deploy 15 the batch recipient is the arena (`fillRecipient`). */
   async quotesFor(agent_pk: string, side: Side = "Short"): Promise<FollowerQuote[]> {
-    const list = await (
-      this.deps.listFollowers ?? ((pk) => arenaView<[string, Mandate][]>("list_followers", { agent_pk: pk }))
-    )(agent_pk);
+    const list = await this.followersOf(agent_pk);
     const now = (this.deps.now ?? (() => BigInt(Date.now()) * 1_000_000n))();
     const q = this.deps.quote ?? quote;
+    // 1Click quotes mainnet prices: a testnet account stands in for its .near namesake
     const solver = this.solverId.replace(/\.testnet$/, ".near");
-    const payFollower = fillRecipient(this.solverId) === "follower";
     const open = list
       .filter(([, m]) => mandateOpen(m, now))
       .map(([follower, m]) => ({ follower, amount: quoteAmount(m) }));
+    if (open.length === 0) return [];
+    const to = fillRecipient(this.solverId, verifiedSettlement(await this.config()));
+    const payFollower = to === "follower";
+    // one recipient for the whole batch: the solver, or (deploy 15) the arena, which credits each follower
+    const batchTo = to === "arena" ? ARENA.replace(/\.testnet$/, ".near") : solver;
     // B17: the solver's own caps, before any quote. A bad cap value refuses every follower (fail closed).
     let caps: Caps;
     try {
@@ -429,14 +489,14 @@ export class Arena {
     this.capLedger.push(...held.values());
     let quoted: FollowerQuote[] = [];
     if (admitted.length > 0 && process.env.BATCH_RFQ !== "0" && !payFollower) {
-      const b = await batchQuote(admitted, (amount) => q(fillRequest(side, amount, solver, solver)));
+      const b = await batchQuote(admitted, (amount) => q(fillRequest(side, amount, solver, batchTo)));
       quoted = b.fills.map((f) =>
-        b.quote && !f.error ? { ...f, quote: b.quote, price: b.price, recipient: solver } : f,
+        b.quote && !f.error ? { ...f, quote: b.quote, price: b.price, recipient: batchTo } : f,
       );
     } else
       quoted = await Promise.all(
         admitted.map(async ({ follower, amount }): Promise<FollowerQuote> => {
-          const recipient = payFollower ? follower : solver;
+          const recipient = payFollower ? follower : batchTo;
           try {
             const r = await q(fillRequest(side, amount, solver, recipient));
             const quote_out = r.quote[variableLeg(r)];
@@ -562,7 +622,32 @@ export class Arena {
     return { tx: (await this.callWithOracleDeposit("request_open_price", { duel_id })).tx };
   }
 
+  /** Ask the arena to repay fills this solver fronted. From deploy 15 the contract pays only for output its own
+   *  intents.near balance shows, so `dry-quote:` fills are refused here before any gas is spent. On a testnet stand-in
+   *  (`intents_account` other than intents.near) the swap is `stub_credit`: the batch's `amount_out` per token is
+   *  credited to the arena first, and a fill with an empty `swap_tx` carries that credit's tx hash. */
   async settleFollow(agent_pk: string, follower: string, fills: Fill[]) {
+    const intents = (await (this.deps.config ?? arenaConfig)()).intents_account;
+    if (intents !== undefined) {
+      if (fills.some((f) => f.swap_tx.startsWith("dry-quote:")))
+        throw new Error("dry quote unsettleable: deploy 15 pays only for output delivered to the arena");
+      if (intents !== "intents.near") {
+        const owed = new Map<string, bigint>();
+        for (const f of fills) owed.set(f.token, (owed.get(f.token) ?? 0n) + BigInt(f.amount_out));
+        let creditTx = "";
+        for (const [token_id, amount] of owed)
+          creditTx = (
+            await this.call(
+              "stub_credit",
+              { receiver_id: ARENA, token_id, amount: amount.toString() },
+              0n,
+              GAS,
+              intents,
+            )
+          ).tx;
+        fills = fills.map((f) => (f.swap_tx ? f : { ...f, swap_tx: `stub:${creditTx}` }));
+      }
+    }
     const r = await this.call("settle_follow", { agent_pk, follower, fills });
     this.fills.push({ agent_pk, follower, report: r.value, tx: r.tx });
     this.persistHistory();
@@ -640,6 +725,12 @@ export class Arena {
     if (url === "/arena") return { code: 200, body: await this.snapshot() };
     if (url === "/pairing") return { code: 200, body: this.pairing };
     if (url === "/execution") return { code: 200, body: { quality: this.quality } };
+    if (url?.startsWith("/followers?")) {
+      // public chain data, open like /arena: the web reads followers here once list_followers is gone (deploy 15)
+      const pk = new URLSearchParams(url.slice("/followers?".length)).get("pk")?.replace(/ /g, "+");
+      if (!pk) return { code: 400, body: { error: "pk required" } };
+      return { code: 200, body: await this.followersOf(pk) };
+    }
     if (url?.startsWith("/agent_duel?")) {
       // base64 pks hold '+': a client that forgot to percent-encode it arrives as a space; base64 never has spaces
       const pk = new URLSearchParams(url.slice("/agent_duel?".length)).get("pk")?.replace(/ /g, "+");
@@ -712,7 +803,12 @@ export class Arena {
     }
     if (method === "POST" && url === "/settle_follow") {
       const q = JSON.parse(body) as { agent_pk: string; follower: string; fills: Fill[] };
-      return { code: 200, body: await this.settleFollow(q.agent_pk, q.follower, q.fills) };
+      try {
+        return { code: 200, body: await this.settleFollow(q.agent_pk, q.follower, q.fills) };
+      } catch (e) {
+        if (/dry quote unsettleable/.test(String(e))) return { code: 400, body: { error: String(e).slice(7) } };
+        throw e;
+      }
     }
     if (method === "POST" && url === "/consume") {
       const q = JSON.parse(body) as { target: string; duel_id: string; blocks: string[] };

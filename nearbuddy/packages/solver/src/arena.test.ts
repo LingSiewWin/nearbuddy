@@ -17,6 +17,8 @@ type AgentView = import("./arena.ts").AgentView;
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 const NOW = 1_700_000_000_000_000_000n;
+/** `get_config` before deploy 15 (no `intents_account`), so quotesFor never reaches the network. */
+const V14 = async () => ({ oracle_deposit: "0" });
 const m = (over: Partial<Mandate> = {}): Mandate => ({
   allowance: "1000",
   spent: "0",
@@ -42,6 +44,7 @@ test("mandateOpen skips revoked, expired and exhausted", () => {
 
 const followerArena = (asked: string[]) =>
   new Arena({} as never, "nearbuddy-solver.testnet", {
+    config: V14,
     listFollowers: async () => [
       ["f1.testnet", m()],
       ["f2.testnet", m({ revoked: true })],
@@ -104,6 +107,7 @@ async function withEnv<T>(vars: Record<string, string | undefined>, f: () => Pro
 }
 const recording = (solverId: string, reqs: QuoteRequest[]) =>
   new Arena({} as never, solverId, {
+    config: V14,
     listFollowers: async () => [
       ["f1.near", m()],
       ["f3.near", m({ spent: "950" })],
@@ -176,7 +180,7 @@ test("B14: FILL_RECIPIENT overrides the network default and refuses anything els
   assert.equal(fillRecipient("x.near"), "follower");
   await assert.rejects(
     withEnv({ FILL_RECIPIENT: "agent" }, () => recording("s.testnet", []).quotesFor("pk")),
-    /FILL_RECIPIENT must be solver or follower/,
+    /FILL_RECIPIENT must be solver, follower or arena/,
   );
 });
 
@@ -185,6 +189,7 @@ const NO_CAPS = { CAP_PER_FILL_YOCTO: undefined, CAP_PER_TICK_YOCTO: undefined, 
 function cappedArena(clock: { ns: bigint }, asked: string[], fail = () => false) {
   const expires_at = (NOW + 10n ** 15n).toString(); // open for 11 days of fake clock
   return new Arena({} as never, "nearbuddy-solver.testnet", {
+    config: V14,
     listFollowers: async () => [
       ["f1.testnet", m({ expires_at })],
       ["f3.testnet", m({ spent: "950", expires_at })],
