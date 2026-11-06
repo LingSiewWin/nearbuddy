@@ -8,6 +8,8 @@ real money depends on the close.
 
 from __future__ import annotations
 
+import os
+
 import requests
 
 HERMES = "https://hermes.pyth.network/v2/updates/price/latest"
@@ -24,7 +26,8 @@ def normalise(price: int, expo: int, decimals: int = 8) -> int:
     return price * 10**shift if shift >= 0 else price // 10 ** (-shift)
 
 
-COINBASE = "https://api.coinbase.com/v2/prices/{base}-USD/spot"
+# NEARBUDDY_COINBASE_URL points the spot price at a stand-in (the offline sandbox run, e2e/run.ts E2E_OFFLINE=1)
+COINBASE = os.environ.get("NEARBUDDY_COINBASE_URL", "https://api.coinbase.com") + "/v2/prices/{base}-USD/spot"
 
 
 def coinbase_price(symbol: str) -> int:
