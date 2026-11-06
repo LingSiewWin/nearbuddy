@@ -1,0 +1,47 @@
+{
+  "meta": {
+    "transaction_hash": "4BsjJxm2MUJQk1kH29XBoPaYJDphU42Wu4hNqWPt3zP4",
+    "tx_block_height": 276503065,
+    "tx_block_timestamp": "1793978022447858640",
+    "is_success": true
+  },
+  "tx": {
+    "transaction": {
+      "hash": "4BsjJxm2MUJQk1kH29XBoPaYJDphU42Wu4hNqWPt3zP4",
+      "signer_id": "nearbuddy-solver.testnet",
+      "receiver_id": "arena.nearbuddy-solver.testnet",
+      "actions": [
+        {
+          "FunctionCall": {
+            "method_name": "inject_chaos",
+            "args": "eyJkdWVsX2lkIjoiMzQ3IiwidGFyZ2V0IjoiVWwrVzZVSktmUWxaOWRxU2VYYS85d3Z1WGY5Q3pkaFNQNTlDbnFEbGY4RT0iLCJraW5kIjoiZmFrZV9uZXdzIiwicGF5bG9hZF9oYXNoIjoidG9ZM3JPNllrUmVFdllxT28wQ3pBZUpyVUJQL1hCRGlVd0xjWHI4UHV2cz0ifQ==",
+            "deposit": "100000000000000000000000"
+          }
+        }
+      ]
+    },
+    "execution_outcome": {
+      "outcome": {
+        "logs": [],
+        "status": {
+          "SuccessReceiptId": "94eVXYAbV9oEqaJk83otuMA6Buq98493KTpQincuPayz"
+        }
+      }
+    },
+    "receipts": [
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "SuccessValue": ""
+            }
+          }
+        }
+      }
+    ]
+  }
+}

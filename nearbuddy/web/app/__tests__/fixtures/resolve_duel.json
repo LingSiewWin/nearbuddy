@@ -1,0 +1,104 @@
+{
+  "meta": {
+    "transaction_hash": "EHbin8KcxE7bja4Nkgi5sfNYyFZyAU6SoAjTKatFroyg",
+    "tx_block_height": 276503026,
+    "tx_block_timestamp": "1793977997892834076",
+    "is_success": true
+  },
+  "tx": {
+    "transaction": {
+      "hash": "EHbin8KcxE7bja4Nkgi5sfNYyFZyAU6SoAjTKatFroyg",
+      "signer_id": "nearbuddy-solver.testnet",
+      "receiver_id": "arena.nearbuddy-solver.testnet",
+      "actions": [
+        {
+          "FunctionCall": {
+            "method_name": "resolve_duel",
+            "args": "eyJkdWVsX2lkIjoiMzQ2In0=",
+            "deposit": "20000000000000000000000"
+          }
+        }
+      ]
+    },
+    "execution_outcome": {
+      "outcome": {
+        "logs": [],
+        "status": {
+          "SuccessReceiptId": "27CcRhzic4sBQRFbH7b7NFxdxDF1oUPsgT8iMFBKSPUT"
+        }
+      }
+    },
+    "receipts": [
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "SuccessValue": ""
+            }
+          }
+        }
+      },
+      {
+        "receipt": {
+          "receiver_id": "outlayer.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "SuccessReceiptId": "4esigbXdwpsqKdQrmovUsHs6p7Cuv5vwfKbpt7H6GE92"
+            }
+          }
+        }
+      },
+      {
+        "receipt": {
+          "receiver_id": "outlayer.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [
+              "[[yNEAR charged: \"1472800100000000000000\"]]",
+              "EVENT_JSON:{\"standard\":\"near-outlayer\",\"version\":\"1.0.0\",\"event\":\"execution_completed\",\"data\":[{\"sender_id\":\"nearbuddy-solver.testnet\",\"code_source\":{\"WasmUrl\":{\"url\":\"https://wasmhub.testnet.fastfs.io/fastfs.testnet/3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0.wasm\",\"hash\":\"3585b3890f49748713b43ccb9b0ef4148f317d62f4d598db80fdaffc3f3185a0\",\"build_target\":\"wasm32-wasip2\"}},\"resources_used\":{\"instructions\":1057200,\"time_ms\":4728,\"compile_time_ms\":null},\"success\":true,\"error_message\":null,\"payment_charged\":\"1472800100000000000000\",\"payment_refunded\":\"18527199900000000000000\",\"compilation_note\":\"Cached WASM from 2026-10-02T18:51:55.432626+00:00\",\"timestamp\":1793978009251973156}]}"
+            ],
+            "status": {
+              "SuccessValue": "eyJwcmljZXMiOlt7ImZyb21fY2FjaGUiOmZhbHNlLCJwcmljZSI6My43ODAzMzMzMzMzMzMzMzMsInNvdXJjZXMiOlsiYmluYW5jZSIsImJpbmFuY2VfdXMiLCJodW9iaSIsImt1Y29pbiIsImdhdGUiLCJjcnlwdG9jb20iXSwidGltZXN0YW1wIjoxNzkzOTc4MDA3LCJ0b2tlbiI6IndyYXAubmVhciJ9XSwic3VjY2VzcyI6dHJ1ZX0="
+            }
+          }
+        }
+      },
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "SuccessValue": ""
+            }
+          }
+        }
+      },
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [
+              "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"resolve\",\"data\":{\"duel_id\":346,\"pnl_a\":-8,\"pnl_b\":-8,\"open\":377386666,\"close\":378033333}}"
+            ],
+            "status": {
+              "SuccessValue": ""
+            }
+          }
+        }
+      }
+    ]
+  }
+}

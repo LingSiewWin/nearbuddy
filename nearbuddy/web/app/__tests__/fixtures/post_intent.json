@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "transaction_hash": "4MorVumsiSrncSz3EAKNKR9Kn8JxEyLjnthh3wwJMwe3",
+    "tx_block_height": 276503140,
+    "tx_block_timestamp": "1793978069561902175",
+    "is_success": true
+  },
+  "tx": {
+    "transaction": {
+      "hash": "4MorVumsiSrncSz3EAKNKR9Kn8JxEyLjnthh3wwJMwe3",
+      "signer_id": "nearbuddy-solver.testnet",
+      "receiver_id": "arena.nearbuddy-solver.testnet",
+      "actions": [
+        {
+          "FunctionCall": {
+            "method_name": "post_intent",
+            "args": "eyJzaWduZWQiOnsiaW50ZW50Ijp7ImFnZW50X3BrIjoiOGRQWjd6blo2Wm9wSnJDQlRGMnZXTVFUaUhoSG11dVZwc3FubmhlM1ZnRT0iLCJkdWVsX2lkIjoiMzQ3Iiwic2lkZSI6IkxvbmciLCJzaXplX2JwcyI6NTAwMCwibm9uY2UiOiIxNzkzOTc0ODIzOTM3IiwiZXhwaXJlc19hdCI6IjE3OTM5Nzg0MDcwMDAwMDAwMDAiLCJwcm9vZl9oYXNoIjoiK01UT29QMGh1L3dsOFJ0S3ZYM3F5L3lTSERjWVozdnArY3ZvUTk1QllrST0ifSwic2lnbmF0dXJlIjoiekFscGNramZiZkdwcGRhOXVTbGZ0TVp0MVpGRlI0aDA3MzNqT3BGeUI1WDNTOE1FNXRLSHB4ZDBneDBtSHVzSVFuU2JsdFpBaFBSbzVSZHU2RGF2Q1E9PSJ9LCJ0ZWUiOnsia2luZCI6MiwicmVxdWVzdF9oYXNoIjoiejNveUxBMllNczVuVDBsQnc5RzgwbWFSMVdSRDdrVFBlRXRROE0yWHRiST0iLCJyZXNwb25zZV9oYXNoIjoieWpzRkg2WDhQaUh4QnNSK0huS25iOWw0SGtZckY1cU8ycHVqTDg4ZWU0MD0iLCJzaWduZXIiOiJpUlZLUTZSMmhIUXNQUmRUSlN1MjlKOWgycDJNaFB5YkhlOHQ4VERMTFpNPSIsInNpZ25hdHVyZSI6ImNVcVZHbi9TRExPQ3hTUFIxUFM1ZzkvTUVlMUFGeUF0NWJWc1NQMmVmeG5qeXZQWm96Y0c2RE9kZVdjM2ZvK0hKN3JlczNwVEVWNVJYTkZhRi9IYkF3PT0ifX0=",
+            "deposit": "0"
+          }
+        }
+      ]
+    },
+    "execution_outcome": {
+      "outcome": {
+        "logs": [],
+        "status": {
+          "SuccessReceiptId": "FiGy9zsAiBJBasCtnoQdHmc7sjqwRNAZsnF8oDhUc1wW"
+        }
+      }
+    },
+    "receipts": [
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [
+              "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"intent\",\"data\":{\"duel_id\":347,\"agent_pk\":\"8dPZ7znZ6ZopJrCBTF2vWMQTiHhHmuuVpsqnnhe3VgE=\",\"side\":\"Long\",\"size_bps\":5000,\"nonce\":1793974823937,\"tee\":2}}"
+            ],
+            "status": {
+              "SuccessValue": ""
+            }
+          }
+        }
+      }
+    ]
+  }
+}

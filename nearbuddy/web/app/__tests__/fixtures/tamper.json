@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "transaction_hash": "4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt",
+    "tx_block_height": 276447687,
+    "tx_block_timestamp": "1793944084163656766",
+    "is_success": false
+  },
+  "tx": {
+    "transaction": {
+      "hash": "4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt",
+      "signer_id": "nearbuddy-solver.testnet",
+      "receiver_id": "arena.nearbuddy-solver.testnet",
+      "actions": [
+        {
+          "FunctionCall": {
+            "method_name": "post_intent",
+            "args": "eyJzaWduZWQiOnsiaW50ZW50Ijp7ImFnZW50X3BrIjoiVWwrVzZVSktmUWxaOWRxU2VYYS85d3Z1WGY5Q3pkaFNQNTlDbnFEbGY4RT0iLCJkdWVsX2lkIjoiMjU4Iiwic2lkZSI6IlNob3J0Iiwic2l6ZV9icHMiOjUwMDAsIm5vbmNlIjoiMTc5Mzk0MzkxMzkwMiIsImV4cGlyZXNfYXQiOiIxNzkzOTQ0MTc4MDAwMDAwMDAwIiwicHJvb2ZfaGFzaCI6Imx4SzIzMnpudEF1V2NxRjZNZFkwaXJUUWVac0kxUWVpRW52SmhNV1l1UE09In0sInNpZ25hdHVyZSI6IitFT0I4MVFUeDZ1K3FLQTIycnRDeEpyeVdOVjNRVXVJY2tHY2N4c21jdTB4MWdlWXpkL2NGL05ObFNpdE92QzhKWUhiZlN6dmxsbFZMZWRWSnpDWEFnPT0ifSwidGVlIjp7ImtpbmQiOjIsInJlcXVlc3RfaGFzaCI6IkdiYkNaZTZEaVlpZVd5bVZ6ZDhHWWRPdWFHd3hNaHhidVpodTd3V0lIUUE9IiwicmVzcG9uc2VfaGFzaCI6ImZnK0JpMzFtWDhiM1A0N0k0ZU1tS2hjaWZvM3JPVWIvTzBHTzFkdXMxY0U9Iiwic2lnbmVyIjoiSTI5YWE1SGRSOXc3ZXpia1BVNjFNYUJDLzdqNCsvT2hWVnQ0enZUOTJrdz0iLCJzaWduYXR1cmUiOiJpM05Hc3dDdWlweWR3cE9wNVVoYkFwZXlraTNaMk5Jbm1TV2hyMnN0ZkhlUmtsZGhudVo2d1pGUCtRcmUzZXZRMGlrNm44NG9HaGNlVWtJdU4wQ2RDUT09In19",
+            "deposit": "0"
+          }
+        }
+      ]
+    },
+    "execution_outcome": {
+      "outcome": {
+        "logs": [],
+        "status": {
+          "SuccessReceiptId": "7g2yQLcmmWiGVxYYveYq6ubTnpWsv4ckdGbwSYQzxAi6"
+        }
+      }
+    },
+    "receipts": [
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "Failure": {
+                "ActionError": {
+                  "index": 0,
+                  "kind": {
+                    "FunctionCallError": {
+                      "ExecutionError": "Smart contract panicked: bad tee signature"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "receipt": {
+          "receiver_id": "nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "SuccessValue": ""
+            }
+          }
+        }
+      }
+    ]
+  }
+}

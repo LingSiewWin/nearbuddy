@@ -1,0 +1,75 @@
+{
+  "meta": {
+    "transaction_hash": "GaY6hGj1ezntTBxjwQZDEoGs7cCWszpg6R7xD4n3Wa9B",
+    "tx_block_height": 276503058,
+    "tx_block_timestamp": "1793978018175285522",
+    "is_success": true
+  },
+  "tx": {
+    "transaction": {
+      "hash": "GaY6hGj1ezntTBxjwQZDEoGs7cCWszpg6R7xD4n3Wa9B",
+      "signer_id": "nearbuddy-solver.testnet",
+      "receiver_id": "arena.nearbuddy-solver.testnet",
+      "actions": [
+        {
+          "FunctionCall": {
+            "method_name": "open_duel",
+            "args": "eyJhIjoiVWwrVzZVSktmUWxaOWRxU2VYYS85d3Z1WGY5Q3pkaFNQNTlDbnFEbGY4RT0iLCJiIjoiOGRQWjd6blo2Wm9wSnJDQlRGMnZXTVFUaUhoSG11dVZwc3FubmhlM1ZnRT0iLCJzeW1ib2wiOiJ3cmFwLm5lYXIiLCJjbG9zZV9hdCI6IjE3OTM5NzgzNDcwMDAwMDAwMDAifQ==",
+            "deposit": "35000000000000000000000"
+          }
+        }
+      ]
+    },
+    "execution_outcome": {
+      "outcome": {
+        "logs": [],
+        "status": {
+          "SuccessReceiptId": "FKKFsmRFVULQdrHKcCE45itywFb91Hhp7iDtbZbnhDf6"
+        }
+      }
+    },
+    "receipts": [
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "SuccessValue": "IjM0NyI="
+            }
+          }
+        }
+      },
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "SuccessValue": ""
+            }
+          }
+        }
+      },
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [
+              "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"open_price\",\"data\":{\"duel_id\":347,\"price\":378033333,\"at\":1793978019362255373}}"
+            ],
+            "status": {
+              "SuccessValue": ""
+            }
+          }
+        }
+      }
+    ]
+  }
+}

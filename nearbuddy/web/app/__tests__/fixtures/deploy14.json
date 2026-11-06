@@ -1,0 +1,200 @@
+{
+  "_note": "Synthetic: deploy 14 (commit_reveal, require_consent) was not live on arena.nearbuddy-solver.testnet on 2026-11-06 (no commit_intent, reveal_intent or open_duel_consented in its newest 200 txs). Args and EVENT_JSON logs follow the formats tape.ts decodes and the deploy-14 contract emits; agent keys are the real ones from post_intent.json and inject_chaos.json; hashes, signatures and tx ids are made up.",
+  "open_duel_consented": {
+    "meta": {
+      "transaction_hash": "synthetic-open-duel-consented",
+      "tx_block_height": 276503600,
+      "tx_block_timestamp": "1793978370123456789",
+      "is_success": true
+    },
+    "tx": {
+      "transaction": {
+        "hash": "synthetic-open-duel-consented",
+        "signer_id": "nearbuddy-solver.testnet",
+        "receiver_id": "arena.nearbuddy-solver.testnet",
+        "actions": [
+          {
+            "FunctionCall": {
+              "method_name": "open_duel_consented",
+              "args": "eyJhIjoiVWwrVzZVSktmUWxaOWRxU2VYYS85d3Z1WGY5Q3pkaFNQNTlDbnFEbGY4RT0iLCJiIjoiOGRQWjd6blo2Wm9wSnJDQlRGMnZXTVFUaUhoSG11dVZwc3FubmhlM1ZnRT0iLCJzeW1ib2wiOiJ3cmFwLm5lYXIiLCJjbG9zZV9hdCI6IjE3OTM5Nzg3MDAwMDAwMDAwMDAiLCJzaWdfYSI6IjErVHpaVnBaV2NHNmdpZVFTMCtzSytHTlZVK00xakNRUWZKbG9oUWtVWFA3a2N0bUs3UUVieGhNYnllckt5eU5SVlQvb01BbW9hZjd1blQ3Vm56VXBnPT0iLCJzaWdfYiI6IjlqRTBxNkRyU3M2TjBDWExkNEZ3OWZma2FuS3N5aG4wL3pDUE5ZMGdGNVJnYjlYK2lLT3hkbEs4Y3N0M1hKcGJpREp0clU5cm1LUStOSVRNa3pTYzNBPT0ifQ==",
+              "deposit": "35000000000000000000000"
+            }
+          }
+        ]
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessReceiptId": "synthetic"
+          }
+        }
+      },
+      "receipts": [
+        {
+          "receipt": {
+            "receiver_id": "arena.nearbuddy-solver.testnet"
+          },
+          "execution_outcome": {
+            "outcome": {
+              "logs": [
+                "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"open_price\",\"data\":{\"duel_id\":348,\"price\":377950000,\"at\":1793978371000000000}}"
+              ],
+              "status": {
+                "SuccessValue": ""
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "commit_intent": {
+    "meta": {
+      "transaction_hash": "synthetic-commit-intent",
+      "tx_block_height": 276503650,
+      "tx_block_timestamp": "1793978400000000000",
+      "is_success": true
+    },
+    "tx": {
+      "transaction": {
+        "hash": "synthetic-commit-intent",
+        "signer_id": "nearbuddy-solver.testnet",
+        "receiver_id": "arena.nearbuddy-solver.testnet",
+        "actions": [
+          {
+            "FunctionCall": {
+              "method_name": "commit_intent",
+              "args": "eyJkdWVsX2lkIjoiMzQ4IiwiYWdlbnRfcGsiOiJVbCtXNlVKS2ZRbFo5ZHFTZVhhLzl3dnVYZjlDemRoU1A1OUNucURsZjhFPSIsImNvbW1pdG1lbnQiOiJhaG53KzB2bFJSRlNTODFiREppemphSHVCSm81YzF3NU1SNFFNMkFrUTI4PSIsInNpZyI6IkZad29BMjJkdTJpdnE1SGcrVm1IelVWQzFaK1VocTZJc0JCVWFjQkErY0xEVFNBZVZYSm50RnBPSERRd1ByS0M3cGJyQ01zTzZDWHZRQTVXZ09KVERRPT0ifQ==",
+              "deposit": "0"
+            }
+          }
+        ]
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessReceiptId": "synthetic"
+          }
+        }
+      },
+      "receipts": [
+        {
+          "receipt": {
+            "receiver_id": "arena.nearbuddy-solver.testnet"
+          },
+          "execution_outcome": {
+            "outcome": {
+              "logs": [
+                "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"commit\",\"data\":{\"duel_id\":348,\"agent_pk\":\"Ul+W6UJKfQlZ9dqSeXa/9wvuXf9CzdhSP59CnqDlf8E=\",\"commitment\":\"ahnw+0vlRRFSS81bDJizjaHuBJo5c1w5MR4QM2AkQ28=\"}}"
+              ],
+              "status": {
+                "SuccessValue": ""
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "reveal_intent": {
+    "meta": {
+      "transaction_hash": "synthetic-reveal-intent",
+      "tx_block_height": 276503700,
+      "tx_block_timestamp": "1793978430000000000",
+      "is_success": true
+    },
+    "tx": {
+      "transaction": {
+        "hash": "synthetic-reveal-intent",
+        "signer_id": "nearbuddy-solver.testnet",
+        "receiver_id": "arena.nearbuddy-solver.testnet",
+        "actions": [
+          {
+            "FunctionCall": {
+              "method_name": "reveal_intent",
+              "args": "eyJzaWduZWQiOnsiaW50ZW50Ijp7ImFnZW50X3BrIjoiVWwrVzZVSktmUWxaOWRxU2VYYS85d3Z1WGY5Q3pkaFNQNTlDbnFEbGY4RT0iLCJkdWVsX2lkIjoiMzQ4Iiwic2lkZSI6IlNob3J0Iiwic2l6ZV9icHMiOjUwMDAsIm5vbmNlIjoiMTc5Mzk3NDgyMzk5OSIsImV4cGlyZXNfYXQiOiIxNzkzOTc4NzYwMDAwMDAwMDAwIiwicHJvb2ZfaGFzaCI6IndjMmlZMktDaTJrbVpSSUZLNWZMTnluanNGTGtyZVI4Q2g0emc5NytjOGM9In0sInNpZ25hdHVyZSI6IkV1dWRiSytKNi9TVFVzZ3dSSE9vWTdnQkNBa3NTZDdoUnA0S2llZGUrVnpZN2NKRTYyRU1LMzRCSi9iTVBZM04xQ0hnZ29nVGYveitRbHkzY2U3bjBBPT0ifSwic2FsdCI6IlkwZWExcG9KQ3lXQ2QreVB1bStaUVpvdit5U0pnVkVHVjhsRXpORVVqcGM9IiwidGVlIjp7ImtpbmQiOjIsInJlcXVlc3RfaGFzaCI6IncvZTk5VGZFWnlRNUxFUW81SDRFd1VqRmFXWVpERHllMlNFVWdBeWZOYnM9IiwicmVzcG9uc2VfaGFzaCI6ImJ1dFY5MllBMUswSXZuS3RPc0U5bHBNdzV6MTYxVEF4VlgyclJENjZJdHM9Iiwic2lnbmVyIjoiLzl6RXVodWdLZGtmdGtYcXNWWXdFTzU3ejZ4dk1oTW05T3F5bUdBYlc4ND0iLCJzaWduYXR1cmUiOiJPTUpZWUtPWmZFU0hnNy9WUjRaYTJLRzk4dTcyaHQ1bzA2ZXJWL3M5SUpOUEN6VFAzMDVwUDRHZi82U0syNmVtYkwzZzhIMzZaR3JuZmZESm5tb3FNZz09In19",
+              "deposit": "0"
+            }
+          }
+        ]
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessReceiptId": "synthetic"
+          }
+        }
+      },
+      "receipts": [
+        {
+          "receipt": {
+            "receiver_id": "arena.nearbuddy-solver.testnet"
+          },
+          "execution_outcome": {
+            "outcome": {
+              "logs": [
+                "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"intent\",\"data\":{\"duel_id\":348,\"agent_pk\":\"Ul+W6UJKfQlZ9dqSeXa/9wvuXf9CzdhSP59CnqDlf8E=\",\"side\":\"Short\",\"size_bps\":5000,\"nonce\":1793974823999,\"tee\":2}}"
+              ],
+              "status": {
+                "SuccessValue": ""
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "resolve_no_reveal": {
+    "meta": {
+      "transaction_hash": "synthetic-resolve-no-reveal",
+      "tx_block_height": 276503800,
+      "tx_block_timestamp": "1793978710000000000",
+      "is_success": true
+    },
+    "tx": {
+      "transaction": {
+        "hash": "synthetic-resolve-no-reveal",
+        "signer_id": "nearbuddy-solver.testnet",
+        "receiver_id": "arena.nearbuddy-solver.testnet",
+        "actions": [
+          {
+            "FunctionCall": {
+              "method_name": "resolve_duel",
+              "args": "eyJkdWVsX2lkIjoiMzQ4In0=",
+              "deposit": "20000000000000000000000"
+            }
+          }
+        ]
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessReceiptId": "synthetic"
+          }
+        }
+      },
+      "receipts": [
+        {
+          "receipt": {
+            "receiver_id": "arena.nearbuddy-solver.testnet"
+          },
+          "execution_outcome": {
+            "outcome": {
+              "logs": [
+                "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"no_reveal\",\"data\":{\"duel_id\":348,\"agent_pk\":\"8dPZ7znZ6ZopJrCBTF2vWMQTiHhHmuuVpsqnnhe3VgE=\",\"slashed\":\"5000000000000000000000\"}}",
+                "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"resolve\",\"data\":{\"duel_id\":348,\"pnl_a\":3,\"pnl_b\":0,\"open\":377950000,\"close\":377700000}}"
+              ],
+              "status": {
+                "SuccessValue": ""
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

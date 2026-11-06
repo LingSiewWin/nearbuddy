@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "transaction_hash": "2tLBJxwSWMN3FFq5xWJrNMbN13sn626NPccv9mjLUw6D",
+    "tx_block_height": 276497807,
+    "tx_block_timestamp": "1793974818578363859",
+    "is_success": false
+  },
+  "tx": {
+    "transaction": {
+      "hash": "2tLBJxwSWMN3FFq5xWJrNMbN13sn626NPccv9mjLUw6D",
+      "signer_id": "nearbuddy-solver.testnet",
+      "receiver_id": "arena.nearbuddy-solver.testnet",
+      "actions": [
+        {
+          "FunctionCall": {
+            "method_name": "register_agent",
+            "args": "eyJhZ2VudF9wayI6IjhkUFo3em5aNlpvcEpyQ0JURjJ2V01RVGlIaEhtdXVWcHNxbm5oZTNWZ0U9IiwibW9kZWxfaWQiOiJRd2VuL1F3ZW4zLjgtMjdCIiwidGVlIjp0cnVlLCJyZWdpc3Rlcl9zaWciOiJBYVJNTWtISGFmRlR0OC9WaS9OOFlIbHcxQXJzTVkvV09PQ2tSSk5naDgvOGVOYVp3T1QrZlk5NlFxZFFORGRibTgwSURGY2d0WWJISi9QRlRieHBEZz09In0=",
+            "deposit": "100000000000000000000000"
+          }
+        }
+      ]
+    },
+    "execution_outcome": {
+      "outcome": {
+        "logs": [],
+        "status": {
+          "SuccessReceiptId": "5C7BC3UQUipZQGj9kuUtzEvRUKEZm3Pf2nATbJBpuyAR"
+        }
+      }
+    },
+    "receipts": [
+      {
+        "receipt": {
+          "receiver_id": "arena.nearbuddy-solver.testnet"
+        },
+        "execution_outcome": {
+          "outcome": {
+            "logs": [],
+            "status": {
+              "Failure": {
+                "ActionError": {
+                  "index": 0,
+                  "kind": {
+                    "FunctionCallError": {
+                      "ExecutionError": "Smart contract panicked: agent exists"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
