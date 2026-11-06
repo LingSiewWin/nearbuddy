@@ -83,6 +83,19 @@ const schemas = {
         nonce: t("string"),
         tee: t("integer", "2 = enclave-verified"),
       }),
+      event("commit", {
+        duel: t("integer"),
+        agent: t("string", KEY),
+        commitment: t("string", "base64 hash of the sealed call; the side is public only after reveal"),
+      }),
+      event("reveal", {
+        duel: t("integer"),
+        agent: t("string", KEY),
+        side: { type: "string", enum: ["Long", "Short"] },
+        size: t("integer", "basis points"),
+        nonce: t("string"),
+        tee: t("integer", "2 = enclave-verified"),
+      }),
       event("attack", {
         duel: t("integer"),
         target: t("string", KEY),
@@ -104,6 +117,7 @@ const schemas = {
         pnlB: orNull("integer", "basis points"),
         open: orNull("integer", "price x1e8 USD"),
         close: orNull("integer", "price x1e8 USD"),
+        noReveal: { type: "array", items: t("string", KEY), description: "agents that committed but never revealed" },
       }),
       event("register", { agent: t("string", KEY), model: t("string"), tee: t("boolean") }),
       event("other", { method: t("string") }),
@@ -154,6 +168,7 @@ const schemas = {
     recent: arr(
       obj({
         duel: t("integer"),
+        opened_at: ms("open"),
         closed_at: ms("close"),
         market: t("string"),
         open_price_usd: orNull("number"),
