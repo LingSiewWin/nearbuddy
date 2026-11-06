@@ -23,21 +23,27 @@ import { b64 } from "../../protocol/src/index.ts";
 import {
   commitMessage,
   consentMessage,
+  type Side,
   type SignedIntent,
   type TeeProof,
   verify,
   verifyIntent,
   verifyTeeProof,
 } from "../../protocol/src/intent.ts";
-import { type Quote, quote, sellNearForUsdc } from "./oneclick.ts";
+import { fillRequest, type Quote, quote } from "./oneclick.ts";
 import {
+  admit,
   batchQuote,
+  type Caps,
+  capsFromEnv,
+  DAY_MS,
   type ExecutionRecord,
   executionRecords,
   MAX_EXECUTION,
   type OracleMid,
   oracleMid,
   quotePrice,
+  variableLeg,
 } from "./rfq.ts";
 
 export interface Mandate {
@@ -63,12 +69,14 @@ export interface Injection {
   payload_hash: string;
   block: string;
 }
-/** With BATCH_RFQ (default) `quote` is the one batch quote shared by every follower of the intent (its amountOut is
- *  the batch total); `quote_out` is this follower's pro rata share and `price` the uniform price. */
+/** With BATCH_RFQ (default) `quote` is the one batch quote shared by every follower of the intent (its USDC leg is
+ *  the batch total); `quote_out` is this follower's pro rata share of the USDC leg (received on a Short, paid on a
+ *  Long) and `price` the uniform USDC per NEAR. `recipient` is the intents.near account the output lands in. */
 export interface FollowerQuote {
   follower: string;
   amount: string;
   quote?: Quote;
+  recipient?: string;
   quote_out?: string;
   price?: number;
   error?: string;
@@ -148,6 +156,15 @@ async function arenaConfig(): Promise<ArenaConfig> {
 }
 const oracleDeposit = async () => BigInt((await arenaConfig()).oracle_deposit);
 
+/** Whose intents.near balance a fill's output lands in. `follower` (mainnet default, blocker B14): the follower's
+ *  own balance, so the solver never holds a follower's proceeds. `solver` (testnet default): dry quotes only,
+ *  nothing is owed. FILL_RECIPIENT overrides; any other value is refused. */
+export function fillRecipient(solverId: string): "solver" | "follower" {
+  const v = process.env.FILL_RECIPIENT || (solverId.endsWith(".testnet") ? "solver" : "follower");
+  if (v !== "solver" && v !== "follower") throw new Error(`FILL_RECIPIENT must be solver or follower, not ${v}`);
+  return v;
+}
+
 /** Pick the mandate-bounded amount to quote for one follower: min(cap, allowance - spent). */
 export function quoteAmount(m: Mandate): bigint {
   const left = BigInt(m.allowance) - BigInt(m.spent);
@@ -185,6 +202,8 @@ export class Arena {
   readonly fills: { agent_pk: string; follower: string; report: unknown; tx: string }[] = [];
   /** Execution quality of every prepared fill, last MAX_EXECUTION (rfq.ts), served by GET /execution. */
   readonly quality: ExecutionRecord[] = [];
+  /** [ms, yocto] per quoted fill in the last 24 h, oldest first: the CAP_PER_DAY_YOCTO ledger. */
+  private readonly capLedger: [number, string][] = [];
   /** Pairing loop state, served by GET /pairing. `every_s` 0 = loop off. */
   readonly pairing = { every_s: 0, next_at: 0, last: [] as PairedDuel[] };
   private pairingRun: Promise<unknown> | null = null;
@@ -369,7 +388,7 @@ export class Arena {
       if (!verifyTeeProof(tee, agent.model_id, signed.intent.proof_hash)) throw new Error("bad tee proof");
     }
     const r = await this.call(method, { signed, ...extra, tee: tee ?? null });
-    const quotes = await this.quotesFor(signed.intent.agent_pk);
+    const quotes = await this.quotesFor(signed.intent.agent_pk, signed.intent.side);
     const mid = quotes.some((x) => x.quote) ? await (this.deps.oracleMid ?? oracleMid)(signed.intent.duel_id) : null;
     this.quality.push(...executionRecords(signed.intent, quotes, mid));
     this.quality.splice(0, Math.max(0, this.quality.length - MAX_EXECUTION));
@@ -380,35 +399,67 @@ export class Arena {
     return { tx: r.tx, quotes };
   }
 
-  /** Dry 1Click quotes for the open follower mandates, sized by the mandate. Never a real swap. BATCH_RFQ (default
-   *  on): one quote for the sum, split pro rata at one price (rfq.ts); BATCH_RFQ=0: one quote per follower. */
-  async quotesFor(agent_pk: string): Promise<FollowerQuote[]> {
+  /** Dry 1Click quotes for the open follower mandates, sized by the mandate in NEAR, in the agent's direction: Short
+   *  sells NEAR for USDC, Long buys NEAR with USDC. Never a real swap. BATCH_RFQ (default on): one quote for the sum,
+   *  split pro rata at one price (rfq.ts); BATCH_RFQ=0, or FILL_RECIPIENT=follower (a quote has one recipient): one
+   *  quote per follower. */
+  async quotesFor(agent_pk: string, side: Side = "Short"): Promise<FollowerQuote[]> {
     const list = await (
       this.deps.listFollowers ?? ((pk) => arenaView<[string, Mandate][]>("list_followers", { agent_pk: pk }))
     )(agent_pk);
     const now = (this.deps.now ?? (() => BigInt(Date.now()) * 1_000_000n))();
     const q = this.deps.quote ?? quote;
-    const account = this.solverId.replace(/\.testnet$/, ".near");
-    const open = list.filter(([, m]) => mandateOpen(m, now));
-    if (process.env.BATCH_RFQ !== "0") {
-      if (open.length === 0) return [];
-      const b = await batchQuote(
-        open.map(([follower, m]) => ({ follower, amount: quoteAmount(m) })),
-        (amount) => q(sellNearForUsdc(amount, account)),
-      );
-      return b.fills.map((f) => (b.quote && !f.error ? { ...f, quote: b.quote, price: b.price } : f));
+    const solver = this.solverId.replace(/\.testnet$/, ".near");
+    const payFollower = fillRecipient(this.solverId) === "follower";
+    const open = list
+      .filter(([, m]) => mandateOpen(m, now))
+      .map(([follower, m]) => ({ follower, amount: quoteAmount(m) }));
+    // B17: the solver's own caps, before any quote. A bad cap value refuses every follower (fail closed).
+    let caps: Caps;
+    try {
+      caps = capsFromEnv();
+    } catch (e) {
+      return open.map((f) => ({ follower: f.follower, amount: f.amount.toString(), error: String(e).slice(0, 200) }));
     }
-    return Promise.all(
-      open.map(async ([follower, m]): Promise<FollowerQuote> => {
-        const amount = quoteAmount(m);
-        try {
-          const r = await q(sellNearForUsdc(amount, account));
-          return { follower, amount: amount.toString(), quote: r, quote_out: r.quote.amountOut, price: quotePrice(r) };
-        } catch (e) {
-          return { follower, amount: amount.toString(), error: String(e).slice(0, 200) };
-        }
-      }),
-    );
+    const nowMs = Number(now / 1_000_000n);
+    const { admitted, rejected } = admit(open, caps, this.capUsed(nowMs));
+    // Reserve the admitted amounts before the first await, so two intents landing together cannot both fit under
+    // the day cap; a follower whose quote fails gets its reservation back below.
+    const held = new Map(admitted.map((f) => [f.follower, [nowMs, f.amount.toString()] as [number, string]]));
+    this.capLedger.push(...held.values());
+    let quoted: FollowerQuote[] = [];
+    if (admitted.length > 0 && process.env.BATCH_RFQ !== "0" && !payFollower) {
+      const b = await batchQuote(admitted, (amount) => q(fillRequest(side, amount, solver, solver)));
+      quoted = b.fills.map((f) =>
+        b.quote && !f.error ? { ...f, quote: b.quote, price: b.price, recipient: solver } : f,
+      );
+    } else
+      quoted = await Promise.all(
+        admitted.map(async ({ follower, amount }): Promise<FollowerQuote> => {
+          const recipient = payFollower ? follower : solver;
+          try {
+            const r = await q(fillRequest(side, amount, solver, recipient));
+            const quote_out = r.quote[variableLeg(r)];
+            return { follower, amount: amount.toString(), quote: r, recipient, quote_out, price: quotePrice(r) };
+          } catch (e) {
+            return { follower, amount: amount.toString(), error: String(e).slice(0, 200) };
+          }
+        }),
+      );
+    for (const x of quoted) {
+      const h = held.get(x.follower);
+      const i = !x.quote && h ? this.capLedger.indexOf(h) : -1;
+      if (i >= 0) this.capLedger.splice(i, 1);
+    }
+    const out = new Map<string, FollowerQuote>([...rejected, ...quoted].map((x) => [x.follower, x]));
+    return open.map((f) => out.get(f.follower)!);
+  }
+
+  /** Yocto quoted in the last 24 h, for CAP_PER_DAY_YOCTO. Counts prepared fills, not settled ones (conservative).
+   *  Pruned as it is read; persisted with the history so a restart does not reset the day. */
+  private capUsed(nowMs: number): bigint {
+    while (this.capLedger.length > 0 && this.capLedger[0]![0] <= nowMs - DAY_MS) this.capLedger.shift();
+    return this.capLedger.reduce((s, [, a]) => s + BigInt(a), 0n);
   }
 
   /** Spectator path, no secret: store the payload and return its hash. The spectator then calls
@@ -434,7 +485,12 @@ export class Arena {
   private persistHistory() {
     writeAtomic(
       HISTORY_FILE,
-      JSON.stringify({ intents: this.intents.slice(-50), fills: this.fills.slice(-50), quality: this.quality }),
+      JSON.stringify({
+        intents: this.intents.slice(-50),
+        fills: this.fills.slice(-50),
+        quality: this.quality,
+        cap_ledger: this.capLedger,
+      }),
     );
   }
 
@@ -454,10 +510,12 @@ export class Arena {
           intents?: IntentRecord[];
           fills?: Arena["fills"];
           quality?: ExecutionRecord[];
+          cap_ledger?: [number, string][];
         } | null;
         this.intents.push(...(h?.intents ?? []));
         this.fills.push(...(h?.fills ?? []));
         if (Array.isArray(h?.quality)) this.quality.push(...h.quality.slice(-MAX_EXECUTION));
+        if (Array.isArray(h?.cap_ledger)) this.capLedger.push(...h.cap_ledger);
       }
     } catch (e) {
       console.log(`[arena] history file ignored: ${String(e).slice(0, 80)}`);

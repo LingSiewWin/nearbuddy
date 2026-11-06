@@ -1,8 +1,10 @@
 //! Sandbox run of the real wasm: agents register with a key-possession signature (a squatter is
 //! refused), a TEE-backed agent posts enclave-proved intents (and one tampered proof is refused),
-//! a bystander relays one intent, the duel takes the maximum 32 injections, a follower follows the
-//! TEE agent (the plain one is refused) and settles 10 fills, and the duel is resolved through the
-//! oracle callback with the oracle account playing Outlayer.
+//! a bystander relays one intent, the plain agent commits a hidden intent and a bystander reveals it,
+//! the duel takes the maximum 32 injections, a follower follows the TEE agent (the plain one is
+//! refused) and settles 10 fills, the duel is resolved through the oracle callback with the oracle
+//! account playing Outlayer, and a second duel is opened by a bystander with both agents' consent
+//! signatures (one with a mismatched signature is refused).
 //! Prints gas burnt per call so the README can quote it.
 //!   cargo test --test test_arena_sandbox -- --ignored --nocapture
 //! Ignored by default: it needs the cargo-near binary and downloads near-sandbox on first run.
@@ -11,7 +13,9 @@ use near_api::{AccountId, NearGas, NearToken};
 use near_sdk::base64::{Engine, prelude::BASE64_STANDARD};
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::serde_json::{Value, json};
-use nearbuddy_arena::{Intent, Side, intent_message, register_bytes, tee_text};
+use nearbuddy_arena::{
+    Intent, Side, commit_bytes, consent_bytes, intent_message, register_bytes, tee_text,
+};
 use sha2::{Digest, Sha256};
 
 const MODEL_A: &str = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
@@ -243,6 +247,61 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         "GAS post_intent (plain) {:.2} TGas",
         gas_of(&r) as f64 / 1e12
     );
+
+    // commit-reveal: B hides nonce 2 behind sha256(intent_message || salt), signing the bytes the
+    // commit_message view returns; a bystander relays both halves
+    let i2 = Intent {
+        agent_pk: Base64VecU8(pkb.clone()),
+        duel_id: U64(duel_id),
+        side: Side::Short,
+        size_bps: 5_000,
+        nonce: U64(2),
+        expires_at: U64(close_at),
+        proof_hash: Base64VecU8(vec![0u8; 32]),
+    };
+    let salt = [0x5au8; 32];
+    let commitment = sha(&intent_message(&i2), &salt);
+    let msg: Base64VecU8 = contract
+        .call_function(
+            "commit_message",
+            json!({"duel_id": duel_id.to_string(), "commitment": b64(&commitment)}),
+        )
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(
+        msg.0,
+        commit_bytes(contract.account_id(), duel_id, &commitment)
+    );
+    let csig = skb.sign(&msg.0).to_bytes().to_vec();
+    let r = call("commit_intent", json!({"duel_id": duel_id.to_string(), "agent_pk": b64(&pkb), "commitment": b64(&commitment), "sig": b64(&csig)}), &spectator, zero).await?.assert_success();
+    println!("GAS commit_intent {:.2} TGas", gas_of(&r) as f64 / 1e12);
+    let isig = skb.sign(&intent_message(&i2)).to_bytes().to_vec();
+    let reveal = json!({"signed": {"intent": i2, "signature": b64(&isig)}, "salt": b64(&[0x5bu8; 32]), "tee": null});
+    call("reveal_intent", reveal, &spectator, zero)
+        .await?
+        .assert_failure();
+    println!("reveal_intent with the wrong salt: refused");
+    let reveal =
+        json!({"signed": {"intent": i2, "signature": b64(&isig)}, "salt": b64(&salt), "tee": null});
+    let r = call("reveal_intent", reveal, &spectator, zero)
+        .await?
+        .assert_success();
+    println!(
+        "GAS reveal_intent (plain) {:.2} TGas",
+        gas_of(&r) as f64 / 1e12
+    );
+    let duel: Value = contract
+        .call_function("get_duel", json!({"duel_id": duel_id.to_string()}))
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(
+        duel["last_intent_b"]["nonce"], "2",
+        "revealed intent is live"
+    );
     let bond_a1: u128 = contract
         .call_function("get_agent", json!({"agent_pk": b64(&pka)}))
         .read_only::<Value>()
@@ -405,5 +464,61 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         "injections pruned"
     );
     assert_eq!(duel["outcome"]["winner"], Value::String(b64(&pka)));
+    let no_reveal: (bool, bool) = contract
+        .call_function("get_no_reveal", json!({"duel_id": duel_id.to_string()}))
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(no_reveal, (false, false));
+
+    // a second duel opened by a bystander with both agents' consent over the consent_message bytes
+    let now2 = near_api::Chain::block()
+        .at(near_api::types::Reference::Final)
+        .fetch_from(&net)
+        .await?
+        .header
+        .timestamp;
+    let close2 = now2 + 120_000_000_000;
+    let consent: Base64VecU8 = contract
+        .call_function("consent_message", json!({"a": b64(&pka), "b": b64(&pkb), "symbol": "wrap.near", "close_at": close2.to_string()}))
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(
+        consent.0,
+        consent_bytes(contract.account_id(), &pka, &pkb, "wrap.near", close2)
+    );
+    let (sa, sb) = (
+        ska.sign(&consent.0).to_bytes().to_vec(),
+        skb.sign(&consent.0).to_bytes().to_vec(),
+    );
+    let bad = skb
+        .sign(&consent_bytes(
+            contract.account_id(),
+            &pka,
+            &pkb,
+            "wrap.near",
+            close2 + 1,
+        ))
+        .to_bytes()
+        .to_vec();
+    call("open_duel_consented", json!({"a": b64(&pka), "b": b64(&pkb), "symbol": "wrap.near", "close_at": close2.to_string(), "sig_a": b64(&sa), "sig_b": b64(&bad)}), &spectator, NearToken::from_millinear(50)).await?.assert_failure();
+    println!("open_duel_consented with B's signature over another close_at: refused");
+    let r = call("open_duel_consented", json!({"a": b64(&pka), "b": b64(&pkb), "symbol": "wrap.near", "close_at": close2.to_string(), "sig_a": b64(&sa), "sig_b": b64(&sb)}), &spectator, NearToken::from_millinear(50)).await?.assert_success();
+    println!(
+        "GAS open_duel_consented (incl. oracle_call to a missing contract) {:.2} TGas",
+        gas_of(&r) as f64 / 1e12
+    );
+    let d2 = r.json::<U64>()?.0;
+    assert_eq!(d2, duel_id + 1);
+    let a: Value = contract
+        .call_function("get_agent", json!({"agent_pk": b64(&pkb)}))
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(a["in_duel"], d2.to_string());
     Ok(())
 }

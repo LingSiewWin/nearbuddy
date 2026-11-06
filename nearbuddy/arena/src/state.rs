@@ -21,6 +21,9 @@ pub(crate) enum StorageKey {
     TeeAgents,
     UsedProofs,
     AgentDuels,
+    Commitments,
+    NoReveal,
+    UsedCommitments,
 }
 
 #[near(contract_state)]
@@ -66,15 +69,34 @@ pub struct Contract {
     pub(crate) intent_lock_ns: u64,
     /// Duels opened and not yet finished or voided. While it is non-zero `set_oracle` may not lower
     /// the lock or move the oracle, so a running duel keeps the rules it was opened under. Starts
-    /// at 0 in `migrate_v12`: duels open across that deploy are not counted and never gate.
+    /// at 0 in `migrate_v12` (deploy 12): duels open across that deploy were not counted.
     pub(crate) open_duels: u64,
+    /// When true `post_intent` is refused: every intent goes through `commit_intent` before the
+    /// lock and `reveal_intent` after it. When false both paths work.
+    pub(crate) commit_reveal: bool,
+    /// Share of the bond an agent pays its opponent (or `owner_fees`) at scoring for leaving a
+    /// commitment unrevealed, on top of forfeiting the duel. Starts equal to `slash_bps`.
+    pub(crate) no_reveal_bps: u16,
+    /// When true the owner's `open_duel` is refused and only `open_duel_consented` pairs agents.
+    pub(crate) require_consent: bool,
+    /// `duel_id_le || agent_pk` (see `commit_key`) to `(sha256(intent_message || salt),
+    /// committed_at_ns)`. Deleted on reveal, on scoring (slashed) and on void.
+    pub(crate) commitments: LookupMap<Vec<u8>, ([u8; 32], u64)>,
+    /// Duel id to (a, b) unrevealed-commitment flags; written only when one of them is true.
+    pub(crate) no_reveal: LookupMap<u64, (bool, bool)>,
+    /// `commit_key || commitment` of every accepted commitment. The commit signature carries no
+    /// nonce, so without this anyone could resubmit an old signed commitment after its reveal (or
+    /// over a newer one) and get the agent slashed for not revealing it. ponytail: entries of
+    /// finished duels are dead weight, paid from the bond like `used_nonces`.
+    pub(crate) used_commitments: LookupSet<Vec<u8>>,
 }
 
-/// State layout of deploy 11 (before `open_duels`). Read once by `migrate_v12`.
+/// State layout of deploys 12 and 13 (before commit-reveal and consent). Read once by
+/// `migrate_v14`.
 #[allow(dead_code)]
 #[derive(near_sdk::borsh::BorshDeserialize)]
 #[borsh(crate = "near_sdk::borsh")]
-pub struct ContractV11 {
+pub struct ContractV12 {
     owner: AccountId,
     oracle_account: AccountId,
     oracle_deposit: u128,
@@ -96,6 +118,7 @@ pub struct ContractV11 {
     min_duel_ns: u64,
     agent_duels: LookupMap<Vec<u8>, Vec<u64>>,
     intent_lock_ns: u64,
+    open_duels: u64,
 }
 
 /// Seconds to ns with a sanity bound (a week), so a unit mix-up cannot set an absurd floor.
@@ -157,19 +180,25 @@ impl Contract {
             agent_duels: LookupMap::new(StorageKey::AgentDuels),
             intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
             open_duels: 0,
+            commit_reveal: false,
+            no_reveal_bps: slash_bps,
+            require_consent: false,
+            commitments: LookupMap::new(StorageKey::Commitments),
+            no_reveal: LookupMap::new(StorageKey::NoReveal),
+            used_commitments: LookupSet::new(StorageKey::UsedCommitments),
         }
     }
 
     // ---------------------------------------------------------------- migration
 
-    /// Deploy 11 → 12: add `open_duels`, starting at 0 (duels open across the deploy are not
-    /// counted; the counter only gates `set_oracle`). Collections keep their prefixes.
-    /// Caller: the contract itself (private), once after the deploy-12 code lands. Deposit:
+    /// Deploy 12/13 → 14: add commit-reveal (off, `no_reveal_bps` = `slash_bps`), consent (off)
+    /// and the new maps. Every existing field and collection prefix is carried over unchanged.
+    /// Caller: the contract itself (private), once after the deploy-14 code lands. Deposit:
     /// none. Panics: "no state", or the SDK private-method panic for any other caller.
     #[private]
     #[init(ignore_state)]
-    pub fn migrate_v12() -> Self {
-        let old: ContractV11 = env::state_read().expect("no state");
+    pub fn migrate_v14() -> Self {
+        let old: ContractV12 = env::state_read().expect("no state");
         Self {
             owner: old.owner,
             oracle_account: old.oracle_account,
@@ -192,7 +221,13 @@ impl Contract {
             min_duel_ns: old.min_duel_ns,
             agent_duels: old.agent_duels,
             intent_lock_ns: old.intent_lock_ns,
-            open_duels: 0,
+            open_duels: old.open_duels,
+            commit_reveal: false,
+            no_reveal_bps: old.slash_bps,
+            require_consent: false,
+            commitments: LookupMap::new(StorageKey::Commitments),
+            no_reveal: LookupMap::new(StorageKey::NoReveal),
+            used_commitments: LookupSet::new(StorageKey::UsedCommitments),
         }
     }
 
@@ -228,6 +263,29 @@ impl Contract {
         self.oracle_deposit = oracle_deposit.0;
         self.min_duel_ns = min_duel_ns;
         self.intent_lock_ns = intent_lock_ns;
+    }
+
+    /// Turn commit-reveal on or off and set the no-reveal slash. With it on, `post_intent` is
+    /// refused and intents go through `commit_intent` / `reveal_intent`. `enabled` may not change
+    /// while a duel is open, so a running duel keeps the rules it was opened under; the bps may.
+    /// Caller: owner. Deposit: none. Panics: "not owner", "bps out of range", "duels open".
+    pub fn set_commit_reveal(&mut self, enabled: bool, no_reveal_bps: u16) {
+        self.only_owner();
+        require!(no_reveal_bps <= 10_000, "bps out of range");
+        require!(
+            self.open_duels == 0 || enabled == self.commit_reveal,
+            "duels open"
+        );
+        self.commit_reveal = enabled;
+        self.no_reveal_bps = no_reveal_bps;
+    }
+
+    /// With `required` on, `open_duel` is refused and pairing needs both agents' signatures
+    /// through `open_duel_consented`.
+    /// Caller: owner. Deposit: none. Panics: "not owner".
+    pub fn set_require_consent(&mut self, required: bool) {
+        self.only_owner();
+        self.require_consent = required;
     }
 
     /// Contract owner collects accrued settlement fees.

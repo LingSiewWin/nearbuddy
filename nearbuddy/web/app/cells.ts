@@ -1,13 +1,80 @@
 // Pure data-to-cells helpers for the commit-reveal and execution rows: no React state, no fetch, so
 // bun test checks them directly (app/__tests__). Every field is optional: a deploy-13 contract (no
 // commit-reveal) and a solver without quality data render as "off" or "none", never as an error.
-import { addrHref, type Cell, near, price8 } from "./tui";
+import { addrHref, type Cell, near, price8, short, txHref } from "./tui";
 
 /** The commit-reveal fields of `get_config`; absent on contracts that predate commit-reveal. */
 export type CommitConfig = { commit_reveal?: boolean; no_reveal_bps?: number; require_consent?: boolean };
 
 /** One word for the arena stats strip; a contract without the field has no commit-reveal. */
 export const commitWord = (c: CommitConfig | null | undefined) => (c?.commit_reveal ? "on" : "off");
+
+/** Arena stats strip: how duels get paired now; null on contracts without the field. */
+export const pairingWord = (c: CommitConfig | null | undefined) =>
+  c?.require_consent == null ? null : c.require_consent ? "consent required" : "open";
+
+/** The tx that opened a duel, as GET /api/events finds it in FastNEAR's tx window. */
+export type Opened = { duel_id: string; method: string; tx: string; at_ms: number };
+
+/** A `commit` or `intent` EVENT_JSON log of the arena, with the method of the receipt that emitted it. */
+export type ChainEvent = {
+  event: "commit" | "intent";
+  duel_id: string;
+  agent_pk: string;
+  method: string;
+  tx: string;
+  at_ms: number;
+};
+
+const hms = (ms: number) => new Date(ms).toISOString().slice(11, 19);
+
+/** Duel box 1, one side's commit and reveal times from chain events (any order): the last commitment and
+ *  the first reveal after it; "hidden" until that reveal lands, "never revealed" once the duel resolved. */
+export const timelineCells = (events: ChainEvent[] | null | undefined, pk: string, resolved: boolean): Cell[] => {
+  const mine = (events ?? []).filter((e) => e.agent_pk === pk).sort((x, y) => x.at_ms - y.at_ms);
+  const commits = mine.filter((e) => e.event === "commit");
+  const c = commits.at(-1);
+  if (!c) {
+    const posted = mine.filter((e) => e.event === "intent").at(-1);
+    return posted
+      ? [`posted ${hms(posted.at_ms)}`, { t: "   in the clear, no commitment", c: "dim" }]
+      : [{ t: "no commit seen", c: "dim" }];
+  }
+  const r = mine.find((e) => e.event === "intent" && e.method === "reveal_intent" && e.at_ms >= c.at_ms);
+  return [
+    { t: `committed ${hms(c.at_ms)}`, href: txHref(c.tx), title: c.tx },
+    " · ",
+    r
+      ? { t: `revealed ${hms(r.at_ms)}`, c: "ok", href: txHref(r.tx), title: r.tx }
+      : { t: resolved ? "never revealed" : "hidden", c: resolved ? "loss" : "dim" },
+    commits.length > 1 ? { t: `   ${commits.length} commits, last shown`, c: "dim" } : "",
+  ];
+};
+
+/** Duel box 1, `pairing` row: from the open tx's method when it is in the scanned window, else from today's
+ *  `require_consent` (labelled as such: the flag may have changed since the duel opened). */
+export const pairingCells = (opened: Opened | null | undefined, c: CommitConfig | null | undefined): Cell[] => {
+  const tx = (o: Opened): Cell[] => [
+    { t: `   ${o.method} tx `, c: "dim" },
+    { t: short(o.tx, 10), href: txHref(o.tx), title: o.tx },
+  ];
+  if (opened?.method === "open_duel_consented")
+    return [
+      { t: "both agents signed this duel", c: "ok", title: "each agent key signed consent_message for this pairing" },
+      ...tx(opened),
+    ];
+  if (opened?.method === "open_duel")
+    return [{ t: "opened by the owner, no agent signatures", c: "dim" }, ...tx(opened)];
+  if (c?.require_consent == null) return [{ t: "this contract predates consented pairing", c: "dim" }];
+  const why = { t: "   from get_config now; the open tx is not in the scanned window", c: "dim" };
+  return c.require_consent
+    ? [{ t: "consent required", c: "ok", title: "open_duel is refused; only open_duel_consented pairs agents" }, why]
+    : [{ t: "open", c: "dim", title: "the owner may pair agents without their signatures" }, why];
+};
+
+/** The contract's rule for a commitment left unrevealed at scoring (deploy 14). */
+export const NO_REVEAL_RULE =
+  "an unrevealed side forfeits the duel and pays no_reveal_bps of its bond to the opponent; both unrevealed is a tie and both slashes go to the protocol";
 
 /** Duel box 1, `commit-reveal` row. */
 export const commitCells = (c: CommitConfig | null | undefined): Cell[] =>
@@ -20,7 +87,13 @@ export const commitCells = (c: CommitConfig | null | undefined): Cell[] =>
       ? [
           { t: "on", c: "ok" },
           "   calls hidden until reveal",
-          c.no_reveal_bps != null ? { t: ` · no reveal costs ${c.no_reveal_bps / 100} % of bond`, c: "dim" } : "",
+          c.no_reveal_bps != null
+            ? {
+                t: ` · no reveal = forfeit + ${c.no_reveal_bps / 100} % of bond to the opponent`,
+                c: "dim",
+                title: NO_REVEAL_RULE,
+              }
+            : "",
         ]
       : [
           { t: "off", c: "dim" },
@@ -28,9 +101,25 @@ export const commitCells = (c: CommitConfig | null | undefined): Cell[] =>
         ];
 
 /** Duel box 1, per-side marker from `get_no_reveal(duel_id)` ([a, b]; null before commit-reveal). */
-export const revealCell = (slashed: boolean | undefined, revealed: boolean, resolved: boolean): Cell =>
-  slashed
-    ? { t: "no-reveal slashed", c: "loss", title: "committed a call, never revealed it: bond slashed (get_no_reveal)" }
+export const revealCell = (
+  nr: readonly [boolean, boolean] | null | undefined,
+  side: 0 | 1,
+  revealed: boolean,
+  resolved: boolean,
+): Cell =>
+  nr?.[side]
+    ? nr[1 - side]
+      ? {
+          t: "no reveal: tie",
+          c: "loss",
+          title: "neither side revealed: a tie, both no-reveal slashes go to the protocol (get_no_reveal)",
+        }
+      : {
+          t: "no reveal: forfeit",
+          c: "loss",
+          title:
+            "committed a call, never revealed it: forfeits the duel, pays no_reveal_bps of its bond to the opponent",
+        }
     : revealed
       ? { t: "revealed", c: "ok" }
       : resolved
@@ -45,11 +134,12 @@ export const proven = (i: { proof_hash?: string | null } | null | undefined, zer
 export type Fill = {
   follower: string;
   intent_nonce: string;
-  amount_in: string; // yocto wNEAR
-  quote_out: string; // USDC base units, 6 decimals
+  side?: "Long" | "Short"; // the agent's side; absent in rows from solvers that only sold (read as Short)
+  amount_in: string; // yocto wNEAR: sold on a Short, bought on a Long
+  quote_out: string; // USDC base units, 6 decimals: received on a Short, paid on a Long
   oracle_mid: string; // USD price x 1e8, as the oracle reports it
   quoted_at: number; // ms since epoch
-  bps_vs_oracle: number | null; // quote vs oracle mid; positive = the follower got more than mid; null in old rows
+  bps_vs_oracle: number | null; // vs oracle mid, positive = better for the follower on either side; null in old rows
 };
 
 export const usdc = (base: string | null | undefined) => (base ? (Number(base) / 1e6).toFixed(4) : "-");
@@ -81,15 +171,27 @@ export const age = (ms: number, nowMs: number) => {
 /** The newest `n` fills, newest first; the solver appends, so the tail is newest. */
 export const lastFills = (q: Fill[] | null | undefined, n = 10) => (q ?? []).slice(-n).reverse();
 
-// columns: follower · amount in · quoted out · oracle mid · vs mid · age
-export const FILL_HEAD = `${"follower".padEnd(21)}  ${"amount in".padStart(14)}   ${"quoted out".padStart(15)}  ${"mid USD".padStart(7)}  ${"vs mid".padStart(10)}  ${"age".padStart(8)}`;
-export const fillCells = (f: Fill, nowMs: number): Cell[] => [
-  { t: f.follower.slice(0, 21), href: addrHref(f.follower), title: f.follower },
-  " ".repeat(Math.max(0, 21 - f.follower.length)),
-  `  ${near(f.amount_in).padStart(8)} wNEAR → ${usdc(f.quote_out).padStart(10)} USDC  ${price8(f.oracle_mid).padStart(7)}  `,
-  vsCell(f.bps_vs_oracle, 10),
-  `  ${age(f.quoted_at, nowMs).padStart(4)} ago`,
-];
+/** Direction of a fill or quote: a Short sells wNEAR for USDC (→), a Long buys wNEAR with USDC (←).
+ *  No side means a solver from before fills followed the agent's side, which only sold. */
+export const legs = (side: "Long" | "Short" | null | undefined) =>
+  side === "Long"
+    ? { word: "buy", arrow: "←", title: "Long: bought wNEAR, paid USDC" }
+    : { word: "sell", arrow: "→", title: "Short: sold wNEAR, received USDC" };
+
+// columns: follower · side · wNEAR leg · USDC leg · oracle mid · vs mid · age
+export const FILL_HEAD = `${"follower".padEnd(21)}  ${"side"} ${"wNEAR leg".padStart(14)}   ${"USDC leg".padStart(15)}  ${"mid USD".padStart(7)}  ${"vs mid".padStart(10)}  ${"age".padStart(8)}`;
+export const fillCells = (f: Fill, nowMs: number): Cell[] => {
+  const l = legs(f.side);
+  return [
+    { t: f.follower.slice(0, 21), href: addrHref(f.follower), title: f.follower },
+    " ".repeat(Math.max(0, 21 - f.follower.length)),
+    "  ",
+    { t: l.word.padEnd(4), title: l.title },
+    ` ${near(f.amount_in).padStart(8)} wNEAR ${l.arrow} ${usdc(f.quote_out).padStart(10)} USDC  ${price8(f.oracle_mid).padStart(7)}  `,
+    vsCell(f.bps_vs_oracle, 10),
+    `  ${age(f.quoted_at, nowMs).padStart(4)} ago`,
+  ];
+};
 
 /** Per-follower execution summary for the given followers, in their order; followers without fills are left out.
  *  `n` counts every fill; avg/best/worst cover the priced ones and are null when none is priced. */

@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   age,
+  type ChainEvent,
   type CommitConfig,
   commitCells,
   commitWord,
@@ -11,10 +12,16 @@ import {
   fillCells,
   followerQuality,
   lastFills,
+  legs,
+  NO_REVEAL_RULE,
+  type Opened,
+  pairingCells,
+  pairingWord,
   proven,
   quoteOut,
   revealCell,
   sbps,
+  timelineCells,
   usdc,
   vsCell,
 } from "../cells";
@@ -44,17 +51,26 @@ describe("commit-reveal", () => {
   test("on: calls hidden, no-reveal cost in percent", () => {
     const c = { commit_reveal: true, no_reveal_bps: 500, require_consent: true };
     expect(commitWord(c)).toBe("on");
-    expect(text(commitCells(c))).toBe("on   calls hidden until reveal · no reveal costs 5 % of bond");
+    expect(text(commitCells(c))).toBe(
+      "on   calls hidden until reveal · no reveal = forfeit + 5 % of bond to the opponent",
+    );
+    expect(text(commitCells(c)).length).toBeLessThanOrEqual(VW);
+    expect(commitCells(c)[2]).toMatchObject({ title: NO_REVEAL_RULE });
+    expect(NO_REVEAL_RULE).toContain("forfeits the duel");
+    expect(NO_REVEAL_RULE).toContain("both unrevealed is a tie");
   });
   test("explicitly off: posted in the clear", () => {
     expect(text(commitCells({ commit_reveal: false }))).toContain("in the clear");
   });
-  test("reveal marker per side", () => {
-    expect(revealCell(true, false, true)).toMatchObject({ t: "no-reveal slashed", c: "loss" });
-    expect(revealCell(true, true, true)).toMatchObject({ t: "no-reveal slashed" }); // the slash wins
-    expect(revealCell(false, true, false)).toMatchObject({ t: "revealed", c: "ok" });
-    expect(revealCell(undefined, false, false)).toMatchObject({ t: "hidden until reveal" });
-    expect(revealCell(undefined, false, true)).toMatchObject({ t: "no intent" });
+  test("reveal marker per side: one unrevealed side forfeits, both unrevealed is a tie", () => {
+    expect(revealCell([true, false], 0, false, true)).toMatchObject({ t: "no reveal: forfeit", c: "loss" });
+    expect(revealCell([false, true], 0, true, true)).toMatchObject({ t: "revealed", c: "ok" });
+    expect(revealCell([false, true], 1, true, true)).toMatchObject({ t: "no reveal: forfeit" }); // an older intent stays
+    expect(revealCell([true, true], 1, false, true)).toMatchObject({ t: "no reveal: tie", c: "loss" });
+    expect(String((revealCell([true, false], 0, false, true) as { title: string }).title)).toContain("to the opponent");
+    expect(revealCell(null, 0, true, false)).toMatchObject({ t: "revealed", c: "ok" });
+    expect(revealCell(undefined, 1, false, false)).toMatchObject({ t: "hidden until reveal" });
+    expect(revealCell(undefined, 0, false, true)).toMatchObject({ t: "no intent" });
   });
   test("proven: zero or missing proof hash is not verified (deploy 13 and committed-but-hidden intents)", () => {
     expect(proven({ proof_hash: "q83vEjRWeJA=" }, ZERO)).toBe(true);
@@ -64,19 +80,96 @@ describe("commit-reveal", () => {
   });
 });
 
+describe("pairing", () => {
+  const opened = (method: string): Opened => ({ duel_id: "411", method, tx: "Cns1Xk9pQz7Lm", at_ms: NOW });
+  test("stats strip word: consent required, open, or nothing before the field existed", () => {
+    expect(pairingWord({ require_consent: true })).toBe("consent required");
+    expect(pairingWord({ require_consent: false })).toBe("open");
+    expect(pairingWord({ commit_reveal: false })).toBeNull();
+    expect(pairingWord(null)).toBeNull();
+  });
+  test("the open tx's method wins over the config: consented means both agents signed", () => {
+    const c = pairingCells(opened("open_duel_consented"), { require_consent: false });
+    expect(text(c)).toBe("both agents signed this duel   open_duel_consented tx Cns1Xk9pQz…");
+    expect(c[0]).toMatchObject({ c: "ok" });
+    expect(c[2]).toMatchObject({ href: "https://testnet.nearblocks.io/txns/Cns1Xk9pQz7Lm" });
+    expect(text(pairingCells(opened("open_duel"), { require_consent: true }))).toStartWith(
+      "opened by the owner, no agent signatures   open_duel tx",
+    );
+  });
+  test("without the open tx, today's require_consent is shown and labelled as such", () => {
+    const on = text(pairingCells(null, { require_consent: true }));
+    expect(on).toBe("consent required   from get_config now; the open tx is not in the scanned window");
+    expect(on.length).toBeLessThanOrEqual(VW);
+    expect(text(pairingCells(undefined, { require_consent: false }))).toStartWith("open   from get_config now");
+    expect(text(pairingCells(null, { next_duel: "412" } as CommitConfig))).toBe(
+      "this contract predates consented pairing",
+    );
+  });
+});
+
+describe("commit timeline", () => {
+  const A = "PK_A";
+  const T0 = Date.UTC(2026, 10, 6, 12, 1, 5);
+  const e = (event: ChainEvent["event"], method: string, dt: number, pk = A): ChainEvent => ({
+    event,
+    duel_id: "411",
+    agent_pk: pk,
+    method,
+    tx: `${method}-${dt}`,
+    at_ms: T0 + dt * 1000,
+  });
+  test("committed then revealed: both times, UTC, linked to their txs", () => {
+    const c = timelineCells([e("intent", "reveal_intent", 155), e("commit", "commit_intent", 0)], A, false);
+    expect(text(c)).toBe("committed 12:01:05 · revealed 12:03:40");
+    expect(c[0]).toMatchObject({ href: "https://testnet.nearblocks.io/txns/commit_intent-0" });
+    expect(c[2]).toMatchObject({ c: "ok", href: "https://testnet.nearblocks.io/txns/reveal_intent-155" });
+  });
+  test("committed, not yet revealed: hidden; once resolved: never revealed", () => {
+    const evs = [e("commit", "commit_intent", 0), e("commit", "commit_intent", 9, "PK_B")];
+    expect(text(timelineCells(evs, A, false))).toBe("committed 12:01:05 · hidden");
+    expect(timelineCells(evs, A, true)[2]).toMatchObject({ t: "never revealed", c: "loss" });
+  });
+  test("a reveal before the last commit belongs to the earlier commitment", () => {
+    const evs = [e("commit", "commit_intent", 0), e("intent", "reveal_intent", 30), e("commit", "commit_intent", 60)];
+    expect(text(timelineCells(evs, A, false))).toBe("committed 12:02:05 · hidden   2 commits, last shown");
+  });
+  test("no commitment: an intent posted in the clear, or nothing seen", () => {
+    expect(text(timelineCells([e("intent", "post_intent", 2)], A, false))).toBe(
+      "posted 12:01:07   in the clear, no commitment",
+    );
+    expect(text(timelineCells([], A, false))).toBe("no commit seen");
+    expect(text(timelineCells(undefined, A, false))).toBe("no commit seen");
+  });
+});
+
 describe("execution", () => {
   test("units: yocto wNEAR in, 6-dp USDC out, 1e8 oracle mid", () => {
     const t = text(fillCells(fill(), NOW));
-    expect(t).toMatch(/ 0\.250 wNEAR → +0\.6401 USDC /);
+    expect(t).toMatch(/ sell +0\.250 wNEAR → +0\.6401 USDC /); // no side: an older solver, which only sold
     expect(t).toContain("2.5610");
     expect(t).toContain("+3.4 bps");
     expect(t).toContain("42s ago");
     expect(usdc(null)).toBe("-");
   });
+  test("direction follows the side: Short sells wNEAR for USDC, Long buys wNEAR with USDC", () => {
+    const short = text(fillCells(fill({ side: "Short" }), NOW));
+    const long = text(fillCells(fill({ side: "Long", bps_vs_oracle: 2.1 }), NOW));
+    expect(short).toMatch(/ sell +0\.250 wNEAR → +0\.6401 USDC /);
+    expect(long).toMatch(/ buy +0\.250 wNEAR ← +0\.6401 USDC /);
+    expect(long.length).toBe(short.length);
+    expect(fillCells(fill({ side: "Long" }), NOW)[3]).toMatchObject({ title: "Long: bought wNEAR, paid USDC" });
+    // the solver already signs bps so + is better for the follower on both sides: same colour rule
+    expect(vsCell(2.1)).toMatchObject({ c: "win" });
+    expect(legs(undefined)).toEqual(legs("Short"));
+    expect(legs(null).arrow).toBe("→");
+  });
   test("a row and the header fit the value column, with the columns aligned", () => {
     const t = text(fillCells(fill({ follower: "a-very-long-follower-account.testnet" }), NOW));
     expect(t.length).toBeLessThanOrEqual(VW);
     expect(FILL_HEAD.length).toBe(text(fillCells(fill(), NOW)).length);
+    expect(FILL_HEAD.length).toBeLessThanOrEqual(VW);
+    expect(FILL_HEAD.indexOf("side")).toBe(text(fillCells(fill({ side: "Long" }), NOW)).indexOf("buy"));
   });
   test("vs mid is coloured: better a win, worse a loss, equal a tie", () => {
     expect(vsCell(2)).toMatchObject({ t: "+2.0 bps", c: "win" });

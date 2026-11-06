@@ -2,7 +2,16 @@
 // One duel, btop-style: the two sides and their tier, the oracle prices and the scored outcome, the
 // attacks thrown at each side, and the three things a reader can check without trusting this page.
 import { use, useEffect, useState } from "react";
-import { type CommitConfig, commitCells, proven as hasProof, revealCell } from "../../../cells";
+import {
+  type ChainEvent,
+  type CommitConfig,
+  commitCells,
+  proven as hasProof,
+  type Opened,
+  pairingCells,
+  revealCell,
+  timelineCells,
+} from "../../../cells";
 import {
   addrHref,
   agentHref,
@@ -66,6 +75,14 @@ type Duel = {
   outcome?: Outcome | null;
   open_price?: string | null;
 };
+/** GET /api/events: the duel's open tx and commit/intent events from FastNEAR's window of the newest arena txs. */
+type Events = {
+  at: number;
+  window: number;
+  oldest_ms: number | null;
+  opened: Opened | null;
+  events?: ChainEvent[];
+};
 type Rec = {
   at: number;
   rpc: string;
@@ -86,10 +103,15 @@ const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
 export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [r, setR] = useState<Rec | null>(null);
+  const [ev, setEv] = useState<Events | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     const tick = async () => {
+      // the tx index is optional enrichment: a FastNEAR outage leaves the contract view intact
+      getJson<Events>(`/api/events?duel=${encodeURIComponent(id)}`)
+        .then((j) => alive && setEv(j))
+        .catch(() => {});
       try {
         const j = await getJson<Rec>(`/api/duel?id=${encodeURIComponent(id)}`);
         if (alive) {
@@ -200,15 +222,36 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
             {"\n"}
             {rowx("commit-reveal", commitCells(r?.config))}
             {"\n"}
+            {rowx("pairing", pairingCells(ev?.opened, r?.config))}
+            {"\n"}
             {r?.config?.commit_reveal || r?.no_reveal ? (
               <>
                 {rowx("reveal", [
                   "A ",
-                  revealCell(r.no_reveal?.[0], !!d.last_intent_a, d.resolved),
+                  revealCell(r.no_reveal, 0, !!d.last_intent_a, d.resolved),
                   "   B ",
-                  revealCell(r.no_reveal?.[1], !!d.last_intent_b, d.resolved),
+                  revealCell(r.no_reveal, 1, !!d.last_intent_b, d.resolved),
                 ])}
                 {"\n"}
+                {ev
+                  ? (["A", "B"] as const).map((t) => (
+                      <span key={t}>
+                        {rowx(`${t} commit`, timelineCells(ev.events, t === "A" ? d.a : d.b, d.resolved))}
+                        {"\n"}
+                      </span>
+                    ))
+                  : null}
+                {ev?.oldest_ms != null && Number(BigInt(d.open_at) / 1_000_000n) < ev.oldest_ms ? (
+                  <>
+                    {rowx("", [
+                      {
+                        t: `opened before the scanned tx window (from ${new Date(ev.oldest_ms).toISOString().slice(11, 19)} UTC): earlier events not shown`,
+                        c: "dim",
+                      },
+                    ])}
+                    {"\n"}
+                  </>
+                ) : null}
               </>
             ) : null}
           </>
@@ -219,7 +262,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
           </>
         )}
         {legend(
-          `ENCLAVE-VERIFIED = intents signed inside a NEAR AI TEE · size = % of bond risked · proof = sha256 of the model call${r?.config?.commit_reveal ? " · no-reveal slashed = committed a hidden call, never revealed it" : ""}`,
+          `ENCLAVE-VERIFIED = intents signed inside a NEAR AI TEE · size = % of bond risked · proof = sha256 of the model call${r?.config?.commit_reveal ? " · no reveal = forfeit + no_reveal_bps of bond to the opponent (both: tie, to the protocol)" : ""}`,
         )}
         {"\n"}
         {bottom()}

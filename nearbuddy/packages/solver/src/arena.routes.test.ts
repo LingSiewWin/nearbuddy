@@ -440,16 +440,16 @@ test("GET /execution: a batched intent records every follower's fill against the
       ["f2.testnet", mandate("250000000000000000000000")], // 0.25 NEAR
     ],
     quote: async (req) => {
-      asked.push(req.amount);
+      asked.push(`${req.swapType} ${req.amount}`);
       return fixture; // 1.0 wNEAR -> 3.744739 USDC
     },
   });
-  const s = signed(KeyPair.fromRandom("ed25519"), { nonce: "7" });
+  const s = signed(KeyPair.fromRandom("ed25519"), { nonce: "7", side: "Short" });
   await withRpc({ get_duel: () => ({ symbol: "wrap.near", open_price: "380000000", outcome: null }) }, async (seen) => {
     await arena.route("POST", "/intent", JSON.stringify({ signed: s }), KEY);
     assert.deepEqual(seen, ["get_duel"]);
   });
-  assert.deepEqual(asked, ["1000000000000000000000000"]); // one RFQ for the sum
+  assert.deepEqual(asked, ["EXACT_INPUT 1000000000000000000000000"]); // one RFQ for the sum, a Short sells NEAR
   const r = (await arena.route("GET", "/execution", ""))!;
   assert.equal(r.code, 200);
   // 3.744739 USDC per NEAR vs a 3.80 mid: -145.42 bps at the batch price; f2's floor costs it 0.01 bps
@@ -464,6 +464,7 @@ test("GET /execution: a batched intent records every follower's fill against the
     agent_pk: s.intent.agent_pk,
     duel_id: "3",
     oracle_source: "outlayer_open",
+    side: "Short",
   });
   assert.deepEqual((r.body as { quality: unknown[] }).quality, [
     row("f1.testnet", "750000000000000000000000", "2808555", -145.42),
@@ -503,4 +504,40 @@ test("GET /execution: no oracle mid (no Outlayer price, spot down) records nothi
   ))!;
   assert.equal((r.body as { quotes: { quote_out?: string }[] }).quotes[0]?.quote_out, fixture.quote.amountOut);
   assert.deepEqual((await arena.route("GET", "/execution", ""))!.body, { quality: [] });
+});
+
+test("B17: the day cap's ledger survives a solver restart (history file)", async () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8"),
+  ) as import("./oneclick.ts").Quote;
+  const deps = {
+    listFollowers: async (): Promise<[string, import("./arena.ts").Mandate][]> => [
+      [
+        "f1.testnet",
+        {
+          allowance: "1000",
+          spent: "0",
+          per_tx_cap: "600",
+          allowed_tokens: [],
+          expires_at: "1900000000000000000",
+          revoked: false,
+        },
+      ],
+    ],
+    quote: async () => fixture,
+    oracleMid: async () => null,
+  };
+  const old = process.env.CAP_PER_DAY_YOCTO;
+  process.env.CAP_PER_DAY_YOCTO = "1000";
+  try {
+    const first = new Arena(fakeSolver().account, "s.testnet", deps);
+    await first.route("POST", "/intent", JSON.stringify({ signed: signed(KeyPair.fromRandom("ed25519")) }), KEY);
+    const restarted = new Arena(fakeSolver().account, "s.testnet", deps);
+    await withRpc({ get_config: () => ({ next_duel: "0" }) }, () => restarted.bootstrap());
+    const [q] = await restarted.quotesFor("pk");
+    assert.equal(q?.error, "over CAP_PER_DAY_YOCTO: 600 quoted in 24 h + 600 > 1000");
+  } finally {
+    if (old === undefined) delete process.env.CAP_PER_DAY_YOCTO;
+    else process.env.CAP_PER_DAY_YOCTO = old;
+  }
 });

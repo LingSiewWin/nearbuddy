@@ -11,14 +11,14 @@ import type { Quote } from "./oneclick.ts";
 export interface BatchFill {
   follower: string;
   amount: string;
-  /** This follower's share of the quote output, base units. Absent when the batch failed. */
+  /** This follower's share of the quote's variable (USDC) leg, base units. Absent when the batch failed. */
   quote_out?: string;
   error?: string;
 }
 export interface BatchQuote {
   amount_in_total: string;
   quote_out_total: string;
-  /** Output per input in display units (`amountOutFormatted / amountInFormatted`); the same for every follower. */
+  /** USDC per NEAR (`quotePrice`); the same for every follower. */
   price: number;
   timestamp: string;
   deadline: string;
@@ -38,8 +38,18 @@ export function proRata(amounts: bigint[], out: bigint): bigint[] {
   return parts;
 }
 
+/** The leg the market sets: `amountOut` for EXACT_INPUT (a Short sells a fixed NEAR amount for USDC), `amountIn`
+ *  for EXACT_OUTPUT (a Long buys a fixed NEAR amount with USDC). It is the USDC leg in both, and the leg that is
+ *  split; `quote_out` carries it (USDC received on a Short, USDC paid on a Long). */
+export function variableLeg(q: Quote): "amountIn" | "amountOut" {
+  return q.quoteRequest.swapType === "EXACT_OUTPUT" ? "amountIn" : "amountOut";
+}
+
+/** Variable leg per fixed leg in display units: USDC per NEAR for both sides. */
 export function quotePrice(q: Quote): number {
-  return Number(q.quote.amountOutFormatted) / Number(q.quote.amountInFormatted);
+  const out = Number(q.quote.amountOutFormatted),
+    inn = Number(q.quote.amountInFormatted);
+  return variableLeg(q) === "amountOut" ? out / inn : inn / out;
 }
 
 /** One quote for the sum of `followers`' amounts, split pro rata. A failed or empty batch fills nobody: every
@@ -65,7 +75,7 @@ export async function batchQuote(
   } catch (e) {
     return failed(String(e).slice(0, 200));
   }
-  const out = BigInt(q.quote.amountOut);
+  const out = BigInt(q.quote[variableLeg(q)]);
   const parts = proRata(
     followers.map((f) => f.amount),
     out,
@@ -87,9 +97,10 @@ export async function batchQuote(
 
 // ---- execution quality ------------------------------------------------------------------------------------------
 // Every fill the solver prepares is compared against the oracle mid (Outlayer, the price the duel is scored on),
-// so the page can show slippage per fill. Units (the web reads these): amount_in yocto wNEAR, quote_out USDC base
-// units (6 dp), oracle_mid USD x 1e8 (the contract's `open_price` scale), all decimal strings; quoted_at ms epoch;
-// bps_vs_oracle a number, positive = the follower receives more USDC than the oracle mid would give.
+// so the page can show slippage per fill. Units (the web reads these): amount_in yocto wNEAR (the fill's NEAR leg:
+// sold on a Short, bought on a Long), quote_out USDC base units (6 dp; received on a Short, paid on a Long),
+// oracle_mid USD x 1e8 (the contract's `open_price` scale), all decimal strings; quoted_at ms epoch; bps_vs_oracle
+// a number, positive = better than the mid for the follower (more USDC on a Short, less USDC on a Long).
 
 export interface OracleMid {
   /** NEAR/USD x 1e8, decimal string. */
@@ -108,10 +119,11 @@ export interface ExecutionRecord {
   agent_pk: string;
   duel_id: string;
   oracle_source: string;
+  side: "Long" | "Short";
 }
 export const MAX_EXECUTION = 200;
 
-/** The quotes are always wNEAR -> USDC, so only a NEAR/USD oracle is a valid mid. */
+/** Every fill trades wNEAR against USDC (either direction), so only a NEAR/USD oracle is a valid mid. */
 export function duelMid(
   duel: { symbol?: string; open_price?: string | null; outcome?: { close_price: string } | null } | null,
 ): OracleMid | null {
@@ -148,15 +160,16 @@ export function bpsVsOracle(amount_in: bigint, quote_out: bigint, mid8: bigint):
 /** One record per quoted follower. Errored followers are skipped (nothing was prepared for them), and so is every
  *  follower when there is no mid: a missing record beats a null `bps_vs_oracle` the page must special-case. */
 export function executionRecords(
-  intent: { agent_pk: string; duel_id: string; nonce: string },
+  intent: { agent_pk: string; duel_id: string; nonce: string; side: "Long" | "Short" },
   quotes: { follower: string; amount: string; quote?: Quote; quote_out?: string }[],
   mid: OracleMid | null,
 ): ExecutionRecord[] {
   if (!mid) return [];
   return quotes.flatMap((q) => {
     if (!q.quote || q.quote_out === undefined) return [];
-    const bps = bpsVsOracle(BigInt(q.amount), BigInt(q.quote_out), BigInt(mid.mid));
-    if (bps === null) return [];
+    const raw = bpsVsOracle(BigInt(q.amount), BigInt(q.quote_out), BigInt(mid.mid));
+    if (raw === null) return [];
+    const bps = intent.side === "Long" ? 0 - raw : raw; // a buyer is better off paying less; `0 -` avoids -0
     return [
       {
         follower: q.follower,
@@ -169,7 +182,59 @@ export function executionRecords(
         agent_pk: intent.agent_pk,
         duel_id: intent.duel_id,
         oracle_source: mid.source,
+        side: intent.side,
       },
     ];
   });
+}
+
+// ---- solver caps (mainnet blocker B17) --------------------------------------------------------------------------
+// The solver fronts every fill, so it bounds its own exposure whatever the mandates allow: per fill, per tick (one
+// intent's followers) and per rolling 24 h, all in yocto of the fill's NEAR leg. Checked before any quote.
+
+export interface Caps {
+  fill: bigint | null;
+  tick: bigint | null;
+  day: bigint | null;
+}
+export const DAY_MS = 86_400_000;
+
+/** CAP_PER_FILL_YOCTO, CAP_PER_TICK_YOCTO, CAP_PER_DAY_YOCTO. Unset or empty = unlimited. Anything but a decimal
+ *  integer throws: a typo must not lift a cap. */
+export function capsFromEnv(env: Record<string, string | undefined> = process.env): Caps {
+  const read = (k: string) => {
+    const v = env[k]?.trim();
+    if (!v) return null;
+    if (!/^\d+$/.test(v)) throw new Error(`${k} must be a yocto integer, got ${v.slice(0, 40)}`);
+    return BigInt(v);
+  };
+  return { fill: read("CAP_PER_FILL_YOCTO"), tick: read("CAP_PER_TICK_YOCTO"), day: read("CAP_PER_DAY_YOCTO") };
+}
+
+/** Admit followers in list order. One over the per-fill cap, or whose amount would take this tick or the day past
+ *  its cap, is rejected with the cap's name; a later, smaller follower can still fit. */
+export function admit<T extends { follower: string; amount: bigint }>(
+  followers: T[],
+  caps: Caps,
+  usedToday: bigint,
+): { admitted: T[]; rejected: { follower: string; amount: string; error: string }[] } {
+  const admitted: T[] = [];
+  const rejected: { follower: string; amount: string; error: string }[] = [];
+  let tick = 0n;
+  for (const f of followers) {
+    const over =
+      caps.fill !== null && f.amount > caps.fill
+        ? `over CAP_PER_FILL_YOCTO: ${f.amount} > ${caps.fill}`
+        : caps.tick !== null && tick + f.amount > caps.tick
+          ? `over CAP_PER_TICK_YOCTO: ${tick} quoted this tick + ${f.amount} > ${caps.tick}`
+          : caps.day !== null && usedToday + tick + f.amount > caps.day
+            ? `over CAP_PER_DAY_YOCTO: ${usedToday + tick} quoted in 24 h + ${f.amount} > ${caps.day}`
+            : null;
+    if (over) rejected.push({ follower: f.follower, amount: f.amount.toString(), error: over });
+    else {
+      admitted.push(f);
+      tick += f.amount;
+    }
+  }
+  return { admitted, rejected };
 }

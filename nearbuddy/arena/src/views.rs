@@ -1,10 +1,10 @@
 //! Read-only views and the signing-helper views off-chain code uses for parity checks.
 use near_sdk::json_types::{Base64VecU8, U64, U128};
-use near_sdk::{AccountId, near};
+use near_sdk::{AccountId, env, near};
 
 use crate::{
-    Agent, AgentView, Config, Contract, ContractExt, Duel, Intent, Mandate, hex, intent_message,
-    register_bytes, tee_text,
+    Agent, AgentView, Config, Contract, ContractExt, Duel, Intent, Mandate, commit_bytes,
+    consent_bytes, hex, intent_message, register_bytes, tee_text,
 };
 
 #[near]
@@ -55,6 +55,9 @@ impl Contract {
             next_duel: U64(self.next_duel),
             open_duels: self.open_duels,
             owner_fees: U128(self.owner_fees),
+            commit_reveal: self.commit_reveal,
+            no_reveal_bps: self.no_reveal_bps,
+            require_consent: self.require_consent,
         }
     }
 
@@ -102,6 +105,44 @@ impl Contract {
     /// View: anyone, no deposit, no panics.
     pub fn register_message(&self, owner: AccountId) -> Base64VecU8 {
         Base64VecU8(register_bytes(&owner))
+    }
+
+    /// Whether side a / side b of a scored duel left a commitment unrevealed and was slashed
+    /// `no_reveal_bps`. `(false, false)` for unknown, open or clean duels.
+    /// View: anyone, no deposit, no panics.
+    pub fn get_no_reveal(&self, duel_id: U64) -> (bool, bool) {
+        self.no_reveal
+            .get(&duel_id.0)
+            .copied()
+            .unwrap_or((false, false))
+    }
+
+    /// The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig)`.
+    /// View: anyone, no deposit, no panics.
+    pub fn commit_message(&self, duel_id: U64, commitment: Base64VecU8) -> Base64VecU8 {
+        Base64VecU8(commit_bytes(
+            &env::current_account_id(),
+            duel_id.0,
+            &commitment.0,
+        ))
+    }
+
+    /// The exact bytes each agent key signs for `open_duel_consented(a, b, symbol, close_at, ..)`.
+    /// View: anyone, no deposit, no panics.
+    pub fn consent_message(
+        &self,
+        a: Base64VecU8,
+        b: Base64VecU8,
+        symbol: String,
+        close_at: U64,
+    ) -> Base64VecU8 {
+        Base64VecU8(consent_bytes(
+            &env::current_account_id(),
+            &a.0,
+            &b.0,
+            &symbol,
+            close_at.0,
+        ))
     }
 
     /// Hex of the exact bytes an agent signs for `intent`, for off-chain parity checks. View:

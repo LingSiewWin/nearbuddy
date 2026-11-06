@@ -4,14 +4,14 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { Quote } from "./oneclick.ts";
+import { type Quote, type QuoteRequest, USDC_NEAR, WNEAR } from "./oneclick.ts";
 
 // Keep the unit tests away from the solver's real state files.
 const scratch = mkdtempSync(join(tmpdir(), "arena-test-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
 process.env.ARENA_HISTORY = join(scratch, "history.json");
 process.env.ARENA_SECRET ??= "route-test-secret"; // shared module cache: arena.routes.test.ts reads it back from the module
-const { Arena, mandateOpen, pairIdle, quoteAmount } = await import("./arena.ts");
+const { Arena, fillRecipient, mandateOpen, pairIdle, quoteAmount } = await import("./arena.ts");
 type Mandate = import("./arena.ts").Mandate;
 type AgentView = import("./arena.ts").AgentView;
 
@@ -85,6 +85,186 @@ test("batched quotesFor: one quote for the open mandates' sum, split pro rata at
   );
   assert.equal(out[0]?.price, out[1]?.price);
   assert.equal(out[0]?.quote, out[1]?.quote);
+});
+
+/** Run `f` with env vars set (undefined = unset), restoring them after: arena.ts reads them per call. */
+async function withEnv<T>(vars: Record<string, string | undefined>, f: () => Promise<T>): Promise<T> {
+  const old = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  const set = (v: Record<string, string | undefined>) => {
+    for (const [k, x] of Object.entries(v))
+      if (x === undefined) delete process.env[k];
+      else process.env[k] = x;
+  };
+  set(vars);
+  try {
+    return await f();
+  } finally {
+    set(old);
+  }
+}
+const recording = (solverId: string, reqs: QuoteRequest[]) =>
+  new Arena({} as never, solverId, {
+    listFollowers: async () => [
+      ["f1.near", m()],
+      ["f3.near", m({ spent: "950" })],
+    ],
+    quote: async (req) => {
+      reqs.push(req);
+      return fixture;
+    },
+    now: () => NOW,
+  });
+
+test("B14: a Long buys NEAR with USDC (EXACT_OUTPUT of the mandate amount); a Short sells NEAR", async () => {
+  const reqs: QuoteRequest[] = [];
+  await recording("nearbuddy-solver.testnet", reqs).quotesFor("pk", "Long");
+  await recording("nearbuddy-solver.testnet", reqs).quotesFor("pk", "Short");
+  assert.deepEqual(
+    reqs.map((r) => [r.swapType, r.originAsset, r.destinationAsset, r.amount]),
+    [
+      ["EXACT_OUTPUT", USDC_NEAR, WNEAR, "350"],
+      ["EXACT_INPUT", WNEAR, USDC_NEAR, "350"],
+    ],
+  );
+});
+
+test("B14: testnet defaults to paying the solver (one batched quote); mainnet pays each follower's intents balance", async () => {
+  const testnet: QuoteRequest[] = [];
+  const t = await withEnv({ FILL_RECIPIENT: undefined }, () =>
+    recording("nearbuddy-solver.testnet", testnet).quotesFor("pk", "Short"),
+  );
+  assert.deepEqual(
+    testnet.map((r) => [r.recipient, r.recipientType, r.refundTo]),
+    [["nearbuddy-solver.near", "INTENTS", "nearbuddy-solver.near"]],
+  );
+  assert.deepEqual(
+    t.map((o) => o.recipient),
+    ["nearbuddy-solver.near", "nearbuddy-solver.near"],
+  );
+
+  const mainnet: QuoteRequest[] = [];
+  const o = await withEnv({ FILL_RECIPIENT: undefined }, () =>
+    recording("nearbuddy-solver.near", mainnet).quotesFor("pk", "Short"),
+  );
+  // a quote has one recipient, so paying followers means one quote each, even with BATCH_RFQ on
+  assert.deepEqual(
+    mainnet.map((r) => [r.recipient, r.recipientType, r.refundTo, r.amount]),
+    [
+      ["f1.near", "INTENTS", "nearbuddy-solver.near", "300"],
+      ["f3.near", "INTENTS", "nearbuddy-solver.near", "50"],
+    ],
+  );
+  assert.deepEqual(
+    o.map((x) => [x.follower, x.recipient, x.quote_out]),
+    [
+      ["f1.near", "f1.near", "3744739"],
+      ["f3.near", "f3.near", "3744739"],
+    ],
+  );
+});
+
+test("B14: FILL_RECIPIENT overrides the network default and refuses anything else", async () => {
+  const reqs: QuoteRequest[] = [];
+  await withEnv({ FILL_RECIPIENT: "follower" }, () =>
+    recording("nearbuddy-solver.testnet", reqs).quotesFor("pk", "Long"),
+  );
+  await withEnv({ FILL_RECIPIENT: "solver" }, () => recording("nearbuddy-solver.near", reqs).quotesFor("pk", "Long"));
+  assert.deepEqual(
+    reqs.map((r) => r.recipient),
+    ["f1.near", "f3.near", "nearbuddy-solver.near"],
+  );
+  assert.equal(fillRecipient("x.near"), "follower");
+  await assert.rejects(
+    withEnv({ FILL_RECIPIENT: "agent" }, () => recording("s.testnet", []).quotesFor("pk")),
+    /FILL_RECIPIENT must be solver or follower/,
+  );
+});
+
+const NO_CAPS = { CAP_PER_FILL_YOCTO: undefined, CAP_PER_TICK_YOCTO: undefined, CAP_PER_DAY_YOCTO: undefined };
+/** f1 300 and f3 50 open (followerArena's mandates) with a settable clock and a quote that can fail. */
+function cappedArena(clock: { ns: bigint }, asked: string[], fail = () => false) {
+  const expires_at = (NOW + 10n ** 15n).toString(); // open for 11 days of fake clock
+  return new Arena({} as never, "nearbuddy-solver.testnet", {
+    listFollowers: async () => [
+      ["f1.testnet", m({ expires_at })],
+      ["f3.testnet", m({ spent: "950", expires_at })],
+    ],
+    quote: async (req) => {
+      asked.push(req.amount);
+      if (fail()) throw new Error("1click quote 503");
+      return fixture;
+    },
+    now: () => clock.ns,
+  });
+}
+
+test("B17: caps refuse followers before any quote and record why, like any follower error", async () => {
+  const asked: string[] = [];
+  const out = await withEnv({ ...NO_CAPS, CAP_PER_FILL_YOCTO: "100" }, () =>
+    cappedArena({ ns: NOW }, asked).quotesFor("pk"),
+  );
+  assert.deepEqual(asked, ["50"]); // f1 (300) never reaches 1Click
+  assert.deepEqual(
+    out.map((o) => [o.follower, o.error ?? o.quote_out]),
+    [
+      ["f1.testnet", "over CAP_PER_FILL_YOCTO: 300 > 100"],
+      ["f3.testnet", "3744739"],
+    ],
+  );
+  const tick = await withEnv({ ...NO_CAPS, CAP_PER_TICK_YOCTO: "320" }, () =>
+    cappedArena({ ns: NOW }, []).quotesFor("pk"),
+  );
+  assert.deepEqual(
+    tick.map((o) => o.error?.split(":")[0] ?? "ok"),
+    ["ok", "over CAP_PER_TICK_YOCTO"],
+  );
+  const bad = await withEnv({ ...NO_CAPS, CAP_PER_DAY_YOCTO: "lots" }, () =>
+    cappedArena({ ns: NOW }, asked).quotesFor("pk"),
+  );
+  assert.ok(
+    bad.every((o) => /CAP_PER_DAY_YOCTO must be a yocto integer/.test(o.error ?? "")),
+    "fail closed",
+  );
+  assert.equal(asked.length, 1);
+});
+
+test("B17: the day cap spans ticks over a rolling 24 h, and a failed quote gives its amount back", async () => {
+  const clock = { ns: NOW };
+  const asked: string[] = [];
+  let failing = true;
+  const arena = cappedArena(clock, asked, () => failing);
+  await withEnv({ ...NO_CAPS, CAP_PER_DAY_YOCTO: "400" }, async () => {
+    const failed = await arena.quotesFor("pk"); // 350 admitted, the quote fails: nothing counts
+    assert.ok(failed.every((o) => o.error === "Error: 1click quote 503"));
+    failing = false;
+    assert.ok((await arena.quotesFor("pk")).every((o) => o.quote_out)); // 350 of 400 used
+    clock.ns += 3_600_000_000_000n; // +1 h
+    const full = await arena.quotesFor("pk"); // f1 300 over; f3 50 fits exactly (400)
+    assert.deepEqual(
+      full.map((o) => o.error ?? "ok"),
+      ["over CAP_PER_DAY_YOCTO: 350 quoted in 24 h + 300 > 400", "ok"],
+    );
+    const none = await arena.quotesFor("pk");
+    assert.ok(none.every((o) => o.error?.startsWith("over CAP_PER_DAY_YOCTO: 400 quoted in 24 h")));
+    clock.ns += 23n * 3_600_000_000_000n; // the first 350 is 24 h old now and drops out; the 50 (23 h) stays
+    assert.deepEqual(
+      (await arena.quotesFor("pk")).map((o) => o.error ?? "ok"),
+      ["ok", "ok"], // 50 + 300 + 50 = 400
+    );
+    assert.ok((await arena.quotesFor("pk")).every((o) => o.error?.startsWith("over CAP_PER_DAY_YOCTO: 400")));
+  });
+  assert.deepEqual(asked, ["350", "350", "50", "350"]);
+});
+
+test("B17: two intents landing together cannot both fit under the day cap", async () => {
+  const asked: string[] = [];
+  const arena = cappedArena({ ns: NOW }, asked);
+  const [a, b] = await withEnv({ ...NO_CAPS, CAP_PER_DAY_YOCTO: "350" }, () =>
+    Promise.all([arena.quotesFor("pk"), arena.quotesFor("pk")]),
+  );
+  assert.deepEqual(asked, ["350"]);
+  assert.ok(a!.every((o) => o.quote_out));
+  assert.ok(b!.every((o) => o.error?.startsWith("over CAP_PER_DAY_YOCTO")));
 });
 
 test("route: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {

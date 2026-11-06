@@ -266,6 +266,13 @@ tick) and opens one `DUEL_SECONDS` duel per pair through `open_duel`. `GET /pair
 50 duels it opened. Run either the two-sided runner or the pairing loop against one deployment, not both: the loop
 also pairs the demo agents A/B between rounds, and an idle verified agent with no runner behind it scores 0 bps.
 
+Follower fills (dry 1Click quotes at each intent) follow the agent's side: a Short sells the mandate amount of wNEAR
+for USDC, a Long buys that much wNEAR with USDC. `FILL_RECIPIENT=follower` sends the output to each follower's own
+`intents.near` balance (one quote per follower); `solver` keeps it with the solver (one batched quote, `BATCH_RFQ=0`
+turns batching off). The default is `solver` for a `.testnet` solver id and `follower` otherwise. The solver caps its
+own exposure before quoting with `CAP_PER_FILL_YOCTO`, `CAP_PER_TICK_YOCTO` and `CAP_PER_DAY_YOCTO` (rolling 24 h,
+kept across restarts); unset means unlimited, and a follower over a cap is listed with the cap's name as its error.
+
 ## The problem
 
 Every "agent wallet" product today (Coinbase CDP agent wallets, FluxA, Agentcard, Nevermined credits) is a

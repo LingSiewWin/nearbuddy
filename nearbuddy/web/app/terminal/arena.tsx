@@ -11,6 +11,8 @@ import {
   type FollowerQuote,
   fillCells,
   lastFills,
+  legs,
+  pairingWord,
   proven,
   quoteOut,
 } from "../cells";
@@ -215,6 +217,21 @@ export default function Arena() {
             >
               {commitWord(s.config)}
             </span>
+            {pairingWord(s.config) ? (
+              <>
+                <span className="dim"> · pairing: </span>
+                <span
+                  className={s.config.require_consent ? "ok" : "dim"}
+                  title={
+                    s.config.require_consent
+                      ? "both agents sign every pairing (open_duel_consented)"
+                      : "the owner may pair agents without their signatures"
+                  }
+                >
+                  {pairingWord(s.config)}
+                </span>
+              </>
+            ) : null}
             <span className="dim">
               {" "}
               · next close {live ? <span className="open">in {countdown(live.close_at, now)}</span> : "none open"}
@@ -441,7 +458,7 @@ export default function Arena() {
                   "intent",
                   `${i.side.padEnd(5)} ${short(i.agent_pk, 6)}  tx `,
                   i.tx,
-                  `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${quoteOut(q)} USDC`).join("; ") || "no followers"}`,
+                  `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR${legs(i.side).arrow}${quoteOut(q)} USDC`).join("; ") || "no followers"}`,
                 )}
                 {"\n"}
               </span>
@@ -503,7 +520,7 @@ export default function Arena() {
           </>
         )}
         {legend(
-          "every follower in a tick gets one price (batched RFQ) · vs mid = quote against the oracle mid, + better for the follower, - worse · nonce = the intent filled",
+          "every follower in a tick gets one price (batched RFQ) · sell = Short, wNEAR sold for USDC · buy = Long, wNEAR bought with USDC · vs mid = quote against the oracle mid, + better for the follower on either side, - worse · nonce = the intent filled",
         )}
         {"\n"}
         {bottom()}
