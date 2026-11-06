@@ -1,4 +1,5 @@
-"""Sign arena intents and resolutions exactly as the contract and packages/protocol/src/intent.ts do.
+"""Sign arena intents exactly as the contract and packages/protocol/src/intent.ts do, and re-encode the
+NEAR AI Cloud signature record into the `TeeProof` the contract verifies.
 
 Bytes = DOMAIN || borsh(struct). Borsh here is hand-rolled (u32-length-prefixed byte vectors,
 little-endian ints, enum as u8) so the agent needs no NEAR SDK: an agent is an ed25519 key.
@@ -11,15 +12,16 @@ import hashlib
 import json
 import struct
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 import requests
-from nacl.signing import SigningKey
+from nacl.exceptions import BadSignatureError
+from nacl.signing import SigningKey, VerifyKey
 
 INTENT_DOMAIN = b"nearbuddy-intent-v1"
-RESOLVE_DOMAIN = b"nearbuddy-resolve-v1"
 ZERO_PROOF = bytes(32)
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+TEE_KIND = {"gateway": 1, "provider_tee": 2}
 
 
 def b58decode(s: str) -> bytes:
@@ -61,28 +63,53 @@ def intent_message(i: dict[str, Any]) -> bytes:
     return INTENT_DOMAIN + body
 
 
-def resolution_message(r: dict[str, Any]) -> bytes:
-    return RESOLVE_DOMAIN + struct.pack("<QQQ", int(r["duel_id"]), int(r["open_price"]), int(r["close_price"]))
-
-
 def sign_intent(sk: SigningKey, intent: dict[str, Any]) -> dict[str, Any]:
     sig = sk.sign(intent_message(intent)).signature
     return {"intent": intent, "signature": base64.b64encode(sig).decode()}
 
 
-def sign_resolution(sk: SigningKey, resolution: dict[str, Any]) -> str:
-    return base64.b64encode(sk.sign(resolution_message(resolution)).signature).decode()
-
-
-def proof_hash(record: dict[str, Any] | None) -> str:
-    """sha256 over the NEAR AI Cloud signature record (text, signature, signing_address); zeros when stubbed."""
-    if not record:
+def proof_hash(request_hash: Optional[bytes], response_hash: Optional[bytes] = None) -> str:
+    """`Intent.proof_hash`: sha256(request_hash || response_hash) of the enclave-signed completion;
+    32 zero bytes when the decision had no TEE (stub model)."""
+    if not request_hash or not response_hash:
         return base64.b64encode(ZERO_PROOF).decode()
-    h = hashlib.sha256()
-    for k in ("text", "signature", "signing_address"):
-        v = str(record.get(k, "")).encode()
-        h.update(struct.pack("<I", len(v)) + v)  # length-framed so field boundaries are unambiguous
-    return base64.b64encode(h.digest()).decode()
+    return base64.b64encode(hashlib.sha256(request_hash + response_hash).digest()).decode()
+
+
+def tee_text(kind: int, model_id: str, request_hash: bytes, response_hash: bytes) -> bytes:
+    """The exact bytes the enclave signs (`text` in the signature record)."""
+    body = f"{request_hash.hex()}:{response_hash.hex()}"
+    return (body if kind == 1 else f"{model_id}:{body}").encode()
+
+
+class TeeProofError(RuntimeError):
+    """The signature record does not verify against the bytes we sent and received."""
+
+
+def tee_proof(record: dict[str, Any], model_id: str, request_hash: bytes, response_hash: bytes) -> dict[str, Any]:
+    """Re-encode a `GET /v1/signature/{chat_id}?signing_algo=ed25519` record as the contract's `TeeProof`,
+    after checking locally that the enclave really signed our request and response hashes."""
+    kind = TEE_KIND.get(record.get("signature_kind", "provider_tee"))
+    if kind is None:
+        raise TeeProofError(f"unknown signature_kind {record.get('signature_kind')!r}")
+    if record.get("signing_algo", "ed25519") != "ed25519":
+        raise TeeProofError("need signing_algo=ed25519")
+    text = tee_text(kind, model_id, request_hash, response_hash)
+    if record.get("text") != text.decode():
+        raise TeeProofError(f"record text {record.get('text')!r} does not match our bytes {text.decode()!r}")
+    signer = bytes.fromhex(record["signing_address"].removeprefix("0x"))
+    signature = bytes.fromhex(record["signature"].removeprefix("0x"))
+    try:
+        VerifyKey(signer).verify(text, signature)
+    except BadSignatureError as exc:
+        raise TeeProofError("enclave signature does not verify") from exc
+    return {
+        "kind": kind,
+        "request_hash": base64.b64encode(request_hash).decode(),
+        "response_hash": base64.b64encode(response_hash).decode(),
+        "signer": base64.b64encode(signer).decode(),
+        "signature": base64.b64encode(signature).decode(),
+    }
 
 
 @dataclass
@@ -91,7 +118,7 @@ class Solver:
     secret: str = ""
 
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        r = requests.post(f"{self.url}{path}", data=json.dumps(body), headers={"content-type": "application/json", "x-arena-key": self.secret}, timeout=180)
+        r = requests.post(f"{self.url}{path}", data=json.dumps(body), headers={"content-type": "application/json", "x-arena-key": self.secret}, timeout=300)
         if r.status_code != 200:
             raise RuntimeError(f"solver {path} {r.status_code}: {r.text[:300]}")
         return r.json()

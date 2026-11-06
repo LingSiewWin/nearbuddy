@@ -1,4 +1,5 @@
-"""Spot prices normalised to u64 with 8 decimals (what the arena contract scores on).
+"""Spot prices normalised to u64 with 8 decimals, for the market brief the models read. The contract itself
+scores on the Outlayer TEE oracle price (price-oracle.testnet), not on anything fetched here.
 
 Pyth Hermes first when a key is configured (the public endpoint answered 401 on 2026-11-05 without one);
 Coinbase spot otherwise, keyless. ponytail: single source per call; add a median over sources before
@@ -13,6 +14,7 @@ HERMES = "https://hermes.pyth.network/v2/updates/price/latest"
 FEEDS = {
     "BTC/USD": "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
     "ETH/USD": "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+    "NEAR/USD": "c415de8d2eba7db216527dff4b60e8f3a5311c740dadb233e13e12547e226750",
 }
 
 
