@@ -76,6 +76,16 @@ export function assertNetworkConfig(id: NetworkId, env: Record<string, string | 
     );
 }
 
+/** Persisted state per network: testnet keeps `path` as is (nothing moves), any other network gets `-<network>`
+ *  before the extension (`.solver-ledger.json` -> `.solver-ledger-mainnet.json`, `attestations` -> `attestations-mainnet`). */
+export function networkFile(path: string, id: NetworkId = NETWORK_ID): string {
+  if (id === "testnet") return path;
+  const base = path.lastIndexOf("/") + 1;
+  const dot = path.lastIndexOf(".");
+  const cut = dot > base ? dot : path.length; // a leading dot (".env") is part of the name, not an extension
+  return `${path.slice(0, cut)}-${id}${path.slice(cut)}`;
+}
+
 export const NETWORK_ID = networkId();
 export const NET = NETWORKS[NETWORK_ID];
 assertNetworkConfig(NETWORK_ID);

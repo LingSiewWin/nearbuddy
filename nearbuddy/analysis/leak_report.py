@@ -26,13 +26,17 @@ import argparse
 import json
 import math
 import os
+import sys
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 from statistics import mean, median, stdev
 
 ROOT = Path(__file__).resolve().parents[1]
-TX_API = os.environ.get("COPIER_TX_API", "https://tx.test.fastnear.com/v0")
+sys.path.insert(0, str(ROOT / "agents"))
+from config import DATA, NETWORK, network_file  # noqa: E402
+
+TX_API = os.environ.get("COPIER_TX_API", f"https://tx.{'main' if NETWORK == 'mainnet' else 'test'}.fastnear.com/v0")
 HORIZONS = ("+15s", "+60s", "+90s", "close")
 PUBLIC, COMMIT_REVEAL = "public post_intent", "commit-reveal"
 
@@ -167,9 +171,14 @@ def render(stats: list[dict]) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     data = ROOT / "analysis" / "data"
-    ap.add_argument("--copier", type=Path, nargs="+", default=[data / "copier.jsonl", data / "copier-v2.jsonl"])
-    ap.add_argument("--decisions", type=Path, default=ROOT / "agents" / "data" / "decisions.jsonl")
-    ap.add_argument("--tx-times", type=Path, default=data / "tx_times.json")
+    ap.add_argument(
+        "--copier",
+        type=Path,
+        nargs="+",
+        default=[network_file(data / "copier.jsonl"), network_file(data / "copier-v2.jsonl")],
+    )
+    ap.add_argument("--decisions", type=Path, default=DATA)
+    ap.add_argument("--tx-times", type=Path, default=network_file(data / "tx_times.json"))
     ap.add_argument("--out", type=Path, default=ROOT / "docs" / "research" / "leak-before-after.md")
     ap.add_argument("--fetch", action="store_true", help="fill --tx-times from FastNEAR for rows without quote_at")
     a = ap.parse_args()

@@ -72,5 +72,14 @@ def assert_network_config(network: str, env: dict[str, str]) -> None:
 
 assert_network_config(NETWORK, ENV)
 
-DATA = HERE / "data" / "decisions.jsonl"
-ATTEST_DIR = HERE / "data" / "attestations"
+
+def network_file(path: Path, network: str = NETWORK) -> Path:
+    """Persisted state per network, as networkFile in network.ts: testnet keeps `path` (nothing moves), any other
+    network gets `-<network>` before the suffix (`decisions.jsonl` -> `decisions-mainnet.jsonl`)."""
+    if network == "testnet":
+        return path
+    return path.with_name(f"{path.stem}-{network}{path.suffix}")
+
+
+DATA = network_file(HERE / "data" / "decisions.jsonl")
+ATTEST_DIR = network_file(HERE / "data" / "attestations")

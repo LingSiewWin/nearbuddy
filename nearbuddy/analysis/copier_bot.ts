@@ -13,7 +13,7 @@
 // negative window means the copier saw the side before the follower quote. Rows go to data/copier-v2.jsonl.
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { JsonRpcProvider } from "near-api-js";
-import { NET, NETWORK_ID } from "../packages/protocol/src/network.ts";
+import { NET, NETWORK_ID, networkFile } from "../packages/protocol/src/network.ts";
 
 const MAINNET = NETWORK_ID === "mainnet";
 // not NEAR_RPC: views go to FastNEAR (testnet fallback, mainnet primary) to spare drpc
@@ -30,7 +30,9 @@ const TX_API = process.env.COPIER_TX_API ?? `https://tx.${MAINNET ? "main" : "te
 const SOLVER = process.env.COPIER_SOLVER ?? process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const args = process.argv.slice(2);
 const REVEAL_AWARE = args.includes("--mode") && args[args.indexOf("--mode") + 1] === "reveal-aware";
-const OUT = new URL(REVEAL_AWARE ? "./data/copier-v2.jsonl" : "./data/copier.jsonl", import.meta.url).pathname;
+const OUT = networkFile(
+  new URL(REVEAL_AWARE ? "./data/copier-v2.jsonl" : "./data/copier.jsonl", import.meta.url).pathname,
+);
 
 type Intent = { agent_pk: string; side: "Long" | "Short"; size_bps: number; nonce: string };
 type Duel = {

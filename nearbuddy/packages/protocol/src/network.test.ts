@@ -1,6 +1,35 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { assertNetworkConfig, NETWORKS, networkId } from "./network.ts";
+import { assertNetworkConfig, NETWORKS, networkFile, networkId, OVERRIDES } from "./network.ts";
+
+test("networkFile keeps testnet paths and suffixes every other network before the extension", () => {
+  assert.equal(networkFile("/r/.solver-ledger.json", "testnet"), "/r/.solver-ledger.json");
+  assert.equal(networkFile("/r/.solver-ledger.json", "mainnet"), "/r/.solver-ledger-mainnet.json");
+  assert.equal(networkFile("/r/.arena-history.json", "mainnet"), "/r/.arena-history-mainnet.json");
+  assert.equal(networkFile("/r/data/copier-v2.jsonl", "mainnet"), "/r/data/copier-v2-mainnet.jsonl");
+  assert.equal(networkFile("/home/u/.nearbuddy/agents", "mainnet"), "/home/u/.nearbuddy/agents-mainnet");
+  assert.equal(networkFile("/r.d/.env", "mainnet"), "/r.d/.env-mainnet");
+});
+
+test("the solver entry's state files follow NEAR_NETWORK; testnet keeps today's names", () => {
+  const paths = (network: string) => {
+    const env: Record<string, string | undefined> = { ...process.env, NEAR_NETWORK: network };
+    for (const k of ["SOLVER_LEDGER", "ARENA_HISTORY", "ARENA_PAYLOADS", ...OVERRIDES]) delete env[k];
+    const script = `import { LEDGER_FILE } from "./packages/solver/src/state.ts";
+      console.log(JSON.stringify([LEDGER_FILE, process.env.ARENA_HISTORY, process.env.ARENA_PAYLOADS]))`;
+    const cwd = new URL("../../..", import.meta.url).pathname;
+    const p = spawnSync("bun", ["--no-env-file", "-e", script], { cwd, env });
+    assert.equal(p.status, 0, p.stderr.toString());
+    return (JSON.parse(p.stdout.toString()) as string[]).map((f) => f.split("/").pop());
+  };
+  assert.deepEqual(paths("testnet"), [".solver-ledger.json", ".arena-history.json", ".arena-payloads.json"]);
+  assert.deepEqual(paths("mainnet"), [
+    ".solver-ledger-mainnet.json",
+    ".arena-history-mainnet.json",
+    ".arena-payloads-mainnet.json",
+  ]);
+});
 
 test("mainnet refuses any override that names testnet", () => {
   for (const [k, v] of [

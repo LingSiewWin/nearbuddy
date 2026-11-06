@@ -23,11 +23,13 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import ATTEST_DIR, DATA, network_file  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-SRC = HERE / "data" / "decisions.jsonl"
-OUT = HERE.parent / "dataset"  # tracked snapshot: judges and researchers read it from the repo
+SRC = DATA
+# tracked snapshot (dataset-mainnet/ on mainnet): judges and researchers read it from the repo
+OUT = network_file(HERE.parent / "dataset")
 HUB_REPO = "NekoRobbin/nearbuddy-arena-duels"
 SOURCE = "https://github.com/LingSiewWin/nearbuddy"
 FIRST_ORACLE_DUEL = 257  # duels 0-256 were resolved with the operator's oracle key (before deploy 7)
@@ -327,7 +329,7 @@ def main() -> int:
     parquet = write_parquet(out_rows, OUT / "decisions.parquet")
     if not parquet:
         (OUT / "decisions.parquet").unlink(missing_ok=True)  # a stale copy would disagree with the jsonl
-    att_src = HERE / "data" / "attestations"
+    att_src = ATTEST_DIR
     if att_src.exists():
         shutil.copytree(att_src, OUT / "attestations", dirs_exist_ok=True)
     (OUT / "README.md").write_text(card(out_rows, "decisions.parquet" if parquet else "decisions.jsonl"))

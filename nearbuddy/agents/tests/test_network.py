@@ -114,3 +114,14 @@ def test_matching_overrides_and_the_1click_account_pass():
         "testnet", {"ARENA_CONTRACT": "arena.nearbuddy-solver.testnet", "ONECLICK_ACCOUNT": "x.near"}
     )
     config.assert_network_config("mainnet", {"NEAR_RPC": "https://rpc.mainnet.near.org", "SOLVER_ID": "contest.near"})
+
+
+def test_data_files_per_network(load):
+    config, _, _ = load(None)
+    assert config.DATA == config.HERE / "data" / "decisions.jsonl"  # testnet: nothing moves
+    assert config.ATTEST_DIR == config.HERE / "data" / "attestations"
+    config, _, _ = load("mainnet")
+    assert config.DATA.name == "decisions-mainnet.jsonl"
+    assert config.ATTEST_DIR.name == "attestations-mainnet"
+    assert config.network_file(Path("/r/data/duels.json"), "mainnet") == Path("/r/data/duels-mainnet.json")
+    assert config.network_file(Path("/r/dataset"), "mainnet") == Path("/r/dataset-mainnet")

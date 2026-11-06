@@ -31,10 +31,10 @@ from pathlib import Path
 from statistics import mean, stdev
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "agents" / "data" / "decisions.jsonl"
-CACHE = ROOT / "analysis" / "data" / "duels.json"
 sys.path.insert(0, str(ROOT / "agents"))
-from config import ENV, NET  # noqa: E402
+from config import DATA, ENV, NET, network_file  # noqa: E402
+
+CACHE = network_file(ROOT / "analysis" / "data" / "duels.json")
 
 RPC = ENV.get("NEAR_RPC", NET["rpc"])
 ARENA = ENV.get("ARENA_CONTRACT", NET["arena"])
