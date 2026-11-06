@@ -261,7 +261,7 @@ export function Standings({ s }: { s: Summary }) {
                   <button
                     type="button"
                     className="btn tiny show-xs"
-                    aria-label={`Follow ${modelName(a.model)}`}
+                    aria-label={`Follow ${modelName(a.model)}, ${promptName(a.prompt)}, ${a.owner}`}
                     onClick={() => follow(a)}
                   >
                     Follow
@@ -311,7 +311,7 @@ export function Standings({ s }: { s: Summary }) {
                 <button
                   type="button"
                   className="btn"
-                  aria-label={`Follow ${modelName(a.model)}`}
+                  aria-label={`Follow ${modelName(a.model)}, ${promptName(a.prompt)}, ${a.owner}`}
                   onClick={() => follow(a)}
                 >
                   Follow
