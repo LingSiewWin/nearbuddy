@@ -1,6 +1,7 @@
 // Thin NEAR helpers shared by solver / demo. Keys come from near-cli legacy keychain files.
 import { readFileSync } from "node:fs";
-import { Account, FailoverRpcProvider, JsonRpcProvider, type KeyPairString } from "near-api-js";
+import { Account, FailoverRpcProvider, JsonRpcProvider, type KeyPairString, type Provider } from "near-api-js";
+import { RpcError } from "near-api-js/rpc-errors";
 import { NET, NETWORK_ID, type NetworkId } from "./network.ts";
 
 export const RPC = process.env.NEAR_RPC ?? NET.rpc; // per-network default in network.ts; see .env.example
@@ -11,10 +12,56 @@ export const provider =
   RPC_FALLBACK && RPC_FALLBACK !== RPC
     ? new FailoverRpcProvider([new JsonRpcProvider({ url: RPC }), new JsonRpcProvider({ url: RPC_FALLBACK })])
     : new JsonRpcProvider({ url: RPC });
+
+const NET_ERROR_CODE =
+  /^(E(CONN|PIPE|TIMEDOUT|NOTFOUND|AI_AGAIN|HOSTUNREACH|NETUNREACH)|UND_ERR|Connection|FailedToOpenSocket)/;
+/** True when the endpoint failed rather than answered: HTTP 408/429/5xx left after near-api-js's own retries, a
+ *  refused or dropped connection, a timeout. A node answer (any `RpcError`: InvalidNonceError, a contract panic,
+ *  an unknown account) is never a transport error. */
+export function isTransportError(e: unknown): boolean {
+  if (!(e instanceof Error) || e instanceof RpcError) return false;
+  const { cause, code, type } = e as { cause?: unknown; code?: unknown; type?: unknown };
+  if (typeof cause === "number") return cause === 408 || cause === 429 || cause >= 500; // fetchJsonRpc's ProviderError
+  if (type === "RetriesExceeded" || e.name === "TimeoutError" || e.name === "AbortError") return true;
+  const c = code ?? (cause as { code?: unknown } | undefined)?.code; // Bun sets `code`; Node's fetch sets `cause.code`
+  return typeof c === "string" ? NET_ERROR_CODE.test(c) : e.message === "fetch failed";
+}
+
+/** A provider for signing accounts: each call tries the endpoints in order and moves to the next one only after a
+ *  transport error; anything else is rethrown as is. near-api-js's FailoverRpcProvider moves on after any error and
+ *  throws a FailoverRpcError wrapping them all, which hides InvalidNonceError from `Account.signAndSendTransaction`,
+ *  so a nonce clash between two processes sharing a key failed instead of being re-signed with a fresh nonce. */
+export function sendFailover(providers: Provider[]): Provider {
+  const [first] = providers;
+  if (!first) throw new Error("sendFailover needs a provider");
+  if (providers.length === 1) return first;
+  return new Proxy(first, {
+    get(target, prop, receiver) {
+      const own = Reflect.get(target, prop, receiver);
+      if (typeof own !== "function") return own;
+      return async (...args: unknown[]) => {
+        let last: unknown;
+        for (const p of providers) {
+          try {
+            return await (p as unknown as Record<PropertyKey, (...a: unknown[]) => Promise<unknown>>)[prop]?.(...args);
+          } catch (e) {
+            if (!isTransportError(e)) throw e;
+            last = e;
+          }
+        }
+        throw last;
+      };
+    },
+  });
+}
+
 /** Transactions whose receipts take seconds (an oracle yield inside open_duel) are dropped by some public RPCs
- *  with "Internal server error" while waiting; sends may use a different endpoint than views. */
+ *  with "Internal server error" while waiting; sends may use a different endpoint than views, and fall back to the
+ *  second endpoint only on such transport errors. */
 const SEND_RPC = process.env.NEAR_SEND_RPC ?? RPC;
-const sendProvider = SEND_RPC === RPC ? provider : new JsonRpcProvider({ url: SEND_RPC });
+const sendProvider = sendFailover(
+  [...new Set([SEND_RPC, RPC_FALLBACK].filter(Boolean))].map((url) => new JsonRpcProvider({ url })),
+);
 
 /** Signing key for `accountId`: `NEAR_KEY_<ACCOUNT_ID>` from the env, else the near-cli legacy keychain file
  *  under ~/.near-credentials/<network>/ (NEAR_NETWORK by default). */

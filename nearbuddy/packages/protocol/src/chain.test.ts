@@ -1,19 +1,24 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { KeyPair } from "near-api-js";
+import { Account, JsonRpcProvider, KeyPair, type KeyPairString, type Provider } from "near-api-js";
+import { ContractExecutionError, InvalidNonceError } from "near-api-js/rpc-errors";
 import {
   ARENA,
   exitDeposit,
   explorerTx,
   fmtNear,
   isDeploy15,
+  isTransportError,
   loadAccount,
   loadKey,
   priceFloor,
   registerMessage,
+  sendFailover,
   warnIfArenaMissing,
 } from "./chain.ts";
 import { NETWORK_ID, NETWORKS } from "./network.ts";
@@ -140,4 +145,114 @@ test("priceFloor: 95% of the quoted output per NEAR, never 0, and a fill at the 
   assert.ok(700_000n * NEAR < (NEAR / 5n) * floor, "6% worse is refused");
   assert.equal(priceFloor(NEAR, 0n), 1n);
   assert.throws(() => priceFloor(0n, 1n), /amountIn must be positive/);
+});
+
+// A node that answers the calls Account.signAndSendTransaction makes; `send` decides each broadcast's outcome.
+const SENT = {
+  status: { SuccessValue: "" },
+  transaction: { hash: "TX" },
+  transaction_outcome: { id: "TX", block_hash: "B" },
+  receipts_outcome: [],
+};
+function fakeNode(send: () => Promise<unknown> = async () => SENT) {
+  const calls = { send: 0, viewAccessKey: 0, callFunction: 0 };
+  return {
+    calls,
+    viewAccessKey: async () => {
+      calls.viewAccessKey++;
+      return { nonce: 7n, permission: "FullAccess" };
+    },
+    viewBlock: async () => ({ header: { hash: "11111111111111111111111111111111" } }),
+    sendTransactionUntil: async () => {
+      calls.send++;
+      return send();
+    },
+    callFunction: async () => {
+      calls.callFunction++;
+      throw new ContractExecutionError("Smart contract panicked: no receipt", "B", 1);
+    },
+  };
+}
+const signer = (nodes: ReturnType<typeof fakeNode>[]) =>
+  new Account(
+    "me.testnet",
+    sendFailover(nodes as unknown as Provider[]),
+    KeyPair.fromRandom("ed25519").toString() as KeyPairString,
+  );
+
+test("sendFailover: a nonce clash reaches Account's retry, which re-reads the nonce and re-signs", async () => {
+  let sends = 0;
+  const a = fakeNode(async () => {
+    if (sends++ === 0) throw new InvalidNonceError(8, 8, "", "");
+    return SENT;
+  });
+  const b = fakeNode();
+  const r = await signer([a, b]).signAndSendTransaction({ receiverId: "arena.testnet", actions: [] });
+  assert.equal(r.transaction.hash, "TX");
+  assert.equal(a.calls.send, 2, "retried on the same endpoint");
+  assert.equal(a.calls.viewAccessKey, 2, "nonce re-read after the clash");
+  assert.equal(b.calls.send, 0, "a nonce clash is not a reason to change endpoint");
+});
+
+test("sendFailover: a contract panic is neither retried nor sent to the second endpoint", async () => {
+  const failure = {
+    ActionError: { index: 0, kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: no receipt" } } },
+  };
+  const a = fakeNode(async () => ({ ...SENT, status: { Failure: failure } }));
+  const b = fakeNode();
+  await assert.rejects(
+    signer([a, b]).signAndSendTransaction({ receiverId: "arena.testnet", actions: [] }),
+    /no receipt/,
+  );
+  assert.equal(a.calls.send, 1);
+  assert.equal(b.calls.send, 0);
+  // a panic the provider itself throws (a view) comes back as that error, not wrapped
+  const p = sendFailover([a, b] as unknown as Provider[]);
+  await assert.rejects(p.callFunction({ contractId: "arena.testnet", method: "x", args: {} }), ContractExecutionError);
+  assert.equal(b.calls.callFunction, 0);
+});
+
+test("sendFailover: a transport error moves the request to the second URL", async () => {
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => {
+      body += c;
+    });
+    req.on("end", () => {
+      const { id } = JSON.parse(body) as { id: number };
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { chain_id: "second" } }));
+    });
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  try {
+    const { port } = server.address() as AddressInfo;
+    const dead = new JsonRpcProvider({ url: "http://127.0.0.1:1" }); // nothing listens on port 1
+    const p = sendFailover([dead, new JsonRpcProvider({ url: `http://127.0.0.1:${port}` })]);
+    const status = (await p.viewNodeStatus()) as { chain_id: string };
+    assert.equal(status.chain_id, "second");
+  } finally {
+    server.close();
+  }
+});
+
+test("isTransportError: endpoint failures only, never a node answer", () => {
+  const withProps = (msg: string, props: object) => Object.assign(new Error(msg), props);
+  for (const e of [
+    withProps("Internal server error", { cause: 500 }),
+    withProps("rate limited", { cause: 429 }),
+    withProps("Timeout error", { cause: 408 }),
+    withProps("Unable to connect", { code: "ConnectionRefused" }),
+    withProps("fetch failed", { cause: { code: "ECONNRESET" } }),
+    withProps("Exceeded 2 attempts", { type: "RetriesExceeded" }),
+  ])
+    assert.ok(isTransportError(e), e.message);
+  for (const e of [
+    new InvalidNonceError(1, 1, "", ""),
+    new ContractExecutionError("Smart contract panicked: x", "B", 1),
+    withProps("bad request", { cause: 400 }),
+    new Error("something else"),
+    "not an error",
+  ])
+    assert.ok(!isTransportError(e), String(e));
 });
