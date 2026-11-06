@@ -128,6 +128,15 @@ export async function registerMessage(owner: string, view: ArenaView = arenaView
   }
 }
 
+/** `Mandate.min_out_per_near` from a price: output units per NEAR in, `keepBps` of the quoted rate (9500 = accept up
+ *  to 5 % worse). `amountIn` is yoctoNEAR, `amountOut` the output token's smallest units, e.g. a 1Click quote's legs.
+ *  Deploy 15 refuses a follow without a floor; at least 1 so a tiny quote never yields 0. */
+export function priceFloor(amountIn: bigint, amountOut: bigint, keepBps = 9500n): bigint {
+  if (amountIn <= 0n) throw new Error("priceFloor: amountIn must be positive");
+  const floor = (amountOut * NEAR * keepBps) / (amountIn * 10_000n);
+  return floor > 0n ? floor : 1n;
+}
+
 /** Deposit for the arena's owner and exit calls (`withdraw_bond`, admin setters): exactly 1 yocto from deploy 15,
  *  none before, where those methods are not payable and refuse any deposit. */
 export async function exitDeposit(view: ArenaView = arenaView): Promise<bigint> {

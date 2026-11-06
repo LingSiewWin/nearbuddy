@@ -12,6 +12,7 @@ import {
   isDeploy15,
   loadAccount,
   loadKey,
+  priceFloor,
   registerMessage,
   warnIfArenaMissing,
 } from "./chain.ts";
@@ -127,4 +128,16 @@ test("registerMessage signs what the contract's view returns, v1 bytes when the 
   assert.deepEqual(fromView, v2);
   const fallback = await registerMessage("me.testnet", fakeView({}));
   assert.equal(fallback.toString(), "nearbuddy-register-v1me.testnet");
+});
+
+test("priceFloor: 95% of the quoted output per NEAR, never 0, and a fill at the quote clears it", () => {
+  const NEAR = 10n ** 24n;
+  // 0.2 NEAR -> 744_947 USDC units (3.72 USD/NEAR): floor 95% of 3_724_735 per NEAR
+  const floor = priceFloor(NEAR / 5n, 744_947n);
+  assert.equal(floor, 3_538_498n);
+  // the contract's check: amount_out * 10^24 >= amount_in * floor
+  assert.ok(744_947n * NEAR >= (NEAR / 5n) * floor);
+  assert.ok(700_000n * NEAR < (NEAR / 5n) * floor, "6% worse is refused");
+  assert.equal(priceFloor(NEAR, 0n), 1n);
+  assert.throws(() => priceFloor(0n, 1n), /amountIn must be positive/);
 });

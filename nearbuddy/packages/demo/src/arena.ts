@@ -9,7 +9,16 @@
 import "../../protocol/src/env.ts";
 import { sign as edSign } from "node:crypto";
 import { teraToGas } from "near-api-js";
-import { ARENA, arenaView, explorerTx, fmtNear, isDeploy15, loadAccount, NEAR } from "../../protocol/src/chain.ts";
+import {
+  ARENA,
+  arenaView,
+  explorerTx,
+  fmtNear,
+  isDeploy15,
+  loadAccount,
+  NEAR,
+  priceFloor,
+} from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import {
   type Intent,
@@ -21,7 +30,7 @@ import {
   ZERO_PROOF,
 } from "../../protocol/src/intent.ts";
 import { NET } from "../../protocol/src/network.ts";
-import { quote, sellNearForUsdc } from "../../solver/src/oneclick.ts";
+import { quote, sellNearForUsdc, USDC_NEAR } from "../../solver/src/oneclick.ts";
 
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const FOLLOWER_ID = process.env.FOLLOWER_ID ?? NET.owner;
@@ -102,6 +111,13 @@ const call = async (methodName: string, args: Record<string, unknown>, deposit =
 
 console.log(`arena ${ARENA}  follower ${FOLLOWER_ID}  plain agent A ${pkA.slice(0, 12)}…  enclave agent A ${teeA}`);
 
+// quote the mandate's cap through 1Click (dry, mainnet prices), as the solver does for each open follower; its rate
+// less 5 % is the mandate's price floor (deploy 15 refuses a follow without one)
+const q = await quote(sellNearForUsdc(CAP, SOLVER_ID.replace(/\.testnet$/, ".near")));
+const floor = priceFloor(CAP, BigInt(q.quote.amountOut));
+// deploy 15 credits the output token itself (USDC from a NEAR sale); deploy 14 kept the mandate in wNEAR
+const TOKEN = DEPLOY15 ? USDC_NEAR : "nep141:wrap.near";
+
 // 1. follower deposits and follows the enclave agent A with a mandate (a plain agent is refused: "agent unverified")
 line("deposit 1 NEAR", await call("deposit", {}, NEAR));
 line(
@@ -112,12 +128,13 @@ line(
       allowance: NEAR.toString(),
       spent: "0",
       per_tx_cap: CAP.toString(),
-      allowed_tokens: ["nep141:wrap.near"],
+      allowed_tokens: [TOKEN],
       expires_at: ((Date.now() + 86_400_000) * 1_000_000).toString(),
       revoked: false,
+      min_out_per_near: floor.toString(),
     },
   }),
-  `cap ${fmtNear(CAP)} NEAR, allowance 1 NEAR, wNEAR only`,
+  `cap ${fmtNear(CAP)} NEAR, allowance 1 NEAR, ${DEPLOY15 ? "USDC" : "wNEAR"} only, floor ${floor} per NEAR`,
 );
 
 // 2. open a duel; a spectator pays the deposit on chain to inject chaos at A
@@ -154,8 +171,6 @@ line("post intent A", (await post("/intent", signed)).tx);
 // the enclave agent's two latest intents, posted by the runner with TEE proofs: one to settle, one for the rejections
 const [nonce, nonce2] = await agentNonces(teeA, 2);
 console.log(`enclave A latest nonces ${nonce}, ${nonce2}`);
-// quote the mandate's cap through 1Click (dry, mainnet prices), as the solver does for each open follower
-const q = await quote(sellNearForUsdc(CAP, SOLVER_ID.replace(/\.testnet$/, ".near")));
 console.log(
   `1Click dry quote: sell ${fmtNear(CAP)} wNEAR -> ${q.quote.amountOutFormatted} USDC (min ${Number(q.quote.minAmountOut) / 1e6}), ${q.quote.timeEstimate}s`,
 );
@@ -165,7 +180,7 @@ console.log(
 const ok = await settle([
   {
     intent_nonce: nonce,
-    token: "nep141:wrap.near",
+    token: TOKEN,
     amount_in: CAP.toString(),
     amount_out: q.quote.amountOut,
     swap_tx: DEPLOY15 ? "" : `dry-quote:${q.timestamp}`,
@@ -177,7 +192,7 @@ line("settle fill", ok.tx, shown(ok));
 const over = await settle([
   {
     intent_nonce: nonce2,
-    token: "nep141:wrap.near",
+    token: TOKEN,
     amount_in: (CAP + 1n).toString(),
     amount_out: "0",
     swap_tx: "over-cap",
@@ -185,21 +200,22 @@ const over = await settle([
   { intent_nonce: nonce2, token: "nep141:usdc.near", amount_in: "1", amount_out: "0", swap_tx: "wrong-token" },
   {
     intent_nonce: nonce,
-    token: "nep141:wrap.near",
+    token: TOKEN,
     amount_in: CAP.toString(),
     amount_out: q.quote.amountOut,
     swap_tx: "replay",
   },
 ]);
 line("settle rejected", over.tx, shown(over));
-// revoke: the follower unfollows, and the very next fill is refused on chain
+// revoke: the follower unfollows. Deploy 14 refuses the very next fill; deploy 15 still settles a fill landing within
+// withdraw_delay (the swap may have been fronted before the unfollow) and refuses it after
 line("unfollow enclave A", await call("unfollow", { agent_pk: teeA }));
 const revoked = await settle([
-  { intent_nonce: nonce2, token: "nep141:wrap.near", amount_in: "1", amount_out: "1", swap_tx: "after-revoke" },
+  { intent_nonce: nonce2, token: TOKEN, amount_in: "1", amount_out: "1", swap_tx: "after-revoke" },
 ]);
 line("settle after revoke", revoked.tx, shown(revoked));
-if (!shown(revoked).includes("mandate revoked"))
-  throw new Error("fill after unfollow was not refused with 'mandate revoked'");
+if (DEPLOY15 ? revoked.refused !== undefined : !shown(revoked).includes("mandate revoked"))
+  throw new Error(`fill after unfollow: unexpected ${shown(revoked)}`);
 const vault = await arenaView<string>("get_vault", { account: FOLLOWER_ID });
 const mandate = await arenaView<{ spent: string }>("get_follow", { agent_pk: teeA, follower: FOLLOWER_ID });
 console.log(`follower vault ${fmtNear(vault)} NEAR, mandate spent ${fmtNear(mandate.spent)} NEAR`);
