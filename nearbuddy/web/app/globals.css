@@ -8,7 +8,7 @@
   --line: #323026;
   --ink: #eee9d8;
   --dim: #a39d89;
-  --faint: #6f6a57;
+  --faint: #948e78; /* 4.7:1 on the 4% tinted tape rows, 5.2:1 on --panel: WCAG AA for small text */
   --qwen: #f2a93b;
   --deep: #6ec5e9;
   --other: #b9d38a;
