@@ -184,16 +184,25 @@ const parse = (s: string): unknown => {
 export function duelCalls(calls: Call[], id: string) {
   const ok = calls.filter((c) => c.ok).sort((x, y) => x.at_ms - y.at_ms);
   const signed = (c: Call) => (c.args.signed as { intent?: Intent } | undefined)?.intent;
+  const oracle = (phase: "open" | "close") =>
+    ok.find((c) => c.method === "oracle_on_call" && c.args.msg === `${phase}:${id}`);
+  const voided = ok.find((c) => c.method === "void_duel" && String(c.args.duel_id) === id);
+  // operator era (testnet duels before #257): the operator key's signed `resolve` scored the duel, no oracle callback
+  const resolve = ok.find(
+    (c) => c.method === "resolve" && String((c.args.resolution as { duel_id?: unknown } | undefined)?.duel_id) === id,
+  );
   return {
     open: ok.find((c) => (c.method === "open_duel" || c.method === "open_duel_consented") && String(c.value) === id),
-    oracle: (phase: "open" | "close") =>
-      ok.find((c) => c.method === "oracle_on_call" && c.args.msg === `${phase}:${id}`),
+    oracle,
     intents: ok.filter(
       (c) => (c.method === "post_intent" || c.method === "reveal_intent") && signed(c)?.duel_id === id,
     ),
     commits: ok.filter((c) => c.method === "commit_intent" && String(c.args.duel_id) === id),
     chaos: ok.filter((c) => c.method === "inject_chaos" && String(c.args.duel_id) === id),
-    void: ok.find((c) => c.method === "void_duel" && String(c.args.duel_id) === id),
+    void: voided,
+    resolve,
+    /** The receipt that scored or voided the duel: the payout state is read at its block. */
+    closing: oracle("close") ?? voided ?? resolve,
   };
 }
 
@@ -440,7 +449,9 @@ export function checkDuel(e: Evidence): Line[] {
     add(
       "SKIP",
       "payout",
-      "state at the close callback's block is not available from the RPC (try VERIFY_ARCHIVAL_RPC)",
+      calls.closing
+        ? "state at the close callback's block is not available from the RPC (try VERIFY_ARCHIVAL_RPC)"
+        : "the close callback's receipt is not in the scanned txs yet (FastNEAR may still be indexing it); re-run later",
     );
   } else {
     const bonds: [bigint, bigint] = [BigInt(b.a.bond), BigInt(b.b.bond)];
@@ -573,6 +584,21 @@ function openerRefund(e: Evidence, open: Call, add: (r: Line["result"], c: strin
 }
 /** yoctoNEAR per byte of storage (NEAR protocol constant). */
 const STORAGE_BYTE_COST = 10n ** 19n;
+
+/** Evidence a later read can complete: the duel is scored (or voided) but its closing receipt (close callback, void,
+ *  or the operator era's resolve) is not in the scanned txs yet (FastNEAR's index trails the RPC right after
+ *  resolution), or a past-block read failed: the state at the closing block, an injection block's pools, the open
+ *  block, or duel_lock on a deploy-15 contract. A result from it is not final. Fields absent from evidence saved
+ *  before they existed do not count. Open duels and duels resolved without an outcome (#0-21) are never incomplete. */
+export function incomplete(e: Evidence): boolean {
+  const d = e.now.duel;
+  if (!d?.resolved || !d.outcome) return false;
+  const c = duelCalls(arenaCalls(e.txs, e.arena), e.duel_id);
+  if (!c.closing || !e.before || !e.after) return true;
+  if (e.chaos_pools && c.chaos.some((x) => !e.chaos_pools?.[x.block_hash])) return true;
+  if (c.open && e.open_block === null) return true;
+  return !!e.now.config.intents_account && e.lock_ns === null;
+}
 
 /** Injections: payer, kind and target of every successful inject_chaos, the count the contract kept, and where each
  *  deposit went. Deploy 15 sends chaos paid by either agent's owner to owner_fees; the rest (minus its storage) and
@@ -782,7 +808,7 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
   const toMs = !d.resolved ? Date.now() : closeMs + (voided ? 48 : 2) * 3_600_000;
   const txs = await txsBetween(arena, openMs - 120_000, Math.min(toMs, Date.now()));
   const calls = duelCalls(arenaCalls(txs, arena), id);
-  const fin = calls.oracle("close") ?? calls.void;
+  const fin = calls.closing;
   let before: State | null = null;
   let after: State | null = null;
   if (fin) {
@@ -839,7 +865,7 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
 /** The evidence with only the txs that carry one of this duel's receipts (what --save keeps). */
 export function ownTxs(e: Evidence): Evidence {
   const c = duelCalls(arenaCalls(e.txs, e.arena), e.duel_id);
-  const mine = [c.open, c.oracle("open"), c.oracle("close"), c.void, ...c.intents, ...c.commits, ...c.chaos];
+  const mine = [c.open, c.oracle("open"), c.closing, ...c.intents, ...c.commits, ...c.chaos];
   const keep = new Set(mine.flatMap((x) => (x ? [x.tx] : [])));
   return { ...e, txs: e.txs.filter((t) => keep.has(t.transaction.hash)) };
 }
@@ -863,5 +889,6 @@ if (import.meta.main) {
   console.log(
     `\n${fails ? `${fails} FAIL` : "no FAIL"} · ${lines.filter((l) => l.result === "PASS").length} PASS · ${lines.filter((l) => l.result === "SKIP").length} SKIP`,
   );
+  if (incomplete(e)) console.log("evidence incomplete (close receipt or its block state not read yet): re-run later");
   process.exit(fails ? 1 : 0);
 }

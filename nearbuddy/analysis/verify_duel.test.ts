@@ -7,7 +7,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { b64 } from "../packages/protocol/src/index.ts";
-import { checkDuel, type Evidence, finishMath, type Line, pnlBps, price8, shieldGain } from "./verify_duel.ts";
+import {
+  checkDuel,
+  type Evidence,
+  finishMath,
+  incomplete,
+  type Line,
+  pnlBps,
+  price8,
+  shieldGain,
+} from "./verify_duel.ts";
 
 const load = (id: string) =>
   JSON.parse(readFileSync(new URL(`./fixtures/verify_duel_${id}.json`, import.meta.url), "utf8")) as Evidence;
@@ -143,6 +152,73 @@ test("only a receipt's own outcome counts, never the tx-level status", () => {
   const lines = checkDuel(f);
   assert.equal(result(lines, "injection").length, 31);
   assert.deepEqual(result(lines, "injections"), ["SKIP"]);
+});
+
+test("a close receipt not indexed yet makes the evidence incomplete, with the right payout reason", () => {
+  for (const id of ["373", "363"]) {
+    const full = load(id);
+    assert.equal(incomplete(full), false);
+    // right after resolution FastNEAR may not have the close callback yet: drop its tx
+    const close = receipts(full, "oracle_on_call").find((r) => args(r).msg === `close:${id}`)!;
+    const lag = { ...load(id), before: null, after: null };
+    lag.txs = lag.txs.filter(
+      (t) => !t.receipts.some((r) => r.execution_outcome.block_hash === close.execution_outcome.block_hash),
+    );
+    assert.equal(incomplete(lag), true);
+    const payout = checkDuel(lag).find((l) => l.check === "payout")!;
+    assert.equal(payout.result, "SKIP");
+    assert.match(payout.detail, /not in the scanned txs yet/);
+    // the receipt is there but its block's state was not served: incomplete, and the archival hint
+    const pruned = { ...load(id), before: null };
+    assert.equal(incomplete(pruned), true);
+    assert.match(checkDuel(pruned).find((l) => l.check === "payout")!.detail, /VERIFY_ARCHIVAL_RPC/);
+  }
+  // nothing to wait for: an open duel, and a duel resolved without an outcome (testnet #0-21)
+  const e = load("373");
+  assert.equal(
+    incomplete({ ...e, txs: [], now: { ...e.now, duel: { ...e.now.duel!, resolved: false, outcome: null } } }),
+    false,
+  );
+  assert.equal(
+    incomplete({ ...e, txs: [], before: null, now: { ...e.now, duel: { ...e.now.duel!, outcome: null } } }),
+    false,
+  );
+});
+
+test("deploy 15: a failed read of an injection block, the open block or duel_lock is incomplete too", () => {
+  for (const id of ["395", "401"]) assert.equal(incomplete(load(id)), false);
+  const e = load("401");
+  const blk = Object.keys(e.chaos_pools!)[0]!;
+  const { [blk]: _, ...rest } = e.chaos_pools!;
+  assert.equal(incomplete({ ...e, chaos_pools: rest }), true);
+  assert.equal(incomplete({ ...load("395"), open_block: null }), true);
+  assert.equal(incomplete({ ...load("395"), lock_ns: null }), true); // deploy 15 has duel_lock: null = a failed read
+  // evidence saved before these fields existed is not incomplete for lacking them
+  const { lock_ns: _l, chaos_pools: _c, open_block: _o, ...old } = load("395");
+  assert.equal(incomplete(old as Evidence), false);
+});
+
+test("an operator-era duel closes on the operator's resolve receipt: complete, payout checked", () => {
+  // testnet duels before #257 had no oracle callback: the operator key's signed `resolve` scored them. Recast #373's
+  // close callback as such a receipt (same block, so the saved before/after state still applies).
+  const e = load("373");
+  const close = receipts(e, "oracle_on_call").find((r) => args(r).msg === "close:373")!;
+  const o = e.now.duel!.outcome!;
+  fc(close).FunctionCall.method_name = "resolve";
+  setArgs(close, {
+    resolution: { duel_id: "373", open_price: o.open_price, close_price: o.close_price },
+    oracle_sig: "x",
+  });
+  assert.equal(incomplete(e), false);
+  const lines = checkDuel(e);
+  assert.deepEqual(result(lines, "oracle close"), ["SKIP"]); // no oracle callback, said as such
+  assert.deepEqual(result(lines, "payout"), ["PASS"]);
+  // a resolve for another duel does not close this one
+  setArgs(close, {
+    resolution: { duel_id: "372", open_price: o.open_price, close_price: o.close_price },
+    oracle_sig: "x",
+  });
+  assert.equal(incomplete({ ...e, before: null }), true);
 });
 
 test("the arithmetic matches the contract on hand-worked cases", () => {
