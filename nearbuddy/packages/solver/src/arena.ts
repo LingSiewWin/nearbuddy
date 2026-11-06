@@ -86,6 +86,17 @@ export class Arena {
     } = {},
   ) {}
 
+  /** `call` with the on-chain oracle deposit; a stale memo after `set_oracle` is refreshed and the call retried once. */
+  private async callWithOracleDeposit(methodName: string, args: Record<string, unknown>, extra = 0n) {
+    try {
+      return await this.call(methodName, args, (await oracleDeposit()) + extra, OPEN_DUEL_GAS);
+    } catch (e) {
+      if (!/attach oracle_deposit|deposit too small/.test(String(e))) throw e;
+      oracleDepositMemo = null;
+      return this.call(methodName, args, (await oracleDeposit()) + extra, OPEN_DUEL_GAS);
+    }
+  }
+
   private async call(methodName: string, args: Record<string, unknown>, deposit = 0n, gas = GAS): Promise<{ tx: string; value: unknown }> {
     // Public RPCs rate-limit (-429); retry with backoff before failing the route.
     let r!: Awaited<ReturnType<Account["callFunctionRaw"]>>;
@@ -116,7 +127,7 @@ export class Arena {
   async openDuel(a: string, b: string, symbol: string, close_at: string) {
     let r: { tx: string; value: unknown };
     try {
-      r = await this.call("open_duel", { a, b, symbol, close_at }, (await oracleDeposit()) + OPEN_DUEL_STORAGE, OPEN_DUEL_GAS);
+      r = await this.callWithOracleDeposit("open_duel", { a, b, symbol, close_at }, OPEN_DUEL_STORAGE);
     } catch (e) {
       // the oracle yield inside open_duel makes the tx take several seconds; public RPCs sometimes drop the wait
       // with "Internal server error" after the tx landed. Never resend (the agents would be "in duel"): look it up.
@@ -229,7 +240,7 @@ export class Arena {
   async resolve(duel_id: string) {
     let tx = "", sent = true;
     try {
-      tx = (await this.call("resolve_duel", { duel_id }, await oracleDeposit(), OPEN_DUEL_GAS)).tx;
+      tx = (await this.callWithOracleDeposit("resolve_duel", { duel_id })).tx;
     } catch (e) {
       // same RPC wait issue as open_duel; the request is detached on chain, so a landed tx has done its job.
       // resolve_duel is idempotent until the oracle answers, so the caller may simply retry.
@@ -243,7 +254,7 @@ export class Arena {
 
   /** Re-ask the oracle for a duel whose open price never landed, paying its deposit. */
   async requestOpenPrice(duel_id: string) {
-    return { tx: (await this.call("request_open_price", { duel_id }, await oracleDeposit(), OPEN_DUEL_GAS)).tx };
+    return { tx: (await this.callWithOracleDeposit("request_open_price", { duel_id })).tx };
   }
 
   async settleFollow(agent_pk: string, follower: string, fills: Fill[]) {
