@@ -40,11 +40,12 @@
 }
 
 .how-lines dd {
+  max-width: 68ch;
   margin: 0;
   text-wrap: pretty;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .how-lines {
     grid-template-columns: minmax(0, 1fr);
   }
