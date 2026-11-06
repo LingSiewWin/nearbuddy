@@ -16,4 +16,4 @@ for i in $(seq 1 30); do
 done
 curl -sf http://127.0.0.1:4020/ledger > /dev/null 2>&1 || { echo "solver did not come up, see .solver.log"; exit 1; }
 echo "solver :4020  web http://127.0.0.1:3011/arena  logs .solver.log .web.log"
-cd agents && .venv/bin/python -u -m runner --rounds "${1:-3}" --duel-seconds "${2:-90}" --cycle-seconds 30
+cd agents && .venv/bin/python -u -m runner --rounds "${1:-3}" --duel-seconds "${2:-330}" --cycle-seconds 30

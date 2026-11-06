@@ -3,7 +3,7 @@ each decision's enclave signature to the contract as a `TeeProof`, asks the Outl
 and appends one dataset row per decision (with the exact request and response bytes) to
 agents/data/decisions.jsonl.
 
-    .venv/bin/python -m runner --rounds 2 --duel-seconds 90 --cycle-seconds 20
+    .venv/bin/python -m runner --rounds 2 --duel-seconds 330 --cycle-seconds 30
 
 Agents are ed25519 keys derived from AGENT_SEED_A / AGENT_SEED_B (hex, 32 bytes) in the env file,
 or fresh random keys when unset (then they are registered on every run). With NEAR_AI_API_KEY set the
@@ -208,7 +208,7 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--rounds", type=int, default=1)
-    p.add_argument("--duel-seconds", type=int, default=90)
+    p.add_argument("--duel-seconds", type=int, default=330)  # Outlayer caches a price for 300 s; shorter duels close on the open price
     p.add_argument("--cycle-seconds", type=int, default=20)
     p.add_argument("--symbol", default="NEAR/USD")
     p.add_argument("--bond", default="100000000000000000000000")  # 0.1 NEAR
