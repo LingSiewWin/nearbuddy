@@ -45,23 +45,38 @@ export function Verified({ duel }: { duel: number }) {
     return (
       <li className="vrf">
         <b>Re-check it yourself</b>
-        <span>This site could not run the check just now (the transaction index is busy).</span>
+        <span>
+          {!("status" in b)
+            ? "This site could not run the check just now (the transaction index is busy)."
+            : b.status === "open"
+              ? "The duel is not scored yet; it can be re-checked once it is."
+              : "The verifier found no duel with this number."}
+        </span>
         {run}
       </li>
     );
   const { PASS, FAIL, SKIP } = b.counts;
+  if (!PASS && !FAIL)
+    return (
+      <li className="vrf">
+        <b>Not checked yet</b>
+        <span>None of the checks could run from what is indexed so far.</span>
+        {run}
+      </li>
+    );
   const failed = b.lines.filter((l) => l.result === "FAIL");
   return (
     <li className={`vrf${FAIL ? " bad" : ""}`}>
       <b>
-        {FAIL
-          ? `${FAIL} of ${PASS + FAIL} checks failed`
-          : `All ${PASS} checks pass, re-read from the chain by this site`}
+        {FAIL ? `${FAIL} of ${PASS + FAIL} checks failed` : `${PASS} checks pass, none fail`}
+        {SKIP ? `, ${SKIP} not checked` : ""}
+        {b.degraded ? " (partial)" : ""}
       </b>
       <span>
-        Every signature and enclave proof, both oracle prices, the score, the slash and the payout
-        {SKIP ? `; ${SKIP} could not be checked from the chain alone` : ""}
-        {b.degraded ? "; some receipts are not indexed yet, so it is checked again in a minute" : ""}.
+        Every signature and enclave proof, both oracle prices, the score, the slash and the payout, run by this site
+        from FastNEAR&apos;s transaction index and the RPC
+        {b.degraded ? "; some receipts are not indexed yet, so reload in a minute for the full check" : ""}. Run the
+        command below to check it without trusting this site.
       </span>
       {failed.length ? (
         <ul className="vlines">
