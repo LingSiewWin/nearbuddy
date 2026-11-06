@@ -58,6 +58,7 @@ impl Contract {
             commit_reveal: self.commit_reveal,
             no_reveal_bps: self.no_reveal_bps,
             require_consent: self.require_consent,
+            agree_flip_s: self.agree_flip_ns.map(|n| n / 1_000_000_000),
         }
     }
 

@@ -57,6 +57,30 @@ pub(crate) fn pnl_bps(intent: Option<&Intent>, close_at: u64, open: u64, close: 
     v as i64
 }
 
+/// R8, "they can't both be right": when both last calls are on the same side, which side is scored
+/// on the opposite one, 0 for a and 1 for b, and why. `since` (a, b) is when each side took its
+/// current side. A side that took it `tol_ns` or more after the other is "later"; otherwise, or
+/// when a time is missing, the duel's "answerer" is: b on even ids, a on odd. Sizes are not
+/// compared. The flipped score is the negated `pnl_bps` (i128 division truncates toward zero).
+pub(crate) fn agree_fade(
+    id: u64,
+    tol_ns: u64,
+    a: Option<&Intent>,
+    b: Option<&Intent>,
+    since: [Option<u64>; 2],
+) -> Option<(usize, &'static str)> {
+    let (Some(a), Some(b)) = (a, b) else {
+        return None;
+    };
+    if a.side != b.side {
+        return None;
+    }
+    Some(match since {
+        [Some(x), Some(y)] if x.abs_diff(y) >= tol_ns => (usize::from(x < y), "later"),
+        _ => (usize::from(id.is_multiple_of(2)), "answerer"),
+    })
+}
+
 #[near]
 impl Contract {
     /// Pair two registered, idle agents on an oracle asset. Attached deposit must cover the duel's
@@ -196,7 +220,7 @@ impl Contract {
     /// "bad signature", "bond exhausted"; "commit first" while `commit_reveal` is on.
     pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
         require!(!self.commit_reveal, "commit first");
-        self.accept_intent(&signed, tee, true);
+        self.accept_intent(&signed, tee, true, env::block_timestamp());
     }
 
     /// Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for
@@ -262,7 +286,8 @@ impl Contract {
     /// Open a commitment: the intent and salt must hash to the stored commitment for
     /// `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,
     /// except that the reveal may land inside the intent lock (the decision was fixed when it was
-    /// committed, before the lock) up to `close_at`. The commitment is deleted.
+    /// committed, before the lock) up to `close_at`, and that for R8 the call took its side at
+    /// commit time, not reveal time. The commitment is deleted.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     /// "no commitment", "commitment mismatch", then as `post_intent` minus "intent lock" and
     /// "commit first".
@@ -274,16 +299,23 @@ impl Contract {
     ) {
         let i = &signed.intent;
         let key = commit_key(i.duel_id.0, &i.agent_pk.0);
-        let (hash, _) = *self.commitments.get(&key).expect("no commitment");
+        let (hash, committed_at) = *self.commitments.get(&key).expect("no commitment");
         let mut preimage = intent_message(i);
         preimage.extend_from_slice(&salt.0);
         require!(env::sha256_array(&preimage) == hash, "commitment mismatch");
         self.commitments.remove(&key);
-        self.accept_intent(&signed, tee, false);
+        self.accept_intent(&signed, tee, false, committed_at);
     }
 
-    /// The checks and effects of `post_intent`; `lock` = refuse inside the intent lock.
-    fn accept_intent(&mut self, signed: &SignedIntent, tee: Option<TeeProof>, lock: bool) {
+    /// The checks and effects of `post_intent`; `lock` = refuse inside the intent lock;
+    /// `decided_at` = when the call was fixed (block time of a post, commit time of a reveal).
+    fn accept_intent(
+        &mut self,
+        signed: &SignedIntent,
+        tee: Option<TeeProof>,
+        lock: bool,
+        decided_at: u64,
+    ) {
         let before = env::storage_usage();
         let i = &signed.intent;
         require!(i.agent_pk.0.len() == 32, "agent_pk length");
@@ -339,14 +371,20 @@ impl Contract {
             verify(&i.agent_pk.0, &intent_message(i), &signed.signature.0),
             "bad signature"
         );
+        let new_side = slot.as_ref().is_none_or(|p| p.side != i.side);
         *slot = Some(i.clone());
         self.used_nonces.insert(key);
+        if new_side && self.agree_flip_ns.is_some() {
+            let k = commit_key(i.duel_id.0, &i.agent_pk.0);
+            self.side_since.insert(k, decided_at);
+        }
         let mut cost = set_entry_cost(32 + 8);
         if tee_kind != 0 {
             self.used_proofs.insert(i.proof_hash.0.clone());
             cost += set_entry_cost(32);
         }
         self.duels.flush();
+        self.side_since.flush();
         cost += storage_cost_since(before);
         let agent = self.agents.get_mut(&i.agent_pk.0).expect("agent missing");
         require!(agent.bond.0 > cost, "bond exhausted");
@@ -534,6 +572,7 @@ impl Contract {
         let half = pool / 2;
         for (pk, share) in [(&pk_a, half + pool % 2), (&pk_b, half)] {
             self.commitments.remove(&commit_key(duel_id.0, pk));
+            self.side_since.remove(&commit_key(duel_id.0, pk));
             let a = self.agents.get_mut(pk).expect("agent missing");
             a.bond.0 += share;
             a.in_duel = None;
@@ -551,12 +590,43 @@ impl Contract {
     /// no gain, and on top of the loss slash it pays `no_reveal_bps` of its bond straight to the
     /// opponent's bond (to `owner_fees` when both withheld, which is a tie). The no-reveal slash never
     /// enters the pool, so withholding a losing reveal is never cheaper than losing.
+    ///
+    /// With `agree_flip_ns` on and both last calls on the same side, `agree_fade` picks the side
+    /// scored on the opposite one (R8). Skipped when either side withheld a reveal: its last revealed
+    /// call is not its final one, and the forfeit already decides the duel.
     fn finish(&mut self, id: u64, open: u64, close: u64) {
         let duel = self.duels.get_mut(&id).expect("duel missing");
         let close_at = duel.close_at.0;
-        let pnl_a = pnl_bps(duel.last_intent_a.as_ref(), close_at, open, close);
-        let pnl_b = pnl_bps(duel.last_intent_b.as_ref(), close_at, open, close);
+        let mut pnl_a = pnl_bps(duel.last_intent_a.as_ref(), close_at, open, close);
+        let mut pnl_b = pnl_bps(duel.last_intent_b.as_ref(), close_at, open, close);
         let (pk_a, pk_b) = (duel.a.0.clone(), duel.b.0.clone());
+        // the freed commitment records outweigh the flag record written below
+        let nr = [&pk_a, &pk_b].map(|pk| self.commitments.remove(&commit_key(id, pk)).is_some());
+        let since = [&pk_a, &pk_b].map(|pk| self.side_since.remove(&commit_key(id, pk)));
+        let fade = match self.agree_flip_ns {
+            Some(tol) if nr == [false; 2] => agree_fade(
+                id,
+                tol,
+                duel.last_intent_a.as_ref(),
+                duel.last_intent_b.as_ref(),
+                since,
+            ),
+            _ => None,
+        };
+        if let Some((side, reason)) = fade {
+            if side == 0 {
+                pnl_a = -pnl_a;
+            } else {
+                pnl_b = -pnl_b;
+            }
+            env::log_str(&format!(
+                r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"fade","data":{{"duel_id":{id},"agent_pk":"{}","reason":"{reason}"}}}}"#,
+                near_sdk::base64::Engine::encode(
+                    &near_sdk::base64::prelude::BASE64_STANDARD,
+                    [&pk_a, &pk_b][side]
+                )
+            ));
+        }
         let mut pool = duel.pool.0;
         let injections = std::mem::take(&mut duel.injections);
         duel.resolved = true;
@@ -573,8 +643,6 @@ impl Contract {
             slashed: U128(0),
             injections: injections.len() as u32,
         };
-        // the freed commitment records outweigh the flag record written below
-        let nr = [&pk_a, &pk_b].map(|pk| self.commitments.remove(&commit_key(id, pk)).is_some());
         let mut taken = [0u128; 2];
         for (side, (pk, pnl)) in [(&pk_a, pnl_a), (&pk_b, pnl_b)].into_iter().enumerate() {
             let a = self.agents.get_mut(pk).expect("agent missing");

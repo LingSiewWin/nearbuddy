@@ -1,5 +1,5 @@
 use super::*;
-use crate::duels::price8;
+use crate::duels::{agree_fade, price8};
 use ed25519_dalek::{Signer, SigningKey};
 use near_sdk::NearToken;
 use near_sdk::json_types::{Base64VecU8, U64, U128};
@@ -1477,6 +1477,7 @@ fn migrate_v14_keeps_state_and_starts_commit_reveal_off() {
     c.agents.flush();
     c.agent_duels.flush();
     let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
+    raw.truncate(raw.len() - 6); // the R8 fields, appended after deploy 14
     let tail = raw.split_off(raw.len() - 19);
     // commit_reveal false, no_reveal_bps 1000, require_consent false, three 1-byte prefixes
     assert_eq!(
@@ -2022,4 +2023,328 @@ fn commit_and_consent_views_return_the_signed_bytes() {
     assert!(m.starts_with(b"nearbuddy-duel-v1arena.testnet"));
     assert!(m.ends_with(&CLOSE.to_le_bytes()));
     assert_eq!(m.len(), 17 + 13 + 32 + 32 + 9 + 8);
+}
+
+// ---------------------------------------------------------------- R8: agreeing calls
+
+const SEC: u64 = 1_000_000_000;
+
+/// Agents A (seed 1) and B (seed 2), both plain so posts need no enclave proof, R8 on at 30 s.
+fn r8_setup() -> Contract {
+    let mut c = fresh(0);
+    register(&mut c, 1, MODEL_A, false);
+    register(&mut c, 2, MODEL_B, false);
+    ctx(OWNER, 0);
+    c.set_agree_flip(Some(30));
+    c
+}
+
+/// Agent `seed` posts `side` at `ts`.
+fn post_at(c: &mut Contract, seed: u8, d: u64, side: Side, nonce: u64, ts: u64) {
+    let i = intent(&key(seed).1, d, side, 5_000, nonce);
+    ctx_at(SOLVER, 0, ts);
+    c.post_intent(sign(&key(seed).0, &i), None);
+}
+
+/// The `fade` event of the last call, as (agent seed, reason).
+fn fade_log() -> Option<(u8, String)> {
+    let l = near_sdk::test_utils::get_logs()
+        .into_iter()
+        .find(|l| l.contains(r#""event":"fade""#))?;
+    let v: near_sdk::serde_json::Value = near_sdk::serde_json::from_str(&l[11..]).unwrap();
+    let pk = Base64VecU8(key(1).1);
+    let pk = near_sdk::serde_json::to_value(pk).unwrap();
+    let seed = if v["data"]["agent_pk"] == pk { 1 } else { 2 };
+    Some((seed, v["data"]["reason"].as_str().unwrap().into()))
+}
+
+fn since(c: &Contract, d: u64, seed: u8) -> Option<u64> {
+    c.side_since.get(&commit_key(d, &key(seed).1)).copied()
+}
+
+#[test]
+fn r8_rule_matches_the_replay_spec() {
+    let (a, b) = (key(1).1, key(2).1);
+    let long_a = intent(&a, 0, Side::Long, 5_000, 1);
+    let long_b = intent(&b, 0, Side::Long, 2_000, 1);
+    let short_b = intent(&b, 0, Side::Short, 5_000, 1);
+    let tol = 30 * SEC;
+    let fade = |id, x, y, sa, sb| agree_fade(id, tol, x, y, [sa, sb]);
+    // later by exactly the tolerance: the later side; sizes are not compared
+    assert_eq!(
+        fade(0, Some(&long_a), Some(&long_b), Some(NOW + tol), Some(NOW)),
+        Some((0, "later"))
+    );
+    assert_eq!(
+        fade(1, Some(&long_a), Some(&long_b), Some(NOW), Some(NOW + tol)),
+        Some((1, "later"))
+    );
+    // a nanosecond inside the tolerance, or a missing time: b on even ids, a on odd
+    let inside = Some(NOW + tol - 1);
+    assert_eq!(
+        fade(0, Some(&long_a), Some(&long_b), inside, Some(NOW)),
+        Some((1, "answerer"))
+    );
+    assert_eq!(
+        fade(7, Some(&long_a), Some(&long_b), inside, Some(NOW)),
+        Some((0, "answerer"))
+    );
+    assert_eq!(
+        fade(4, Some(&long_a), Some(&long_b), None, Some(NOW)),
+        Some((1, "answerer"))
+    );
+    // disagreeing calls or a missing call: nobody
+    assert_eq!(
+        fade(0, Some(&long_a), Some(&short_b), Some(NOW + tol), Some(NOW)),
+        None
+    );
+    assert_eq!(fade(0, Some(&long_a), None, Some(NOW + tol), None), None);
+}
+
+#[test]
+fn r8_later_agreeing_side_takes_the_other_side_and_loses() {
+    let mut c = r8_setup();
+    let d = open(&mut c);
+    post_at(&mut c, 2, d, Side::Long, 1, NOW);
+    post_at(&mut c, 1, d, Side::Long, 1, NOW + 40 * SEC);
+    let (bond_a, bond_b) = (bond(&c, 1), bond(&c, 2));
+    resolve_at_close(&mut c, d, UP);
+    // duel 0 is even, so the answerer would be b: a fades because it agreed 40 s later
+    assert_eq!(fade_log(), Some((1, "later".into())));
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    let slashed = bond_a * 1_000 / 10_000;
+    assert_eq!((o.pnl_a, o.pnl_b, o.slashed.0), (-25, 25, slashed));
+    assert_eq!(o.winner.unwrap().0, key(2).1);
+    assert_eq!(bond(&c, 1), bond_a - slashed);
+    assert_eq!(bond(&c, 2), bond_b + slashed);
+    let (a, b) = (
+        c.get_agent(Base64VecU8(key(1).1)).unwrap(),
+        c.get_agent(Base64VecU8(key(2).1)).unwrap(),
+    );
+    assert_eq!((a.alpha_bps, b.alpha_bps), (-25, 25));
+    assert_eq!((since(&c, d, 1), since(&c, d, 2)), (None, None), "freed");
+}
+
+#[test]
+fn r8_agreeing_within_the_tolerance_fades_the_answerer() {
+    let mut c = r8_setup();
+    // even id: b answers, although a agreed 20 s later
+    let d0 = open(&mut c);
+    post_at(&mut c, 2, d0, Side::Long, 1, NOW);
+    post_at(&mut c, 1, d0, Side::Long, 1, NOW + 20 * SEC);
+    resolve_at_close(&mut c, d0, UP);
+    assert_eq!(fade_log(), Some((2, "answerer".into())));
+    let o = c.get_duel(U64(d0)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (25, -25));
+    assert_eq!(o.winner.unwrap().0, key(1).1);
+    // odd id: a answers
+    let d1 = open(&mut c);
+    assert_eq!(d1, 1);
+    post_at(&mut c, 1, d1, Side::Short, 2, NOW);
+    post_at(&mut c, 2, d1, Side::Short, 2, NOW);
+    resolve_at_close(&mut c, d1, UP);
+    assert_eq!(fade_log(), Some((1, "answerer".into())));
+    let o = c.get_duel(U64(d1)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (25, -25));
+    assert_eq!(o.winner.unwrap().0, key(1).1);
+}
+
+#[test]
+fn r8_disagreeing_calls_are_scored_as_posted() {
+    let mut c = r8_setup();
+    let d = open(&mut c);
+    post_at(&mut c, 1, d, Side::Short, 1, NOW);
+    post_at(&mut c, 2, d, Side::Long, 1, NOW + 40 * SEC);
+    resolve_at_close(&mut c, d, UP);
+    assert_eq!(fade_log(), None);
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (-25, 25));
+}
+
+#[test]
+fn r8_off_scores_agreeing_calls_as_posted_and_records_nothing() {
+    let mut c = r8_setup();
+    ctx(OWNER, 0);
+    c.set_agree_flip(None);
+    assert_eq!(c.get_config().agree_flip_s, None);
+    let d = open(&mut c);
+    post_at(&mut c, 2, d, Side::Long, 1, NOW);
+    post_at(&mut c, 1, d, Side::Long, 1, NOW + 40 * SEC);
+    assert_eq!((since(&c, d, 1), since(&c, d, 2)), (None, None));
+    resolve_at_close(&mut c, d, UP);
+    assert_eq!(fade_log(), None);
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (25, 25));
+    assert!(o.winner.is_none());
+}
+
+#[test]
+fn r8_a_side_change_resets_the_time_and_a_repeat_does_not() {
+    let mut c = r8_setup();
+    let d = open(&mut c);
+    post_at(&mut c, 1, d, Side::Long, 1, NOW);
+    post_at(&mut c, 2, d, Side::Long, 1, NOW + 5 * SEC);
+    assert_eq!(since(&c, d, 1), Some(NOW));
+    post_at(&mut c, 1, d, Side::Short, 2, NOW + 10 * SEC);
+    post_at(&mut c, 1, d, Side::Long, 3, NOW + 45 * SEC);
+    post_at(&mut c, 2, d, Side::Long, 2, NOW + 48 * SEC);
+    assert_eq!(since(&c, d, 1), Some(NOW + 45 * SEC), "reset by the change");
+    assert_eq!(since(&c, d, 2), Some(NOW + 5 * SEC), "kept by the repeat");
+    resolve_at_close(&mut c, d, UP);
+    // a took Long again 40 s after b: a fades (the answerer would have been b)
+    assert_eq!(fade_log(), Some((1, "later".into())));
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (-25, 25));
+}
+
+#[test]
+fn r8_under_commit_reveal_a_side_is_taken_at_commit_time() {
+    let mut c = r8_setup();
+    commit_reveal_on(&mut c);
+    let d = open(&mut c);
+    let (ia, ib) = (
+        intent(&key(1).1, d, Side::Long, 5_000, 1),
+        intent(&key(2).1, d, Side::Long, 5_000, 1),
+    );
+    // b commits first and reveals last; a commits 40 s later and reveals first
+    commit_at(&mut c, &key(2).0, &ib, &SALT, NOW);
+    commit_at(&mut c, &key(1).0, &ia, &SALT, NOW + 40 * SEC);
+    reveal_at(&mut c, &key(1).0, &ia, &SALT, NOW + 41 * SEC);
+    reveal_at(&mut c, &key(2).0, &ib, &SALT, CLOSE - 1);
+    assert_eq!(since(&c, d, 2), Some(NOW), "commit time, not reveal time");
+    resolve_at_close(&mut c, d, UP);
+    // by reveal time b would fade, and so would the even-id answerer: a fades
+    assert_eq!(fade_log(), Some((1, "later".into())));
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (-25, 25));
+    assert_eq!(o.winner.unwrap().0, key(2).1);
+}
+
+#[test]
+fn r8_skipped_when_a_side_withholds_its_reveal() {
+    let mut c = r8_setup();
+    let d = open(&mut c);
+    post_at(&mut c, 1, d, Side::Long, 1, NOW);
+    post_at(&mut c, 2, d, Side::Long, 1, NOW + 40 * SEC);
+    commit_at(
+        &mut c,
+        &key(2).0,
+        &intent(&key(2).1, d, Side::Short, 5_000, 2),
+        &SALT,
+        NOW + 45 * SEC,
+    );
+    resolve_at_close(&mut c, d, UP);
+    // b forfeits; its last revealed call is scored as posted, a is not faded either
+    assert_eq!(fade_log(), None);
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (25, 25));
+    assert_eq!(o.winner.unwrap().0, key(1).1);
+    assert_eq!(c.get_no_reveal(U64(d)), (false, true));
+}
+
+#[test]
+fn r8_a_side_with_no_call_is_not_faded() {
+    let mut c = r8_setup();
+    let d = open(&mut c);
+    post_at(&mut c, 2, d, Side::Long, 1, NOW + 40 * SEC);
+    resolve_at_close(&mut c, d, UP);
+    assert_eq!(fade_log(), None);
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (0, 25));
+    assert_eq!(o.winner.unwrap().0, key(2).1);
+}
+
+#[test]
+fn r8_side_time_is_paid_from_the_bond_and_freed_on_void() {
+    // a first post's bond cost with R8 on, minus the same post in a duel run with R8 off
+    let mut c = r8_setup();
+    let first_post = |c: &mut Contract, tol: Option<u64>, nonce: u64| {
+        ctx(OWNER, 0);
+        c.set_agree_flip(tol);
+        let d = open(c);
+        let before = bond(c, 2);
+        post_at(c, 2, d, Side::Long, nonce, NOW);
+        (d, before - bond(c, 2))
+    };
+    let (d0, off) = first_post(&mut c, None, 1);
+    resolve_at_close(&mut c, d0, UP);
+    let (d, on) = first_post(&mut c, Some(30), 2);
+    // one record: 1-byte prefix, 4-byte length and 40-byte key, 8-byte value, 40 bytes overhead
+    let record = (1 + 4 + 40 + 8 + 40) as u128 * env::storage_byte_cost().as_yoctonear();
+    assert_eq!(on - off, record);
+    // a side change rewrites the record in place: it costs what a repeat costs
+    let cost = |c: &mut Contract, side: Side, nonce: u64, ts: u64| {
+        let before = bond(c, 2);
+        post_at(c, 2, d, side, nonce, ts);
+        before - bond(c, 2)
+    };
+    let change = cost(&mut c, Side::Short, 3, NOW + SEC);
+    let repeat = cost(&mut c, Side::Short, 4, NOW + 2 * SEC);
+    assert_eq!(change, repeat);
+    assert_eq!(since(&c, d, 2), Some(NOW + SEC));
+    ctx_at(OPERATOR, 0, CLOSE + VOID_AFTER_NS);
+    c.void_duel(U64(d));
+    assert_eq!(since(&c, d, 2), None);
+}
+
+#[test]
+#[should_panic(expected = "duels open")]
+fn set_agree_flip_refused_while_a_duel_is_open() {
+    let mut c = r8_setup();
+    open(&mut c);
+    ctx(OWNER, 0);
+    c.set_agree_flip(None);
+}
+
+#[test]
+#[should_panic(expected = "agree_flip_s out of range")]
+fn set_agree_flip_refuses_zero() {
+    let mut c = r8_setup();
+    ctx(OWNER, 0);
+    c.set_agree_flip(Some(0));
+}
+
+#[test]
+fn migrate_r8_keeps_state_and_starts_r8_off() {
+    let (mut c, _, skb) = setup();
+    commit_reveal_on(&mut c);
+    let d0 = open(&mut c);
+    resolve_at_close(&mut c, d0, UP);
+    let d1 = open(&mut c);
+    let i = intent(&key(2).1, d1, Side::Long, 5_000, 1);
+    commit_at(&mut c, &skb, &i, &SALT, NOW);
+    // deploy-14 state: the current layout minus the two appended fields
+    c.duels.flush();
+    c.agents.flush();
+    c.agent_duels.flush();
+    c.commitments.flush();
+    let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
+    let tail = raw.split_off(raw.len() - 6);
+    // agree_flip_ns None, side_since prefix 14
+    assert_eq!(tail, [0, 1, 0, 0, 0, 14]);
+    assert_eq!(
+        &raw[raw.len() - 5..],
+        [1, 0, 0, 0, 13],
+        "used_commitments ends the old layout"
+    );
+    env::storage_write(b"STATE", &raw);
+    ctx(CONTRACT, 0);
+    let mut m = Contract::migrate_r8();
+    let cfg = m.get_config();
+    assert_eq!(
+        (
+            cfg.next_duel.0,
+            cfg.open_duels,
+            cfg.commit_reveal,
+            cfg.agree_flip_s
+        ),
+        (2, 1, true, None)
+    );
+    assert!(m.get_duel(U64(d0)).unwrap().resolved);
+    assert_eq!(bond(&m, 2), bond(&c, 2));
+    // the duel running across the deploy reveals its commitment and is scored as posted
+    reveal_at(&mut m, &skb, &i, &SALT, NOW + SEC);
+    assert_eq!(since(&m, d1, 2), None);
+    resolve_at_close(&mut m, d1, UP);
+    assert_eq!(m.get_duel(U64(d1)).unwrap().outcome.unwrap().pnl_b, 25);
 }

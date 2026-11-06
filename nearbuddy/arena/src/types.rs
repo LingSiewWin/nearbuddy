@@ -190,6 +190,9 @@ pub struct Config {
     pub no_reveal_bps: u16,
     /// `open_duel` refused; pairing only through `open_duel_consented`.
     pub require_consent: bool,
+    /// R8 tolerance in seconds: of two same-side last calls, the one that took its side this much
+    /// later (else the duel's answerer) is scored on the opposite side. `None` = off.
+    pub agree_flip_s: Option<u64>,
 }
 
 // ---------------------------------------------------------------- Outlayer price oracle wire types

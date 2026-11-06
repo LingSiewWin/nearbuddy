@@ -21,6 +21,10 @@
 //! chain until the reveal. An unrevealed commitment forfeits the duel and pays `no_reveal_bps` of
 //! the bond to the opponent at scoring. `open_duel_consented` pairs two agents only with both agent keys' signatures.
 //!
+//! With `agree_flip_ns` set (R8), two last calls on the same side cannot both win: the side that
+//! took that side later (at commit time under commit-reveal) is scored on the opposite side, or the
+//! duel's answerer when both took it within the tolerance. Off by default.
+//!
 //! Every state-growing call pays its own storage (`storage_byte_cost` x bytes added) out of the
 //! value it brings: bond, chaos deposit, vault deposit, or the attached deposit.
 mod agents;

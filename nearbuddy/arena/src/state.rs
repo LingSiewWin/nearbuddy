@@ -24,6 +24,7 @@ pub(crate) enum StorageKey {
     Commitments,
     NoReveal,
     UsedCommitments,
+    SideSince,
 }
 
 #[near(contract_state)]
@@ -89,6 +90,12 @@ pub struct Contract {
     /// over a newer one) and get the agent slashed for not revealing it. ponytail: entries of
     /// finished duels are dead weight, paid from the bond like `used_nonces`.
     pub(crate) used_commitments: LookupSet<Vec<u8>>,
+    /// R8 tolerance (see `set_agree_flip`); `None` scores every call as posted.
+    pub(crate) agree_flip_ns: Option<u64>,
+    /// `duel_id_le || agent_pk` (see `commit_key`) to when that side's current side was decided:
+    /// the block time of the post, or the commit time of the reveal, that set it. Written only while
+    /// `agree_flip_ns` is on, paid from the bond, deleted on scoring and on void.
+    pub(crate) side_since: LookupMap<Vec<u8>, u64>,
 }
 
 /// State layout of deploys 12 and 13 (before commit-reveal and consent). Read once by
@@ -119,6 +126,41 @@ pub struct ContractV12 {
     agent_duels: LookupMap<Vec<u8>, Vec<u64>>,
     intent_lock_ns: u64,
     open_duels: u64,
+}
+
+/// State layout of deploy 14 (commit-reveal and consent, before R8). Read once by `migrate_r8`.
+#[allow(dead_code)]
+#[derive(near_sdk::borsh::BorshDeserialize)]
+#[borsh(crate = "near_sdk::borsh")]
+pub struct ContractV14 {
+    owner: AccountId,
+    oracle_account: AccountId,
+    oracle_deposit: u128,
+    slash_bps: u16,
+    fee_bps: u16,
+    min_chaos_deposit: u128,
+    agents: IterableMap<Vec<u8>, Agent>,
+    duels: LookupMap<u64, Duel>,
+    next_duel: u64,
+    used_nonces: LookupSet<Vec<u8>>,
+    solvers: LookupSet<AccountId>,
+    vaults: LookupMap<AccountId, u128>,
+    follows: LookupMap<Vec<u8>, Vec<(AccountId, Mandate)>>,
+    settled_fills: LookupSet<Vec<u8>>,
+    owner_fees: u128,
+    tee_signers: LookupSet<Vec<u8>>,
+    tee_agents: LookupSet<Vec<u8>>,
+    used_proofs: LookupSet<Vec<u8>>,
+    min_duel_ns: u64,
+    agent_duels: LookupMap<Vec<u8>, Vec<u64>>,
+    intent_lock_ns: u64,
+    open_duels: u64,
+    commit_reveal: bool,
+    no_reveal_bps: u16,
+    require_consent: bool,
+    commitments: LookupMap<Vec<u8>, ([u8; 32], u64)>,
+    no_reveal: LookupMap<u64, (bool, bool)>,
+    used_commitments: LookupSet<Vec<u8>>,
 }
 
 /// Seconds to ns with a sanity bound (a week), so a unit mix-up cannot set an absurd floor.
@@ -186,6 +228,8 @@ impl Contract {
             commitments: LookupMap::new(StorageKey::Commitments),
             no_reveal: LookupMap::new(StorageKey::NoReveal),
             used_commitments: LookupSet::new(StorageKey::UsedCommitments),
+            agree_flip_ns: None,
+            side_since: LookupMap::new(StorageKey::SideSince),
         }
     }
 
@@ -228,6 +272,50 @@ impl Contract {
             commitments: LookupMap::new(StorageKey::Commitments),
             no_reveal: LookupMap::new(StorageKey::NoReveal),
             used_commitments: LookupSet::new(StorageKey::UsedCommitments),
+            agree_flip_ns: None,
+            side_since: LookupMap::new(StorageKey::SideSince),
+        }
+    }
+
+    /// Deploy 14 → R8: add the agree-flip tolerance (off) and the side-time map. Every existing field
+    /// and collection prefix is carried over unchanged; no `Duel` record is rewritten.
+    /// Caller: the contract itself (private), once after the code lands. Deposit: none. Panics:
+    /// "no state", or the SDK private-method panic for any other caller.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate_r8() -> Self {
+        let old: ContractV14 = env::state_read().expect("no state");
+        Self {
+            owner: old.owner,
+            oracle_account: old.oracle_account,
+            oracle_deposit: old.oracle_deposit,
+            slash_bps: old.slash_bps,
+            fee_bps: old.fee_bps,
+            min_chaos_deposit: old.min_chaos_deposit,
+            agents: old.agents,
+            duels: old.duels,
+            next_duel: old.next_duel,
+            used_nonces: old.used_nonces,
+            solvers: old.solvers,
+            vaults: old.vaults,
+            follows: old.follows,
+            settled_fills: old.settled_fills,
+            owner_fees: old.owner_fees,
+            tee_signers: old.tee_signers,
+            tee_agents: old.tee_agents,
+            used_proofs: old.used_proofs,
+            min_duel_ns: old.min_duel_ns,
+            agent_duels: old.agent_duels,
+            intent_lock_ns: old.intent_lock_ns,
+            open_duels: old.open_duels,
+            commit_reveal: old.commit_reveal,
+            no_reveal_bps: old.no_reveal_bps,
+            require_consent: old.require_consent,
+            commitments: old.commitments,
+            no_reveal: old.no_reveal,
+            used_commitments: old.used_commitments,
+            agree_flip_ns: None,
+            side_since: LookupMap::new(StorageKey::SideSince),
         }
     }
 
@@ -286,6 +374,22 @@ impl Contract {
     pub fn set_require_consent(&mut self, required: bool) {
         self.only_owner();
         self.require_consent = required;
+    }
+
+    /// R8 scoring, "they can't both be right". `Some(s)`: when both last calls of a duel are on the
+    /// same side, the side that took it `s` seconds or more after the other is scored on the opposite
+    /// side; within `s`, the duel's answerer is (b on even ids, a on odd). A revealed call took its
+    /// side when it was committed. `None`: every call is scored as posted. May not change while a
+    /// duel is open, so a running duel keeps the rules it was opened under.
+    /// Caller: owner. Deposit: none. Panics: "not owner", "agree_flip_s out of range", "duels open".
+    pub fn set_agree_flip(&mut self, agree_flip_s: Option<u64>) {
+        self.only_owner();
+        require!(
+            agree_flip_s.is_none_or(|s| (1..=3600).contains(&s)),
+            "agree_flip_s out of range"
+        );
+        require!(self.open_duels == 0, "duels open");
+        self.agree_flip_ns = agree_flip_s.map(|s| s * 1_000_000_000);
     }
 
     /// Contract owner collects accrued settlement fees.
