@@ -140,6 +140,18 @@ export function Tape({
     return out;
   }, [events, ticks, filter]);
 
+  // one polite line for screen readers: the newest attack, duel open or result (calls and trades come too often
+  // to speak); a live region announces changes only, so the first frame stays silent
+  const loud = events.find(
+    (e): e is Extract<ArenaEvent, { kind: "attack" | "open" | "resolve" }> =>
+      e.ok && (e.kind === "attack" || e.kind === "open" || e.kind === "resolve"),
+  );
+  const say = !loud
+    ? ""
+    : loud.kind === "attack"
+      ? `Paid attack on ${who(modelOf(loud.target))}${loud.text ? `: ${loud.text}` : ""}`
+      : `Duel ${loud.duel ?? ""} ${loud.kind === "open" ? "opened" : "resolved"}`;
+
   const reply = (pk: string, duel: number, after: number) =>
     events
       .filter((e): e is Intent => isCall(e) && e.ok && e.duel === duel && e.agent === pk && e.at > after)
@@ -294,6 +306,9 @@ export function Tape({
         ))}
       </fieldset>
       <div className="h rows">{lines.map(row)}</div>
+      <p className="sr" aria-live="polite">
+        {say}
+      </p>
     </>
   );
 }
