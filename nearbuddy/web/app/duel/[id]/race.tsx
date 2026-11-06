@@ -36,6 +36,9 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
   const price = d.live ? (last?.p ?? null) : d.close;
   const move = open && price ? ((price - open) / open) * 100 : null;
   const { intents, attacks } = duelEvents(d.events, d.duel);
+  const label = `NEAR price over duel ${d.duel}${open ? `, open ${usd(open)}` : ""}${
+    price != null && move != null ? `, ${d.live ? "now" : "oracle close"} ${usd(price)}, ${moved(move)}` : ""
+  }${attacks.length ? `, ${attacks.length} paid attack${attacks.length > 1 ? "s" : ""}` : ""}`;
   const t = tones(d);
   const lane = (s: DuelSide, k: string) => {
     const mine = intents.filter((i) => i.agent === s.agent);
@@ -114,7 +117,7 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
           </div>
         ) : null}
         <div className="plot">
-          <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-label="NEAR price during the duel">
+          <svg viewBox="0 0 1000 100" preserveAspectRatio="none" role="img" aria-label={label}>
             {oracleOpen && close ? (
               <rect
                 x="0"
