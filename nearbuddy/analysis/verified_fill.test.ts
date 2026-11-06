@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
+import { OVERRIDES } from "../packages/protocol/src/network.ts";
 
 test("verified_fill refuses to run off testnet before any RPC call", async () => {
   let hits = 0;
@@ -21,6 +22,8 @@ test("verified_fill refuses to run off testnet before any RPC call", async () =>
         {
           cwd: `${import.meta.dirname}/..`,
           env: {
+            // a local .env must not leak testnet overrides in (env.ts only fills unset keys): blank every override
+            ...Object.fromEntries(OVERRIDES.map((k) => [k, ""])),
             PATH: process.env.PATH,
             HOME: process.env.HOME,
             NEAR_NETWORK: "mainnet",
