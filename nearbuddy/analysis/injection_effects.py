@@ -14,7 +14,7 @@ Means (bps) use a normal 95% CI and the same n >= 30 rule against 0.
 Close prices come from get_duel on the arena contract, cached in analysis/data/duels.json.
 
 Run:  agents/.venv/bin/python analysis/injection_effects.py
-Stdlib only.
+Stdlib plus agents/config.py (env file and the NEAR_NETWORK table).
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from __future__ import annotations
 import base64
 import json
 import math
-import os
 import re
 import sys
 import urllib.request
@@ -34,8 +33,11 @@ from statistics import mean, stdev
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "agents" / "data" / "decisions.jsonl"
 CACHE = ROOT / "analysis" / "data" / "duels.json"
-RPC = os.environ.get("NEAR_RPC", "https://near-testnet.drpc.org")
-ARENA = os.environ.get("ARENA_CONTRACT", "arena.nearbuddy-solver.testnet")
+sys.path.insert(0, str(ROOT / "agents"))
+from config import ENV, NET  # noqa: E402
+
+RPC = ENV.get("NEAR_RPC", NET["rpc"])
+ARENA = ENV.get("ARENA_CONTRACT", NET["arena"])
 PRICE_SCALE = 1e8  # contract price fixed-point; checked against the brief below
 
 # Kept identical to agents/summarize.py (a test checks). The last words of each list read the holdout payloads in

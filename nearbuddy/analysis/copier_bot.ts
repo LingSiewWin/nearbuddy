@@ -5,7 +5,7 @@
 //   bun analysis/copier_bot.ts --minutes 240     collect, append rows to analysis/data/copier.jsonl, print table
 //   bun analysis/copier_bot.ts --report          table only, from the jsonl
 // Return convention: positive bps = mirroring the intent (Long -> buy, Short -> sell) at detection made money.
-// Close-horizon exit is the oracle close (price-oracle.testnet), entry is Coinbase: a small basis is baked in.
+// Close-horizon exit is the oracle close (the network's price oracle), entry is Coinbase: a small basis is baked in.
 //   bun analysis/copier_bot.ts --mode reveal-aware --minutes 240
 // reveal-aware also writes `phase` (get_config commit_reveal at detection, and the chain times of the `commit`
 // and `intent` events, read from FastNEAR's tx API), `quote_at` (solver /arena snapshot, else the chain time the
@@ -13,16 +13,20 @@
 // negative window means the copier saw the side before the follower quote. Rows go to data/copier-v2.jsonl.
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { JsonRpcProvider } from "near-api-js";
+import { NET, NETWORK_ID } from "../packages/protocol/src/network.ts";
 
-const RPC = process.env.COPIER_RPC ?? "https://test.rpc.fastnear.com"; // not NEAR_RPC: views go to FastNEAR to spare drpc
-const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
+const MAINNET = NETWORK_ID === "mainnet";
+// not NEAR_RPC: views go to FastNEAR (testnet fallback, mainnet primary) to spare drpc
+const RPC = process.env.COPIER_RPC ?? (MAINNET ? NET.rpc : NET.fallback);
+const ARENA = process.env.ARENA_CONTRACT ?? NET.arena;
 const COINBASE = "https://api.coinbase.com/v2/prices/NEAR-USD/spot";
 const POLL_MS = 5_000;
 const FLUSH_DELAY_MS = 120_000; // > the +90 s horizon plus fetch slack
 const HORIZONS_S = [15, 60, 90] as const;
 const HARDENED = ["Ul+W6UJK", "qZ+N09R4"];
 const NAIVE = ["8dPZ7znZ", "fwHajcL3"];
-const TX_API = process.env.COPIER_TX_API ?? "https://tx.test.fastnear.com/v0"; // POST /account, POST /transactions (<= 20)
+// POST /account, POST /transactions (<= 20)
+const TX_API = process.env.COPIER_TX_API ?? `https://tx.${MAINNET ? "main" : "test"}.fastnear.com/v0`;
 const SOLVER = process.env.COPIER_SOLVER ?? process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const args = process.argv.slice(2);
 const REVEAL_AWARE = args.includes("--mode") && args[args.indexOf("--mode") + 1] === "reveal-aware";
