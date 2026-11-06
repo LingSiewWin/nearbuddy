@@ -32,6 +32,7 @@ pub(crate) enum StorageKey {
     DuelLocks,
     Sweeping,
     SelfChaos,
+    NonceTimes,
 }
 
 /// Most accounts one `reconcile_vault_total` reads, so the call stays inside one transaction's gas.
@@ -53,7 +54,7 @@ pub struct Contract {
     pub(crate) agents: IterableMap<Vec<u8>, Agent>,
     pub(crate) duels: LookupMap<u64, Duel>,
     pub(crate) next_duel: u64,
-    /// `agent_pk || nonce_le` of every accepted intent.
+    /// `agent_pk || nonce_le` of every intent accepted before deploy 16 (later ones: `nonce_times`).
     pub(crate) used_nonces: LookupSet<Vec<u8>>,
     pub(crate) solvers: LookupSet<AccountId>,
     /// Follower vault balances, yoctoNEAR.
@@ -147,6 +148,10 @@ pub struct Contract {
     /// cannot park the whole of `max_vault_total` and block every other follower. Vaults already
     /// above it stay as they are and withdraw normally; only new deposits are checked.
     pub(crate) max_vault_per_account: u128,
+    /// `agent_pk || nonce_le` (see `nonce_key`) to the block time its intent was accepted, for every
+    /// intent accepted from deploy 16 on; it replaces `used_nonces` for them. A fill for an intent
+    /// accepted at or after its mandate's revoke or expiry is refused, whatever the grace (deploy 16).
+    pub(crate) nonce_times: LookupMap<Vec<u8>, u64>,
 }
 
 /// State layout of deploy 15 (verified settlement, vault delay and cap, per-duel lock, self-chaos).
@@ -231,6 +236,15 @@ impl Contract {
         require!(!self.paused, "paused");
     }
 
+    /// When the intent behind `key` (see `nonce_key`) was accepted: its block time from deploy 16
+    /// on, 0 for one accepted before (time not recorded), `None` for a nonce never accepted.
+    pub(crate) fn accepted_at(&self, key: &[u8]) -> Option<u64> {
+        self.nonce_times
+            .get(key)
+            .copied()
+            .or_else(|| self.used_nonces.contains(key).then_some(0))
+    }
+
     pub(crate) fn not_migrating(&self) {
         require!(self.follows_cursor.is_none(), "migrating");
     }
@@ -304,12 +318,15 @@ impl Contract {
             sweeping: LookupMap::new(StorageKey::Sweeping),
             self_chaos: LookupMap::new(StorageKey::SelfChaos),
             max_vault_per_account: max_vault_total.0,
+            nonce_times: LookupMap::new(StorageKey::NonceTimes),
         }
     }
 
     // ---------------------------------------------------------------- migration
 
-    /// Deploy 15 → 16: a per-account vault cap (`max_vault_per_account`). Every deploy-15 field is
+    /// Deploy 15 → 16: a per-account vault cap (`max_vault_per_account`) and the accept time of
+    /// each new intent (`nonce_times`; intents accepted before keep only `used_nonces`, so their
+    /// fills keep the deploy-15 grace rule). Every deploy-15 field is
     /// carried over unchanged, so existing vaults, mandates, holdings and duels read as before.
     /// `vault_total` keeps its deploy-15 value; `reconcile_vault_total` clears its drift.
     /// Caller: the contract itself (private), once after the deploy-16 code lands. Deposit:
@@ -362,6 +379,7 @@ impl Contract {
             sweeping: old.sweeping,
             self_chaos: old.self_chaos,
             max_vault_per_account: max_vault_per_account.0,
+            nonce_times: LookupMap::new(StorageKey::NonceTimes),
         }
     }
 

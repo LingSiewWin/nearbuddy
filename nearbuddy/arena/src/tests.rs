@@ -771,7 +771,8 @@ pub fn fill(nonce: u64, token: &str, amount: u128) -> Fill {
 
 const VAULT: u128 = 10 * NEAR;
 /// `withdraw_delay_ns` default: the grace a fronted fill keeps after unfollow or expiry.
-const GRACE: u64 = 900 * 1_000_000_000;
+const GRACE: u64 = 900 * SEC;
+const SEC: u64 = 1_000_000_000;
 
 /// setup + TEE signer + duel + A posts nonce 1 through its proof + follower deposits 10 NEAR and
 /// follows A (TEE-backed; plain B cannot be followed) with the given mandate.
@@ -1003,12 +1004,12 @@ fn fill_after_revoke_and_its_grace_rejected() {
 fn swap_fronted_before_unfollow_settles_inside_the_grace() {
     // the follower unfollows after the solver fronted the swap; the fill lands 899 s later and settles
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    ctx(FOLLOWER, 0);
+    ctx_at(FOLLOWER, 0, NOW + 1);
     c.unfollow(Base64VecU8(key(1).1));
     let m = c
         .get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
         .unwrap();
-    assert_eq!((m.revoked, m.revoked_at.0), (true, NOW));
+    assert_eq!((m.revoked, m.revoked_at.0), (true, NOW + 1));
     // a second unfollow does not restart the grace
     ctx_at(FOLLOWER, 0, NOW + 10);
     c.unfollow(Base64VecU8(key(1).1));
@@ -1016,6 +1017,98 @@ fn swap_fronted_before_unfollow_settles_inside_the_grace() {
     let answer = covering(&c, &fills);
     let r = settle_answered(&mut c, 1, fills, answer, NOW + GRACE - 1);
     assert_eq!(r.unwrap().settled, 1);
+}
+
+/// A posts nonce `nonce` through its TEE proof at `ts`.
+fn post_a_at(c: &mut Contract, ska: &SigningKey, tee: &SigningKey, d: u64, nonce: u64, ts: u64) {
+    let pk = ska.verifying_key().to_bytes();
+    let (req, res) = (pk, [nonce as u8; 32]);
+    let mut i = intent(&pk, d, Side::Long, 5_000, nonce);
+    i.proof_hash = Base64VecU8(proof_hash(&req, &res));
+    ctx_at(SOLVER, 0, ts);
+    c.post_intent(sign(ska, &i), Some(tee_proof(tee, 2, MODEL_A, req, res)));
+}
+
+#[test]
+fn intent_accepted_after_unfollow_never_settles_inside_the_grace() {
+    // red team V3: the grace let the solver settle intents posted after the revoke
+    let (mut c, d, _) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let tee = key(7).0;
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.unfollow(Base64VecU8(key(1).1));
+    post_a_at(&mut c, &key(1).0, &tee, d, 2, NOW + 2 * SEC);
+    let fills = vec![fill(2, "usdc", 50), fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 3 * SEC).unwrap();
+    assert_eq!(
+        r.settled, 1,
+        "nonce 1 (before the revoke) is inside the grace"
+    );
+    assert_eq!(r.rejected, vec![(0, "mandate revoked".to_string())]);
+}
+
+#[test]
+fn intent_accepted_at_the_revoke_instant_is_refused() {
+    // same block as the unfollow: the order inside the block is unknown, so the follower wins
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 0);
+    c.unfollow(Base64VecU8(key(1).1));
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC);
+    assert_eq!(r.unwrap_err(), "mandate revoked");
+}
+
+#[test]
+fn intent_accepted_after_expiry_never_settles_inside_the_grace() {
+    let mut m = mandate(NEAR, VAULT, vec![]);
+    m.expires_at = U64(NOW + 2 * SEC);
+    let (mut c, d, _) = setup_follow(m);
+    post_a_at(&mut c, &key(1).0, &key(7).0, d, 2, NOW + 2 * SEC);
+    let fills = vec![fill(2, "usdc", 50), fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 3 * SEC).unwrap();
+    assert_eq!(r.settled, 1);
+    assert_eq!(r.rejected, vec![(0, "mandate expired".to_string())]);
+}
+
+#[test]
+fn intent_accepted_before_deploy_16_keeps_the_grace_rule() {
+    // only `used_nonces` knows it: no accept time, so the deploy-15 grace applies as before
+    let mut m = mandate(NEAR, VAULT, vec![]);
+    m.expires_at = U64(NOW + 2 * GRACE);
+    let (mut c, ..) = setup_follow(m);
+    c.used_nonces.insert(nonce_key(&key(1).1, 5));
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.unfollow(Base64VecU8(key(1).1));
+    let fills = vec![fill(5, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let late = settle_answered(&mut c, 1, fills.clone(), answer, NOW + SEC + GRACE);
+    assert_eq!(late.unwrap_err(), "mandate revoked");
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC + GRACE - 1);
+    assert_eq!(r.unwrap().settled, 1);
+}
+
+#[test]
+#[should_panic(expected = "nonce used")]
+fn a_pre_deploy_16_nonce_cannot_be_posted_again() {
+    let (mut c, ska, _) = setup();
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    c.used_nonces.insert(nonce_key(&key(1).1, 3));
+    post_a(&mut c, &ska, &tee, d, Side::Long, 3);
+}
+
+#[test]
+fn post_intent_records_its_accept_time() {
+    let (c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    assert_eq!(c.accepted_at(&nonce_key(&key(1).1, 1)), Some(NOW));
+    assert_eq!(c.accepted_at(&nonce_key(&key(1).1, 2)), None);
+    assert!(
+        !c.used_nonces.contains(&nonce_key(&key(1).1, 1)),
+        "new intents skip used_nonces"
+    );
 }
 
 #[test]
@@ -2220,7 +2313,8 @@ fn v15_state(c: &mut Contract) -> Vec<u8> {
     c.vaults.flush();
     c.follows.flush();
     let mut raw = near_sdk::borsh::to_vec(&*c).unwrap();
-    let tail = near_sdk::borsh::to_vec(&c.max_vault_per_account).unwrap();
+    c.nonce_times.flush();
+    let tail = near_sdk::borsh::to_vec(&(&c.max_vault_per_account, &c.nonce_times)).unwrap();
     assert_eq!(raw.split_off(raw.len() - tail.len()), tail);
     raw
 }
@@ -2228,6 +2322,10 @@ fn v15_state(c: &mut Contract) -> Vec<u8> {
 #[test]
 fn migrate_v16_keeps_deploy_15_state_and_adds_the_account_cap() {
     let (mut c, d, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    // deploy 15 recorded the posted nonce in `used_nonces` only
+    let k = nonce_key(&key(1).1, 1);
+    c.nonce_times.remove(&k);
+    c.used_nonces.insert(k.clone());
     let raw = v15_state(&mut c);
     let before = c.get_config();
     env::storage_write(b"STATE", &raw);
@@ -2248,6 +2346,11 @@ fn migrate_v16_keeps_deploy_15_state_and_adds_the_account_cap() {
     assert_eq!(m.get_vault(f.clone()).0, v, "vaults untouched");
     assert!(m.get_follow(Base64VecU8(key(1).1), f).is_some());
     assert_eq!(m.lock_of(d), LOCK);
+    assert_eq!(
+        m.accepted_at(&k),
+        Some(0),
+        "a deploy-15 nonce stays known, time unknown"
+    );
     // the fill posted before the deploy still settles
     assert_eq!(settle(&mut m, vec![fill(1, "usdc", 50)]).settled, 1);
     // the follower holds ~10 NEAR: 2 more fit under 12, 1 more after that does not

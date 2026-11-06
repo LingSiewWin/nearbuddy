@@ -227,7 +227,8 @@ impl Contract {
     }
 
     /// Revoke the caller's mandate for `agent_pk`; a no-op when there is none. Open while paused.
-    /// Fills the solver fronted before now stay settleable for `withdraw_delay_s` (see `apply_fill`).
+    /// Fills for intents accepted before now stay settleable for `withdraw_delay_s`; intents
+    /// accepted from now on never settle against this mandate (see `apply_fill`).
     /// Caller: the follower. Deposit: none. Panics: "migrating".
     pub fn unfollow(&mut self, agent_pk: Base64VecU8) {
         self.not_migrating();
@@ -364,28 +365,26 @@ impl Contract {
         now: u64,
         surplus: &mut BTreeMap<String, u128>,
     ) -> Result<u128, &'static str> {
-        if !self
-            .used_nonces
-            .contains(&nonce_key(agent_pk, f.intent_nonce.0))
-        {
-            return Err("nonce unknown");
-        }
+        let at = self
+            .accepted_at(&nonce_key(agent_pk, f.intent_nonce.0))
+            .ok_or("nonce unknown")?;
         let fkey = fill_key(agent_pk, follower, f.intent_nonce.0);
         if self.settled_fills.contains(&fkey) {
             return Err("duplicate fill");
         }
         // a swap fronted while the mandate was live may land after an unfollow or the expiry: it stays
-        // settleable for the same delay a vault withdrawal waits, then the mandate is closed
+        // settleable for the same delay a vault withdrawal waits, then the mandate is closed. The grace
+        // covers only intents accepted before the revoke or expiry (`at`; 0 = before deploy 16, unknown).
         let grace = self.withdraw_delay_ns;
         let m = self
             .follows
             .get_mut(&follow_key(agent_pk, follower))
             .ok_or("no mandate")?
             .current_mut();
-        if m.revoked && now >= m.revoked_at.0.saturating_add(grace) {
+        if m.revoked && (now >= m.revoked_at.0.saturating_add(grace) || at >= m.revoked_at.0) {
             return Err("mandate revoked");
         }
-        if now >= m.expires_at.0.saturating_add(grace) {
+        if now >= m.expires_at.0.saturating_add(grace) || at >= m.expires_at.0 {
             return Err("mandate expired");
         }
         if !m.allowed_tokens.is_empty() && !m.allowed_tokens.contains(&f.token) {
