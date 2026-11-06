@@ -1,5 +1,6 @@
 """The final reveals cannot be pushed past close_at: held commitments are revealed concurrently, every solver wait for
-a reveal ends at close_at minus REVEAL_MARGIN_S (restart retries and the answer alike)."""
+a reveal ends at close_at minus REVEAL_MARGIN_S (restart retries and the answer alike), and commit-reveal is refused
+outright when the contract has no intent lock to hold the scored call behind."""
 
 import json
 import socket
@@ -14,6 +15,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import runner  # noqa: E402
+from config import ENV  # noqa: E402
 from intent_client import DeadlineError, Solver  # noqa: E402
 
 S = 1_000_000_000
@@ -114,3 +116,23 @@ def test_commitments_carry_close_at_minus_the_margin():
     clock_close = 100 * S
     p = runner.Commitment("A", {}, b"", None, {}, clock_close - runner.REVEAL_MARGIN_S * S)
     assert p.deadline_ns == 95 * S
+
+
+def test_commit_reveal_without_an_intent_lock_is_refused(monkeypatch):
+    with pytest.raises(SystemExit, match="intent_lock_s is 0"):
+        runner.require_lock_for_commit_reveal(True, 0)
+    runner.require_lock_for_commit_reveal(True, 10)
+    runner.require_lock_for_commit_reveal(False, 0)
+
+    class NoPosts:
+        def __init__(self, *_a):
+            pass
+
+        def post(self, *_a, **_k):
+            raise AssertionError("refused before any solver call")
+
+    monkeypatch.setitem(ENV, "ARENA_SECRET", "k")
+    monkeypatch.setattr(runner, "Solver", NoPosts)
+    monkeypatch.setattr(runner, "view", lambda m, a: {"commit_reveal": False, "intent_lock_s": 0})
+    with pytest.raises(SystemExit, match="intent_lock_s is 0"):
+        runner.run(1, 60, 6, "NEAR/USD", "http://127.0.0.1:1", "1", commit_reveal=True)

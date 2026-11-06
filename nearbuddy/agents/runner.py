@@ -559,6 +559,16 @@ def reveal_all(solver: Solver, held: dict[str, Commitment]) -> None:
 Player = tuple[str, Duelist, SigningKey, Tracked, ModelClient]
 
 
+def require_lock_for_commit_reveal(commit_reveal: bool, lock_s: int) -> None:
+    """Commit-reveal only hides the scored call if it can be held until nobody can commit again, which is the
+    contract's intent lock. With `intent_lock_s` 0 there is no such moment: refuse rather than reveal into the open."""
+    if commit_reveal and lock_s <= 0:
+        raise SystemExit(
+            "commit-reveal needs the contract's intent lock, but get_config.intent_lock_s is 0: the scored call "
+            "would be revealed while the opponent can still commit. Set it with set_oracle first."
+        )
+
+
 def hold_until_lock(lock_at_ns: int, close_at_ns: int) -> None:
     """Wait until the chain clock reaches `lock_at_ns` (close_at minus the intent lock). From there no agent can
     commit again, so revealing the scored call cannot be answered by a counter-call; reveals stay open up to
@@ -756,6 +766,8 @@ def run_single(
         )
         cfg = view("get_config", {}) or {}
         lock_s = int(cfg.get("intent_lock_s", 0) or 0)
+        duel_cr = commit_reveal or bool(cfg.get("commit_reveal"))
+        require_lock_for_commit_reveal(duel_cr, lock_s)
         stop_ns = close_at_ns - (lock_s + 25) * 1_000_000_000  # intent lock + model/signature/chain round trip
         nonce = play_duel(
             solver,
@@ -768,7 +780,7 @@ def run_single(
             nonce,
             cycle_seconds,
             attestations,
-            commit_reveal or bool(cfg.get("commit_reveal")),
+            duel_cr,
             lock_s,
         )
         while time.time_ns() < close_at_ns + 2_000_000_000:
@@ -848,6 +860,7 @@ def run(
     lock_s = int(cfg.get("intent_lock_s", 0) or 0)
     # the contract can require either; the flags turn them on against a contract that only allows them
     commit_reveal = commit_reveal or bool(cfg.get("commit_reveal"))
+    require_lock_for_commit_reveal(commit_reveal, lock_s)
     consent = consent or bool(cfg.get("require_consent"))
     print(f"commit-reveal {'on' if commit_reveal else 'off'}, consent {'on' if consent else 'off'}")
     model_a, model_b = client_from_env(ENV, "A"), client_from_env(ENV, "B")
