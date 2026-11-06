@@ -53,7 +53,10 @@ type AccountTx = { transaction_hash: string; tx_block_height: number; tx_block_t
 type FcAction = { FunctionCall?: { method_name: string; args: string; deposit: string } };
 type TxDetail = {
   transaction: { hash: string; signer_id: string; actions: (FcAction | string)[] };
-  receipts: { receipt: { receiver_id: string }; execution_outcome: { outcome: { logs: string[] } } }[];
+  receipts: {
+    receipt: { receiver_id: string };
+    execution_outcome: { outcome: { logs: string[]; status?: { SuccessValue?: string } } };
+  }[];
 };
 
 const post = async <T>(path: string, body: unknown): Promise<T> => {
@@ -143,10 +146,18 @@ export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
     case "open_duel":
     case "open_duel_consented": {
       const o = find("open_price");
+      // open_duel returns the new id; it is the only source when the oracle's open_price log has not landed
+      const ret = t.receipts.find(
+        (r) => r.receipt.receiver_id === ARENA && "SuccessValue" in (r.execution_outcome.outcome.status ?? {}),
+      )?.execution_outcome.outcome.status?.SuccessValue;
+      let returned: number | null = null;
+      try {
+        returned = ret ? Number(JSON.parse(Buffer.from(ret, "base64").toString("utf8"))) : null;
+      } catch {}
       return {
         ...base,
         kind: "open",
-        duel: num(o?.duel_id),
+        duel: num(o?.duel_id) ?? (Number.isFinite(returned) ? returned : null),
         a: String(args.a),
         b: String(args.b),
         closeAt: Math.floor(Number(args.close_at) / 1e6),
