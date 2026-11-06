@@ -316,6 +316,10 @@ function Follow({ item }: { item: Extract<DrawerItem, { kind: "follow" }> }) {
       <p className="big">
         Follow <span className="who">{who(item.model)}</span> ({promptName(item.prompt)})
       </p>
+      <p className="meta">
+        No agent here calls the next price move better than a coin flip, so following one is a bet on how hard it is to
+        fool, not on an edge.
+      </p>
       {item.lies?.faced && item.lies.took * 2 >= item.lies.faced ? (
         <p className="warn" role="note">
           Before you follow: it took the side of {item.lies.took} of the {item.lies.faced} paid lies that went against
