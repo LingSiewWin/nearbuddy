@@ -18,9 +18,9 @@
 //
 // Scenarios:
 //   1. commit-reveal duel: owner turns commit-reveal on, the runner plays one duel with two stub agents, the oracle
-//      stand-in answers open and close, the duel resolves. Checks commit events then intent (reveal) events per
-//      dataset row, the revealed intents scored, no no-reveal flags, the outcome, the dataset columns, and that the
-//      final reveals land inside the intent lock (after the last moment the opponent could still commit).
+//      stand-in answers open and close, the duel resolves. Checks commit events per committed row, one reveal per
+//      agent (every other commitment replaced), the revealed intents scored, no no-reveal flags, the outcome, and
+//      that EVERY reveal lands inside the intent lock (after the last moment the opponent could still commit).
 //   2. SIGTERM mid-duel: the runner is killed after its second commit round; its held commitments must still be
 //      revealed, and the duel resolves with no no-reveal flag. Stub A and B take opposite sides, so this duel is
 //      decided: the loser's bond is slashed and the winner is paid the pool.
@@ -77,6 +77,7 @@ const yoctoForUsdc = (usdc: bigint, centsPerNear = SPOT_CENTS) => (usdc * 100n *
 function offlineThirdParties(): Promise<string> {
   const decimals = (asset: string) => (asset === WNEAR ? 24 : 6);
   const fmt = (raw: bigint, d: number) => (Number(raw) / 10 ** d).toString();
+  let spotReads = 0;
   const convert = (amount: bigint, from: string) => (from === WNEAR ? usdcForYocto(amount) : yoctoForUsdc(amount));
   const usd = (amount: bigint, asset: string) =>
     (Number(asset === WNEAR ? usdcForYocto(amount) : amount) / 1e6).toFixed(4);
@@ -89,7 +90,11 @@ function offlineThirdParties(): Promise<string> {
         res.end(JSON.stringify(v));
       };
       if (req.method === "GET" && /^\/v2\/prices\/[A-Z]+-USD\/spot$/.test(req.url ?? ""))
-        return send(200, { data: { amount: SPOT_USD.toFixed(4), base: "NEAR", currency: "USD" } });
+        // the tape alternates 3.68 / 3.69: the stub models (agents/nearai.py, hash of the prompt) flip their call on
+        // each new brief, so commit-reveal replaces commitments on chain instead of only keeping them
+        return send(200, {
+          data: { amount: (spotReads++ % 2 ? 3.69 : 3.68).toFixed(4), base: "NEAR", currency: "USD" },
+        });
       if (req.method === "POST" && req.url === "/v0/quote") {
         const q = JSON.parse(body) as {
           swapType: string;
@@ -250,10 +255,15 @@ async function txEvents(hash: string, sender: string): Promise<J[]> {
   const r = await rpc<J>("tx", { tx_hash: hash, sender_account_id: sender, wait_until: "FINAL" });
   return events(r.receipts_outcome.flatMap((o: J) => o.outcome.logs as string[]));
 }
-/** Chain time (ns) of the block that included a transaction. */
-async function txTime(hash: string, sender: string): Promise<bigint> {
+/** Chain time of the block of the transaction's successful arena receipt (the block_timestamp the contract compared
+ *  with the lock), or null when no arena receipt succeeded. */
+async function arenaReceiptTime(hash: string, sender: string): Promise<bigint | null> {
   const r = await rpc<J>("tx", { tx_hash: hash, sender_account_id: sender, wait_until: "FINAL" });
-  return BigInt((await rpc<J>("block", { block_id: r.transaction_outcome.block_hash })).header.timestamp_nanosec);
+  const o = (r.receipts_outcome as J[]).find(
+    (x) =>
+      x.outcome.executor_id === ARENA && ("SuccessValue" in x.outcome.status || "SuccessReceiptId" in x.outcome.status),
+  );
+  return o ? BigInt((await rpc<J>("block", { block_id: o.block_hash })).header.timestamp_nanosec) : null;
 }
 const events = (logs: string[]) =>
   logs.filter((l) => l.startsWith("EVENT_JSON:")).map((l) => JSON.parse(l.slice("EVENT_JSON:".length)));
@@ -543,21 +553,28 @@ async function main() {
    *  scored intents are the last revealed ones, no no-reveal flag, the outcome matches the oracle prices. */
   async function checkDuel(sc: string, duelId: string, rows: Row0[], resolveTx: Tx | undefined, lockReveal = false) {
     const mine = rows.filter((r) => String(r.duel_id) === duelId);
+    // the contract keeps one commitment per agent: every committed row is either the one revealed or replaced by a
+    // later commit; an unchanged call keeps the held commitment and commits nothing
     const committed = mine.filter((r) => r.commitment);
-    const complete = committed.filter((r) => r.committed_tx && r.revealed_tx);
+    const accounted = committed.filter((r) => r.committed_tx && (r.revealed_tx || r.replaced_by));
+    const revealed = committed.filter((r) => r.committed_tx && r.revealed_tx);
     const agents = [...new Set(committed.map((r) => r.agent_pk as string))];
+    const onePerAgent = agents.every((pk) => revealed.filter((r) => r.agent_pk === pk).length === 1);
     check(
       sc,
-      "dataset rows carry commitment, committed_tx, revealed_tx",
-      committed.length >= 2 && complete.length === committed.length && agents.length === 2,
-      `${complete.length}/${committed.length} complete rows, ${agents.length} agents, errors: ${JSON.stringify(mine.filter((r) => r.error).map((r) => r.error))}`,
+      "dataset: every commitment revealed or replaced, one reveal per agent",
+      committed.length >= 2 && accounted.length === committed.length && agents.length === 2 && onePerAgent,
+      `${committed.length} committed (${revealed.length} revealed, ${committed.length - revealed.length} replaced), ` +
+        `${mine.filter((r) => r.kept_commitment).length} kept, errors: ${JSON.stringify(mine.filter((r) => r.error).map((r) => r.error))}`,
     );
     let commitsOk = 0,
       revealsOk = 0;
-    for (const r of complete) {
+    for (const r of accounted) {
       const ce = await txEvents(r.committed_tx, owner.accountId);
       if (ce.some((e) => e.event === "commit" && e.data.agent_pk === r.agent_pk && e.data.commitment === r.commitment))
         commitsOk++;
+    }
+    for (const r of revealed) {
       const re = await txEvents(r.revealed_tx, owner.accountId);
       if (
         re.some(
@@ -569,19 +586,19 @@ async function main() {
     check(
       sc,
       "commit event on chain for every committed row",
-      commitsOk === complete.length && commitsOk > 0,
-      `${commitsOk}/${complete.length}`,
+      commitsOk === accounted.length && commitsOk > 0,
+      `${commitsOk}/${accounted.length}`,
     );
     check(
       sc,
       "intent (reveal) event on chain for every revealed row",
-      revealsOk === complete.length && revealsOk > 0,
-      `${revealsOk}/${complete.length}`,
+      revealsOk === revealed.length && revealsOk > 0,
+      `${revealsOk}/${revealed.length}`,
     );
 
     const d = await view("get_duel", { duel_id: duelId });
     const lastOf = (pk: string) =>
-      complete
+      revealed
         .filter((r) => r.agent_pk === pk)
         .sort((x, y) => Number(BigInt(y.intent.nonce) - BigInt(x.intent.nonce)))[0]?.intent;
     const la = lastOf(d.a),
@@ -621,18 +638,30 @@ async function main() {
       `get_no_reveal ${JSON.stringify(nr)}, resolve tx events ${resolveEvents.map((e) => e.event).join(",") || "none"}`,
     );
     if (lockReveal) {
-      // commit-reveal only hides the scored call if it opens after the last moment the opponent can still commit
+      // commit-reveal only hides a call if it opens after the last moment the opponent can still commit: EVERY
+      // reveal, timed at its arena receipt (where the contract checks the lock), not only the scored one
       const lockAt = BigInt(d.close_at) - BigInt(LOCK_S) * S;
       const early: string[] = [];
-      for (const [label, i] of [
-        ["A", la],
-        ["B", lb],
-      ] as const) {
-        const row = complete.find((r) => r.intent.nonce === i?.nonce);
-        const t = row ? await txTime(row.revealed_tx, owner.accountId) : 0n;
-        if (t < lockAt) early.push(`${label} ${Number((lockAt - t) / 1_000_000n) / 1000} s before the lock`);
+      for (const r of revealed) {
+        const t = await arenaReceiptTime(r.revealed_tx, owner.accountId);
+        if (t === null || t < lockAt)
+          early.push(
+            `nonce ${r.intent.nonce} ${t === null ? "untimed" : `${Number((lockAt - t) / 1_000_000n) / 1000} s before the lock`}`,
+          );
       }
-      check(sc, "final reveals land inside the intent lock", early.length === 0, early.join(", ") || "both inside");
+      if (OFFLINE)
+        check(
+          sc,
+          "a changed call replaced the held commitment on chain",
+          committed.some((r) => r.replaced_by),
+          `${committed.filter((r) => r.replaced_by).length} replaced`,
+        );
+      check(
+        sc,
+        "every reveal lands inside the intent lock",
+        early.length === 0 && revealed.length > 0,
+        early.join(", ") || `all ${revealed.length} inside`,
+      );
     }
   }
 
@@ -683,7 +712,9 @@ async function main() {
     log(`${sc}: runner killed after its second commit round`);
     const data = join(TMP, "decisions-2.jsonl");
     const r = start("runner-2", python(), runnerArgs(60), runnerEnv(data));
-    const commitsOf = (who: string) => r.lines.filter((l) => l.includes(`  ${who} committed nonce`)).length;
+    const commitsOf = (who: string) =>
+      r.lines.filter((l) => l.includes(`  ${who} committed nonce`) || l.includes(`  ${who} keeps its commitment`))
+        .length;
     let killedAt = 0;
     try {
       await until("second B commit", () => commitsOf("B") >= 2, 120_000, 200);
