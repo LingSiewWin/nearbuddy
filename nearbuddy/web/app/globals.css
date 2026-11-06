@@ -427,6 +427,9 @@ h1 {
   color: var(--dim);
   font-stretch: 85%;
   transform: translateY(-120%);
+  /* sits on the price line near the bell; the ground colour keeps it readable over the path */
+  background: var(--bg);
+  padding: 0 4px;
 }
 .flag {
   position: absolute;
