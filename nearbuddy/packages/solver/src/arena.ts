@@ -153,6 +153,7 @@ export interface ArenaConfig {
   require_consent?: boolean;
   /** Present from deploy 15 on (verified settlement): where fill outputs land and `settle_follow` reads balances. */
   intents_account?: string;
+  fee_bps?: number;
 }
 /** Deploy 15 (verified settlement) or later: `get_config` names the intents account. */
 export const verifiedSettlement = (c: ArenaConfig | null): boolean => typeof c?.intents_account === "string";
@@ -184,12 +185,14 @@ const FOLLOWERS = (process.env.FOLLOWERS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-/** Pick the mandate-bounded amount to quote for one follower: min(cap, allowance - spent). */
-export function quoteAmount(m: Mandate): bigint {
+/** Pick the mandate-bounded amount to quote for one follower: min(cap, allowance - spent). Deploy 15 counts the fee
+ *  inside both, so with `feeBps` it is the largest amount whose amount + fee still fits. */
+export function quoteAmount(m: Mandate, feeBps = 0): bigint {
   const left = BigInt(m.allowance) - BigInt(m.spent);
   const cap = BigInt(m.per_tx_cap);
   // biome-ignore lint/complexity/useMathMinMax: bigint, Math.min would throw
-  return left < cap ? left : cap;
+  const limit = left < cap ? left : cap;
+  return (limit * 10_000n) / (10_000n + BigInt(feeBps));
 }
 
 export function mandateOpen(m: Mandate, nowNs: bigint): boolean {
@@ -466,11 +469,13 @@ export class Arena {
     const q = this.deps.quote ?? quote;
     // 1Click quotes mainnet prices: a testnet account stands in for its .near namesake
     const solver = this.solverId.replace(/\.testnet$/, ".near");
-    const open = list
-      .filter(([, m]) => mandateOpen(m, now))
-      .map(([follower, m]) => ({ follower, amount: quoteAmount(m) }));
-    if (open.length === 0) return [];
-    const to = fillRecipient(this.solverId, verifiedSettlement(await this.config()));
+    const live = list.filter(([, m]) => mandateOpen(m, now));
+    if (live.length === 0) return [];
+    const cfg = await this.config();
+    const verified = verifiedSettlement(cfg);
+    const fee = verified ? (cfg?.fee_bps ?? 0) : 0;
+    const open = live.map(([follower, m]) => ({ follower, amount: quoteAmount(m, fee) }));
+    const to = fillRecipient(this.solverId, verified);
     const payFollower = to === "follower";
     // one recipient for the whole batch: the solver, or (deploy 15) the arena, which credits each follower
     const batchTo = to === "arena" ? ARENA.replace(/\.testnet$/, ".near") : solver;

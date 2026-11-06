@@ -35,6 +35,21 @@ test("quote amount is min(cap, allowance - spent)", () => {
   assert.equal(quoteAmount(m({ spent: "1000" })), 0n);
 });
 
+test("deploy 15: the quoted amount leaves room for the fee inside the cap", () => {
+  // fee 50 bps: 300 cap -> 298, and 298 + floor(298 * 50 / 10000) = 299 <= 300 (the contract's "over cap" check)
+  for (const [mm, fee] of [
+    [m(), 50],
+    [m({ per_tx_cap: (10n ** 24n).toString(), allowance: (10n ** 25n).toString() }), 50],
+    [m({ spent: "900" }), 1_000],
+  ] as const) {
+    const a = quoteAmount(mm, fee);
+    const debit = a + (a * BigInt(fee)) / 10_000n;
+    const limit = quoteAmount(mm);
+    assert.ok(debit <= limit && a > 0n, `amount ${a} debit ${debit} limit ${limit}`);
+    assert.ok(limit - debit <= 1n + limit / 10_000n, "and fills the cap up to rounding");
+  }
+});
+
 test("mandateOpen skips revoked, expired and exhausted", () => {
   assert.ok(mandateOpen(m(), NOW));
   assert.ok(!mandateOpen(m({ revoked: true }), NOW));
