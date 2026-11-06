@@ -13,7 +13,7 @@ import { tape } from "../api/tape";
 import { GET as verifyDuel } from "../api/verify/route";
 import { depositFor, followArgs, nearUsd, priceFloor, SCOPE, STORAGE_NEAR } from "../lib/follow";
 import { NET, NETWORK_ID } from "../network";
-import { CHAIN } from "../ui/format";
+import { CHAIN, isTestAgent } from "../ui/format";
 
 const MODERN = "2026-07-28";
 const VERSIONS = [MODERN, "2025-11-25", "2025-06-18", "2025-03-26"];
@@ -92,6 +92,7 @@ async function followTransaction(a: Args) {
   const pk = a.pk as string;
   const agent = (await snapshot()).leaderboard.find((x) => x.pk === pk) ?? fail("no agent with that key");
   if (!agent.tee) fail("its calls are not enclave-verified, and the contract refuses to let anyone follow it");
+  if (isTestAgent(agent.model_id)) fail("a test agent the team runs (stub or red team), not a model to follow");
   const capNear = (a.cap_near as number | undefined) ?? 0.2;
   const allowanceNear = (a.allowance_near as number | undefined) ?? 1;
   const days = (a.days as number | undefined) ?? 7;

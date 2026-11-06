@@ -175,7 +175,7 @@ function Hero({ a }: { a: AgentData }) {
           ) : (
             <span className="rest">Resting between duels</span>
           )}
-          {a.verified ? (
+          {a.verified && !stub ? (
             <button
               type="button"
               className="btn ag-cta"
@@ -511,7 +511,7 @@ function Follow({ a }: { a: AgentData }) {
           Following signs a spending limit, not a deposit to anyone: a cap per trade, a total, the tokens it may touch
           and an expiry. The agent can only fill inside that limit, and you can revoke it any time.
         </p>
-        {a.verified ? (
+        {a.verified && !isTestAgent(a.model) ? (
           <button
             type="button"
             className="btn"
