@@ -62,9 +62,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93.0
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: nearbuddy/arena
+          workspaces: |
+            nearbuddy/arena
+            nearbuddy/intents-stub
       # unit tests only; tests/test_arena_sandbox.rs is #[ignore] and needs cargo-near plus a sandbox download
       - run: cargo test --lib
+      # testnet stand-in for intents.near used by the verified-settlement sandbox tests
+      - run: cargo test --lib
+        working-directory: nearbuddy/intents-stub
 
   # Playwright smoke over the built pages. Reads the live testnet arena contract through the public RPC,
   # so it needs the network but no secrets. Not required by the other jobs.

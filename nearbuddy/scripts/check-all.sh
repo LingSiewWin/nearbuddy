@@ -16,6 +16,7 @@ run py-tests     bash -c 'NEAR_AI_API_KEY= agents/.venv/bin/python -m pytest -q 
 run rs-fmt       bash -c 'cd arena && cargo fmt --check'
 run rs-clippy    bash -c 'cd arena && cargo clippy --all-targets -- -D warnings'
 run rs-tests     bash -c 'cd arena && cargo test --lib'
+run stub-tests   bash -c 'cd intents-stub && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --lib'
 if [ "$fast" != "--fast" ]; then
   run web-build  bash -c 'cd web && bun run build'
   run wasm       bash -c 'cd arena && cargo near build non-reproducible-wasm'
