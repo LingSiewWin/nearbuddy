@@ -18,6 +18,8 @@ import requests
 from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
 
+from keys import pk_b64  # noqa: F401  (moved to keys.py; re-exported for older imports)
+
 INTENT_DOMAIN = b"nearbuddy-intent-v1"
 ZERO_PROOF = bytes(32)
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

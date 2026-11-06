@@ -37,8 +37,14 @@ from typing import Any
 ASSUMPTIONS = {
     "trials": (200_000, "default per scenario; argv[1] overrides"),
     "seed": (7, "argv[2] overrides"),
-    "latency_sigma": (0.5, "ESTIMATE lognormal sigma for block inclusion jitter; pending Track 2 measurement"),
-    "near_settle_s": (1.2, "NEAR finality ~1.2 s, https://docs.near.org/concepts/basics/transactions/overview"),
+    "latency_sigma": (
+        0.5,
+        "ESTIMATE lognormal sigma for block inclusion jitter; pending Track 2 measurement",
+    ),
+    "near_settle_s": (
+        1.2,
+        "NEAR finality ~1.2 s, https://docs.near.org/concepts/basics/transactions/overview",
+    ),
     "near_settle_gas_usd": (
         0.0001,
         "0.498 TGas/IOU measured at 100-IOU batch (agents/finance-ops.md); "
@@ -46,7 +52,10 @@ ASSUMPTIONS = {
     ),
     "amount_median_usd": (40.0, "ESTIMATE card ticket median; lognormal"),
     "amount_sigma": (1.0, "ESTIMATE; mean ticket = median*exp(sigma^2/2) ~ $66"),
-    "balance_median_usd": (500.0, "ESTIMATE self-custody card wallet balance; lognormal"),
+    "balance_median_usd": (
+        500.0,
+        "ESTIMATE self-custody card wallet balance; lognormal",
+    ),
     "balance_sigma": (0.8, "ESTIMATE"),
     "allowance": ("inf", "ESTIMATE allowance >= balance, so ledger bound = balance"),
     "cards_per_wallet": (5, "ESTIMATE K; shared wallet backing several agent cards"),
@@ -56,10 +65,16 @@ ASSUMPTIONS = {
         "ESTIMATE range. Ceiling analog: e-commerce chargeback rate 0.6-1.0%, "
         "friendly fraud ~44% of chargebacks, https://chargebacks911.com/chargeback-statistics/",
     ),
-    "adv_react_median_s": (3.0, "ESTIMATE human reaction: open wallet, sign drain; lognormal sigma 1.0"),
+    "adv_react_median_s": (
+        3.0,
+        "ESTIMATE human reaction: open wallet, sign drain; lognormal sigma 1.0",
+    ),
     "adv_react_sigma": (1.0, "ESTIMATE"),
     "recovery_rate": (0.0, "ESTIMATE r; later recovery from wallet not modeled"),
-    "book_swipes_per_day": (10_000.0, "ESTIMATE guarantor-wide swipe volume, drives concurrent exposure"),
+    "book_swipes_per_day": (
+        10_000.0,
+        "ESTIMATE guarantor-wide swipe volume, drives concurrent exposure",
+    ),
     "stake_yield_apr": (0.08, "ESTIMATE target yield on staked USDC"),
     "exposure_percentile": (0.99, "stake covers p99 of concurrent outstanding $"),
     "insurable_bps": (25.0, "product target: fee floor <= 25 bps"),
@@ -118,7 +133,9 @@ def V(k: str) -> Any:
     return ASSUMPTIONS[k][0]
 
 
-def sample_latency(spec: tuple[str, float, float | None], sigma: float, rng: random.Random) -> float:
+def sample_latency(
+    spec: tuple[str, float, float | None], sigma: float, rng: random.Random
+) -> float:
     kind, a, b = spec
     if kind == "lognormal":
         return rng.lognormvariate(math.log(a), sigma if b is None else b)
@@ -194,10 +211,14 @@ def simulate(chain: str, n: int, rng: random.Random) -> dict[str, Any]:
         if i < n_cap:
             W = l_pull + tail
             N = poisson(book_rate * W, rng)
-            exposures.append(max(0.0, rng.gauss(N * a_mean, math.sqrt(N * a_var))) if N else 0.0)
+            exposures.append(
+                max(0.0, rng.gauss(N * a_mean, math.sqrt(N * a_var))) if N else 0.0
+            )
 
     exposures.sort()
-    stake = exposures[min(len(exposures) - 1, int(V("exposure_percentile") * len(exposures)))]
+    stake = exposures[
+        min(len(exposures) - 1, int(V("exposure_percentile") * len(exposures)))
+    ]
     annual_vol = V("book_swipes_per_day") * 365 * (sum_a / n)
     return dict(
         chain=chain,
@@ -212,15 +233,29 @@ def simulate(chain: str, n: int, rng: random.Random) -> dict[str, Any]:
     )
 
 
-def loss_bps(r: dict[str, Any], p_adv: float, ledger_on: bool, bot: bool = False) -> float:
+def loss_bps(
+    r: dict[str, Any], p_adv: float, ledger_on: bool, bot: bool = False
+) -> float:
     adv = r["adv_bot"] if bot else r["adv_h"]
-    loss = p_adv * adv * (1 - V("recovery_rate")) + (0.0 if ledger_on else r["race_off"])
+    loss = p_adv * adv * (1 - V("recovery_rate")) + (
+        0.0 if ledger_on else r["race_off"]
+    )
     return 1e4 * loss / r["mean_amt"]
 
 
-def floor_bps(r: dict[str, Any], p_adv: float, ledger_on: bool, capital: bool = True, bot: bool = False) -> float:
+def floor_bps(
+    r: dict[str, Any],
+    p_adv: float,
+    ledger_on: bool,
+    capital: bool = True,
+    bot: bool = False,
+) -> float:
     gas = 1e4 * r["gas_usd"] / r["mean_amt"]
-    return loss_bps(r, p_adv, ledger_on, bot) + gas + (r["capital_bps"] if capital else 0.0)
+    return (
+        loss_bps(r, p_adv, ledger_on, bot)
+        + gas
+        + (r["capital_bps"] if capital else 0.0)
+    )
 
 
 def self_check(results: dict[str, dict[str, Any]]) -> None:
@@ -238,11 +273,13 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
     grid = V("p_adv_grid")
     out: list[str] = []
     p = out.append
-    p(f"NearBuddy guarantor loss model  trials={n} seed={seed} runtime={secs:.1f}s  (python3 -I, stdlib)")
+    p(
+        f"NearBuddy guarantor loss model  trials={n} seed={seed} runtime={secs:.1f}s  (python3 -I, stdlib)"
+    )
     p("")
     p("ASSUMPTIONS")
     for k, (v, src) in ASSUMPTIONS.items():
-        p(f"  {k:26s} {str(v):22s} {src}")
+        p(f"  {k:26s} {v!s:22s} {src}")
     for k in DEFAULT_CHAINS + ["base_preconf", "base_l1"]:
         c = CHAINS[k]
         p(
@@ -250,7 +287,9 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
             f"gas_pull_usd={c['gas_pull_usd']}  {c['source']}"
         )
     p("")
-    p("SCENARIOS  (loss and floor in bps of guaranteed volume; p99 exposure = stake S in $)")
+    p(
+        "SCENARIOS  (loss and floor in bps of guaranteed volume; p99 exposure = stake S in $)"
+    )
     hdr = (
         f"{'chain':18s} {'ledger':6s} {'p_adv':>7s} {'loss_bps':>10s} {'gas_bps':>8s} "
         f"{'p99_exp_$':>10s} {'cap_bps':>8s} {'floor_bps':>10s} {'floor+cap':>10s}"
@@ -267,7 +306,9 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
                     f"{floor_bps(r, pa, on):10.4f}"
                 )
     p("")
-    p("LEDGER VALUE  (race loss removed by the reservation ledger; same events become declines)")
+    p(
+        "LEDGER VALUE  (race loss removed by the reservation ledger; same events become declines)"
+    )
     for k in DEFAULT_CHAINS:
         r = results[k]
         p(
@@ -283,7 +324,9 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
             f"cap={r['capital_bps']:.5f} bps  floor+cap={floor_bps(r, 1e-4, True):.4f} bps"
         )
     p("")
-    p("SENSITIVITY  bot adversary (zero reaction time, drain races pull head-on), ledger on, p_adv=1e-4")
+    p(
+        "SENSITIVITY  bot adversary (zero reaction time, drain races pull head-on), ledger on, p_adv=1e-4"
+    )
     for k in DEFAULT_CHAINS:
         r = results[k]
         p(
@@ -294,7 +337,9 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
     p("")
     lim = V("insurable_bps")
     ok = [k for k in DEFAULT_CHAINS if floor_bps(results[k], 1e-3, True) <= lim]
-    p(f"INSURABLE at <= {lim:.0f} bps with ledger on, worst p_adv={grid[-1]:.0e}: {', '.join(ok) or 'none'}")
+    p(
+        f"INSURABLE at <= {lim:.0f} bps with ledger on, worst p_adv={grid[-1]:.0e}: {', '.join(ok) or 'none'}"
+    )
     return "\n".join(out)
 
 

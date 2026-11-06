@@ -1,4 +1,5 @@
 """`export_dataset.check_row` recomputes every hash a dataset row claims; each failure mode has its own note."""
+
 import base64
 import hashlib
 import sys
@@ -22,10 +23,18 @@ def good_row() -> dict:
     res = hashlib.sha256(RES_BODY.encode()).digest()
     text = f"{MODEL}:{req.hex()}:{res.hex()}"
     return {
-        "model": MODEL, "request_body": REQ_BODY, "response_body": RES_BODY,
-        "request_hash": req.hex(), "response_hash": res.hex(),
-        "signature_record": {"text": text, "signature": ENCLAVE.sign(text.encode()).signature.hex(),
-                             "signing_address": bytes(ENCLAVE.verify_key).hex(), "signing_algo": "ed25519", "signature_kind": "provider_tee"},
+        "model": MODEL,
+        "request_body": REQ_BODY,
+        "response_body": RES_BODY,
+        "request_hash": req.hex(),
+        "response_hash": res.hex(),
+        "signature_record": {
+            "text": text,
+            "signature": ENCLAVE.sign(text.encode()).signature.hex(),
+            "signing_address": bytes(ENCLAVE.verify_key).hex(),
+            "signing_algo": "ed25519",
+            "signature_kind": "provider_tee",
+        },
         "intent": {"proof_hash": proof_hash(req, res)},
     }
 
@@ -49,7 +58,10 @@ def test_missing_signature_record_is_reported_not_verified():
 
 
 def test_stub_rows_without_bytes_are_not_verifiable():
-    assert check_row({"model": "stub/deterministic", "intent": {"proof_hash": proof_hash(None)}}) == (False, "no tee bytes")
+    assert check_row({"model": "stub/deterministic", "intent": {"proof_hash": proof_hash(None)}}) == (
+        False,
+        "no tee bytes",
+    )
 
 
 def test_forged_enclave_signature_is_named_in_the_note():

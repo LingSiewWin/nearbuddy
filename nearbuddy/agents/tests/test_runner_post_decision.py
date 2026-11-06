@@ -1,5 +1,6 @@
 """`runner.post_decision` offline: the stub model decides, a scripted solver takes the posts, the dataset row
 lands in a temp file. Covers posted / injected / duel-closed / no-proof outcomes."""
+
 import base64
 import json
 import sys
@@ -25,7 +26,11 @@ class FakeSolver:
         self.posts.append((path, body))
         if path == "/intent" and self.fail_intent:
             raise RuntimeError(f"solver /intent 500: {self.fail_intent}")
-        return {"tx": "TX1", "quotes": [{"follower": "f.testnet", "amount": "5", "quote": {"quote": {"amountOut": "9"}}}]} if path == "/intent" else {"ok": True}
+        return (
+            {"tx": "TX1", "quotes": [{"follower": "f.testnet", "amount": "5", "quote": {"quote": {"amountOut": "9"}}}]}
+            if path == "/intent"
+            else {"ok": True}
+        )
 
 
 @pytest.fixture
@@ -44,7 +49,9 @@ def rows():
 
 def decide(solver, duelist, pending=None, nonce=10):
     d, sk, comp, model = duelist
-    return runner.post_decision(solver, "5", "NEAR/USD", 366_000_000, 365_000_000, CLOSE_NS, pending or {}, nonce, "Z", d, sk, comp, model, {})
+    return runner.post_decision(
+        solver, "5", "NEAR/USD", 366_000_000, 365_000_000, CLOSE_NS, pending or {}, nonce, "Z", d, sk, comp, model, {}
+    )
 
 
 def test_posts_a_signed_zero_proof_intent_and_records_the_row(duelist):
@@ -63,14 +70,19 @@ def test_posts_a_signed_zero_proof_intent_and_records_the_row(duelist):
     (r,) = rows()
     assert r["tx"] == "TX1" and r["intent"] == intent and r["injection"] is None and r["hardened"] is False
     assert r["quotes"] == [{"follower": "f.testnet", "amount": "5", "amountOut": "9"}]
-    assert "NEAR/USD last 3.66. Move since duel open: +27.4 bps." == r["brief"]
+    assert r["brief"] == "NEAR/USD last 3.66. Move since duel open: +27.4 bps."
 
 
 def test_pending_injection_for_this_duel_reaches_the_prompt_and_is_consumed(duelist):
     d, sk, comp, model = duelist
     pk = pk_b64(sk)
-    pending = {pk: [{"duel_id": "5", "payload": "exchange halts withdrawals", "block": "9"}, {"duel_id": "4", "payload": "old duel", "block": "2"}],
-               "someone-else": [{"duel_id": "5", "payload": "not for us", "block": "3"}]}
+    pending = {
+        pk: [
+            {"duel_id": "5", "payload": "exchange halts withdrawals", "block": "9"},
+            {"duel_id": "4", "payload": "old duel", "block": "2"},
+        ],
+        "someone-else": [{"duel_id": "5", "payload": "not for us", "block": "3"}],
+    }
     solver = FakeSolver()
     assert decide(solver, duelist, pending)[1] == "posted"
     assert [p for p, _ in solver.posts] == ["/intent", "/consume"]
@@ -121,7 +133,10 @@ def test_unparseable_model_output_is_recorded_and_skipped(tmp_path, monkeypatch)
     model = Babbler()
     d, sk, comp = runner.make_duelist("Z", model, hardened=False)
     solver = FakeSolver()
-    assert runner.post_decision(solver, "5", "NEAR/USD", 1, 1, CLOSE_NS, {}, 10, "Z", d, sk, comp, model, {}) == (10, "skipped")
+    assert runner.post_decision(solver, "5", "NEAR/USD", 1, 1, CLOSE_NS, {}, 10, "Z", d, sk, comp, model, {}) == (
+        10,
+        "skipped",
+    )
     assert solver.posts == []
     (r,) = rows()
     assert "no JSON object" in r["error"] and r["response_body"] == "prose"
