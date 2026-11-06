@@ -38,9 +38,18 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
               `- on ${agentLink(o, x.target)} (${x.kind}):\n${x.text ? untrusted("headline", x.text, "  ") : `  unknown text, sha256 ${x.payload_sha256}`}`,
           )
           .join("\n")
-      : d.attack_count
-        ? "The contract keeps only the count after a duel resolves; the texts are no longer on the live tape."
-        : "None.",
+      : d.decisions.some((x) => x.attack)
+        ? // the contract drops attack payloads at resolve; the published record still has each one the model saw
+          d.decisions
+            .filter((x) => x.attack)
+            .map(
+              (x) =>
+                `- on ${agentLink(o, x.agent)} (from the published record):\n${untrusted("headline", x.attack ?? "", "  ")}`,
+            )
+            .join("\n")
+        : d.attack_count
+          ? `The contract keeps only the count after a duel resolves, and none of these attacks is in the published record yet; ${o}/duel/${d.duel} reads them from the chain.`
+          : "None.",
     "",
     "## Decisions, with the model's own reasoning",
     "",
