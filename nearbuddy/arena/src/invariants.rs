@@ -383,8 +383,6 @@ enum Kind {
     /// Keeps the storage it adds (new records plus growth, freed bytes not refunded), paid out of
     /// the value the caller brings or the agent's bond.
     PaysStorage,
-    /// `open_duel`: keeps the whole deposit above `oracle_deposit` (storage plus any overpay).
-    Open,
     /// Keeps exactly this much (the 1 yocto an owner or exit call attaches and does not forward;
     /// minus 1 when a callback forwards the yocto it holds).
     Exact(i128),
@@ -726,7 +724,6 @@ impl World {
         let pre = self.snap();
         let (bal0, trie0) = (self.balance, self.trie.clone());
         let mut kind = Kind::Neutral;
-        let mut open_keep = 0u128;
         match op.clone() {
             Op::Register { agent, milli } => {
                 kind = Kind::PaysStorage;
@@ -863,7 +860,7 @@ impl World {
                 open_price,
                 consented,
             } => {
-                kind = Kind::Open;
+                kind = Kind::PaysStorage; // the excess over storage and the oracle deposit is refunded
                 let dep = ORACLE_DEPOSIT + milli as u128 * MILLI;
                 let close_at = self.now + len_s * SEC;
                 let (pa, pb) = (
@@ -898,9 +895,8 @@ impl World {
                         chaos_in: 0,
                         final_bytes: None,
                     });
-                    open_keep = dep - ORACLE_DEPOSIT;
                     if open_price {
-                        self.check_money(&pre, bal0, &trie0, kind, open_keep);
+                        self.check_money(&pre, bal0, &trie0, kind);
                         return self.oracle(id, "open", OPEN_PRICE);
                     }
                 }
@@ -1029,7 +1025,7 @@ impl World {
                     })
                     .is_ok()
                 {
-                    self.check_money(&pre, bal0, &trie0, kind, 0);
+                    self.check_money(&pre, bal0, &trie0, kind);
                     let open = pre.duels[d]
                         .open_price
                         .expect("resolve needs an open price")
@@ -1079,7 +1075,7 @@ impl World {
             }
             Op::Advance { secs } => self.now += secs * SEC,
         }
-        self.check_money(&pre, bal0, &trie0, kind, open_keep);
+        self.check_money(&pre, bal0, &trie0, kind);
     }
 
     /// Records an accepted intent (posted or revealed) of agent `ag`.
@@ -1114,7 +1110,7 @@ impl World {
             self.check_slash(&pre, id as usize);
             self.pending.retain(|k, _| k.0 != id as usize);
         }
-        self.check_money(&pre, bal0, &trie0, Kind::Neutral, 0);
+        self.check_money(&pre, bal0, &trie0, Kind::Neutral);
     }
 
     /// Property 5, with bonds as they stood at resolution. A side holding an unrevealed commitment
@@ -1296,7 +1292,7 @@ impl World {
                 );
                 assert_eq!(msg, got[0].1, "the refusal names the first rejection");
                 assert!(self.trie == trie0, "an all-rejected batch wrote state");
-                return self.check_money(pre, bal0, &trie0, Kind::Neutral, 0);
+                return self.check_money(pre, bal0, &trie0, Kind::Neutral);
             }
         };
         assert_eq!(
@@ -1361,7 +1357,7 @@ impl World {
         }
         self.vault_out[who] += amt_in + fees;
         self.vault_in[SOLVER_IX] += amt_in;
-        self.check_money(pre, bal0, &trie0, Kind::Neutral, 0);
+        self.check_money(pre, bal0, &trie0, Kind::Neutral);
     }
 
     /// `withdraw_token` debits the holding first and forwards the yocto to `mt_transfer`; its
@@ -1381,7 +1377,7 @@ impl World {
         if ok {
             self.in_flight[t] += amt;
         }
-        self.check_money(pre, bal0, &trie0, Kind::Neutral, 0);
+        self.check_money(pre, bal0, &trie0, Kind::Neutral);
         if !ok {
             return;
         }
@@ -1424,7 +1420,7 @@ impl World {
             );
             self.intents_bal[t] -= amt;
         }
-        self.check_money(&mid, bal1, &trie1, Kind::Neutral, 0);
+        self.check_money(&mid, bal1, &trie1, Kind::Neutral);
     }
 
     /// `sweep_surplus` keeps its yocto; the check forwards one with `mt_transfer` when the surplus
@@ -1437,7 +1433,7 @@ impl World {
                 drop(c.sweep_surplus(TOKENS[t].into(), OWNER.parse().unwrap(), U128(amt)))
             })
             .is_ok();
-        self.check_money(pre, bal0, &trie0, Kind::Exact(ok as i128), 0);
+        self.check_money(pre, bal0, &trie0, Kind::Exact(ok as i128));
         if !ok {
             return;
         }
@@ -1467,7 +1463,7 @@ impl World {
             amt <= free,
             "sweep bounded to balance - accounted - sweeping"
         );
-        self.check_money(&mid, bal1, &trie1, Kind::Exact(-(sent as i128)), 0);
+        self.check_money(&mid, bal1, &trie1, Kind::Exact(-(sent as i128)));
         let post = self.snap();
         assert_eq!(
             post.accounted, pre.accounted,
@@ -1507,7 +1503,7 @@ impl World {
             self.intents_bal[t] -= amt;
             assert_eq!(fin.outflow_seq, pre.outflow_seq + 1);
         }
-        self.check_money(&post, bal2, &trie2, Kind::Neutral, 0);
+        self.check_money(&post, bal2, &trie2, Kind::Neutral);
     }
 
     /// Property 1 (per operation) and the state-wide properties 2-4.
@@ -1517,7 +1513,6 @@ impl World {
         bal0: u128,
         trie0: &HashMap<Vec<u8>, Vec<u8>>,
         kind: Kind,
-        open_keep: u128,
     ) {
         let post = self.snap();
         let cost = env::storage_byte_cost().as_yoctonear();
@@ -1534,12 +1529,6 @@ impl World {
         match kind {
             Kind::Neutral => assert_eq!(kept, 0, "neutral op changed balance - liabilities"),
             Kind::PaysStorage => assert_eq!(kept, added, "kept {kept} for {added} of new storage"),
-            Kind::Open => {
-                assert!(
-                    kept == open_keep as i128 && kept >= added,
-                    "open_duel kept {kept}, storage {added}"
-                )
-            }
             Kind::Exact(k) => assert_eq!(kept, k, "kept {kept}, expected {k}"),
         }
 

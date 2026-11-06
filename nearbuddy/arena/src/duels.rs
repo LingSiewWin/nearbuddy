@@ -73,9 +73,10 @@ impl Contract {
     /// Pair two registered, idle agents on an oracle asset. Attached deposit must cover the duel's
     /// storage plus `oracle_deposit`; the open price is requested from the oracle in the same call
     /// and lands through `oracle_on_call`. Returns the duel id.
-    /// Caller: owner. Deposit: the duel record's storage plus `oracle_deposit`. Panics:
-    /// "not owner", "consent required", "paused", "same agent", "symbol too long", "close_at in the past",
-    /// "duel too short", "duel too long", "agent missing", "in duel", "deposit too small".
+    /// Caller: owner. Deposit: at least the duel record's storage plus `oracle_deposit`; the excess
+    /// is refunded. Panics: "not owner", "consent required", "paused", "same agent",
+    /// "symbol too long", "close_at in the past", "duel too short", "duel too long", "agent missing",
+    /// "in duel", "deposit too small".
     #[payable]
     pub fn open_duel(
         &mut self,
@@ -166,10 +167,13 @@ impl Contract {
         self.duel_locks.flush();
         self.agent_duels.flush();
         let cost = storage_cost_since(before) + self.oracle_deposit;
-        require!(
-            env::attached_deposit().as_yoctonear() >= cost,
-            "deposit too small"
-        );
+        let attached = env::attached_deposit().as_yoctonear();
+        require!(attached >= cost, "deposit too small");
+        // the opener pays storage and the oracle deposit, nothing more (red team F3)
+        if attached > cost {
+            let _ = Promise::new(env::predecessor_account_id())
+                .transfer(NearToken::from_yoctonear(attached - cost));
+        }
         let _ = self.ask_oracle(&symbol, format!("open:{id}"));
         U64(id)
     }

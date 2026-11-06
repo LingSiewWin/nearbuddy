@@ -2880,3 +2880,65 @@ fn sweep_is_owner_only() {
     ctx(FOLLOWER, 1);
     let _ = c.sweep_surplus("usdc".into(), FOLLOWER.parse().unwrap(), U128(1));
 }
+
+// ---------------------------------------------------------------- red team deploy 14 (F3, suggestion 7)
+
+/// yoctoNEAR the contract sent back to `to` with a plain transfer in the last call.
+fn refunded_to(to: &str) -> u128 {
+    near_sdk::test_utils::get_created_receipts()
+        .iter()
+        .filter(|r| r.receiver_id.as_str() == to)
+        .flat_map(|r| r.actions.iter())
+        .map(|a| match a {
+            near_sdk::mock::MockAction::Transfer { deposit, .. } => deposit.as_yoctonear(),
+            _ => 0,
+        })
+        .sum()
+}
+
+#[test]
+fn a_consented_open_refunds_the_excess_to_its_opener() {
+    // a third party opens with 1 NEAR more than needed: it pays the duel's storage and the oracle
+    // deposit, and gets the rest back
+    let (mut c, ska, skb) = setup();
+    let msg = consent_bytes(
+        &CONTRACT.parse().unwrap(),
+        &key(1).1,
+        &key(2).1,
+        "wrap.near",
+        CLOSE,
+    );
+    let sig = |sk: &SigningKey| Base64VecU8(sk.sign(&msg).to_bytes().to_vec());
+    let u0 = env::storage_usage();
+    ctx("matchmaker.testnet", ORACLE_DEPOSIT + NEAR);
+    c.open_duel_consented(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "wrap.near".into(),
+        U64(CLOSE),
+        sig(&ska),
+        sig(&skb),
+    );
+    let storage = (env::storage_usage() - u0) as u128 * env::storage_byte_cost().as_yoctonear();
+    assert_eq!(refunded_to("matchmaker.testnet"), NEAR - storage);
+}
+
+#[test]
+fn the_owner_open_refunds_its_margin_too() {
+    let (mut c, ..) = setup();
+    let u0 = env::storage_usage();
+    ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
+    c.open_duel(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "wrap.near".into(),
+        U64(CLOSE),
+    );
+    let storage = (env::storage_usage() - u0) as u128 * env::storage_byte_cost().as_yoctonear();
+    assert_eq!(
+        refunded_to(OWNER),
+        NEAR / 10 - storage,
+        "only the margin comes back"
+    );
+}
+
