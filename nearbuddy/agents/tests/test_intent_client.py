@@ -111,3 +111,14 @@ def test_price_retries_transient_errors(monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda s: None)
     assert prices.price("NEAR/USD") == 123
     assert calls["n"] == 3
+
+
+def test_runner_agent_key_uses_a_raw_builder_key(monkeypatch):
+    import runner
+
+    seed = bytes([9] * 32)
+    monkeypatch.setitem(runner.ENV, "AGENT_KEY_B", seed.hex())
+    monkeypatch.setitem(runner.ENV, "AGENT_SEED_B", bytes([1] * 32).hex())
+    assert bytes(runner.agent_key("B", True)) == seed  # raw seed wins, no sha256(seed||"tee") derivation
+    monkeypatch.delitem(runner.ENV, "AGENT_KEY_B")
+    assert bytes(runner.agent_key("B", True)) != seed

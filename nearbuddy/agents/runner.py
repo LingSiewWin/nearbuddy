@@ -44,9 +44,12 @@ ASSETS = {"NEAR/USD": "wrap.near"}
 
 
 def agent_key(name: str, tee: bool, tag: str = "") -> SigningKey:
-    """Demo keys come straight from AGENT_SEED_*; TEE-backed duelists use a key derived from the same seed, so
+    """`AGENT_KEY_*` is a raw seed handed over by a builder; otherwise demo keys come straight from AGENT_SEED_*; TEE-backed duelists use a key derived from the same seed, so
     the plain demo agents and the enclave-proved agents are distinct registrations on chain. `tag` derives one
     more key per seed (the swapped-prompt control registers the other model under it)."""
+    key = ENV.get(f"AGENT_KEY_{name}", "")
+    if key:  # an outside builder's agent (from `bun run join`): the hex is the ed25519 seed itself, no derivation
+        return SigningKey(bytes.fromhex(key))
     seed = ENV.get(f"AGENT_SEED_{name}", "")
     if not seed:
         return SigningKey.generate()
