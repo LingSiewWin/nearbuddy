@@ -7,20 +7,16 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 
 import requests
-from dotenv import dotenv_values
 
-ROOT = Path(__file__).resolve().parents[1]
-ENV: dict[str, str] = {**{k: v for k, v in dotenv_values(ROOT / ".env").items() if v is not None}, **os.environ}
-RPC = ENV.get("NEAR_RPC", "https://near-testnet.drpc.org")
-ARENA = ENV.get("ARENA_CONTRACT", "arena.nearbuddy-solver.testnet")
-DATA = Path(__file__).resolve().parent / "data" / "decisions.jsonl"
+from config import DATA, ENV, NET
+
+RPC = ENV.get("NEAR_RPC", NET["rpc"])
+ARENA = ENV.get("ARENA_CONTRACT", NET["arena"])
 
 
 def view(method: str, args: dict[str, Any]) -> Any:

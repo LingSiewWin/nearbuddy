@@ -9,14 +9,14 @@ from typing import Any
 
 import requests
 
-from config import ENV
+from config import ENV, NET
 
-RPC = ENV.get("NEAR_RPC", "https://near-testnet.drpc.org")
+RPC = ENV.get("NEAR_RPC", NET["rpc"])
 # public endpoints rate-limit bursts; views retry with backoff and alternate with a second endpoint
-RPC_FALLBACK = ENV.get("NEAR_RPC_FALLBACK", "https://test.rpc.fastnear.com")
+RPC_FALLBACK = ENV.get("NEAR_RPC_FALLBACK", NET["fallback"])
 RETRIES = 5
-ARENA = ENV.get("ARENA_CONTRACT", "arena.nearbuddy-solver.testnet")
-# display symbol -> Outlayer asset id priced by price-oracle.testnet (only wrap.near is served on testnet)
+ARENA = ENV.get("ARENA_CONTRACT", NET["arena"])
+# display symbol -> Outlayer asset id priced by NET["oracle"] (only wrap.near is served on testnet)
 ASSETS = {"NEAR/USD": "wrap.near"}
 
 

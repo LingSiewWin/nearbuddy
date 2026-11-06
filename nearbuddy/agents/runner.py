@@ -53,7 +53,7 @@ import requests
 from nacl.signing import SigningKey
 
 from chain import ARENA, ASSETS, agent_tier_on_chain, view, wait_outcome
-from config import ATTEST_DIR, DATA, ENV
+from config import ATTEST_DIR, DATA, ENV, NET
 from duelist import Duelist, DuelistError
 from intent_client import (
     Solver,
@@ -560,7 +560,7 @@ def run_single(
     d, sk, comp = make_duelist(name, model, hardened=hardened)
     pk = pk_b64(sk)
     if agent_tier_on_chain(pk) is None:
-        solver_id = ENV.get("SOLVER_ID", "nearbuddy-solver.testnet")
+        solver_id = ENV.get("SOLVER_ID", NET["solver"])
         solver.post(
             "/register",
             {
@@ -695,9 +695,7 @@ def run(
     a, ska, ca = make_duelist("A", model_a, hardened=True, tag=tag)
     b, skb, cb = make_duelist("B", model_b, hardened=False, tag=tag)
     print(f"pair {pair_tag or 'main'}: A {pk_b64(ska)[:8]} {model_a.model_id}, B {pk_b64(skb)[:8]} {model_b.model_id}")
-    solver_id = ENV.get(
-        "SOLVER_ID", "nearbuddy-solver.testnet"
-    )  # the account that signs register_agent = on-chain owner
+    solver_id = ENV.get("SOLVER_ID", NET["solver"])  # the account that signs register_agent = on-chain owner
     for sk, m in ((ska, model_a), (skb, model_b)):
         try:
             solver.post(
