@@ -80,7 +80,7 @@ async function main() {
     process.exit(1);
   }
 
-  const solver = spawn("pnpm", ["exec", "tsx", "packages/solver/src/index.ts"], { stdio: ["ignore", "pipe", "inherit"] });
+  const solver = spawn("bun", ["packages/solver/src/index.ts"], { stdio: ["ignore", "pipe", "inherit"] });
   solver.stdout?.on("data", (d) => process.stdout.write(`    ${String(d).trim()}\n`));
   process.on("exit", () => solver.kill());
   for (let i = 0; i < 50; i++) { try { await fetch(`${SOLVER_URL}/guarantor`); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }
