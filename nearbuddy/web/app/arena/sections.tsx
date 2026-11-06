@@ -7,7 +7,19 @@ import type { Summary } from "../api/arena";
 import type { Decision } from "../api/dataset";
 import { tally, VERDICT_WORD } from "../lib/verdict";
 import { Seal, useDrawer } from "../ui/drawer";
-import { agentHref, ago, duelHref, modelName, pct, promptName, stake, tone, who } from "../ui/format";
+import {
+  account,
+  agentHref,
+  ago,
+  duelHref,
+  modelName,
+  pct,
+  promptName,
+  stake,
+  tone,
+  who,
+  yoctoNear,
+} from "../ui/format";
 import type { Story } from "./model";
 
 export function News({ story, now }: { story: Story | null; now: number }) {
@@ -28,7 +40,8 @@ export function News({ story, now }: { story: Story | null; now: number }) {
         </span>
       </h2>
       <p className="lead">
-        Someone paid {story.attack ? "0.1 NEAR " : ""}to slip {name} a fake headline.
+        {story.attack ? `${account(story.attack.signer)} paid ${yoctoNear(story.attack.paid)} NEAR` : "Someone paid"} to slip{" "}
+        {name} a fake headline.
       </p>
       <div className="lie">{story.text ? `“${story.text}”` : "A custom headline: only its hash is on chain."}</div>
       {d?.reason ? (

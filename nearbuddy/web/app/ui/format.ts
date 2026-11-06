@@ -53,6 +53,10 @@ export const stake = (sizePct: number | null | undefined) =>
 export const shortKey = (pk: string) => pk.slice(0, 4);
 export const txUrl = (tx: string) => `https://testnet.nearblocks.io/txns/${tx}`;
 export const acctUrl = (a: string) => `https://testnet.nearblocks.io/address/${a}`;
+/** A NEAR account for a sentence: named accounts as they are, 64-hex implicit accounts shortened. */
+export const account = (a: string) => (a.length > 40 ? `${a.slice(0, 8)}…${a.slice(-6)}` : a);
+/** yoctoNEAR (a u128 string) to NEAR, 4 decimals. */
+export const yoctoNear = (y: string) => Number((Number(BigInt(y) / 10n ** 20n) / 1e4).toFixed(4));
 export const agentHref = (pk: string) => `/agent/${encodeURIComponent(pk)}`;
 export const duelHref = (id: number | string) => `/duel/${id}`;
 export const ARENA_ID = "arena.nearbuddy-solver.testnet";

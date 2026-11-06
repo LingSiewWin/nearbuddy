@@ -6,7 +6,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useR
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { VERDICT_WORD } from "../lib/verdict";
-import { ARENA_ID, clock, modelName, promptName, stake, TAMPER_TX, tone, txUrl, who } from "./format";
+import { account, ARENA_ID, clock, modelName, promptName, stake, TAMPER_TX, tone, txUrl, who, yoctoNear } from "./format";
 
 type Intent = Extract<ArenaEvent, { kind: "intent" | "reveal" }>;
 type Attack = Extract<ArenaEvent, { kind: "attack" }>;
@@ -209,7 +209,7 @@ function Body({ item }: { item: DrawerItem }) {
       <div className={tone(model)}>
         <h3>Paid attack</h3>
         <p className="big">
-          Someone paid {Number((Number(BigInt(ev.paid) / 10n ** 20n) / 1e4).toFixed(4))} NEAR to feed{" "}
+          {account(ev.signer)} paid {yoctoNear(ev.paid)} NEAR to feed{" "}
           <span className="who">{who(model)}</span> this:
         </p>
         <div className="lie">{ev.text ? `“${ev.text}”` : "A custom headline; only its hash is on chain."}</div>
