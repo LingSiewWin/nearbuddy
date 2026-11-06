@@ -134,14 +134,14 @@ built and tested offline; the README will carry its hash when it runs.
 ```sh
 cp .env.example .env                      # add NEAR_AI_API_KEY to use real models; blank = stub
 cd arena && cargo test                    # 63 contract tests
-cd .. && pnpm test                        # protocol + solver tests (ARENA_DEPLOYED=1 adds on-chain parity)
-pnpm solver                               # :4020, mounts /register /duel /intent /chaos /resolve /settle_follow /arena
+cd .. && bun run test                        # protocol + solver tests (ARENA_DEPLOYED=1 adds on-chain parity)
+bun run solver                               # :4020, mounts /register /duel /intent /chaos /resolve /settle_follow /arena
 cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pytest -q
 .venv/bin/python -m runner --rounds 1 --duel-seconds 330 --cycle-seconds 30  # a live NEAR/USD duel (oracle caches 300 s); with a key, both agents are TEE-backed
-cd .. && pnpm arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, oracle resolve
-DUELS=8 TARGET=b pnpm spectator           # inject one attack per new duel at the naive model (pays 0.1 NEAR each)
-pnpm --dir web build && pnpm --dir web start -p 3011   # /arena reads the public RPC, no keys in the browser
-pnpm real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
+cd .. && bun run arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, oracle resolve
+DUELS=8 TARGET=b bun run spectator           # inject one attack per new duel at the naive model (pays 0.1 NEAR each)
+bun --cwd web run build && bun --cwd web run start -p 3011   # /arena reads the public RPC, no keys in the browser
+bun run real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
 sh scripts/arena-up.sh 3 90               # or all at once: solver + web + three 90-second duels
 ```
 
@@ -198,12 +198,12 @@ verifies IOUs with the native `ed25519_verify` host function.
 
 ## Try it: do X, see Y
 
-Prerequisites: Node 22+, pnpm, near-cli-rs (only to create testnet accounts). Rust is only needed to rebuild the contract.
+Prerequisites: bun 1.3+, near-cli-rs (only to create testnet accounts). Rust is only needed to rebuild the contract.
 
 ```sh
 cd nearbuddy
-pnpm install
-pnpm test          # protocol tests: borsh encoding is byte-identical to the Rust contract; sign/verify/tamper
+bun install
+bun run test          # protocol tests: borsh encoding is byte-identical to the Rust contract; sign/verify/tamper
 ```
 
 Run the full flow against the deployed testnet contract. The demo spawns the paid API and the solver locally,
@@ -213,7 +213,7 @@ then plays owner, solver and agent:
 # needs keys for the three testnet accounts in ~/.near-credentials/testnet/*.json
 # (create your own with: near account create-account sponsor-by-faucet-service <name>.testnet autogenerate-new-keypair save-to-legacy-keychain network-config testnet create
 #  and set OWNER_ID / SOLVER_ID / API_ID)
-CALLS=100 pnpm demo
+CALLS=100 bun run demo
 ```
 
 You see, in order:
@@ -233,24 +233,24 @@ Open the settlement tx on nearblocks: one `settle_batch` call, one transfer rece
 Live terminal-style dashboard (Next.js, read-only, polls the contract every 2 s and the local solver's ledger):
 
 ```sh
-pnpm --dir web install
-pnpm web            # http://localhost:3000
+cd web && bun install && cd ..
+bun run web            # http://localhost:3000
 ```
 
-Run `pnpm demo` in another shell and watch the SOLVER box climb to 100 carried IOUs, then drop to 0 as the vault
+Run `bun run demo` in another shell and watch the SOLVER box climb to 100 carried IOUs, then drop to 0 as the vault
 balance and the solver's lifetime counter move in the EVENTS box. Paste the base64 agent key printed at step 3 into
 the MANDATE box to watch `spent / allowance` update. Screenshot: `docs/dashboard.png`.
 
 Run the pieces separately if you prefer:
 
 ```sh
-pnpm solver   # :4020  x402 facilitator: POST /verify, POST /settle, GET /supported, GET /ledger
-pnpm api      # :4010  GET /quote?pair=NEAR/USD  (402 + PAYMENT-REQUIRED until PAYMENT-SIGNATURE is present)
+bun run solver   # :4020  x402 facilitator: POST /verify, POST /settle, GET /supported, GET /ledger
+bun run api      # :4010  GET /quote?pair=NEAR/USD  (402 + PAYMENT-REQUIRED until PAYMENT-SIGNATURE is present)
 ```
 
 The solver persists carried IOUs to `.solver-ledger.json` and auto-settles at 200 IOUs, when the oldest IOU is
 60 s old (`SOLVER_AUTO_AGE_MS`), or the moment it sees the owner queue a withdrawal.
-`CALLS=5 SKIP_SETTLE=1 pnpm demo` leaves IOUs carried so you can kill and restart the solver and watch it restore
+`CALLS=5 SKIP_SETTLE=1 bun run demo` leaves IOUs carried so you can kill and restart the solver and watch it restore
 and settle them.
 
 ## x402 compatibility
@@ -293,7 +293,7 @@ solver --POST /pull--> NEAR contract --request_pull_signature--> Chain Signature
 solver --settle_pull([outcomes])--> contract: pull ok -> fee accrues; pull failed -> issuer paid from reserve
 ```
 
-Proof (`pnpm guarantor`, NEAR testnet + Ethereum Sepolia, 2026-11-05):
+Proof (`bun run guarantor`, NEAR testnet + Ethereum Sepolia, 2026-11-05):
 
 | Step | Hash |
 | --- | --- |
@@ -321,7 +321,7 @@ nearbuddy/
   packages/protocol/        IOU, cert and intent types, borsh encoding byte-identical to the contracts, sign/verify, chain helpers
   packages/resource-server/ a paid API speaking HTTP 402
   packages/solver/          underwriter + arena solver: /verify, /settle, /guarantee, /pull, /duel, /intent, /chaos, /resolve, /settle_follow
-  packages/demo/            terminal demos: pnpm demo (IOUs), pnpm guarantor (cards), pnpm arena-demo (follow + chaos + settle), pnpm real-swap
+  packages/demo/            terminal demos: bun run demo (IOUs), bun run guarantor (cards), bun run arena-demo (follow + chaos + settle), bun run real-swap
   agents/                   Python runner: model duelists (NEAR AI Cloud or stub), intent signing, prices, dataset, summary
   web/                      Next.js 16: / dashboard (vault + solver) and /arena (standings, duels, chaos, followers), two API routes
 ```
