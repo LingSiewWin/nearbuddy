@@ -31,6 +31,7 @@ pub(crate) enum StorageKey {
     PendingWithdrawals,
     DuelLocks,
     Sweeping,
+    SelfChaos,
 }
 
 /// Default `withdraw_delay_ns`: twice a generous settle lag. `set_withdraw_delay` changes it.
@@ -132,6 +133,11 @@ pub struct Contract {
     /// Per token id, surplus `sweep_surplus` has approved and not yet seen confirmed: settles treat it
     /// as spent, so a fill can never be credited from balance that is on its way out.
     pub(crate) sweeping: LookupMap<String, u128>,
+    /// Duel id to a bitmask over `Duel.injections` (at most 32): bit i set when injection i was paid
+    /// by the owner of either agent. Such chaos earns no shield and its deposit goes to `owner_fees`,
+    /// not the pool, so an owner cannot buy shield or recycle chaos deposits through its own duel.
+    /// Duels opened before deploy 15 have no entry.
+    pub(crate) self_chaos: LookupMap<u64, u64>,
 }
 
 /// State layout of deploy 14 (commit-reveal, before verified settlement). Read once by
@@ -268,6 +274,7 @@ impl Contract {
             vault_total: 0,
             duel_locks: LookupMap::new(StorageKey::DuelLocks),
             sweeping: LookupMap::new(StorageKey::Sweeping),
+            self_chaos: LookupMap::new(StorageKey::SelfChaos),
         }
     }
 
@@ -325,6 +332,7 @@ impl Contract {
             vault_total: 0,
             duel_locks: LookupMap::new(StorageKey::DuelLocks),
             sweeping: LookupMap::new(StorageKey::Sweeping),
+            self_chaos: LookupMap::new(StorageKey::SelfChaos),
         }
     }
 

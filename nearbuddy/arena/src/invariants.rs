@@ -150,6 +150,8 @@ enum Op {
         duel: usize,
         b_side: bool,
         milli: u64,
+        /// Paid by the owner of side a (shield farming): a fee, never shield.
+        own: bool,
     },
     Resolve {
         duel: usize,
@@ -328,7 +330,7 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(a, off, len_s, milli, open_price, consented)| Op::Open { a, b: (a + off) % AGENTS, len_s, milli, open_price, consented }),
         10 => post(),
         6 => reveal(),
-        3 => (0..8usize, any::<bool>(), 0u64..500).prop_map(|(duel, b_side, milli)| Op::Chaos { duel, b_side, milli }),
+        3 => (0..8usize, any::<bool>(), 0u64..500, prop::bool::weighted(0.3)).prop_map(|(duel, b_side, milli, own)| Op::Chaos { duel, b_side, milli, own }),
         3 => (0..8usize, prop_oneof![Just(0i64), -500i64..500]).prop_map(|(duel, move_bps)| Op::Resolve { duel, move_bps }),
         5 => (fol, followable(), vec(fill, 0..5)).prop_map(|(who, agent, fills)| Op::Settle { who, agent, fills }),
         1 => (0..8usize).prop_map(|duel| Op::Void { duel }),
@@ -393,6 +395,8 @@ struct DuelM {
     b: usize,
     close_at: u64,
     chaos_in: u128,
+    /// Per accepted injection: (aimed at side b, paid by an agent owner).
+    chaos: Vec<(bool, bool)>,
     /// Borsh bytes at the first check that saw it finished; must never change afterwards.
     final_bytes: Option<Vec<u8>>,
 }
@@ -400,6 +404,7 @@ struct DuelM {
 #[derive(Clone)]
 struct Snap {
     bonds: [Option<u128>; AGENTS],
+    shields: [Option<u32>; AGENTS],
     in_duel: [Option<u64>; AGENTS],
     vaults: [u128; 4],
     duels: Vec<Duel>,
@@ -644,6 +649,7 @@ impl World {
         let sweeping = std::array::from_fn(|t| tok(&c.sweeping, t));
         Snap {
             bonds: std::array::from_fn(|i| agent(i).map(|a| a.bond.0)),
+            shields: std::array::from_fn(|i| agent(i).map(|a| a.shield)),
             in_duel: std::array::from_fn(|i| agent(i).and_then(|a| a.in_duel.map(|d| d.0))),
             vaults: std::array::from_fn(|i| {
                 let id: AccountId = ACCOUNTS[i].parse().unwrap();
@@ -893,6 +899,7 @@ impl World {
                         b,
                         close_at,
                         chaos_in: 0,
+                        chaos: vec![],
                         final_bytes: None,
                     });
                     if open_price {
@@ -984,6 +991,7 @@ impl World {
                 duel,
                 b_side,
                 milli,
+                own,
             } => {
                 kind = Kind::PaysStorage;
                 let Some(d) = self.duel(duel, |i| {
@@ -1000,8 +1008,13 @@ impl World {
                     }]
                     .clone(),
                 );
+                let payer = if own {
+                    agent_owner(self.duels[d].a)
+                } else {
+                    "spectator.testnet".into()
+                };
                 if self
-                    .call("spectator.testnet", amt, |c| {
+                    .call(&payer, amt, |c| {
                         c.inject_chaos(
                             U64(d as u64),
                             target,
@@ -1011,7 +1024,10 @@ impl World {
                     })
                     .is_ok()
                 {
-                    self.duels[d].chaos_in += amt;
+                    self.duels[d].chaos.push((b_side, own));
+                    if !own {
+                        self.duels[d].chaos_in += amt;
+                    }
                 }
             }
             Op::Resolve { duel, move_bps } => {
@@ -1172,6 +1188,25 @@ impl World {
         assert_eq!(post.bonds[a], Some(na), "bond a after resolution");
         assert_eq!(post.bonds[b], Some(nb), "bond b after resolution");
         assert_eq!(post.fees, fees, "owner fees after resolution");
+        // 5b. shield grows only by third-party chaos the winner outlasted on the price: never from
+        // chaos an agent owner paid, never on a forfeit win, never for the loser or on a tie
+        let won = |side_b: bool| a_wins == Some(!side_b);
+        for (side_b, ag) in [(false, a), (true, b)] {
+            let earned = if won(side_b) && nr == [false; 2] {
+                self.duels[d]
+                    .chaos
+                    .iter()
+                    .filter(|(at_b, own)| *at_b == side_b && !own)
+                    .count() as u32
+            } else {
+                0
+            };
+            assert_eq!(
+                post.shields[ag],
+                pre.shields[ag].map(|s| s + earned),
+                "shield after resolution"
+            );
+        }
         for (i, before, after) in [(a, ba, na), (b, bb, nb)] {
             if after >= before {
                 self.bond_in[i] += after - before;

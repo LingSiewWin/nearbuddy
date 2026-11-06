@@ -415,7 +415,9 @@ impl Contract {
     }
 
     /// Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver
-    /// delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool.
+    /// delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool;
+    /// when the payer owns either agent it goes to `owner_fees` instead and the injection earns no
+    /// shield, so an owner cannot buy shield or recycle chaos through its own pairing.
     /// Caller: anyone (spectator). Deposit: at least `min_chaos_deposit` and above the record's
     /// storage. Panics: "paused", "chaos deposit too small", "payload_hash length", "kind too long",
     /// "duel missing", "duel closed", "bad target", "chaos full".
@@ -433,6 +435,14 @@ impl Contract {
         require!(deposit >= self.min_chaos_deposit, "chaos deposit too small");
         require!(payload_hash.0.len() == 32, "payload_hash length");
         require!(kind.len() <= 32, "kind too long");
+        // chaos paid by either agent's owner: no shield for it, and its deposit is a fee, not pool
+        let payer = env::predecessor_account_id();
+        let own = {
+            let d = self.duels.get(&duel_id.0).expect("duel missing");
+            [&d.a.0, &d.b.0]
+                .iter()
+                .any(|pk| self.agents.get(*pk).is_some_and(|a| a.owner == payer))
+        };
         let duel = self.duels.get_mut(&duel_id.0).expect("duel missing");
         require!(
             !duel.resolved && env::block_timestamp() < duel.close_at.0,
@@ -440,17 +450,27 @@ impl Contract {
         );
         require!(target.0 == duel.a.0 || target.0 == duel.b.0, "bad target");
         require!(duel.injections.len() < MAX_INJECTIONS, "chaos full");
+        let index = duel.injections.len();
         duel.injections.push(Injection {
             kind,
             payload_hash,
             target,
             block: U64(env::block_height()),
         });
+        if own {
+            let bits = self.self_chaos.get(&duel_id.0).copied().unwrap_or(0);
+            self.self_chaos.insert(duel_id.0, bits | (1 << index));
+        }
         // flush so the storage delta is measurable before charging
         self.duels.flush();
+        self.self_chaos.flush();
         let cost = storage_cost_since(before);
         require!(deposit > cost, "chaos deposit too small");
-        self.duels.get_mut(&duel_id.0).expect("duel missing").pool.0 += deposit - cost;
+        if own {
+            self.owner_fees += deposit - cost;
+        } else {
+            self.duels.get_mut(&duel_id.0).expect("duel missing").pool.0 += deposit - cost;
+        }
     }
 
     /// After `close_at`, anyone asks the oracle for the close price; the answer arrives in
@@ -554,6 +574,7 @@ impl Contract {
         d.resolved = true;
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
         self.duel_locks.remove(&duel_id.0);
+        self.self_chaos.remove(&duel_id.0);
         d.pool = U128(0);
         d.injections = vec![];
         d.outcome = Some(Outcome {
@@ -593,6 +614,7 @@ impl Contract {
         let (pk_a, pk_b) = (duel.a.0.clone(), duel.b.0.clone());
         let mut pool = duel.pool.0;
         let injections = std::mem::take(&mut duel.injections);
+        let self_paid = self.self_chaos.remove(&id).unwrap_or(0);
         duel.resolved = true;
         duel.pool = U128(0);
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
@@ -657,7 +679,17 @@ impl Contract {
             pool += slashed;
             outcome.winner = Some(Base64VecU8(winner.clone()));
             outcome.slashed = U128(slashed);
-            let survived = injections.iter().filter(|i| i.target.0 == *winner).count() as u32;
+            // shield counts chaos a third party paid for and the winner outlasted on the price: none
+            // for chaos either owner paid, none when the win is a forfeit (red team F2)
+            let survived = if nr == [false; 2] {
+                injections
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, j)| j.target.0 == *winner && self_paid & (1 << i) == 0)
+                    .count() as u32
+            } else {
+                0
+            };
             let w = self.agents.get_mut(winner).unwrap();
             w.bond.0 += pool;
             w.shield += survived;

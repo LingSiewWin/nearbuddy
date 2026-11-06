@@ -12,6 +12,7 @@ pub const SOLVER: &str = "solver.testnet";
 pub const ORACLE: &str = "price-oracle.testnet";
 pub const OPERATOR: &str = "operator.testnet";
 pub const FOLLOWER: &str = "follower.testnet";
+pub const SPECTATOR: &str = "spectator.testnet";
 pub const INTENTS: &str = "intents.testnet";
 pub const VAULT_CAP: u128 = 1_000 * NEAR;
 pub const NOW: u64 = 1_700_000_000_000_000_000;
@@ -1563,8 +1564,13 @@ fn post_a(c: &mut Contract, ska: &SigningKey, tee: &SigningKey, d: u64, side: Si
     post_tee(c, ska, MODEL_A, tee, d, side, nonce)
 }
 
+/// A spectator (owns neither agent) pays for one injection.
 fn inject(c: &mut Contract, d: u64, target: &[u8], deposit: u128) {
-    ctx(OPERATOR, deposit);
+    inject_as(c, SPECTATOR, d, target, deposit);
+}
+
+fn inject_as(c: &mut Contract, who: &str, d: u64, target: &[u8], deposit: u128) {
+    ctx(who, deposit);
     c.inject_chaos(
         U64(d),
         Base64VecU8(target.to_vec()),
@@ -2149,6 +2155,7 @@ fn migrate_v15_rekeys_follows_in_batches_and_keeps_the_rest() {
         &c.vault_total,
         &c.duel_locks,
         &c.sweeping,
+        &c.self_chaos,
     ))
     .unwrap();
     assert_eq!(raw.split_off(raw.len() - tail.len()), tail);
@@ -2586,7 +2593,7 @@ fn withholding_a_losing_reveal_forfeits_a_winning_duel() {
         (0, 0),
         "no alpha from a forfeit"
     );
-    assert_eq!(a.shield, 1);
+    assert_eq!(a.shield, 0, "a forfeit win earns no shield (red team F2)");
     assert_eq!(c.get_no_reveal(U64(d)), (false, true));
 }
 
@@ -2965,5 +2972,43 @@ fn open_before_set_oracle_panics() {
         Base64VecU8(key(2).1),
         "wrap.near".into(),
         U64(CLOSE),
+    );
+}
+
+// ---------------------------------------------------------------- red team deploy 14 (F2)
+
+#[test]
+fn chaos_an_agent_owner_pays_earns_no_shield_and_goes_to_owner_fees() {
+    // OPERATOR owns both agents (duel 363 shape): its chaos at A is a fee, not pool, and no shield
+    let (mut c, ska, skb) = setup();
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    post_a(&mut c, &ska, &tee, d, Side::Long, 1);
+    post_b(&mut c, &skb, d, Side::Short, 1);
+    let fees0 = c.get_config().owner_fees.0;
+    inject_as(&mut c, OPERATOR, d, &key(1).1, MIN_CHAOS);
+    let fees1 = c.get_config().owner_fees.0;
+    assert!(
+        fees1 > fees0 && fees1 - fees0 < MIN_CHAOS,
+        "the deposit less its storage is a fee"
+    );
+    assert_eq!(
+        c.get_duel(U64(d)).unwrap().pool.0,
+        0,
+        "nothing reaches the pool"
+    );
+    inject(&mut c, d, &key(1).1, MIN_CHAOS);
+    let pool = c.get_duel(U64(d)).unwrap().pool.0;
+    assert!(
+        pool > 0 && pool < MIN_CHAOS,
+        "a spectator's deposit is pool"
+    );
+    resolve_at_close(&mut c, d, UP); // A is Long and wins on the rise
+    let a = c.get_agent(Base64VecU8(key(1).1)).unwrap();
+    assert_eq!(a.shield, 1, "only the spectator's chaos counts");
+    assert_eq!(c.get_duel(U64(d)).unwrap().outcome.unwrap().injections, 2);
+    assert!(
+        c.self_chaos.get(&d).is_none(),
+        "the marker goes with the duel"
     );
 }
