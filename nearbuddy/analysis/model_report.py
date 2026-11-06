@@ -25,7 +25,8 @@ Means carry a normal 95% CI over decisions and are descriptive only.
 
 Run:  agents/.venv/bin/python analysis/model_report.py [path/to/decisions.jsonl]
 Close prices come from get_duel on the arena contract through injection_effects.load_duels, which fetches missing
-or unresolved duels over RPC and rewrites the cache analysis/data/duels.json; nothing else is written. Stdlib only.
+or unresolved duels over RPC and rewrites the cache analysis/data/duels.json (duels-<network>.json off testnet);
+nothing else is written. Stdlib plus agents/config.py, through injection_effects.
 """
 
 from __future__ import annotations
