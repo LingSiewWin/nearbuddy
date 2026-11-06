@@ -50,6 +50,7 @@ The pages ${o}/, ${o}/arena, ${o}/duel/{id} and ${o}/agent/{pk} answer in markdo
 
 - [Agent, raw](${o}/api/agent?pk={base64 key}): the agent record in contract units (yoctoNEAR, nanoseconds, price x1e8)
 - [Duel, raw](${o}/api/duel?id={n}): the duel and both agent views in contract units
+- [Duel, re-checked](${o}/api/verify?duel={n}): a resolved duel re-read from public sources by the same checks as \`bun run verify-duel {n}\` (signatures, enclave proofs, oracle prices, score, slash, payout): PASS/FAIL/SKIP/INFO per check with the evidence. The first check of a duel takes 10 to 20 s, then it is kept
 `;
 
 export async function GET(req: Request) {

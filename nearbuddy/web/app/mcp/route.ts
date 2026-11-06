@@ -10,6 +10,7 @@ import { datasetBuilt, decisionBytes, getDecisions } from "../api/dataset";
 import { duelSummary } from "../api/duel";
 import { ARENA, json, jsonBody } from "../api/near";
 import { tape } from "../api/tape";
+import { GET as verifyDuel } from "../api/verify/route";
 import { depositFor, followArgs, nearUsd, priceFloor, SCOPE, STORAGE_NEAR } from "../lib/follow";
 import { NET, NETWORK_ID } from "../network";
 import { CHAIN } from "../ui/format";
@@ -319,6 +320,21 @@ const TOOLS: Tool[] = [
       "text, the decisions with reasoning, and its on-chain events while they are on the live tape.",
     inputSchema: obj({ id: DUEL }, ["id"]),
     run: async (a) => (await duelSummary(String(a.id))) ?? fail("no duel with that id"),
+  },
+  {
+    name: "verify_duel",
+    title: "Re-check a duel",
+    description:
+      "A resolved duel re-read from public sources by the same checks as `bun run verify-duel`: every signature and " +
+      "enclave proof, both oracle prices, the score, the slash and the payout, each PASS, FAIL, SKIP or INFO with its " +
+      "evidence, plus the command to reproduce it. An open duel answers status open. The first check of a duel " +
+      "takes 10 to 20 s; then it is kept.",
+    inputSchema: obj({ id: DUEL }, ["id"]),
+    run: async (a) => {
+      const r = await verifyDuel(new Request(`http://mcp.local/api/verify?duel=${a.id}`));
+      const body = (await r.json()) as { error?: string };
+      return r.ok ? body : fail(body.error ?? `verifier answered ${r.status}`);
+    },
   },
   {
     name: "which_agent_to_follow",

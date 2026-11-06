@@ -60,7 +60,7 @@ test("initialize negotiates a legacy version; GET is 405 with a description", as
   expect(await get.text()).toContain("claude mcp add --transport http nearbuddy");
 });
 
-test("tools/list: eight tools with valid input schemas", async ({ request }) => {
+test("tools/list: nine tools with valid input schemas", async ({ request }) => {
   const { status, body } = await rpc(request, "tools/list");
   expect(status).toBe(200);
   const { tools, resultType, ttlMs } = body.result;
@@ -73,6 +73,7 @@ test("tools/list: eight tools with valid input schemas", async ({ request }) => 
     "decision_bytes",
     "agent_record",
     "duel_record",
+    "verify_duel",
     "which_agent_to_follow",
     "follow_transaction",
   ]);
@@ -140,6 +141,19 @@ test("follow_transaction builds deposit + follow with a positive USDC price floo
   const over = await call(request, "follow_transaction", { pk, cap_near: 2, allowance_near: 1 });
   expect(over.isError).toBe(true);
   expect(over.content[0]?.text).toContain("cap_near");
+});
+
+test("verify_duel re-checks a resolved duel and refuses to judge an open one", async ({ request }) => {
+  test.setTimeout(120_000); // a cold check pages FastNEAR for 10-20 s, more on a throttled RPC
+  const arena = (await call(request, "arena_now", {})).structuredContent;
+  const done = arena.recent[0]?.duel as number;
+  const r = await call(request, "verify_duel", { id: done });
+  expect(r.isError, r.content[0]?.text).toBeFalsy();
+  expect(r.structuredContent.status).toBe("checked");
+  expect(r.structuredContent.counts.PASS).toBeGreaterThan(10);
+  expect(r.structuredContent.command).toContain(`verify-duel ${done}`);
+  const live = arena.live_duels?.[0] as number | undefined;
+  if (live != null) expect((await call(request, "verify_duel", { id: live })).structuredContent.status).toBe("open");
 });
 
 test("protocol errors: unknown tool, missing headers, unsupported version", async ({ request }) => {
