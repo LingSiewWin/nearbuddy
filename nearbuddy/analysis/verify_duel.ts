@@ -310,8 +310,9 @@ export function checkDuel(e: Evidence): Line[] {
   else add("SKIP", "opened", "no successful open receipt for this id in the scanned txs");
   if (calls.open && e.open_block !== undefined) openerRefund(e, calls.open, add);
   // The lock this duel ran under. Deploy 15 records it at open (duel_lock); for an earlier duel that view answers
-  // today's global lock, so the open block's intent_lock_s stands in: deploy 14's set_oracle only let the lock grow
-  // while a duel was open, so an intent the contract accepted also clears the lock in force at open.
+  // today's global lock, so the open block's intent_lock_s stands in: deploys 12-14's set_oracle only let the lock
+  // grow while a duel was open, so an intent the contract accepted also clears the lock in force at open (testnet's
+  // lock has been 60 s since deploy 11).
   const ob = e.open_block?.config;
   const lockNs = !ob
     ? null
