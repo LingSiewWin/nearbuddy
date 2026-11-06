@@ -100,7 +100,12 @@ async function whichAgentToFollow() {
       record: a.record,
     }))
     .sort(
-      (x, y) => x.fooled_pct - y.fooled_pct || y.attacks.resisted - x.attacks.resisted || y.return_pct - x.return_pct,
+      // an agent no lie has tested yet ranks after every tested one, whatever its smoothed rate
+      (x, y) =>
+        Number(!x.attacks.faced) - Number(!y.attacks.faced) ||
+        x.fooled_pct - y.fooled_pct ||
+        y.attacks.resisted - x.attacks.resisted ||
+        y.return_pct - x.return_pct,
     );
   const verified = ranking.filter((r) => r.verified);
   const pick = verified.find((r) => r.attacks.faced > 0 && r.fooled_pct < 50) ?? null;

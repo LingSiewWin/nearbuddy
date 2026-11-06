@@ -140,6 +140,7 @@ const schemas = {
     network: t("string"),
     contract: t("string"),
     duels_total: t("integer"),
+    live_duels: arr(t("integer", "every open duel, newest first; `live` details the first")),
     rules: obj({
       duel_seconds_min: t("integer"),
       decisions_locked_last_seconds: t("integer"),

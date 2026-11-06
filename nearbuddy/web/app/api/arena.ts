@@ -192,7 +192,8 @@ export async function summary(s: Snap, now = Date.now()) {
   const ATTACKS = attackRecord(await getDecisions());
   const lb = s.leaderboard;
   const done = s.duels.filter((d) => d.resolved && d.outcome);
-  const live = s.duels.find((d) => !d.resolved);
+  const open = s.duels.filter((d) => !d.resolved);
+  const live = open[0]; // the newest; live_duels lists every open one
   const liveAttacks = await Promise.all(
     (live?.injections ?? []).map(async (j) => ({
       target: j.target,
@@ -230,6 +231,7 @@ export async function summary(s: Snap, now = Date.now()) {
     network: "testnet",
     contract: s.contract,
     duels_total: Number(s.config.next_duel),
+    live_duels: open.map((d) => Number(d.id)),
     rules: {
       duel_seconds_min: s.config.min_duel_s,
       decisions_locked_last_seconds: s.config.intent_lock_s,
