@@ -285,9 +285,11 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
   } else {
     const ma = markPct(d.a, open, price);
     const mb = markPct(d.b, open, price);
-    // a side whose only call is sealed has no known score, and an unrevealed call forfeits: nobody can lead it
-    const hidden = (s: DuelSide) => !s.side && sealedIn(d.events, d.duel, s.agent);
-    const veiled = hidden(d.a) ? d.a : hidden(d.b) ? d.b : null;
+    // a sealed call has no known score, and one still sealed at the close forfeits (even after an earlier reveal):
+    // while either side holds one, nobody can be called ahead
+    const sa = sealedIn(d.events, d.duel, d.a.agent);
+    const sb = sealedIn(d.events, d.duel, d.b.agent);
+    const veiled = sa ? d.a : sb ? d.b : null;
     const lead = veiled || Math.abs(ma - mb) < 0.005 ? null : ma > mb ? d.a : d.b;
     const lag = lead === d.a ? d.b : d.a;
     const pay = lag.bond != null ? (lag.bond * d.slashPct) / 100 : null;
@@ -300,8 +302,10 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
           At the last trade,{" "}
           {lead ? (
             <>{nm(lead)} was ahead</>
+          ) : sa && sb ? (
+            "both calls were still sealed"
           ) : veiled ? (
-            <>{nm(veiled)}&apos;s call was not revealed yet</>
+            <>{nm(veiled)}&apos;s call was still sealed</>
           ) : d.a.side || d.b.side ? (
             "the two sides were tied"
           ) : (
@@ -314,16 +318,16 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
       // "Dead heat" only once a side is known; before the first reveal nothing can be level or ahead
       h1 = lead ? (
         <>{nm(lead)} is winning.</>
+      ) : sa && sb ? (
+        // commit-reveal: both have called, and nobody can read either call until the last minute
+        "Both calls are sealed."
+      ) : veiled ? (
+        <>{nm(veiled)}&apos;s call is sealed.</>
       ) : d.a.side && d.a.side === d.b.side ? (
         // the common case: both made the same call, so the price cannot separate them
         `Both bet ${d.a.side === "Long" ? "up" : "down"}.`
-      ) : veiled && (d.a.side || d.b.side) ? (
-        <>{nm(veiled)}&apos;s call is sealed.</>
       ) : d.a.side || d.b.side ? (
         "Dead heat."
-      ) : sealedIn(d.events, d.duel, d.a.agent) && sealedIn(d.events, d.duel, d.b.agent) ? (
-        // commit-reveal: both have called, and nobody can read either call until the last minute
-        "Both calls are sealed."
       ) : (
         `Duel ${d.duel}: no call revealed yet.`
       );
@@ -352,6 +356,8 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
             <>
               If it ends now, {nm(lag)} pays {nm(lead)} <b>{pay != null ? near(pay) : `${d.slashPct}% of its bond`}</b>.
             </>
+          ) : veiled ? (
+            "A sealed call counts only once it is revealed; one still sealed at the close forfeits."
           ) : d.a.side && d.a.side === d.b.side ? (
             "Same call on both sides: if it ends like this, nobody pays."
           ) : (

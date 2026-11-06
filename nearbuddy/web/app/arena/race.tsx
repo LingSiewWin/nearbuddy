@@ -58,8 +58,10 @@ export function Headline({
   const ma = f.live ? markPct(f.a, open, p) : (f.a.return_pct ?? 0);
   const mb = f.live ? markPct(f.b, open, p) : (f.b.return_pct ?? 0);
   const move = open && p ? ((p - open) / open) * 100 : 0;
-  // a side whose only call is sealed has no known score, and an unrevealed call forfeits: nobody can lead it
-  const veiled = !f.live ? null : !f.a.side && f.a.sealed ? "a" : !f.b.side && f.b.sealed ? "b" : null;
+  // a sealed call has no known score, and one still sealed at the close forfeits (even after an earlier reveal):
+  // while either side holds one, nobody can be called ahead
+  const both = f.live && !!f.a.sealed && !!f.b.sealed;
+  const veiled = !f.live ? null : f.a.sealed ? "a" : f.b.sealed ? "b" : null;
   const lead = veiled || Math.abs(ma - mb) < 0.005 ? null : ma > mb ? "a" : "b";
   const loser = lead === "a" ? f.b : lead === "b" ? f.a : null;
   const pay = loser?.bond != null ? (loser.bond * f.slashPct) / 100 : null;
@@ -75,8 +77,10 @@ export function Headline({
         oracle supplies the closing price. At the last trade,{" "}
         {lead ? (
           <>{lead === "a" ? A : B} was ahead</>
+        ) : both ? (
+          "both calls were still sealed"
         ) : veiled ? (
-          <>{veiled === "a" ? A : B}&apos;s call was not revealed yet</>
+          <>{veiled === "a" ? A : B}&apos;s call was still sealed</>
         ) : f.a.side || f.b.side ? (
           "the two sides were tied"
         ) : (
@@ -97,16 +101,16 @@ export function Headline({
     // "Dead heat" only once a side is known; before the first reveal nothing can be level or ahead
     h1 = lead ? (
       <>{lead === "a" ? A : B} is winning.</>
+    ) : both ? (
+      // commit-reveal: both have called, and nobody can read either call until the last minute
+      "Both calls are sealed."
+    ) : veiled ? (
+      <>{veiled === "a" ? A : B}&apos;s call is sealed.</>
     ) : f.a.side && f.a.side === f.b.side ? (
       // the common case: both made the same call, so the price cannot separate them
       `Both bet ${f.a.side === "Long" ? "up" : "down"}.`
-    ) : veiled && (f.a.side || f.b.side) ? (
-      <>{veiled === "a" ? A : B}&apos;s call is sealed.</>
     ) : f.a.side || f.b.side ? (
       "Dead heat."
-    ) : f.a.sealed && f.b.sealed ? (
-      // commit-reveal: both have called, and nobody can read either call until the last minute
-      "Both calls are sealed."
     ) : (
       `Duel ${f.duel}: no call revealed yet.`
     );
@@ -123,6 +127,8 @@ export function Headline({
             <b>{pay != null ? near(pay) : `${f.slashPct}% of its bond`}</b>
             {f.pot > 0 ? <> plus the {near(f.pot)} pot</> : null}.
           </>
+        ) : veiled ? (
+          "A sealed call counts only once it is revealed; one still sealed at the close forfeits."
         ) : f.a.side && f.a.side === f.b.side ? (
           "Same call on both sides: if it ends like this, nobody pays."
         ) : (
@@ -255,11 +261,13 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
             {s.side ? `, ${stake(s.size_pct)}` : ""}
           </span>
           <span className="st">
-            {!s.side && s.sealed
-              ? "hidden until revealed"
+            {s.sealed
+              ? s.side
+                ? "newer call sealed"
+                : "hidden until revealed"
               : !s.side && !opp.side
                 ? "no call yet"
-                : !opp.side && opp.sealed
+                : opp.sealed
                   ? "vs a sealed call"
                   : Math.abs(mark - other) < 0.005
                     ? "tied"
