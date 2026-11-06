@@ -127,7 +127,10 @@ enclave produced the response whose hash is in the intent, while the link "that 
 dataset row (request and response bytes are published there, so anyone can recompute both hashes); the open price may be up to
 300 s old because the oracle serves its cache with a fresh timestamp, which is why duels are at least 310 s.
 
-The real 1Click swap ran on mainnet (table above: 0.5 wNEAR → 1.864135 USDC). Not yet proven: that swap reported back
+The real 1Click swap ran on mainnet (table above: 0.5 wNEAR → 1.864135 USDC). Where its 77 s went, from block timestamps: our client 33 s (four sequential txs on rpc.mainnet.near.org), NEAR
+~2 s, 1Click 33 s, status indexer 9 s. `analysis/send_latency.ts` measured the client leg on testnet (10 runs per cell):
+one tx lands in p50 2.4 s on FastNEAR at the default wait, 8.5 s on rpc.testnet.near.org, FINAL adds ~2 s, and two actions in
+one tx take 2.8 s where two txs take 5.6 s; the swap path now sends one batched tx. Not yet proven: that swap reported back
 through `settle_follow` on a mainnet arena; the contract and solver are testnet-only, so the fill on testnet carries the
 mainnet quote, not the mainnet tx.
 
