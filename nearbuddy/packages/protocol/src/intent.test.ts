@@ -20,7 +20,7 @@ import {
 } from "./intent.ts";
 
 // Same fixture as the contract test `intent_message_len` (arena/src/tests.rs).
-export const fixture: Intent = {
+const fixture: Intent = {
   agent_pk: b64.enc(new Uint8Array(32).fill(1)),
   duel_id: "7",
   side: "Short",

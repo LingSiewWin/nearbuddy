@@ -11,6 +11,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { teraToGas } from "near-api-js";
 import nacl from "tweetnacl";
 import { ARENA, explorerTx, loadAccount } from "../../protocol/src/chain.ts";
+import { b64 } from "../../protocol/src/index.ts";
 
 const arg = (k: string, d?: string) => {
   const i = process.argv.indexOf(`--${k}`);
@@ -56,7 +57,7 @@ console.log(
 // 2. fresh agent key, seed kept locally
 const seed = randomBytes(32);
 const kp = nacl.sign.keyPair.fromSeed(seed);
-const pk = Buffer.from(kp.publicKey).toString("base64");
+const pk = b64.enc(kp.publicKey);
 const dir = `${process.env.HOME}/.nearbuddy/agents`;
 mkdirSync(dir, { recursive: true });
 const file = `${dir}/${pk.replace(/[^a-zA-Z0-9]/g, "_")}.json`;
@@ -66,9 +67,9 @@ const file = `${dir}/${pk.replace(/[^a-zA-Z0-9]/g, "_")}.json`;
 const signer = loadAccount(account);
 const deposit = BigInt(Math.round(bondNear * 1e6)) * 10n ** 18n;
 // proof of key possession: ed25519 over "nearbuddy-register-v1" || your account id, so nobody can squat a published key
-const register_sig = Buffer.from(
+const register_sig = b64.enc(
   nacl.sign.detached(Buffer.concat([Buffer.from("nearbuddy-register-v1"), Buffer.from(account)]), kp.secretKey),
-).toString("base64");
+);
 const r = await signer.callFunctionRaw({
   contractId: ARENA,
   methodName: "register_agent",

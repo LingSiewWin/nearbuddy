@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { bottom, boxTitle, near, row, W } from "../tui";
 
 type Snap = {
   at: number;
@@ -23,17 +24,8 @@ type Snap = {
   ledger: { carrying: number; exposure: { agent_pk: string; yocto: string }[] } | null;
 };
 
-const NEAR = 10n ** 24n;
-const near = (y: string | null | undefined, d = 5) => {
-  if (!y) return "-";
-  const v = BigInt(y);
-  const f = ((v % NEAR) * 10n ** BigInt(d)) / NEAR;
-  return `${v / NEAR}.${f.toString().padStart(d, "0")}`;
-};
-const W = 96;
-const row = (k: string, v: string) => `│ ${k.padEnd(16)} ${v.padEnd(W - 20).slice(0, W - 20)} │`;
-const top = (t: string) => `┌─ ${t} ${"─".repeat(Math.max(0, W - t.length - 5))}┐`;
-const bottom = () => `└${"─".repeat(W - 2)}┘`;
+/** 5 decimals: a call costs 0.00005 NEAR, which the arena's 3-decimal default would print as 0.000. */
+const near5 = (y: string | null | undefined) => near(y, 5);
 
 export default function Page() {
   const [snap, setSnap] = useState<Snap | null>(null);
@@ -55,10 +47,10 @@ export default function Page() {
         if (p?.ledger && s.ledger && s.ledger.carrying !== p.ledger.carrying)
           lines.push(`${t}  solver carrying ${p.ledger.carrying} -> ${s.ledger.carrying} IOUs`);
         if (p?.vault && s.vault && s.vault.balance !== p.vault.balance)
-          lines.push(`${t}  vault ${near(p.vault.balance)} -> ${near(s.vault.balance)} NEAR  (settlement landed)`);
+          lines.push(`${t}  vault ${near5(p.vault.balance)} -> ${near5(s.vault.balance)} NEAR  (settlement landed)`);
         if (p?.solver && s.solver && s.solver.ious_settled !== p.solver.ious_settled)
           lines.push(
-            `${t}  solver lifetime IOUs ${p.solver.ious_settled} -> ${s.solver.ious_settled}, fees ${near(s.solver.fees_earned)} NEAR`,
+            `${t}  solver lifetime IOUs ${p.solver.ious_settled} -> ${s.solver.ious_settled}, fees ${near5(s.solver.fees_earned)} NEAR`,
           );
         if (lines.length) setLog((l) => [...l, ...lines].slice(-30));
         prev.current = s;
@@ -87,7 +79,7 @@ export default function Page() {
       </span>
       <span className="cursor" />
       {"\n\n"}
-      {top("CONTRACT")}
+      {boxTitle(1, "contract")}
       {"\n"}
       {row("account", s?.contract ?? "-")}
       {"\n"}
@@ -104,47 +96,47 @@ export default function Page() {
       {"\n"}
       {bottom()}
       {"\n\n"}
-      {top("OWNER VAULT")}
+      {boxTitle(2, "owner vault")}
       {"\n"}
       {row("owner", s?.owner ?? "-")}
       {"\n"}
-      {row("locked", `${near(s?.vault?.balance)} NEAR`)}
+      {row("locked", `${near5(s?.vault?.balance)} NEAR`)}
       {"\n"}
       {row(
         "withdraw",
-        s?.vault?.pending_withdraw ? `PENDING ${near(s.vault.pending_withdraw[0])} NEAR` : "none pending",
+        s?.vault?.pending_withdraw ? `PENDING ${near5(s.vault.pending_withdraw[0])} NEAR` : "none pending",
       )}
       {"\n"}
       {bottom()}
       {"\n\n"}
-      {top("SOLVER")}
+      {boxTitle(3, "solver")}
       {"\n"}
       {row("solver", s?.solverId ?? "-")}
       {"\n"}
-      {row("stake", `${near(s?.solver?.stake)} NEAR`)}
+      {row("stake", `${near5(s?.solver?.stake)} NEAR`)}
       {"\n"}
-      {row("fees earned", `${near(s?.solver?.fees_earned)} NEAR`)}
+      {row("fees earned", `${near5(s?.solver?.fees_earned)} NEAR`)}
       {"\n"}
       {row("IOUs settled", `${s?.solver?.ious_settled ?? "-"} lifetime`)}
       {"\n"}
       {row(
         "carrying now",
         s?.ledger
-          ? `${s.ledger.carrying} unsettled IOUs, exposure ${near(exposure.toString())} NEAR  ${"▮".repeat(Math.min(60, s.ledger.carrying))}`
+          ? `${s.ledger.carrying} unsettled IOUs, exposure ${near5(exposure.toString())} NEAR  ${"▮".repeat(Math.min(60, s.ledger.carrying))}`
           : "solver offline (start: pnpm solver)",
       )}
       {"\n"}
       {bottom()}
       {"\n\n"}
-      {top("PAYEE (paid API)")}
+      {boxTitle(4, "payee", "paid API")}
       {"\n"}
       {row("account", s?.api ?? "-")}
       {"\n"}
-      {row("balance", `${near(s?.apiBalance)} NEAR`)}
+      {row("balance", `${near5(s?.apiBalance)} NEAR`)}
       {"\n"}
       {bottom()}
       {"\n\n"}
-      {top("MANDATE")}
+      {boxTitle(5, "mandate")}
       {"\n"}
       <span>│ agent key </span>
       <input
@@ -164,13 +156,13 @@ export default function Page() {
       {row(
         "allowance",
         s?.mandate
-          ? `${near(s.mandate.spent)} spent / ${near(s.mandate.allowance)} NEAR`
+          ? `${near5(s.mandate.spent)} spent / ${near5(s.mandate.allowance)} NEAR`
           : agentPk
             ? "no mandate for that key"
             : "-",
       )}
       {"\n"}
-      {row("per-IOU cap", s?.mandate ? `${near(s.mandate.per_tx_cap)} NEAR` : "-")}
+      {row("per-IOU cap", s?.mandate ? `${near5(s.mandate.per_tx_cap)} NEAR` : "-")}
       {"\n"}
       {row("payees", s?.mandate ? s.mandate.allowed_payees.join(", ") || "any" : "-")}
       {"\n"}
@@ -185,7 +177,7 @@ export default function Page() {
       {"\n"}
       {bottom()}
       {"\n\n"}
-      {top("EVENTS (observed by this page)")}
+      {boxTitle(6, "events", "observed by this page")}
       {"\n"}
       {log.length
         ? log.map((l) => `│ ${l.padEnd(W - 4)} │`).join("\n")

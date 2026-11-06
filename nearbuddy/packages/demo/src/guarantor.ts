@@ -9,7 +9,7 @@ import { createWalletClient, formatUnits, type Hex, http, parseUnits } from "vie
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
 import type { SignedCert } from "../../protocol/src/cert.ts";
-import { CONTRACT, explorerTx, fmtNear, provider } from "../../protocol/src/chain.ts";
+import { CONTRACT, explorerTx, fmtNear, provider, view } from "../../protocol/src/chain.ts";
 import type { IssuerReserve, PullReport } from "../../solver/src/guarantor.ts";
 import { erc20, evm, PULLER, SEPOLIA_RPC, USDC } from "../../solver/src/pull.ts";
 
@@ -39,12 +39,7 @@ const box = (title: string, rows: string[]) => {
 const step = (s: string) => console.log(`\n▶ ${s}`);
 const post = async <T>(path: string, body: unknown): Promise<T> =>
   (await fetch(`${SOLVER_URL}${path}`, { method: "POST", body: JSON.stringify(body) })).json() as Promise<T>;
-const getIssuer = () =>
-  provider.callFunction({
-    contractId: CONTRACT,
-    method: "get_issuer",
-    args: { issuer: ISSUER },
-  }) as Promise<IssuerReserve | null>;
+const getIssuer = () => view<IssuerReserve | null>("get_issuer", { issuer: ISSUER });
 const usdc = (a: Hex) => evm.readContract({ address: USDC, abi: erc20, functionName: "balanceOf", args: [a] });
 const nearBal = async (id: string) => BigInt((await provider.viewAccount({ accountId: id })).amount);
 

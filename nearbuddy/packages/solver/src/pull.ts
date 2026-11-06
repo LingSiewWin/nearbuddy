@@ -20,7 +20,7 @@ export const USDC = (process.env.SEPOLIA_USDC ?? "0x1c7D4B196Cb0C7B01d743Fbc6116
 /// MPC-derived address of nearbuddy-vault.testnet at path "sepolia-1":
 /// keccak256(derived_public_key(nearbuddy-vault.testnet, "sepolia-1"))[12..]. No one holds its key.
 export const PULLER = (process.env.PULLER ?? "0x1a10a02f13144a60a775b6969c01dfDdD3BB4595") as Hex;
-export const MPC_PATH = process.env.MPC_PATH ?? "sepolia-1";
+const MPC_PATH = process.env.MPC_PATH ?? "sepolia-1";
 export const CHAIN_ID = sepolia.id; // 11155111
 
 export const erc20 = parseAbi([

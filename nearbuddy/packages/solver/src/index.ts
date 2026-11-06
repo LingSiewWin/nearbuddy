@@ -74,7 +74,7 @@ async function cached<T>(k: string, f: () => Promise<T>, ttlMs = 3000): Promise<
 }
 
 // ---- underwriting -----------------------------------------------------------------------------
-export async function underwrite(s: SignedIou): Promise<{ ok: boolean; reason?: string }> {
+async function underwrite(s: SignedIou): Promise<{ ok: boolean; reason?: string }> {
   const { iou } = s;
   const key = `${iou.agent_pk}:${iou.nonce}`;
   if (seen.has(key)) return { ok: false, reason: "duplicate nonce" };
@@ -118,7 +118,7 @@ export async function underwrite(s: SignedIou): Promise<{ ok: boolean; reason?: 
 // ---- settlement -------------------------------------------------------------------------------
 let settling: Promise<SettleResult | null> | null = null;
 type SettleResult = { txHash: string; report: SettlementReport; count: number; gasTgas: number };
-export function settle(): Promise<SettleResult | null> {
+function settle(): Promise<SettleResult | null> {
   // ponytail: single in-flight settlement; a second caller awaits the first.
   if (settling) return settling;
   settling = doSettle().finally(() => (settling = null));
@@ -233,8 +233,10 @@ if (process.argv[1]?.endsWith("solver/src/index.ts")) {
       if (a) return json(res, a.code, a.body);
       json(res, 404, { error: "not found" });
     } catch (e) {
-      console.error(`[solver] ${req.method} ${req.url} failed:`, String(e).slice(0, 300));
-      json(res, 500, { error: String(e) });
+      // a body that is not JSON is the caller's fault; anything else (chain, RPC, 1Click) is ours
+      const error = e instanceof Error ? e.message : String(e);
+      console.error(`[solver] ${req.method} ${req.url} failed:`, error.slice(0, 300));
+      json(res, e instanceof SyntaxError ? 400 : 500, { error });
     }
   }).listen(PORT, () =>
     console.log(

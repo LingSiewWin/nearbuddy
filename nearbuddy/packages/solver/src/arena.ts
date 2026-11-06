@@ -79,8 +79,8 @@ const PAIR_SYMBOL = process.env.PAIR_SYMBOL ?? "wrap.near";
 /// Shared secret for the POST routes: every one of them spends the solver's NEAR or debits a follower.
 /// Unset = routes refuse all POSTs (the on-chain gate trusts this account, so the port must not be open).
 export const ARENA_SECRET = process.env.ARENA_SECRET ?? "";
-export const MAX_PAYLOAD = 2048;
-export const MAX_PAYLOADS = 2000;
+const MAX_PAYLOAD = 2048;
+const MAX_PAYLOADS = 2000;
 const PAYLOAD_FILE = process.env.ARENA_PAYLOADS ?? new URL("../../../.arena-payloads.json", import.meta.url).pathname;
 const HISTORY_FILE = process.env.ARENA_HISTORY ?? new URL("../../../.arena-history.json", import.meta.url).pathname;
 /** Write to a temp file and rename, so a crash mid-write never leaves a truncated JSON file. */

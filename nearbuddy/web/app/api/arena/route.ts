@@ -3,17 +3,12 @@
 // is optional enrichment (intent txs, injection payloads, quotes, fills); the page renders without it.
 // Cached 20 s and built once at a time however many tabs poll; a stale body beats a 500 while the RPC
 // is throttled. Resolved duels never change, so they are kept in memory and not re-read.
-import { JsonRpcProvider } from "near-api-js";
+import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
 
-const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org"; // rpc.testnet.near.org is deprecated (429); fastnear rate-limits bursts
-const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
-const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const SCAN = Number(process.env.ARENA_SCAN ?? 40);
 const SHOW = 3;
 const TTL = 20_000;
-const provider = new JsonRpcProvider({ url: RPC });
-const view = (method: string, args: Record<string, unknown>) =>
-  provider.callFunction({ contractId: ARENA, method, args });
+const view = viewOn(ARENA);
 
 type Intent = { proof_hash: string };
 type Duel = {
@@ -29,8 +24,6 @@ const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 let cache: { at: number; body: string } | null = null;
 let inflight: Promise<string> | null = null;
 const resolved = new Map<string, Duel>(); // ponytail: unbounded, SCAN entries live at a time plus history; fine for one process
-const json = (body: string, status = 200) =>
-  new Response(body, { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
 async function duel(id: string): Promise<Duel | null> {
   const hit = resolved.get(id);
@@ -79,20 +72,17 @@ async function build(): Promise<string> {
     verified_decisions: seen.reduce((s, d) => s + Number(proven(d.last_intent_a)) + Number(proven(d.last_intent_b)), 0),
     attacks: seen.reduce((s, d) => s + (d.resolved ? (d.outcome?.injections ?? 0) : d.injections.length), 0),
   };
-  const body = JSON.stringify(
-    {
-      at: Date.now(),
-      rpc: RPC,
-      contract: ARENA,
-      config,
-      leaderboard,
-      duels: scanned.slice(0, SHOW),
-      stats,
-      followers,
-      solver,
-    },
-    (_, v) => (typeof v === "bigint" ? v.toString() : v),
-  );
+  const body = jsonBody({
+    at: Date.now(),
+    rpc: RPC,
+    contract: ARENA,
+    config,
+    leaderboard,
+    duels: scanned.slice(0, SHOW),
+    stats,
+    followers,
+    solver,
+  });
   cache = { at: Date.now(), body };
   return body;
 }

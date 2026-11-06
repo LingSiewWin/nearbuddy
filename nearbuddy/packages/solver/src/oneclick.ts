@@ -4,8 +4,8 @@
 // 25 bps platform fee. `swap` is the only paid path and is never called by the arena loop.
 import { type Account, actions, teraToGas } from "near-api-js";
 
-export const ONECLICK_URL = process.env.ONECLICK_URL ?? "https://1click.chaindefuser.com";
-export const ONECLICK_JWT = process.env.ONECLICK_JWT;
+const ONECLICK_URL = process.env.ONECLICK_URL ?? "https://1click.chaindefuser.com";
+const ONECLICK_JWT = process.env.ONECLICK_JWT;
 export const WNEAR = "nep141:wrap.near";
 export const USDC_NEAR = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 
@@ -88,7 +88,7 @@ export function sellNearForUsdc(amountYocto: bigint, account: string, dry = true
 }
 
 /** Report the deposit for a non-dry quote, then poll status. Paid path: run by hand for the proof. */
-export async function submitDeposit(
+async function submitDeposit(
   txHash: string,
   depositAddress: string,
   fetchFn: typeof fetch = fetch,
@@ -101,7 +101,7 @@ export async function submitDeposit(
   if (!r.ok) throw new Error(`1click submit ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return (await r.json()) as { status: SwapStatus };
 }
-export async function status(
+async function status(
   depositAddress: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<{ status: SwapStatus; swapDetails?: Record<string, unknown> }> {

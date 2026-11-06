@@ -2,11 +2,10 @@
 // window and gets a solver-signed cert back; /pull executes the on-chain pull (signed by the
 // vault contract via Chain Signatures); /settle_pulls reports outcomes to the contract in one tx,
 // which pays the issuer from the reserve for every failed pull.
-import { readFileSync } from "node:fs";
-import { type Account, KeyPair, type KeyPairString, teraToGas } from "near-api-js";
+import { type Account, KeyPair, teraToGas } from "near-api-js";
 import type { Hex } from "viem";
 import { type GuaranteeCert, type PullSettlement, type SignedCert, signCert } from "../../protocol/src/cert.ts";
-import { CONTRACT, view } from "../../protocol/src/chain.ts";
+import { CONTRACT, loadKey, view } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import { Ledger } from "./ledger.ts";
 import { CHAIN_ID, observe, type PullResult, pull, USDC } from "./pull.ts";
@@ -46,11 +45,7 @@ export class Guarantor {
     private solver: Account,
     private solverId: string,
   ) {
-    const key =
-      process.env[`NEAR_KEY_${solverId.replace(/[.-]/g, "_").toUpperCase()}`] ??
-      (JSON.parse(readFileSync(`${process.env.HOME}/.near-credentials/testnet/${solverId}.json`, "utf8"))
-        .private_key as string);
-    this.kp = KeyPair.fromString(key as KeyPairString);
+    this.kp = KeyPair.fromString(loadKey(solverId));
     this.pkB64 = b64.enc(this.kp.getPublicKey().data);
   }
 

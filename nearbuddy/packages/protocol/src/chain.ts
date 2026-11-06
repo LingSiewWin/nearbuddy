@@ -1,23 +1,25 @@
 // Thin NEAR helpers shared by solver / demo. Keys come from near-cli legacy keychain files.
 import { readFileSync } from "node:fs";
 import { Account, JsonRpcProvider, type KeyPairString } from "near-api-js";
-import type { Iou } from "./index.ts";
 
 export const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org"; // one default everywhere; see .env.example
 export const CONTRACT = process.env.NEARBUDDY_CONTRACT ?? "nearbuddy-vault.testnet";
 export const provider = new JsonRpcProvider({ url: RPC });
 /** Transactions whose receipts take seconds (an oracle yield inside open_duel) are dropped by some public RPCs
  *  with "Internal server error" while waiting; sends may use a different endpoint than views. */
-export const SEND_RPC = process.env.NEAR_SEND_RPC ?? RPC;
+const SEND_RPC = process.env.NEAR_SEND_RPC ?? RPC;
 const sendProvider = SEND_RPC === RPC ? provider : new JsonRpcProvider({ url: SEND_RPC });
 
-export function loadAccount(accountId: string): Account {
+/** Testnet signing key for `accountId`: `NEAR_KEY_<ACCOUNT_ID>` from the env, else the near-cli legacy keychain file. */
+export function loadKey(accountId: string): KeyPairString {
   const envKey = process.env[`NEAR_KEY_${accountId.replace(/[.-]/g, "_").toUpperCase()}`];
-  const key =
-    envKey ??
-    (JSON.parse(readFileSync(`${process.env.HOME}/.near-credentials/testnet/${accountId}.json`, "utf8"))
-      .private_key as string);
-  return new Account(accountId, sendProvider, key as KeyPairString);
+  return (envKey ??
+    JSON.parse(readFileSync(`${process.env.HOME}/.near-credentials/testnet/${accountId}.json`, "utf8"))
+      .private_key) as KeyPairString;
+}
+
+export function loadAccount(accountId: string): Account {
+  return new Account(accountId, sendProvider, loadKey(accountId));
 }
 
 export async function view<T>(method: string, args: Record<string, unknown>): Promise<T> {
@@ -53,7 +55,6 @@ export interface SettlementReport {
 export const getVault = (owner: string) => view<Vault | null>("get_vault", { owner });
 export const getMandate = (agent_pk: string) => view<Mandate | null>("get_mandate", { agent_pk });
 export const getSolver = (solver: string) => view<Solver | null>("get_solver", { solver });
-export const iouMessageHexOnChain = (iou: Iou) => view<string>("iou_message_hex", { iou });
 
 export const NEAR = 10n ** 24n;
 export const fmtNear = (yocto: string | bigint, digits = 5) => {

@@ -1,16 +1,10 @@
 // Read-only snapshot: contract config, vault, solver, mandate (optional), and the local solver's ledger.
-import { JsonRpcProvider } from "near-api-js";
+import { CONTRACT, json, jsonBody, provider, RPC, SOLVER_URL, viewOn } from "../near";
 
-const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org";
-const CONTRACT = process.env.NEARBUDDY_CONTRACT ?? "nearbuddy-vault.testnet";
 const OWNER = process.env.OWNER_ID ?? "nearbuddy-owner.testnet";
 const SOLVER = process.env.SOLVER_ID ?? "nearbuddy-solver.testnet";
 const API = process.env.API_ID ?? "nearbuddy-api.testnet";
-const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
-const provider = new JsonRpcProvider({ url: RPC });
-
-const view = (method: string, args: Record<string, unknown>) =>
-  provider.callFunction({ contractId: CONTRACT, method, args });
+const view = viewOn(CONTRACT);
 
 export async function GET(req: Request) {
   const agentPk = new URL(req.url).searchParams.get("agent_pk");
@@ -27,9 +21,8 @@ export async function GET(req: Request) {
       .then((r) => r.json())
       .catch(() => null),
   ]);
-  // near-api-js returns bigint in some view responses; stringify them.
-  const body = JSON.stringify(
-    {
+  return json(
+    jsonBody({
       at: Date.now(),
       rpc: RPC,
       contract: CONTRACT,
@@ -42,8 +35,6 @@ export async function GET(req: Request) {
       mandate,
       apiBalance: apiAcc,
       ledger,
-    },
-    (_, v) => (typeof v === "bigint" ? v.toString() : v),
+    }),
   );
-  return new Response(body, { headers: { "content-type": "application/json", "cache-control": "no-store" } });
 }

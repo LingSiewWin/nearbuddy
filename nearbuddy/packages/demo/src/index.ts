@@ -71,7 +71,7 @@ async function main() {
 
   const kids: ChildProcess[] = [];
   for (const pkg of ["solver", "resource-server"]) {
-    const p = spawn("pnpm", ["exec", "tsx", `packages/${pkg}/src/index.ts`], { stdio: ["ignore", "pipe", "inherit"] });
+    const p = spawn("bun", [`packages/${pkg}/src/index.ts`], { stdio: ["ignore", "pipe", "inherit"] });
     p.stdout?.on("data", (d) => process.stdout.write(`    ${String(d).trim()}\n`));
     kids.push(p);
   }

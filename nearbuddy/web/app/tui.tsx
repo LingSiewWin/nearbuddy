@@ -167,7 +167,7 @@ export const meter = (parts: [number, string][], total: number, width = 30): Cel
   return segs;
 };
 
-export const explorer = (net: "testnet" | "mainnet" = "testnet") =>
+const explorer = (net: "testnet" | "mainnet" = "testnet") =>
   net === "testnet" ? "https://testnet.nearblocks.io" : "https://nearblocks.io";
 export const txHref = (tx: string, net?: "testnet" | "mainnet") => `${explorer(net)}/txns/${tx}`;
 export const addrHref = (acct: string, net?: "testnet" | "mainnet") => `${explorer(net)}/address/${acct}`;

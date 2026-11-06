@@ -2,8 +2,9 @@
 // single tx vs two actions batched in one tx. Writes analysis/data/send_latency.jsonl and prints p50/p95.
 //   RUNS=10 bun analysis/send_latency.ts            (spends ~0.001 NEAR per run from SENDER, default nearbuddy-solver.testnet)
 import "../packages/protocol/src/env.ts";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { Account, actions, JsonRpcProvider, type KeyPairString, teraToGas } from "near-api-js";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { Account, actions, JsonRpcProvider, teraToGas } from "near-api-js";
+import { loadKey } from "../packages/protocol/src/chain.ts";
 
 const SENDER = process.env.SENDER ?? "nearbuddy-solver.testnet";
 const DEP = process.env.DEP ?? "nearbuddy-owner.testnet"; // stands in for the 1Click deposit address
@@ -12,8 +13,7 @@ const RPCS = (
   process.env.RPCS ?? "https://test.rpc.fastnear.com,https://near-testnet.drpc.org,https://rpc.testnet.near.org"
 ).split(",");
 const WAITS = ["EXECUTED_OPTIMISTIC", "FINAL"] as const;
-const key = JSON.parse(readFileSync(`${process.env.HOME}/.near-credentials/testnet/${SENDER}.json`, "utf8"))
-  .private_key as KeyPairString;
+const key = loadKey(SENDER);
 const out = new URL("./data/send_latency.jsonl", import.meta.url).pathname;
 mkdirSync(new URL("./data/", import.meta.url).pathname, { recursive: true });
 

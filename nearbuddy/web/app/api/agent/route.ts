@@ -1,14 +1,10 @@
 // One agent's public record, read from the arena contract on the public RPC: the agent view, its
 // followers, and every duel it fought among the last SCAN duels (the contract keeps no per-agent index;
 // ponytail: scan the tail, add an index in the contract when agents outgrow it). Cached 60 s per agent.
-import { JsonRpcProvider } from "near-api-js";
+import { ARENA, json, jsonBody, RPC, viewOn } from "../near";
 
-const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org";
-const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
 const SCAN = Number(process.env.AGENT_SCAN ?? 40);
-const provider = new JsonRpcProvider({ url: RPC });
-const view = (method: string, args: Record<string, unknown>) =>
-  provider.callFunction({ contractId: ARENA, method, args });
+const view = viewOn(ARENA);
 
 type Intent = { agent_pk: string; side: "Long" | "Short"; size_bps: number; nonce: string; proof_hash: string };
 type Outcome = {
@@ -39,8 +35,6 @@ type Duel = {
 const cache = new Map<string, { at: number; body: string }>();
 const inflight = new Map<string, Promise<string>>();
 const PK_RE = /^[A-Za-z0-9+/]{43}=$/; // 32 bytes, standard base64
-const json = (body: string, status = 200) =>
-  new Response(body, { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
 /** Views in small chunks so a rate-limited RPC sees a trickle, not a 40-call burst. */
 async function chunked<T>(items: string[], size: number, f: (id: string) => Promise<T>): Promise<T[]> {
@@ -118,22 +112,19 @@ async function build(pk: string): Promise<string> {
         attacks_on_me: d.resolved ? null : d.injections.filter((j) => j.target === pk).length,
       };
     });
-  const body = JSON.stringify(
-    {
-      at: Date.now(),
-      rpc: RPC,
-      contract: ARENA,
-      scanned: ids.length,
-      indexed,
-      next_duel: n,
-      slash_bps: config.slash_bps,
-      min_chaos_deposit: config.min_chaos_deposit,
-      agent,
-      followers,
-      duels,
-    },
-    (_, v) => (typeof v === "bigint" ? v.toString() : v),
-  );
+  const body = jsonBody({
+    at: Date.now(),
+    rpc: RPC,
+    contract: ARENA,
+    scanned: ids.length,
+    indexed,
+    next_duel: n,
+    slash_bps: config.slash_bps,
+    min_chaos_deposit: config.min_chaos_deposit,
+    agent,
+    followers,
+    duels,
+  });
   cache.set(pk, { at: Date.now(), body });
   if (cache.size > 200) cache.delete(cache.keys().next().value as string); // oldest entry out
   return body;
