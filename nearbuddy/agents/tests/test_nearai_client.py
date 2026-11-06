@@ -92,6 +92,33 @@ def test_near_ai_client_round_trip_and_tee_proof():
     srv.shutdown()
 
 
+SNAPSHOT = Path(__file__).resolve().parents[2] / "dataset" / "decisions.jsonl"
+
+
+def test_pair_1_requests_stay_byte_identical_to_the_signed_dataset_rows():
+    """Re-send the system/user text of real enclave-signed pair-1 rows; the client must emit the exact bytes the
+    enclave signed then (max_tokens 600), while the pair-2 reasoning models get their measured budgets."""
+    rows = [json.loads(line) for line in SNAPSHOT.read_text().splitlines() if line.strip()]
+    srv = HTTPServer(("127.0.0.1", 0), Fake)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}/v1"
+    for model in ("deepseek-ai/DeepSeek-V4.1-Flash-1017", "Qwen/Qwen3.8-27B"):
+        stored = [r["request_body"] for r in rows if r.get("model") == model and r.get("request_body")][-3:]
+        assert stored, model
+        c = client_from_env({"NEAR_AI_API_KEY": "k", "NEAR_AI_MODEL_A": model, "NEAR_AI_BASE": base}, "A")
+        for body in stored:
+            system, user = (m["content"] for m in json.loads(body)["messages"])
+            c.complete(system, user)
+            assert SENT["chatcmpl-test1"][0] == body.encode(), model
+    for model, budget in (("Qwen/Qwen3.6-35B-A3B-FP8", 1800), ("z-ai/glm-5.3-flash", 1600)):
+        client_from_env({"NEAR_AI_API_KEY": "k", "NEAR_AI_MODEL_A": model, "NEAR_AI_BASE": base}, "A").complete(
+            "s", "u"
+        )
+        assert json.loads(SENT["chatcmpl-test1"][0])["max_tokens"] == budget
+    assert NearAiClient("k", "Qwen/Qwen3.6-35B-A3B-FP8", base, max_tokens=50)._max_tokens == 50  # explicit wins
+    srv.shutdown()
+
+
 def test_env_picks_per_side_model_and_stub_without_key():
     assert client_from_env({}, "A").model_id == "stub/deterministic"
     b = client_from_env({"NEAR_AI_API_KEY": "k", "NEAR_AI_MODEL": "x/default"}, "B")

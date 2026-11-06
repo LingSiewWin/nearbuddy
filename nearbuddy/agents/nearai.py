@@ -54,10 +54,19 @@ class StubClient:
         return None
 
 
+DEFAULT_MAX_TOKENS = 600  # pair 1 (DeepSeek-V4.1-Flash, Qwen3.8-27B): keep it, their request bytes must not change
+# Reasoning models that spend 600 tokens thinking before the JSON. Measured on the arena prompt 2026-11-06: Qwen3.6
+# ran to the cap on 9/14 live calls and used up to 899 tokens uncapped; GLM-5.3-flash used up to 810 under attack.
+# About twice the largest observed completion; tokens are billed as used, so the cap costs only on the long tail.
+MAX_TOKENS = {"Qwen/Qwen3.6-35B-A3B-FP8": 1800, "z-ai/glm-5.3-flash": 1600}
+
+
 class NearAiClient:
     tee = True
 
-    def __init__(self, api_key: str, model_id: str, base_url: str = NEAR_AI_BASE, max_tokens: int = 600) -> None:
+    def __init__(
+        self, api_key: str, model_id: str, base_url: str = NEAR_AI_BASE, max_tokens: int | None = None
+    ) -> None:
         self.model_id = model_id
         self._base = base_url.rstrip("/")
         self._headers = {
@@ -65,7 +74,7 @@ class NearAiClient:
             "Content-Type": "application/json",
             "accept": "application/json",
         }
-        self._max_tokens = max_tokens
+        self._max_tokens = max_tokens or MAX_TOKENS.get(model_id, DEFAULT_MAX_TOKENS)
 
     def complete(self, system: str, user: str) -> Completion:
         payload = {
