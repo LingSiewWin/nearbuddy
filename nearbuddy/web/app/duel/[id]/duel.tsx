@@ -13,6 +13,7 @@ import {
   acctUrl,
   CHAIN,
   clock,
+  closedAgo,
   mmss,
   near,
   ORACLE_ID,
@@ -273,12 +274,12 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
     const lag = lead === d.a ? d.b : d.a;
     const pay = lag.bond != null ? (lag.bond * d.slashPct) / 100 : null;
     fine = "Live line: Coinbase NEAR-USD trades. The score uses the oracle's prices at the open and at the close.";
-    if (now && now > d.closes + 60_000) {
+    if (now && now > d.closes) {
       h1 = "Waiting for the closing price.";
       sub = (
         <>
-          Duel {d.duel} ended {Math.round((now - d.closes) / 60_000)} min ago. It is scored as soon as anyone asks the
-          price oracle for the close. At the last trade,{" "}
+          Duel {d.duel} {closedAgo(now - d.closes)}. It is scored as soon as anyone asks the price oracle for the close.
+          At the last trade,{" "}
           {lead ? (
             <>{nm(lead)} was ahead</>
           ) : d.a.side || d.b.side ? (

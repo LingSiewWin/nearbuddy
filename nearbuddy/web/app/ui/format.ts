@@ -58,6 +58,11 @@ export const stake = (sizePct: number | null | undefined) =>
         ? "half its stake"
         : `${sizePct}% of its stake`;
 export const shortKey = (pk: string) => pk.slice(0, 4);
+/** "just closed", "closed 1 min ago", "closed 4 min ago": how long ago a duel's bell rang. */
+export const closedAgo = (ms: number) => {
+  const m = Math.round(ms / 60_000);
+  return m < 1 ? "just closed" : `closed ${m} min ago`;
+};
 /** Explorer links on this build's network (NEAR_NETWORK, app/network.ts); historic testnet proofs pass "testnet". */
 export const txUrl = (tx: string, net: NetworkId = NETWORK_ID) => `${NETWORKS[net].explorer}/txns/${tx}`;
 export const acctUrl = (a: string, net: NetworkId = NETWORK_ID) => `${NETWORKS[net].explorer}/address/${a}`;

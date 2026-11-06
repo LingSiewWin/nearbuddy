@@ -3,7 +3,7 @@
 // reference price over the duel window with each model's calls as lanes underneath and attacks as flags).
 import type { ArenaEvent } from "../api/tape";
 import type { Tick } from "../lib/live";
-import { agentHref, mmss, near, pct, sideWord, stake, tone, usd, who } from "../ui/format";
+import { agentHref, closedAgo, mmss, near, pct, sideWord, stake, tone, usd, who } from "../ui/format";
 import { duelEvents, type Focus, markPct, openOf } from "./model";
 
 const sideTone = (f: Focus) => {
@@ -38,13 +38,13 @@ export function Headline({
 
   let h1: React.ReactNode;
   let sub: React.ReactNode;
-  if (f.live && now && now > f.closes + 60_000) {
-    // the bell rang a while ago and nobody has called resolve_duel yet
+  if (f.live && now && now > f.closes) {
+    // the bell has rung and resolve_duel has not landed yet (it usually does within seconds)
     h1 = "Waiting for the closing price.";
     sub = (
       <>
-        Duel {f.duel} closed {Math.round((now - f.closes) / 60_000)} min ago and is waiting to be scored. Anyone can
-        trigger that on chain; the TEE oracle supplies the closing price. At the last trade,{" "}
+        Duel {f.duel} {closedAgo(now - f.closes)} and is waiting to be scored. Anyone can trigger that on chain; the TEE
+        oracle supplies the closing price. At the last trade,{" "}
         {lead ? (
           <>{lead === "a" ? A : B} was ahead</>
         ) : f.a.side || f.b.side ? (
