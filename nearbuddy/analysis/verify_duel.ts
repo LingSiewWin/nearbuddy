@@ -23,7 +23,7 @@ import { NET, NETWORK_ID } from "../packages/protocol/src/network.ts";
 
 // ---------------------------------------------------------------- the evidence (all public)
 
-export type AgentView = { owner: string; pk: string; model_id: string; bond: string; tee: boolean };
+export type AgentView = { owner: string; pk: string; model_id: string; bond: string; tee: boolean; shield?: number };
 export type Outcome = {
   open_price: string;
   close_price: string;
@@ -48,7 +48,15 @@ export type Duel = {
   outcome: Outcome | null;
   open_price: string | null;
 };
-export type Config = { oracle_account: string; slash_bps: number; no_reveal_bps?: number; owner_fees: string };
+export type Config = {
+  oracle_account: string;
+  oracle_deposit?: string;
+  slash_bps: number;
+  no_reveal_bps?: number;
+  owner_fees: string;
+  /** Present from deploy 15 on: how the verifier tells v15 rules (self-chaos, forfeit shield) from v14. */
+  intents_account?: string;
+};
 /** Arena views at one point: now, or at a past block. */
 export type State = {
   config: Config;
@@ -67,7 +75,10 @@ export type Tx = {
       receipt: {
         Action?: {
           signer_id: string;
-          actions: ({ FunctionCall?: { method_name: string; args: string; deposit: string } } | string)[];
+          actions: (
+            | { FunctionCall?: { method_name: string; args: string; deposit: string }; Transfer?: { deposit: string } }
+            | string
+          )[];
         };
       };
     };
@@ -93,6 +104,14 @@ export type Evidence = {
   /** Range of tx times scanned (ms) and how many txs it held. */
   window: { from_ms: number; to_ms: number; txs: number };
   rows: Record<string, Row>; // by intent proof_hash
+  // Deploy 15 (absent in evidence saved before it; those lines then SKIP):
+  /** duel_lock(duel_id) read now, ns: the intent lock this duel ran under. null on a contract without the view. */
+  lock_ns?: string | null;
+  /** Per block holding a successful inject_chaos for this duel: the duel's pool at the block before and at it. */
+  chaos_pools?: Record<string, [string, string]>;
+  /** At the open receipt's block: the arena account's storage_usage before and after, get_config there, and how many
+   *  other successful arena receipts ran in that block (any of them makes the storage delta inexact). */
+  open_block?: { storage_before: number; storage_after: number; config: Config; others?: number } | null;
 };
 
 // ---------------------------------------------------------------- receipts
@@ -108,7 +127,19 @@ export type Call = {
   ok: boolean;
   block_hash: string;
   at_ms: number;
+  /** Block time in ns (FastNEAR may send a lossy JSON number; sub-microsecond error at most). */
+  at_ns: bigint;
 };
+
+/** yoctoNEAR the arena transferred to `to` inside tx `hash` (the open_duel refund). */
+export function transfersFromArena(txs: Tx[], arena: string, hash: string, to: string): bigint {
+  return txs
+    .filter((t) => t.transaction.hash === hash)
+    .flatMap((t) => t.receipts)
+    .filter((r) => r.receipt.predecessor_id === arena && r.receipt.receiver_id === to)
+    .flatMap((r) => r.receipt.receipt.Action?.actions ?? [])
+    .reduce((s, a) => s + (typeof a === "object" && a.Transfer ? BigInt(a.Transfer.deposit) : 0n), 0n);
+}
 
 /** Every function-call receipt the arena executed in these txs, with its own outcome. */
 export function arenaCalls(txs: Tx[], arena: string): Call[] {
@@ -134,6 +165,7 @@ export function arenaCalls(txs: Tx[], arena: string): Call[] {
             ok,
             block_hash: r.execution_outcome.block_hash,
             at_ms: Math.floor(Number(r.execution_outcome.block_timestamp) / 1e6),
+            at_ns: BigInt(String(r.execution_outcome.block_timestamp)),
           },
         ];
       });
@@ -243,6 +275,8 @@ export function checkDuel(e: Evidence): Line[] {
   ] as const;
   const o = d.outcome;
   const voided = !!o && o.open_price === "0" && o.close_price === "0";
+  // deploy-15 rules (self-chaos to owner fees, no shield on a forfeit) when the contract that finished it had them
+  const v15 = !!(e.before ?? e.now).config.intents_account;
   add(
     "INFO",
     "duel",
@@ -257,6 +291,7 @@ export function checkDuel(e: Evidence): Line[] {
       `${calls.open.method} returned duel id ${e.duel_id}, tx ${calls.open.tx} by ${calls.open.signer}`,
     );
   else add("SKIP", "opened", "no successful open receipt for this id in the scanned txs");
+  if (calls.open && e.open_block !== undefined) openerRefund(e, calls.open, add);
 
   // agents and their tier
   for (const [s, pk, ag] of sides) {
@@ -288,6 +323,7 @@ export function checkDuel(e: Evidence): Line[] {
       `intent ${s} signature`,
       `${stored.side} ${stored.size_bps} bps nonce ${stored.nonce}: ed25519 over intent_message by ${short(stored.agent_pk, 12)} (${c.method}, tx ${c.tx})`,
     );
+    if (e.lock_ns != null) timing(s, pk, c, BigInt(d.close_at), BigInt(e.lock_ns), calls.commits, add);
     const p = c.args.tee as TeeProof | null | undefined;
     if (!p) {
       add(
@@ -352,7 +388,7 @@ export function checkDuel(e: Evidence): Line[] {
     );
   };
   oracleLine("open", d.open_price);
-  if (!o) return chaos(e, d, calls.chaos, out, add);
+  if (!o) return chaos(e, d, calls.chaos, v15, out, add);
   if (voided) {
     add(
       calls.void ? "PASS" : "SKIP",
@@ -437,34 +473,164 @@ export function checkDuel(e: Evidence): Line[] {
         "payout",
         `pool ${near(pool)} NEAR; A ${near(bonds[0])} -> ${near(got[0])} (expected ${near(m.after[0])}), B ${near(bonds[1])} -> ${near(got[1])} (expected ${near(m.after[1])})`,
       );
+      // shield: the winner's count of injections it outlasted, as finish() credits it
+      const sh = [b.a.shield, b.b.shield, a.a.shield, a.b.shield];
+      if (sh.some((x) => x === undefined)) add("SKIP", "shield", "shield not in the saved agent views");
+      else if (calls.chaos.length !== o.injections)
+        add("SKIP", "shield", "some injections are outside the scanned txs");
+      else {
+        const owners = new Set([e.now.a?.owner, e.now.b?.owner]);
+        const targets = calls.chaos.map((c) => ({ target: String(c.args.target), self: owners.has(c.predecessor) }));
+        const forfeit = flags[0] || flags[1];
+        const gain = shieldGain(targets, o.winner ?? null, forfeit, v15);
+        const got = [sh[2]! - sh[0]!, sh[3]! - sh[1]!];
+        const want = [o.winner === d.a ? gain : 0, o.winner === d.b ? gain : 0];
+        add(
+          got[0] === want[0] && got[1] === want[1] ? "PASS" : "FAIL",
+          "shield",
+          `${v15 ? "v15" : "v14"} rule: the winner gains one per injection aimed at it${v15 ? ", none paid by an agent's owner, none on a forfeit win" : ""}: expected A +${want[0]} B +${want[1]}, got A +${got[0]} B +${got[1]}`,
+        );
+      }
     }
   }
-  return chaos(e, d, calls.chaos, out, add);
+  return chaos(e, d, calls.chaos, v15, out, add);
 }
 
-/** Injections: payer, kind and target of every successful inject_chaos, and the count the contract kept. */
+/** finish()'s shield credit: injections aimed at the winner; from deploy 15 none paid by either agent's owner and
+ *  none at all when the win is a forfeit (red team F2). 0 on a tie. */
+export function shieldGain(
+  targets: { target: string; self: boolean }[],
+  winner: string | null,
+  forfeit: boolean,
+  v15: boolean,
+): number {
+  if (!winner || (v15 && forfeit)) return 0;
+  return targets.filter((t) => t.target === winner && !(v15 && t.self)).length;
+}
+
+const secs = (ns: bigint) => (Number(ns) / 1e9).toFixed(1);
+
+/** When the scored intent landed against the duel's own lock: a post before the lock; a reveal before close_at
+ *  (inside the lock is the intended window; earlier is legal but made the call public sooner) and its commitment
+ *  before the lock. */
+function timing(
+  s: string,
+  pk: string,
+  c: Call,
+  close: bigint,
+  lock: bigint,
+  commits: Call[],
+  add: (r: Line["result"], c: string, x: string) => void,
+) {
+  const opens = close - lock;
+  const left = `${secs(close - c.at_ns)} s before close (lock ${secs(lock)} s)`;
+  if (c.method === "post_intent") {
+    add(c.at_ns < opens ? "PASS" : "FAIL", `intent ${s} timing`, `posted ${left}: before the lock`);
+    return;
+  }
+  if (c.at_ns >= close) add("FAIL", `intent ${s} timing`, `revealed ${secs(c.at_ns - close)} s after close_at`);
+  else if (c.at_ns >= opens) add("PASS", `intent ${s} timing`, `revealed ${left}: inside [close_at - lock, close_at)`);
+  else add("INFO", `intent ${s} timing`, `revealed ${left}: before the lock opened (legal; public sooner)`);
+  const commit = commits.filter((x) => x.args.agent_pk === pk && x.at_ns <= c.at_ns).at(-1);
+  if (!commit) add("SKIP", `intent ${s} commit`, "the commitment's receipt is not in the scanned txs");
+  else
+    add(
+      commit.at_ns < opens ? "PASS" : "FAIL",
+      `intent ${s} commit`,
+      `committed ${secs(close - commit.at_ns)} s before close: before the lock, tx ${commit.tx}`,
+    );
+}
+
+/** Deploy 15 refunds the opener everything above the duel's storage and the oracle deposit. The storage is the
+ *  arena's storage_usage delta across the open block, exact only when no other arena receipt ran in that block. */
+function openerRefund(e: Evidence, open: Call, add: (r: Line["result"], c: string, x: string) => void) {
+  const refund = transfersFromArena(e.txs, e.arena, open.tx, open.predecessor);
+  const ob = e.open_block;
+  if (!ob?.config.oracle_deposit)
+    return add("INFO", "opener refund", `refund ${near(refund)} NEAR; state at the open block not available`);
+  const v15 = !!ob.config.intents_account;
+  const bytes = BigInt(ob.storage_after - ob.storage_before);
+  const cost = bytes * STORAGE_BYTE_COST;
+  const oracle = BigInt(ob.config.oracle_deposit);
+  if (!v15)
+    return add(
+      "INFO",
+      "opener refund",
+      `deploy 14 refunds nothing: attached ${near(open.deposit)}, refund ${near(refund)} NEAR`,
+    );
+  if ((ob.others ?? 0) > 0)
+    return add(
+      "INFO",
+      "opener refund",
+      `refund ${near(refund)} of ${near(open.deposit)} NEAR attached; storage not derivable (${ob.others} other arena receipts in the open block)`,
+    );
+  const want = open.deposit - cost - oracle;
+  add(
+    refund === want ? "PASS" : "FAIL",
+    "opener refund",
+    `attached ${near(open.deposit)} - storage ${bytes} B (${near(cost)}) - oracle deposit ${near(oracle)} = ${near(want)} NEAR, refunded ${near(refund)}`,
+  );
+}
+/** yoctoNEAR per byte of storage (NEAR protocol constant). */
+const STORAGE_BYTE_COST = 10n ** 19n;
+
+/** Injections: payer, kind and target of every successful inject_chaos, the count the contract kept, and where each
+ *  deposit went. Deploy 15 sends chaos paid by either agent's owner to owner_fees; the rest (minus its storage) and
+ *  all chaos before deploy 15 joins the pool, which the duel's pool delta across each injection's block shows. */
 function chaos(
   e: Evidence,
   d: Duel,
   list: Call[],
+  v15: boolean,
   out: Line[],
   add: (r: Line["result"], c: string, x: string) => void,
 ) {
-  const owners = new Map([e.now.a, e.now.b].flatMap((ag) => (ag ? [[ag.pk, ag.owner] as const] : [])));
+  const owners = new Set([e.now.a?.owner, e.now.b?.owner]);
+  const self = (c: Call) => owners.has(c.predecessor);
   for (const c of list) {
     const target = String(c.args.target);
-    const self = owners.get(target) === c.predecessor ? " (payer owns the target agent)" : "";
+    const where = !self(c)
+      ? " -> pool"
+      : v15
+        ? " -> owner fees (self-chaos: the payer owns an agent in this duel)"
+        : " -> pool (payer owns an agent; deploy 14 had no self-chaos rule)";
     add(
       "INFO",
       "injection",
-      `${c.predecessor} paid ${near(c.deposit)} NEAR: kind "${c.args.kind}" at ${target === d.a ? "A" : "B"}${self}, tx ${c.tx}`,
+      `${c.predecessor} paid ${near(c.deposit)} NEAR: kind "${c.args.kind}" at ${target === d.a ? "A" : "B"}${where}, tx ${c.tx}`,
     );
   }
   const kept = d.outcome ? d.outcome.injections : d.injections.length;
   add(
     list.length === kept ? "PASS" : "SKIP",
     "injections",
-    `${list.length} successful inject_chaos receipts found, contract counts ${kept}${list.length === kept ? "" : " (some outside the scanned txs)"}; no self-chaos rule in this contract`,
+    `${list.length} successful inject_chaos receipts found, contract counts ${kept}${list.length === kept ? "" : " (some outside the scanned txs)"}`,
+  );
+  if (!e.chaos_pools || !list.length) return out;
+  const blocks = new Map<string, Call[]>();
+  for (const c of list) blocks.set(c.block_hash, [...(blocks.get(c.block_hash) ?? []), c]);
+  let bad = 0;
+  let missing = 0;
+  let added = 0n;
+  let toPool = 0n;
+  for (const [blk, cs] of blocks) {
+    const pp = e.chaos_pools[blk];
+    if (!pp) {
+      missing++;
+      continue;
+    }
+    const delta = BigInt(pp[1]) - BigInt(pp[0]);
+    const paid = cs.filter((c) => !(v15 && self(c))).reduce((s, c) => s + c.deposit, 0n);
+    added += delta;
+    toPool += paid;
+    if (paid === 0n ? delta !== 0n : delta <= 0n || delta > paid) bad++;
+  }
+  const nSelf = v15 ? list.filter(self).length : 0;
+  add(
+    bad ? "FAIL" : missing ? "SKIP" : "PASS",
+    "injection deposits",
+    `${list.length - nSelf} into the pool: +${near(added)} NEAR of ${near(toPool)} paid (the rest is their storage)` +
+      `${v15 ? `; ${nSelf} self-paid, pool unchanged by them` : ""}${bad ? `; ${bad} blocks off` : ""}${missing ? `; ${missing} blocks without state` : ""}`,
   );
   return out;
 }
@@ -512,6 +678,30 @@ async function viewAt<T>(arena: string, method: string, args: object, block?: st
     if (!block) throw new Error(`${method}: ${JSON.stringify(r.error).slice(0, 160)}`);
   }
   throw new Error(`${method} at ${block}: not served`);
+}
+
+/** The hash of the block before `block` (state there is what a receipt in `block` started from). */
+async function prevHash(block: string): Promise<string> {
+  for (const url of [RPC, ARCHIVAL]) {
+    const r = await post<RpcRes>(url, { jsonrpc: "2.0", id: 1, method: "block", params: { block_id: block } });
+    if (r.result?.header?.prev_hash) return r.result.header.prev_hash;
+  }
+  throw new Error(`block ${block}: not served`);
+}
+
+/** The arena account's storage_usage (bytes) after `block`. */
+async function storageAt(arena: string, block: string): Promise<number> {
+  const params = { request_type: "view_account", account_id: arena, block_id: block };
+  for (const url of [RPC, ARCHIVAL]) {
+    const r = await post<{ result?: { storage_usage?: number } }>(url, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "query",
+      params,
+    });
+    if (r.result?.storage_usage !== undefined) return r.result.storage_usage;
+  }
+  throw new Error(`view_account at ${block}: not served`);
 }
 
 async function state(arena: string, id: string, block?: string): Promise<State> {
@@ -597,20 +787,39 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
   let after: State | null = null;
   if (fin) {
     try {
-      const blk = await post<RpcRes>(RPC, {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "block",
-        params: { block_id: fin.block_hash },
-      });
-      const prev = blk.result?.header?.prev_hash;
-      if (prev) [before, after] = await Promise.all([state(arena, id, prev), state(arena, id, fin.block_hash)]);
+      const prev = await prevHash(fin.block_hash);
+      [before, after] = await Promise.all([state(arena, id, prev), state(arena, id, fin.block_hash)]);
     } catch {} // pruned and no archival answer: the payout line says SKIP
   }
   const proofs = calls.intents.map((c) => c.args.tee as TeeProof | null).filter((p): p is TeeProof => !!p);
   const pinned: Record<string, boolean> = {};
   for (const p of proofs) pinned[p.signer] ??= await viewAt<boolean>(arena, "is_tee_signer", { signer: p.signer });
   const stored = [d.last_intent_a, d.last_intent_b].flatMap((i) => (i ? [i.proof_hash] : []));
+  // deploy 15: the duel's own lock, where each injection's deposit went, and the opener's refund
+  const lock = await viewAt<string | null>(arena, "duel_lock", { duel_id: id }).catch(() => null);
+  const chaos_pools: Record<string, [string, string]> = {};
+  for (const blk of new Set(calls.chaos.map((c) => c.block_hash)))
+    try {
+      const prev = await prevHash(blk);
+      const [x, y] = await Promise.all([
+        viewAt<Duel | null>(arena, "get_duel", { duel_id: id }, prev),
+        viewAt<Duel | null>(arena, "get_duel", { duel_id: id }, blk),
+      ]);
+      if (x && y) chaos_pools[blk] = [x.pool, y.pool];
+    } catch {} // pruned: that block's line says SKIP
+  let open_block: Evidence["open_block"] = null;
+  if (calls.open)
+    try {
+      const blk = calls.open.block_hash;
+      const prev = await prevHash(blk);
+      const [storage_before, storage_after, config] = await Promise.all([
+        storageAt(arena, prev),
+        storageAt(arena, blk),
+        viewAt<Config>(arena, "get_config", {}, blk),
+      ]);
+      const others = arenaCalls(txs, arena).filter((c) => c.ok && c.block_hash === blk).length - 1;
+      open_block = { storage_before, storage_after, config, others };
+    } catch {} // pruned: the refund line says INFO
   return {
     arena,
     duel_id: id,
@@ -621,6 +830,9 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
     txs,
     window: { from_ms: openMs - 120_000, to_ms: Math.min(toMs, Date.now()), txs: txs.length },
     rows: datasetRows(stored),
+    lock_ns: lock,
+    chaos_pools,
+    open_block,
   };
 }
 
