@@ -49,6 +49,7 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # run from any cwd: `python agents/runner.py`
 from typing import Any
 
+import requests
 from nacl.signing import SigningKey
 
 from chain import ARENA, ASSETS, agent_tier_on_chain, view, wait_outcome
@@ -191,6 +192,23 @@ def prepare_decision(
             }
         )
         return None
+    except requests.RequestException as e:
+        if not _model_transient(e):
+            raise
+        record(
+            {
+                "duel_id": duel_id,
+                "agent_pk": pk,
+                "model": model.model_id,
+                "hardened": d.hardened,
+                "prompt_variant": d.prompt_variant,
+                "error": f"transient: model {str(e)[:200]}",
+                "injection": injection_text,
+                "brief": brief(symbol, px, open_px),
+            }
+        )
+        print(f"  model call failed ({str(e)[:120]}); skipping this cycle")
+        return None
     c = comp.last
     sig_record = model.signature(c.chat_id) if c.chat_id else None
     tee = None
@@ -252,6 +270,15 @@ def _late(e: RuntimeError) -> str | None:
 
 
 TRANSIENT = ("rate limit", "Internal server error", "timed out", "Timeout", "ECONNRESET", "503", "502")
+
+
+def _model_transient(e: requests.RequestException) -> bool:
+    """The model API dropped the connection, timed out, throttled (429) or failed on its side (5xx): skip this
+    cycle like an RPC throttle. A 4xx other than 429 is our bug and still ends the batch."""
+    if isinstance(e, (requests.ConnectionError, requests.Timeout)):
+        return True
+    status = e.response.status_code if e.response is not None else None
+    return status is not None and (status == 429 or status >= 500)
 
 
 def _transient(e: Exception) -> bool:

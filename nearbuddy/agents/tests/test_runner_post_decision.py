@@ -218,3 +218,38 @@ def test_variant_c_decision_without_oracle_evidence_is_recorded_as_skipped_and_n
     assert [p for p, _ in solver.posts] == ["/intent", "/consume"]
     assert solver.posts[0][1]["signed"]["intent"]["side"] == "Long"
     assert rows()[1]["prompt_variant"] == "C" and rows()[1]["tx"] == "TX1"
+
+
+def _http_error(status: int):
+    import requests
+
+    resp = requests.Response()
+    resp.status_code = status
+    return requests.HTTPError(f"{status} Server Error: Internal Server Error for url: x", response=resp)
+
+
+@pytest.mark.parametrize("status", [500, 502, 429])
+def test_model_5xx_or_429_skips_the_cycle_instead_of_ending_the_batch(duelist, status):
+    _, _, _, model = duelist
+    model.complete = lambda system, user: (_ for _ in ()).throw(_http_error(status))
+    nonce, status_ = decide(FakeSolver(), duelist)
+    assert status_ == "skipped"
+    (r,) = rows()
+    assert r["error"].startswith("transient: model") and str(status) in r["error"]
+
+
+def test_model_connection_drop_skips_the_cycle(duelist):
+    import requests
+
+    _, _, _, model = duelist
+    model.complete = lambda system, user: (_ for _ in ()).throw(requests.ConnectionError("reset by peer"))
+    assert decide(FakeSolver(), duelist)[1] == "skipped"
+
+
+def test_model_4xx_is_our_bug_and_still_raises(duelist):
+    import requests
+
+    _, _, _, model = duelist
+    model.complete = lambda system, user: (_ for _ in ()).throw(_http_error(400))
+    with pytest.raises(requests.HTTPError):
+        decide(FakeSolver(), duelist)
