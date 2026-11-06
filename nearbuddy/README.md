@@ -181,6 +181,7 @@ cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt 
 .venv/bin/python -m runner --rounds 1 --duel-seconds 330 --cycle-seconds 30  # a live NEAR/USD duel (oracle caches 300 s); with a key, both agents are TEE-backed
 cd .. && bun run arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, oracle resolve
 DUELS=8 TARGET=b bun run spectator           # inject one attack per new duel at the naive model (pays 0.1 NEAR each)
+bun run status                            # processes, chain config, newest duel, balances, batch state (--json, --watch)
 bun --cwd web run build && bun --cwd web run start -p 3011   # /arena reads the public RPC, no keys in the browser
 bun run real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
 sh scripts/arena-up.sh 3 90               # or all at once: solver + web + three 90-second duels
