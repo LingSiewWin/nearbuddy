@@ -1,10 +1,15 @@
 // Thin NEAR helpers shared by solver / demo. Keys come from near-cli legacy keychain files.
 import { readFileSync } from "node:fs";
-import { Account, JsonRpcProvider, type KeyPairString } from "near-api-js";
+import { Account, FailoverRpcProvider, JsonRpcProvider, type KeyPairString } from "near-api-js";
 
 export const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org"; // one default everywhere; see .env.example
+/** Public RPCs rate-limit per machine; views fail over to a second endpoint instead of failing the request. */
+export const RPC_FALLBACK = process.env.NEAR_RPC_FALLBACK ?? "https://test.rpc.fastnear.com";
 export const CONTRACT = process.env.NEARBUDDY_CONTRACT ?? "nearbuddy-vault.testnet";
-export const provider = new JsonRpcProvider({ url: RPC });
+export const provider =
+  RPC_FALLBACK && RPC_FALLBACK !== RPC
+    ? new FailoverRpcProvider([new JsonRpcProvider({ url: RPC }), new JsonRpcProvider({ url: RPC_FALLBACK })])
+    : new JsonRpcProvider({ url: RPC });
 /** Transactions whose receipts take seconds (an oracle yield inside open_duel) are dropped by some public RPCs
  *  with "Internal server error" while waiting; sends may use a different endpoint than views. */
 const SEND_RPC = process.env.NEAR_SEND_RPC ?? RPC;
