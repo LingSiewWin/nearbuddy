@@ -6,6 +6,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useR
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { SHOWN_WORD, shown } from "../lib/verdict";
+import { NET } from "../network";
 import { Cmd } from "./cmd";
 import {
   ARENA_ID,
@@ -34,7 +35,8 @@ export type DrawerItem =
 const Ctx = createContext<(i: DrawerItem) => void>(() => {});
 export const useDrawer = () => useContext(Ctx);
 
-const FASTNEAR = "https://tx.test.fastnear.com/v0/transactions";
+const FASTNEAR = `${NET.txApi}/transactions`; // the reader's browser asks FastNEAR directly, not this site
+const TX_HOST = new URL(NET.txApi).host;
 const hex = (b: ArrayBuffer) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
 const sha256 = async (s: string) => hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
 const b64hex = (b: string) => [...atob(b)].map((c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join("");
@@ -85,8 +87,8 @@ async function recheck(ev: Intent): Promise<Check[]> {
     label: failed ? "The contract refused this transaction" : "Every receipt succeeded on NEAR",
     ok: outcomes.length > 0 && !failed,
     detail: failed
-      ? `refused on chain${why ? `: ${why}` : ""} (read from tx.test.fastnear.com)`
-      : "read from tx.test.fastnear.com, not from this site",
+      ? `refused on chain${why ? `: ${why}` : ""} (read from ${TX_HOST})`
+      : `read from ${TX_HOST}, not from this site`,
   });
   out.push({
     label: "Request bytes hash to the chain's request_hash",
