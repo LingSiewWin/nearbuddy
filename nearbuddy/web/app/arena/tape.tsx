@@ -87,7 +87,12 @@ function Positions({ f, events, ticks, now }: { f: Focus; events: ArenaEvent[]; 
           <th>model</th>
           <th>call</th>
           <th>held</th>
-          <th className="r">if it ended now</th>
+          <th
+            className="r"
+            title="Return on its stake at the live price: the move since the open times its position size"
+          >
+            if it ended now
+          </th>
           <th className="r">bond</th>
         </tr>
       </thead>
