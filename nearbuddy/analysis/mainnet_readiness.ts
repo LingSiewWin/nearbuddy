@@ -265,7 +265,7 @@ const v15check = (name: string, fn: (c: V15Config) => Promise<[Row["result"], st
 
 await v15check("deploy 15: intents_account", async (c) => {
   const want = ON_MAINNET ? "intents.near" : INTENTS_STUB;
-  return [c.intents_account === want ? "PASS" : "FAIL", ` (want )`];
+  return [c.intents_account === want ? "PASS" : "FAIL", `${c.intents_account} (want ${want})`];
 });
 await v15check("deploy 15: intents_account answers mt_batch_balance_of for the arena", async (c) => {
   const b = await view<string[]>(
