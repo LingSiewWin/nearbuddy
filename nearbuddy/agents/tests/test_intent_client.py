@@ -91,3 +91,23 @@ def test_normalise_pyth():
     assert normalise(10_050_000_000_000, -8) == 10_050_000_000_000
     assert normalise(1_005, -1) == 1_005 * 10**7
     assert normalise(123_456_789_012, -9) == 12_345_678_901
+
+
+def test_price_retries_transient_errors(monkeypatch):
+    import prices
+    import requests as rq
+
+    calls = {"n": 0}
+
+    def flaky(symbol):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise rq.ConnectionError("dns")
+        return 123
+
+    monkeypatch.setattr(prices, "coinbase_price", flaky)
+    import time
+
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    assert prices.price("NEAR/USD") == 123
+    assert calls["n"] == 3

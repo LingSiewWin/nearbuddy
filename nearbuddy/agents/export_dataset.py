@@ -10,7 +10,6 @@ Each exported row keeps the exact request and response bytes of the model call, 
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import shutil
@@ -18,34 +17,31 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "data" / "decisions.jsonl"
 OUT = HERE / "data" / "export"
 
 
 def check_row(r: dict) -> tuple[bool, str]:
-    """Recompute every hash the row claims. Returns (verifiable, note)."""
+    """Recompute every hash the row claims with the same code the runner used. Returns (verifiable, note)."""
     if not r.get("request_body") or not r.get("response_body"):
         return False, "no tee bytes"
-    req = hashlib.sha256(r["request_body"].encode()).hexdigest()
-    res = hashlib.sha256(r["response_body"].encode()).hexdigest()
-    if req != r.get("request_hash") or res != r.get("response_hash"):
+    req = hashlib.sha256(r["request_body"].encode()).digest()
+    res = hashlib.sha256(r["response_body"].encode()).digest()
+    if req.hex() != r.get("request_hash") or res.hex() != r.get("response_hash"):
         return False, "stored hash differs from bytes"
-    rec = r.get("signature_record") or {}
-    tee = r.get("tee") or {}
-    kind = tee.get("kind")
-    expect = f"{req}:{res}" if kind == 1 else f"{r['model']}:{req}:{res}"
-    if rec.get("text") != expect:
-        return False, "signed text differs"
-    want = base64.b64encode(hashlib.sha256(bytes.fromhex(req) + bytes.fromhex(res)).digest()).decode()
-    if r.get("intent", {}).get("proof_hash") != want:
-        return False, "proof_hash differs"
+    rec = r.get("signature_record")
+    if not rec:
+        return False, "no signature record"
     try:
-        from nacl.signing import VerifyKey
-
-        VerifyKey(bytes.fromhex(rec["signing_address"])).verify(expect.encode(), bytes.fromhex(rec["signature"]))
-    except Exception as exc:  # noqa: BLE001
-        return False, f"enclave signature: {type(exc).__name__}"
+        tee_proof(rec, r["model"], req, res)  # text, kind, ed25519 signature under signing_address
+    except TeeProofError as exc:
+        return False, f"enclave record: {exc}"
+    if r.get("intent", {}).get("proof_hash") != proof_hash(req, res):
+        return False, "proof_hash differs"
     return True, "ok"
 
 

@@ -105,10 +105,19 @@ def wait_outcome(duel_id: str, timeout_s: int = 90) -> dict[str, Any] | None:
     return None
 
 
-def resolve_duel(solver: Solver, duel_id: str) -> dict[str, Any]:
-    r = solver.post("/resolve", {"duel_id": duel_id})
-    outcome = wait_outcome(duel_id)
-    return {"tx": r["tx"], "outcome": outcome}
+def resolve_duel(solver: Solver, duel_id: str, attempts: int = 4) -> dict[str, Any]:
+    """Ask the oracle (the solver pays its deposit) and wait for the callback; re-ask when the RPC dropped the
+    send or the oracle did not answer in time. The call is idempotent until the duel is resolved."""
+    txs: list[str] = []
+    outcome = None
+    for _ in range(attempts):
+        r = solver.post("/resolve", {"duel_id": duel_id})
+        if r.get("tx"):
+            txs.append(r["tx"])
+        outcome = wait_outcome(duel_id, 120 if r.get("sent", True) else 30)
+        if outcome:
+            break
+    return {"tx": txs[-1] if txs else "", "txs": txs, "outcome": outcome}
 
 
 def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str) -> list[dict[str, Any]]:
