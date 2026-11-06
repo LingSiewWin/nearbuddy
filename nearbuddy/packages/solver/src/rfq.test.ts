@@ -134,18 +134,17 @@ test("duelMid: close beats open, only a NEAR/USD duel counts", () => {
   assert.equal(duelMid(null), null);
 });
 
-test("executionRecords: one row per quoted follower, errors skipped, null bps without a mid", () => {
+test("executionRecords: one row per quoted follower, errors skipped, no rows at all without a mid", () => {
   const intent = { agent_pk: "PK", duel_id: "3", nonce: "9" };
   const quotes = [
     { follower: "a", amount: "1000000000000000000000000", quote: fixture, quote_out: "3744739" },
     { follower: "b", amount: "5", error: "1click quote 503" },
+    { follower: "c", amount: "0", quote: fixture, quote_out: "0" }, // no price: bps undefined, skipped
   ];
-  const rows = executionRecords(intent, quotes, null);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]?.bps_vs_oracle, null);
-  assert.equal(rows[0]?.oracle_mid, null);
-  assert.equal(rows[0]?.quoted_at, Date.parse(fixture.timestamp));
+  assert.deepEqual(executionRecords(intent, quotes, null), []);
   const spot = executionRecords(intent, quotes, { mid: "369750000", source: "coinbase_spot" });
+  assert.equal(spot.length, 1);
   assert.equal(spot[0]?.oracle_source, "coinbase_spot");
   assert.equal(spot[0]?.bps_vs_oracle, 127.76);
+  assert.equal(spot[0]?.quoted_at, Date.parse(fixture.timestamp));
 });

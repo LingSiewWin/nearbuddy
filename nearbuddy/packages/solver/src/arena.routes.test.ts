@@ -471,3 +471,35 @@ test("GET /execution: a batched intent records every follower's fill against the
   const snap = (await arena.route("GET", "/arena", ""))!.body as { quality: unknown[] };
   assert.equal(snap.quality.length, 2);
 });
+
+test("GET /execution: no oracle mid (no Outlayer price, spot down) records nothing; the intent still lands", async () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8"),
+  ) as import("./oneclick.ts").Quote;
+  const { account } = fakeSolver();
+  const arena = new Arena(account, "s.testnet", {
+    listFollowers: async () => [
+      [
+        "f1.testnet",
+        {
+          allowance: "1000",
+          spent: "0",
+          per_tx_cap: "1000",
+          allowed_tokens: [],
+          expires_at: "1900000000000000000",
+          revoked: false,
+        },
+      ],
+    ],
+    quote: async () => fixture,
+    oracleMid: async () => null,
+  });
+  const r = (await arena.route(
+    "POST",
+    "/intent",
+    JSON.stringify({ signed: signed(KeyPair.fromRandom("ed25519")) }),
+    KEY,
+  ))!;
+  assert.equal((r.body as { quotes: { quote_out?: string }[] }).quotes[0]?.quote_out, fixture.quote.amountOut);
+  assert.deepEqual((await arena.route("GET", "/execution", ""))!.body, { quality: [] });
+});

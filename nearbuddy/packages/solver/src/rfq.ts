@@ -102,12 +102,12 @@ export interface ExecutionRecord {
   intent_nonce: string;
   amount_in: string;
   quote_out: string;
-  oracle_mid: string | null;
+  oracle_mid: string;
   quoted_at: number;
-  bps_vs_oracle: number | null;
+  bps_vs_oracle: number;
   agent_pk: string;
   duel_id: string;
-  oracle_source: string | null;
+  oracle_source: string;
 }
 export const MAX_EXECUTION = 200;
 
@@ -145,28 +145,31 @@ export function bpsVsOracle(amount_in: bigint, quote_out: bigint, mid8: bigint):
   return Math.round(Number((quote_out * 10n ** 34n) / (amount_in * mid8) - 10n ** 8n) / 100) / 100;
 }
 
-/** One record per quoted follower (errors skipped: nothing was prepared for them). */
+/** One record per quoted follower. Errored followers are skipped (nothing was prepared for them), and so is every
+ *  follower when there is no mid: a missing record beats a null `bps_vs_oracle` the page must special-case. */
 export function executionRecords(
   intent: { agent_pk: string; duel_id: string; nonce: string },
   quotes: { follower: string; amount: string; quote?: Quote; quote_out?: string }[],
   mid: OracleMid | null,
 ): ExecutionRecord[] {
-  return quotes.flatMap((q) =>
-    q.quote && q.quote_out !== undefined
-      ? [
-          {
-            follower: q.follower,
-            intent_nonce: intent.nonce,
-            amount_in: q.amount,
-            quote_out: q.quote_out,
-            oracle_mid: mid?.mid ?? null,
-            quoted_at: Date.parse(q.quote.timestamp),
-            bps_vs_oracle: mid ? bpsVsOracle(BigInt(q.amount), BigInt(q.quote_out), BigInt(mid.mid)) : null,
-            agent_pk: intent.agent_pk,
-            duel_id: intent.duel_id,
-            oracle_source: mid?.source ?? null,
-          },
-        ]
-      : [],
-  );
+  if (!mid) return [];
+  return quotes.flatMap((q) => {
+    if (!q.quote || q.quote_out === undefined) return [];
+    const bps = bpsVsOracle(BigInt(q.amount), BigInt(q.quote_out), BigInt(mid.mid));
+    if (bps === null) return [];
+    return [
+      {
+        follower: q.follower,
+        intent_nonce: intent.nonce,
+        amount_in: q.amount,
+        quote_out: q.quote_out,
+        oracle_mid: mid.mid,
+        quoted_at: Date.parse(q.quote.timestamp),
+        bps_vs_oracle: bps,
+        agent_pk: intent.agent_pk,
+        duel_id: intent.duel_id,
+        oracle_source: mid.source,
+      },
+    ];
+  });
 }
