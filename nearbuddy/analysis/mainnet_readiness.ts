@@ -1,7 +1,9 @@
 // Read-only check of the mainnet facts the week-4 dry run depends on. Sends no transaction and spends nothing:
 // RPC views, the 1Click token list, one dry quote, the NEAR AI model list and one non-billable attestation report per
 // model (NEAR_AI_API_KEY sent when set). Prints a PASS/FAIL/SKIP/INFO table; exits 1 on any FAIL. Signer pins are read from
-// ARENA_CONTRACT on NEAR_RPC (testnet by default; point both at the mainnet arena once it exists).
+// ARENA_CONTRACT on NEAR_RPC (testnet by default; point both at the mainnet arena once it exists), and so are the
+// deploy-15 checks (verified settlement, re-keyed follows, delay, cap, register v2, duel_lock, pagination), which say
+// "not deployed" (SKIP) on an older arena.
 //   bun analysis/mainnet_readiness.ts
 //   MAINNET_RPC=https://rpc.mainnet.fastnear.com OWNER_ID_MAINNET=nearbuddy.near SOLVER_ID_MAINNET=solver.nearbuddy.near
 import "../packages/protocol/src/env.ts";
@@ -25,8 +27,8 @@ type Row = { check: string; result: "PASS" | "FAIL" | "SKIP" | "INFO"; detail: s
 const rows: Row[] = [];
 const add = (check: string, result: Row["result"], detail: string) => rows.push({ check, result, detail });
 
-async function rpc<T>(method: string, params: unknown): Promise<T> {
-  const r = await fetch(RPC, {
+async function rpc<T>(method: string, params: unknown, url = RPC): Promise<T> {
+  const r = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -41,14 +43,18 @@ const account = (id: string) =>
     finality: "final",
     account_id: id,
   });
-async function view<T>(contract: string, method: string, args: unknown = {}): Promise<T> {
-  const res = await rpc<{ result?: number[]; error?: string }>("query", {
-    request_type: "call_function",
-    finality: "final",
-    account_id: contract,
-    method_name: method,
-    args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
-  });
+async function view<T>(contract: string, method: string, args: unknown = {}, url = RPC): Promise<T> {
+  const res = await rpc<{ result?: number[]; error?: string }>(
+    "query",
+    {
+      request_type: "call_function",
+      finality: "final",
+      account_id: contract,
+      method_name: method,
+      args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
+    },
+    url,
+  );
   if (!res.result) throw new Error(res.error ?? "no result");
   return JSON.parse(Buffer.from(res.result).toString()) as T;
 }
@@ -213,6 +219,112 @@ for (const m of MODELS) {
     return [bound ? "PASS" : "FAIL", `${atts.length} signer(s), nonce echoed ${bound}; ${pinned.join(", ")}`];
   });
 }
+
+// ---- the arena: deploy 15 (verified settlement) -------------------------------------------------------------
+// Read from ARENA_CONTRACT on NEAR_RPC (testnet by default). Before deploy 15 every check here says "not deployed"
+// (SKIP) instead of failing; on a mainnet arena (an id ending in .near) the mainnet values are required.
+const ARENA_RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org";
+const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
+const ON_MAINNET = ARENA.endsWith(".near");
+const MAX_VAULT_MAINNET = 27n * 10n ** 24n; // the week-4 cap: 100 USDC total
+type V15Config = {
+  owner: string;
+  oracle_account: string;
+  intent_lock_s: number;
+  min_duel_s: number;
+  next_duel: string;
+  intents_account?: string;
+  migrating?: boolean;
+  paused?: boolean;
+  withdraw_delay_s?: number;
+  max_vault_total?: string;
+  vault_total?: string;
+};
+const arenaCfg = await view<V15Config>(ARENA, "get_config", {}, ARENA_RPC).catch(() => null);
+const v15 = typeof arenaCfg?.intents_account === "string";
+const notDeployed = (): [Row["result"], string] => [
+  "SKIP",
+  arenaCfg ? "not deployed: get_config has no intents_account (deploy 14 or earlier)" : `cannot read ${ARENA}`,
+];
+const v15check = (name: string, fn: (c: V15Config) => Promise<[Row["result"], string]>) =>
+  check(`${ARENA} ${name}`, async () => (v15 && arenaCfg ? fn(arenaCfg) : notDeployed()));
+
+await v15check("deploy 15: intents_account", async (c) => {
+  const want = ON_MAINNET ? "intents.near" : c.intents_account;
+  return [
+    c.intents_account === want ? "PASS" : "FAIL",
+    `${c.intents_account}${ON_MAINNET ? " (mainnet needs intents.near)" : ""}`,
+  ];
+});
+await v15check("deploy 15: intents_account answers mt_batch_balance_of for the arena", async (c) => {
+  const b = await view<string[]>(
+    c.intents_account!,
+    "mt_batch_balance_of",
+    { account_id: ARENA, token_ids: [USDC_NEAR, WNEAR] },
+    ARENA_RPC,
+  );
+  return ["PASS", `arena holds USDC ${b[0]}, wNEAR ${b[1]} on ${c.intents_account}`];
+});
+await v15check("deploy 15: follows re-keyed (migrating false)", async (c) => [
+  c.migrating === false ? "PASS" : "FAIL",
+  `migrating ${c.migrating}; until false, follow/unfollow/settle refuse "migrating" (run migrate_follows)`,
+]);
+await v15check("deploy 15: not paused", async (c) => [c.paused ? "FAIL" : "PASS", `paused ${c.paused}`]);
+await v15check("deploy 15: delayed vault withdraw", async (c) => [
+  (c.withdraw_delay_s ?? 0) >= 900 ? "PASS" : "FAIL",
+  `withdraw_delay_s ${c.withdraw_delay_s} (at least 900, twice the settle lag)`,
+]);
+await v15check("deploy 15: vault cap", async (c) => {
+  const cap = BigInt(c.max_vault_total ?? "0");
+  const ok = ON_MAINNET ? cap > 0n && cap <= MAX_VAULT_MAINNET : cap > 0n;
+  return [
+    ok ? "PASS" : "FAIL",
+    `max_vault_total ${near(cap)}, vault_total ${near(BigInt(c.vault_total ?? "0"))}${ON_MAINNET ? `, mainnet cap ${near(MAX_VAULT_MAINNET)}` : ""}`,
+  ];
+});
+await v15check("deploy 15: register domain v2 (contract id bound)", async (c) => {
+  const m = Buffer.from(
+    await view<string>(ARENA, "register_message", { owner: c.owner }, ARENA_RPC),
+    "base64",
+  ).toString();
+  const want = `nearbuddy-register-v2${ARENA}\u0000${c.owner}`;
+  return [m === want ? "PASS" : "FAIL", JSON.stringify(m).slice(0, 90)];
+});
+await v15check("deploy 15: duel_lock readable", async (c) => {
+  const last = Number(c.next_duel) - 1;
+  if (last < 0) return ["SKIP", "no duel yet"];
+  const lock = await view<string | null>(ARENA, "duel_lock", { duel_id: String(last) }, ARENA_RPC);
+  return [
+    lock !== null ? "PASS" : "FAIL",
+    `duel ${last}: lock ${lock === null ? "null" : `${Number(BigInt(lock) / 10n ** 9n)} s`}`,
+  ];
+});
+await v15check("deploy 15: leaderboard pages, list_followers gone", async () => {
+  const page = await view<unknown[]>(ARENA, "leaderboard", { from: 0, limit: 1 }, ARENA_RPC);
+  const gone = await view(ARENA, "list_followers", { agent_pk: "" }, ARENA_RPC).then(
+    () => false,
+    () => true,
+  );
+  return [
+    page.length <= 1 && gone ? "PASS" : "FAIL",
+    `leaderboard(0, 1) gave ${page.length}; list_followers ${gone ? "absent" : "still exported"}`,
+  ];
+});
+// Not deploy-15 specific: the lock the arena runs must outlast the cache window of the oracle it reads.
+await check(`${ARENA} intent lock vs its oracle's recency window`, async () => {
+  if (!arenaCfg) throw new Error(`cannot read ${ARENA} get_config`);
+  const d = await view<{ recency_duration_sec: number }>(
+    arenaCfg.oracle_account,
+    "get_price_data",
+    { asset_ids: ["wrap.near"] },
+    ARENA_RPC,
+  );
+  const ok = arenaCfg.intent_lock_s > d.recency_duration_sec;
+  return [
+    ok ? "PASS" : ON_MAINNET ? "FAIL" : "INFO",
+    `intent_lock_s ${arenaCfg.intent_lock_s}, min_duel_s ${arenaCfg.min_duel_s}, ${arenaCfg.oracle_account} recency ${d.recency_duration_sec} s${ok ? "" : " (an agent can post with the close price knowable; known testnet limit)"}`,
+  ];
+});
 
 // ---- table --------------------------------------------------------------------------------------------------
 const w = Math.max(...rows.map((r) => r.check.length));
