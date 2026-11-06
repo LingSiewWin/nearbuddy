@@ -24,7 +24,22 @@ async function First({ params }: Params) {
   const { id } = await params;
   if (!ID.test(id)) notFound();
   await connection();
-  const d = await loadDuel(id);
+  let d: Awaited<ReturnType<typeof loadDuel>>;
+  try {
+    d = await loadDuel(id);
+  } catch {
+    // the chain read failed (a throttled public RPC), not a missing duel: say so instead of a server error
+    return (
+      <main className="page solo">
+        <section className="p-story">
+          <h1>Could not read duel {id} from NEAR testnet.</h1>
+          <p className="sub">
+            The public RPC is busy. <a href={`/duel/${id}`}>Try again</a> in a moment.
+          </p>
+        </section>
+      </main>
+    );
+  }
   if (!d) notFound();
   return <Duel initial={d} />;
 }
