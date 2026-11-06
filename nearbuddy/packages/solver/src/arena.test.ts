@@ -11,7 +11,8 @@ const scratch = mkdtempSync(join(tmpdir(), "arena-test-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
 process.env.ARENA_HISTORY = join(scratch, "history.json");
 process.env.ARENA_SECRET ??= "route-test-secret"; // shared module cache: arena.routes.test.ts reads it back from the module
-const { Arena, fillRecipient, mandateOpen, pairIdle, quoteAmount } = await import("./arena.ts");
+const { Arena, fillRecipient, mandateOpen, meetsFloor, outputToken, pairIdle, quoteAmount, tokenAllowed } =
+  await import("./arena.ts");
 type Mandate = import("./arena.ts").Mandate;
 type AgentView = import("./arena.ts").AgentView;
 
@@ -399,4 +400,118 @@ test("pairIdle leaves excluded agents (the operator's own runner pair) alone", (
   const mk = (pk: string) => ({ pk, tee: true, in_duel: null, bond: "1" }) as never;
   const pairs = pairIdle([mk("c"), mk("a"), mk("b"), mk("d")], 0n, new Set(["a"]));
   assert.deepEqual(pairs, [["b", "c"]]);
+});
+
+// ---- settle_follow's token and price checks, before quoting ---------------------------------------------------
+const ONE = 10n ** 24n;
+const U128_MAX = (1n << 128n) - 1n;
+
+test("tokenAllowed and meetsFloor answer the contract's unit-test cases the way follow.rs does", () => {
+  // the contract's `mandate()` helper: min_out_per_near 1
+  const cm = (tokens: string[], floor = "1") => m({ allowed_tokens: tokens, min_out_per_near: floor });
+  // fill_wrong_token_rejected: a usdc-only mandate refuses wbtc ("token not allowed")
+  assert.ok(!tokenAllowed(cm(["usdc"]), "wbtc"));
+  assert.ok(tokenAllowed(cm(["usdc"]), "usdc"));
+  assert.ok(tokenAllowed(cm([]), "wbtc"), "an empty list allows any token");
+  // price_floor_refuses_a_cheap_fill: floor 3 USDC per NEAR; 1 NEAR for 2.9 USDC refused, 3.0 settles
+  assert.ok(!meetsFloor(cm([], "3000000"), ONE, 2_900_000n));
+  assert.ok(meetsFloor(cm([], "3000000"), ONE, 3_000_000n));
+  // price_floor_overflow_is_rejected_not_panicked: floor u128::MAX, fill(1, "usdc", 2) ("amount overflow")
+  assert.ok(!meetsFloor(cm([], U128_MAX.toString()), 2n, 1_000_000n));
+  // zero_output_never_settles: the floor-1 mandate refuses 0 out ("below min price")
+  assert.ok(!meetsFloor(cm([]), 50n, 0n));
+  // the default fill (50 in, 1_000_000 out) clears the floor-1 mandate; a migrated floor-0 mandate has no floor
+  assert.ok(meetsFloor(cm([]), 50n, 1_000_000n));
+  assert.ok(meetsFloor(cm([], "0"), 50n, 0n));
+  assert.ok(meetsFloor(m(), 50n, 0n), "before deploy 15: no min_out_per_near");
+  // the fill's token is the quote's destination
+  assert.equal(outputToken("Short"), USDC_NEAR);
+  assert.equal(outputToken("Long"), WNEAR);
+});
+
+/** 1Click stand-in at 3.7 USDC per NEAR, sized by the request: EXACT_INPUT pays out USDC for NEAR in, EXACT_OUTPUT
+ *  charges USDC for the NEAR out. */
+const priced = (asked: QuoteRequest[]) => async (req: QuoteRequest) => {
+  asked.push(req);
+  const usdc = ((BigInt(req.amount) * 3_700_000n) / ONE).toString();
+  const exactOut = req.swapType === "EXACT_OUTPUT";
+  return {
+    ...fixture,
+    quoteRequest: { ...fixture.quoteRequest, swapType: req.swapType },
+    quote: {
+      ...fixture.quote,
+      amountIn: exactOut ? usdc : req.amount,
+      amountOut: exactOut ? req.amount : usdc,
+      amountInFormatted: exactOut ? String(Number(usdc) / 1e6) : String(Number(BigInt(req.amount) / 10n ** 18n) / 1e6),
+      amountOutFormatted: exactOut ? String(Number(BigInt(req.amount) / 10n ** 18n) / 1e6) : String(Number(usdc) / 1e6),
+    },
+  } as Quote;
+};
+const nearMandate = (over: Partial<Mandate>) =>
+  m({ allowance: (10n * ONE).toString(), per_tx_cap: ONE.toString(), ...over });
+const floorArena = (asked: QuoteRequest[], followers: [string, Mandate][]) =>
+  new Arena({} as never, "nearbuddy-solver.testnet", {
+    config: V14,
+    listFollowers: async () => followers,
+    quote: priced(asked),
+    now: () => NOW,
+  });
+
+test("quotesFor skips a follower whose mandate does not allow the side's output token", async () => {
+  const usdcOnly = nearMandate({ allowed_tokens: [USDC_NEAR] });
+  const followers: [string, Mandate][] = [
+    ["usdc.testnet", usdcOnly],
+    ["any.testnet", nearMandate({})],
+  ];
+  // Long lands wNEAR: the USDC-only follower is refused before the quote, the batch covers only the other one
+  const asked: QuoteRequest[] = [];
+  const long = await floorArena(asked, followers).quotesFor("pk", "Long");
+  assert.deepEqual(
+    long.map((x) => [x.follower, x.error ?? "quoted"]),
+    [
+      ["usdc.testnet", `token not allowed: ${WNEAR}`],
+      ["any.testnet", "quoted"],
+    ],
+  );
+  assert.deepEqual(
+    asked.map((r) => r.amount),
+    [ONE.toString()],
+  );
+  // Short lands USDC: both are quoted in one batch
+  const short: QuoteRequest[] = [];
+  const out = await floorArena(short, followers).quotesFor("pk", "Short");
+  assert.ok(out.every((x) => x.quote));
+  assert.deepEqual(
+    short.map((r) => r.amount),
+    [(2n * ONE).toString()],
+  );
+});
+
+test("batched quotesFor drops a follower under its price floor and re-quotes the rest", async () => {
+  const followers: [string, Mandate][] = [
+    ["ok.testnet", nearMandate({ min_out_per_near: "3600000" })], // 3.6 USDC per NEAR: the 3.7 quote clears it
+    ["high.testnet", nearMandate({ min_out_per_near: "3800000" })], // 3.8: refused by settle_follow
+  ];
+  const asked: QuoteRequest[] = [];
+  const out = await floorArena(asked, followers).quotesFor("pk", "Short");
+  assert.deepEqual(
+    asked.map((r) => r.amount),
+    [(2n * ONE).toString(), ONE.toString()],
+    "the second quote covers only the follower the floor admits",
+  );
+  assert.equal(out[0]?.follower, "ok.testnet");
+  assert.equal(out[0]?.quote_out, "3700000");
+  assert.equal(out[1]?.quote, undefined);
+  assert.match(out[1]?.error ?? "", /^below min price: 3700000 out for 1000000000000000000000000 in$/);
+});
+
+test("BATCH_RFQ=0: a follower whose own quote misses the floor gets an error, not a quote", async () => {
+  const followers: [string, Mandate][] = [
+    ["ok.testnet", nearMandate({ min_out_per_near: "3600000" })],
+    ["high.testnet", nearMandate({ min_out_per_near: "3800000" })],
+  ];
+  const out = await withEnv({ BATCH_RFQ: "0" }, () => floorArena([], followers).quotesFor("pk", "Short"));
+  assert.ok(out[0]?.quote);
+  assert.equal(out[1]?.quote, undefined);
+  assert.match(out[1]?.error ?? "", /^below min price/);
 });

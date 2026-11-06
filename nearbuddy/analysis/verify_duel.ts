@@ -54,6 +54,8 @@ export type Config = {
   slash_bps: number;
   no_reveal_bps?: number;
   owner_fees: string;
+  /** The global intent lock in seconds: before deploy 15 every duel read this value. */
+  intent_lock_s?: number;
   /** Present from deploy 15 on: how the verifier tells v15 rules (self-chaos, forfeit shield) from v14. */
   intents_account?: string;
 };
@@ -286,6 +288,12 @@ export function checkDuel(e: Evidence): Line[] {
   const voided = !!o && o.open_price === "0" && o.close_price === "0";
   // deploy-15 rules (self-chaos to owner fees, no shield on a forfeit) when the contract that finished it had them
   const v15 = !!(e.before ?? e.now).config.intents_account;
+  // a duel opened under one deploy and finished under the other: its injections landed under one rule set and
+  // finish() credited shield under the other, so no single rule describes it
+  const straddled =
+    e.open_block?.config && e.before?.config && !!e.open_block.config.intents_account !== v15
+      ? `the duel straddled deploy 15 (opened under ${v15 ? "v14" : "v15"}, finished under ${v15 ? "v15" : "v14"}): its injections and its finish ran under different rules`
+      : null;
   add(
     "INFO",
     "duel",
@@ -301,15 +309,26 @@ export function checkDuel(e: Evidence): Line[] {
     );
   else add("SKIP", "opened", "no successful open receipt for this id in the scanned txs");
   if (calls.open && e.open_block !== undefined) openerRefund(e, calls.open, add);
-  // duel_lock is the lock a duel ran under only when it opened under deploy 15, which records it at open; for an
-  // earlier duel the view answers today's global lock, so timing against it would be wrong
-  const lockKnown = e.lock_ns != null && !!e.open_block?.config.intents_account;
-  if (e.lock_ns != null && !lockKnown)
+  // The lock this duel ran under. Deploy 15 records it at open (duel_lock); for an earlier duel that view answers
+  // today's global lock, so the open block's intent_lock_s stands in: deploys 12-14's set_oracle only let the lock
+  // grow while a duel was open, so an intent the contract accepted also clears the lock in force at open (testnet's
+  // lock has been 60 s since deploy 11).
+  const ob = e.open_block?.config;
+  const lockNs = !ob
+    ? null
+    : ob.intents_account
+      ? e.lock_ns != null
+        ? BigInt(e.lock_ns)
+        : null
+      : ob.intent_lock_s != null
+        ? BigInt(ob.intent_lock_s) * 1_000_000_000n
+        : null;
+  if (lockNs === null && (e.lock_ns != null || e.open_block !== undefined))
     add(
       "INFO",
       "intent timing",
-      e.open_block
-        ? "not checked: the duel opened before deploy 15, so duel_lock is today's global lock, not this duel's"
+      ob
+        ? "not checked: the lock this duel ran under is in neither duel_lock nor the open block's config"
         : "not checked: the open block's config is not available, so the lock this duel ran under is unknown",
     );
 
@@ -343,7 +362,7 @@ export function checkDuel(e: Evidence): Line[] {
       `intent ${s} signature`,
       `${stored.side} ${stored.size_bps} bps nonce ${stored.nonce}: ed25519 over intent_message by ${short(stored.agent_pk, 12)} (${c.method}, tx ${c.tx})`,
     );
-    if (lockKnown) timing(s, pk, c, BigInt(d.close_at), BigInt(e.lock_ns!), calls.commits, add);
+    if (lockNs !== null) timing(s, pk, c, BigInt(d.close_at), lockNs, calls.commits, add);
     const p = c.args.tee as TeeProof | null | undefined;
     if (!p) {
       add(
@@ -408,7 +427,7 @@ export function checkDuel(e: Evidence): Line[] {
     );
   };
   oracleLine("open", d.open_price);
-  if (!o) return chaos(e, d, calls.chaos, v15, out, add);
+  if (!o) return chaos(e, d, calls.chaos, v15, straddled, out, add);
   if (voided) {
     add(
       calls.void ? "PASS" : "SKIP",
@@ -497,7 +516,8 @@ export function checkDuel(e: Evidence): Line[] {
       );
       // shield: the winner's count of injections it outlasted, as finish() credits it
       const sh = [b.a.shield, b.b.shield, a.a.shield, a.b.shield];
-      if (sh.some((x) => x === undefined)) add("SKIP", "shield", "shield not in the saved agent views");
+      if (straddled) add("SKIP", "shield", `not judged: ${straddled}`);
+      else if (sh.some((x) => x === undefined)) add("SKIP", "shield", "shield not in the saved agent views");
       else if (calls.chaos.length !== o.injections)
         add("SKIP", "shield", "some injections are outside the scanned txs");
       else {
@@ -515,7 +535,7 @@ export function checkDuel(e: Evidence): Line[] {
       }
     }
   }
-  return chaos(e, d, calls.chaos, v15, out, add);
+  return chaos(e, d, calls.chaos, v15, straddled, out, add);
 }
 
 /** finish()'s shield credit: injections aimed at the winner; from deploy 15 none paid by either agent's owner and
@@ -619,6 +639,7 @@ function chaos(
   d: Duel,
   list: Call[],
   v15: boolean,
+  straddled: string | null,
   out: Line[],
   add: (r: Line["result"], c: string, x: string) => void,
 ) {
@@ -628,9 +649,11 @@ function chaos(
     const target = String(c.args.target);
     const where = !self(c)
       ? " -> pool"
-      : v15
-        ? " -> owner fees (self-chaos: the payer owns an agent in this duel)"
-        : " -> pool (payer owns an agent; deploy 14 had no self-chaos rule)";
+      : straddled
+        ? " (payer owns an agent; pool or owner fees depending on the deploy it landed under)"
+        : v15
+          ? " -> owner fees (self-chaos: the payer owns an agent in this duel)"
+          : " -> pool (payer owns an agent; deploy 14 had no self-chaos rule)";
     add(
       "INFO",
       "injection",
@@ -644,6 +667,10 @@ function chaos(
     `${list.length} successful inject_chaos receipts found, contract counts ${kept}${list.length === kept ? "" : " (some outside the scanned txs)"}`,
   );
   if (!e.chaos_pools || !list.length) return out;
+  if (straddled) {
+    add("SKIP", "injection deposits", `not judged: ${straddled}`);
+    return out;
+  }
   const blocks = new Map<string, Call[]>();
   for (const c of list) blocks.set(c.block_hash, [...(blocks.get(c.block_hash) ?? []), c]);
   let bad = 0;
