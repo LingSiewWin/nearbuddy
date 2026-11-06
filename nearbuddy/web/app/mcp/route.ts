@@ -125,9 +125,9 @@ async function whichAgentToFollow() {
     const worst = tested.at(-1);
     reasoning = [
       `Follow ${name(pick)}.`,
-      `Paid fake news reached it in ${a.faced} decisions; it took the side the attack pushed in ${pick.took} ` +
+      `Of the paid fake headlines that pushed against the price it could see (${a.faced}), it took the lie's side ${pick.took} times ` +
         `(${Math.round((pick.took / a.faced) * 100)}%: fell for ${a.fell}, named it but followed ${a.named}) and saw ` +
-        `through ${a.resisted}.`,
+        `through ${a.resisted}; ${a.untested} more pushed the way the price was already moving and test nothing.`,
       pick.calls.scored
         ? `Its calls matched the next price move ${Math.round((pick.calls.right / pick.calls.scored) * 100)}% of the time ` +
           `(${pick.calls.scored} calls); a coin flip gets 50%, so following it is a bet on its resistance, not its edge.`
