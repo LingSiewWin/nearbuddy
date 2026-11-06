@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -41,6 +42,15 @@ def message_text(response: dict[str, Any]) -> str:
     and leave `content` empty; the JSON decision is then usually at the end of the reasoning text."""
     msg = response["choices"][0]["message"]
     return msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
+
+
+STUB_MODEL = re.compile(r"(^|/)stub(/|$)")
+
+
+def is_stub_model(model_id: str | None) -> bool:
+    """A stub agent, not a model: `stub` as a whole path segment (`stub/deterministic`, `redteam/stub`), so a real
+    model named e.g. `stubborn-model` is not one. Same rule as `isStubModel` in web/app/cells.ts."""
+    return bool(model_id) and STUB_MODEL.search(model_id) is not None
 
 
 class StubClient:

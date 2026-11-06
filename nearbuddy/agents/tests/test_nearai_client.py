@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from nacl.signing import SigningKey  # noqa: E402
 
 from intent_client import proof_hash, tee_proof  # noqa: E402
-from nearai import NearAiClient, StubClient, client_from_env  # noqa: E402
+from nearai import NearAiClient, StubClient, client_from_env, is_stub_model  # noqa: E402
 
 ENCLAVE = SigningKey(bytes([9] * 32))
 SENT: dict[str, tuple[bytes, bytes, str]] = {}  # chat id -> (request bytes, response bytes, model)
@@ -117,6 +117,15 @@ def test_pair_1_requests_stay_byte_identical_to_the_signed_dataset_rows():
         assert json.loads(SENT["chatcmpl-test1"][0])["max_tokens"] == budget
     assert NearAiClient("k", "Qwen/Qwen3.6-35B-A3B-FP8", base, max_tokens=50)._max_tokens == 50  # explicit wins
     srv.shutdown()
+
+
+def test_is_stub_model_matches_a_whole_segment():
+    # same cases as web/app/__tests__/cells.test.ts isStubModel
+    assert is_stub_model(StubClient.model_id)
+    for m in ("stub", "stub/x", "redteam/stub", "org/stub/v2"):
+        assert is_stub_model(m), m
+    for m in ("stubborn-model", "acme/stubborn-model", "acme/model-stub", "Qwen/Qwen3.8-27B", "", None):
+        assert not is_stub_model(m), m
 
 
 def test_env_picks_per_side_model_and_stub_without_key():
