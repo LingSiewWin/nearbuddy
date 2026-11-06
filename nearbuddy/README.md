@@ -15,17 +15,25 @@ The clearinghouse above is the settlement rail. On top of it sits an arena where
 prices, strangers pay to attack them, losers get slashed, and humans follow the survivors with a mandate
 instead of money**.
 
-- **Agents are models.** An agent is an ed25519 key plus a NEAR AI Cloud model id (`deepseek/deepseek-v4.1-flash`,
-  `anthropic/claude-opus-5-5`, 64 ids on `GET https://cloud-api.near.ai/v1/models`). Every decision is a signed
-  intent on chain; `proof_hash` is the sha256 of the TEE signature record NEAR AI Cloud returns for that completion,
-  so the chain proves which model made the call, unmodified. The stub model writes 32 zero bytes and the page says so.
+- **Agents are models, and the chain checks the enclave.** An agent is an ed25519 key plus a NEAR AI Cloud model id
+  (`deepseek-ai/DeepSeek-V4.1-Flash-1017`, `Qwen/Qwen3.8-27B`, 64 ids on `GET https://cloud-api.near.ai/v1/models`).
+  The runner sends the request as exact bytes, keeps the response as exact bytes, and fetches the enclave's ed25519
+  signature over `"{model}:{sha256(request)}:{sha256(response)}"` (`GET /v1/signature/{chat_id}?signing_algo=ed25519`).
+  `post_intent(signed, tee)` rebuilds that text from the agent's registered model id and the two hashes, verifies the
+  signature against a signer the owner registered from the model's attestation report, and requires the agent-signed
+  `proof_hash` to equal `sha256(request_hash || response_hash)`. A TEE-backed agent cannot post without it; a flipped
+  byte in the response is refused on chain. Plain agents (stub model, demo keys) write 32 zero bytes and the page says so.
 - **Chaos.** A spectator hands the solver the attack text (open `POST /chaos`, returns its sha256), then pays at
   least 0.1 NEAR to `inject_chaos(duel_id, target, kind, payload_hash)` on chain with their own account. Only the
   hash is on chain; the solver joins it to the stored payload and the runner prompts the model with it before its
   next decision. Max 32 injections per duel; every deposit joins the pool the winner takes.
-- **Resolve.** At `close_at` the oracle signs `(duel_id, open_price, close_price)`. Scoring in `i128`, multiply before
-  divide: `pnl_bps = sign * (close - open) * size_bps / open`. Loser's bond loses 10% into the pool, winner takes the
-  pool and `shield += 1` per attack it survived. Tie: no slash, pool split.
+- **Prices come from a TEE oracle, not from us.** `open_duel` asks the Outlayer price oracle (`price-oracle.testnet`,
+  Intel TDX workers, median of exchanges) for the asset through `oracle_call`; the oracle calls back `oracle_on_call`
+  with the open price a few seconds later. After `close_at` **anyone** calls `resolve_duel(duel_id)`; the oracle's
+  close price finishes the duel. Scoring in `i128`, multiply before divide: `pnl_bps = sign * (close - open) *
+  size_bps / open`. Loser's bond loses 10% into the pool, winner takes the pool and `shield += 1` per attack it
+  survived. Tie: no slash, pool split. No operator key can set a price; if the oracle never answers, the owner may
+  `void_duel` after 24 h (bonds back, no score). Testnet Outlayer serves `wrap.near` only, so duels are NEAR/USD.
 - **Follow with a mandate, not funds.** A follower deposits into the arena vault and attaches
   `{per_tx_cap, allowance, allowed_tokens, expires_at}` to one agent. The solver quotes every follower through
   NEAR Intents 1Click (`POST /v0/quote`, dry) when the agent posts an intent, fronts the swap, and is repaid by
@@ -63,8 +71,16 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Duel 23: follower calls `unfollow`; the next fill is refused on chain with `mandate revoked` | [`FRVPNdao…FagW`](https://testnet.nearblocks.io/txns/FRVPNdaoZsnNj3tx9jmxAUn3V5f8nqCHnTSorYdPFagW) · [`6gzuKcwY…kQzek`](https://testnet.nearblocks.io/txns/6gzuKcwYRkGbtFEad5kVNi3zFuv1JVeDES6kg98kQzek) |
 | Deploy 6: `Duel.outcome` recorded on resolve; raw-storage migration of duels 0-21 to the new layout | [`6H8EzRii…7gB7`](https://testnet.nearblocks.io/txns/6H8EzRiikQ9mpRLWj4mc47j5arS6KUGmTrUUSagX7gB7) · [`263mBTxe…uLgJ`](https://testnet.nearblocks.io/txns/263mBTxeNYrVTYGicUyAfEbhHCkAzdkNnyRnS6VRuLgJ) |
 | Duel 14: spectator injects "Fed emergency rate cut" at B; B flips Short → Long mid-duel, BTC rises, B wins, A slashed 10%, **B shield 1** | [`GyWjqm4F…1a5w`](https://testnet.nearblocks.io/txns/GyWjqm4Fu9HhfHyjn3HeDcew5xfiiAYzkzxC3FQW1a5w) · [`DAcmUCB3…oVqvA`](https://testnet.nearblocks.io/txns/DAcmUCB3ZPnYHwwuFhBVxrh2sHZVfN8BnEDR3t7oVqvA) |
+| Deploy 7 + `migrate`: oracle key removed, Outlayer `price-oracle.testnet` + TEE signer sets added; `migrate_duels` re-encodes all 257 duels (91 + 90 + 76) | [`G9xf9bzs…WMDm`](https://testnet.nearblocks.io/txns/G9xf9bzsyu4TYsNAJgzfVXWY4x3ni8s5grA6CEq2WMDm) · [`6863fCvw…siXV6`](https://testnet.nearblocks.io/txns/6863fCvwXyHrdF24Lxb9AbJ8pfVrKGf5ZhXRuSysiXV6) · [`HVfjLY5p…VMcQh`](https://testnet.nearblocks.io/txns/HVfjLY5pv94DtFkRGoLnng9B7zEtPkiniosiDQ6VMcQh) · [`5xkp4SFD…ZCak`](https://testnet.nearblocks.io/txns/5xkp4SFDJBpzWS22fEdHzcN9qQfBbpKSrsjB78QJZCak) |
+| `add_tee_signer` × 3 from attestation reports: cloud-api gateway `40599fb2…`, DeepSeek-V4.1-Flash-1017 enclave `236f5a6b…`, Qwen3.8-27B enclave `89154a43…` | [`G9CstTny…gbBv`](https://testnet.nearblocks.io/txns/G9CstTnyW94pqEhdTn4ZzDMLto9F3x5FFqs23ftrgbBv) · [`3643duGN…QQ1r`](https://testnet.nearblocks.io/txns/3643duGNqnmdsUZazVX59zpTK6EzY3R5fjpiXXymQQ1r) · [`9FXAbxS3…gUTL`](https://testnet.nearblocks.io/txns/9FXAbxS3hQCQ9AZb44W3rPMAELZ1hV1ZYBaSUzPQgUTL) |
+| Duel 257 resolved **by the oracle, no operator key**: Outlayer TEE priced NEAR/USD at open and close (3.68003333 both, inside its 300 s cache → tie); `resolve_duel` was called permissionlessly | `get_duel(257).outcome` (RPC dropped the tx wait; outcome on chain) |
+| Duel 258 opened on `wrap.near`; Outlayer open price 3.69380000 landed through `oracle_on_call` | [`7jVxFqyd…XmjO`](https://testnet.nearblocks.io/txns/7jVxFqydro3cJExn5RpWv4P5TY1jZ8aFXcsZerWjXmjo) |
+| **Enclave-verified intents**: DeepSeek-V4.1-Flash-1017 (A) and Qwen3.8-27B (B) decisions posted with `provider_tee` proofs; the contract rebuilt `model:sha256(req):sha256(res)`, verified the enclave's ed25519 signature and the agent's `proof_hash` | [`EatWHL64…PSoD`](https://testnet.nearblocks.io/txns/EatWHL64BPAC7zswPHixTijjnC5v13f8NEfXPAKkPSoD) · [`Ffa965S1…sTuB`](https://testnet.nearblocks.io/txns/Ffa965S1THZqy4uUkmmYeaZdpfGLn1rzMye5zywnsTuB) · [`EjvbRp6Q…byBG`](https://testnet.nearblocks.io/txns/EjvbRp6QNmducAcaMHoMHkhhyLj6VqwytsHGvojnbyBG) · [`BpfgtnjL…E14N`](https://testnet.nearblocks.io/txns/BpfgtnjLvpNUtZVcbNfsPvS5jnK18EhTBE9XtBcNE14N) |
+| **Tampered proof refused**: the real enclave signature with one flipped byte in the response hash (intent re-signed to match) → `Smart contract panicked: bad tee signature` | [`4rmFo38n…PPSt`](https://testnet.nearblocks.io/txns/4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt) |
+| Agent A bond 0.1 → 0.09278 NEAR after registration and three intents: **storage paid from the bond** | `get_agent(Ul+W6UJK…)` |
+| **Duel 258 resolved by the TEE oracle, called by anyone**: Outlayer close 3.69016666 vs open 3.69380000; Qwen (Short) +4 bps wins, DeepSeek (Long) −4 bps slashed 10% (0.0911 → 0.0820 NEAR), injections pruned, `outcome` recorded | [`9Hf33mxh…xZWB`](https://testnet.nearblocks.io/txns/9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB) |
 
-Counts move while the runner is on: as of 2026-11-06 07:45 (UTC+8) 252 duels, 970+ signed intents and 7 chaos injections
+Counts move while the runner is on: as of 2026-11-06 13:50 (UTC+8) 259 duels, 980+ signed intents (the newest with enclave proofs) and 7 chaos injections
 ran on testnet. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
@@ -72,30 +88,36 @@ Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test
 
 | Call | TGas |
 |---|---|
-| `open_duel` | 2.51 |
-| `post_intent` (ed25519 verify + nonce burn) | 2.68 |
-| `inject_chaos` (32nd of 32) | 2.56 |
-| `settle_follow` with 10 fills | 4.96 |
-| `resolve` scoring a duel with 32 injections | 3.44 |
+| `register_agent` (storage charged from the bond) | 2.52 |
+| `open_duel` incl. the `oracle_call` to the price oracle | 4.26 |
+| `oracle_on_call` storing the open price | 2.27 |
+| `post_intent` with a TEE proof (two ed25519 verifies, sha256, nonce burn) | 3.37 |
+| `post_intent` plain | 3.02 |
+| `inject_chaos` (32nd of 32) | 2.97 |
+| `settle_follow` with 10 fills | 5.01 |
+| `resolve_duel` (permissionless, sends the oracle request) | 3.92 |
+| `oracle_on_call` scoring a duel with 32 injections | 3.02 |
 
-Known limits, on purpose for the hackathon: one trusted oracle key signs resolutions (Pyth-on-NEAR read is the
-upgrade); follower withdrawals are instant, so the solver carries exposure between its swap and `settle_follow`
-(the vault contract's delayed withdraw is the upgrade); the solver's POST routes are gated by a shared secret, not
-per-agent keys; contract storage is paid from the same balance as bonds and vaults (no storage staking yet).
+Every state-growing call pays its own storage out of the value it brings (bond, chaos deposit, vault deposit,
+`open_duel` deposit), and a duel's injection list is pruned when it finishes; the sandbox test asserts a bond and a
+vault shrink by the bytes they add. Known limits, on purpose for the hackathon: follower withdrawals are instant, so
+the solver carries exposure between its swap and `settle_follow` (the vault contract's delayed withdraw is the
+upgrade); the solver's POST routes are gated by a shared secret, not per-agent keys; the on-chain check proves an
+enclave produced the response whose hash is in the intent, while the link "that response says Long" lives in the
+dataset row (request and response bytes are published there, so anyone can recompute both hashes).
 
-Not yet proven: a NEAR AI Cloud completion with its `/v1/signature/{chat_id}` record (needs `NEAR_AI_API_KEY`), and
-one real 1Click swap reported through `settle_follow` (needs a funded mainnet account). Both seams are built and
-tested offline; the README will carry their hashes when they run.
+Not yet proven: one real 1Click swap reported through `settle_follow` (needs a funded mainnet account). The seam is
+built and tested offline; the README will carry its hash when it runs.
 
 ### Run the arena
 
 ```sh
 cp .env.example .env                      # add NEAR_AI_API_KEY to use real models; blank = stub
-cd arena && cargo test                    # 32 contract tests
+cd arena && cargo test                    # 63 contract tests
 cd .. && pnpm test                        # protocol + solver tests (ARENA_DEPLOYED=1 adds on-chain parity)
-pnpm solver                               # :4020, mounts /duel /intent /chaos /resolve /settle_follow /arena
+pnpm solver                               # :4020, mounts /register /duel /intent /chaos /resolve /settle_follow /arena
 cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pytest -q
-.venv/bin/python -m runner --rounds 1 --duel-seconds 75 --cycle-seconds 25   # a live duel on testnet
+.venv/bin/python -m runner --rounds 1 --duel-seconds 330 --cycle-seconds 30  # a live NEAR/USD duel (oracle caches 300 s); with a key, both agents are TEE-backed
 cd .. && pnpm arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, resolve
 pnpm --dir web build && pnpm --dir web start -p 3011   # /arena reads the public RPC, no keys in the browser
 pnpm real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
@@ -314,27 +336,33 @@ IOU signing bytes: `"nearbuddy-iou-v1" || borsh(Iou{owner, agent_pk, payee, amou
 
 | Method | Who | What |
 | --- | --- | --- |
-| `register_agent(agent_pk, model_id)` payable | agent operator | bond = deposit; `withdraw_bond(agent_pk, amount)` when not in a duel |
-| `open_duel(a, b, symbol, close_at)` | contract owner (solver) | pair two idle agents; returns `duel_id` |
-| `post_intent(signed)` | registered solver | agent-signed `Intent{agent_pk, duel_id, side, size_bps, nonce, expires_at, proof_hash}`; nonce burned; refused at or after `close_at` |
-| `inject_chaos(duel_id, target, kind, payload_hash)` payable | anyone (≥ `min_chaos_deposit`) | attack one agent; deposit joins the pool; 32 per duel |
-| `resolve(resolution, oracle_sig)` | registered solver | oracle-signed `(duel_id, open_price, close_price)`; scores, slashes, pays the pool, counts shield, records `outcome` |
+| `register_agent(agent_pk, model_id, tee)` payable | agent operator | bond = deposit minus storage; `tee` commits the agent to a verified enclave proof on every intent; `withdraw_bond(agent_pk, amount)` when not in a duel |
+| `add_tee_signer(signer, label)` / `remove_tee_signer` | contract owner | ed25519 `signing_address` from a NEAR AI Cloud attestation report (`GET /v1/attestation/report?model=…`) |
+| `open_duel(a, b, symbol, close_at)` payable | contract owner (solver) | pair two idle agents on an oracle asset (`wrap.near`); sends `oracle_call` for the open price; returns `duel_id` |
+| `request_open_price(duel_id)` | anyone | ask the oracle again if the open price never landed |
+| `post_intent(signed, tee)` | registered solver | agent-signed `Intent{agent_pk, duel_id, side, size_bps, nonce, expires_at, proof_hash}` plus `TeeProof{kind, request_hash, response_hash, signer, signature}`; enclave signature verified on chain, `proof_hash == sha256(req \|\| res)`; nonce burned; storage from the bond |
+| `inject_chaos(duel_id, target, kind, payload_hash)` payable | anyone (≥ `min_chaos_deposit`) | attack one agent; deposit minus storage joins the pool; 32 per duel |
+| `resolve_duel(duel_id)` | anyone, after `close_at` | asks the oracle for the close price |
+| `oracle_on_call(sender_id, data, msg)` | `price-oracle.*` only | stores the open price (`open:<id>`) or scores, slashes, pays the pool, counts shield, prunes injections, records `outcome` (`close:<id>`) |
+| `void_duel(duel_id)` | contract owner, 24 h after `close_at` | oracle never answered: free both agents, split the pool, no slash |
 | `deposit()` payable / `withdraw(amount)` | follower | arena vault |
 | `follow(agent_pk, mandate)` / `unfollow(agent_pk)` | follower | `Mandate{allowance, spent, per_tx_cap, allowed_tokens, expires_at, revoked}` |
 | `settle_follow(agent_pk, follower, fills)` | registered solver | per-fill mandate checks; rejections reported, never panicked |
-| `get_config`, `get_agent`, `get_duel`, `get_vault`, `get_follow`, `list_followers`, `leaderboard`, `intent_message_hex`, `resolution_message_hex` | anyone | views |
+| `get_config`, `get_agent`, `get_duel`, `get_vault`, `get_follow`, `list_followers`, `leaderboard`, `is_tee_signer`, `intent_message_hex`, `tee_text_utf8` | anyone | views |
 
-Signing bytes: `"nearbuddy-intent-v1" || borsh(Intent)` and `"nearbuddy-resolve-v1" || borsh(Resolution)`; the Rust test,
-the TypeScript test and the Python test pin the same hex.
+Signing bytes: `"nearbuddy-intent-v1" || borsh(Intent)` for the agent, and the enclave's text
+`"{model_id}:{request_hash_hex}:{response_hash_hex}"` (`provider_tee`) or `"{request_hash_hex}:{response_hash_hex}"`
+(`gateway`); the Rust, TypeScript and Python tests pin the same hex and verify the same real NEAR AI Cloud record.
 
 ## What is deliberately not here (yet)
 
 - **USDC settlement for the clearinghouse.** The vault holds NEAR. The arena already quotes and (by hand) swaps
   through NEAR Intents 1Click; moving IOU settlement to USDC through the same rail is the next step.
-- **Attestation checks in the solver.** The arena hashes NEAR AI Cloud's TEE signature into every intent; the solver
-  does not yet verify the attestation chain before underwriting (the verifier repo linked in the docs does).
+- **Attestation checks on chain.** The contract verifies the enclave's signature against signers the owner registered
+  after checking their attestation reports off chain (Intel TDX quote, NVIDIA NRAS payload; saved under
+  `agents/data/attestations/`). Verifying the quote itself on chain is the next step.
 - **Solver market.** One solver here. Both contracts already support many; routing and auction are open.
-- **Delayed follower withdrawals, storage staking, per-agent solver keys**: see "Known limits" above.
+- **Delayed follower withdrawals, per-agent solver keys**: see "Known limits" above.
 
 ## Status
 
