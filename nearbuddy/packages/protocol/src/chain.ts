@@ -77,3 +77,35 @@ export const ARENA = process.env.ARENA_CONTRACT ?? NET.arena;
 export async function arenaView<T>(method: string, args: Record<string, unknown>): Promise<T> {
   return (await provider.callFunction({ contractId: ARENA, method, args })) as T;
 }
+
+/** Mainnet startup check, read-only (one view_account, no tx). The mainnet ids in network.ts are defaults for
+ *  accounts not claimed yet, so warn when the arena account does not exist. Returns true when it warned; an RPC
+ *  error other than UNKNOWN_ACCOUNT says nothing about the account and stays silent. */
+export async function warnIfArenaMissing(
+  network: NetworkId = NETWORK_ID,
+  arena = ARENA,
+  rpc = RPC,
+  fetchFn: typeof fetch = fetch,
+): Promise<boolean> {
+  if (network !== "mainnet") return false;
+  try {
+    const r = await fetchFn(rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "query",
+        params: { request_type: "view_account", finality: "final", account_id: arena },
+      }),
+    });
+    const j = (await r.json()) as { error?: { cause?: { name?: string } } };
+    if (j.error?.cause?.name !== "UNKNOWN_ACCOUNT") return false;
+  } catch {
+    return false;
+  }
+  console.warn(
+    `[network] mainnet arena ${arena} does not exist (UNKNOWN_ACCOUNT on ${rpc}); create it or set ARENA_CONTRACT`,
+  );
+  return true;
+}

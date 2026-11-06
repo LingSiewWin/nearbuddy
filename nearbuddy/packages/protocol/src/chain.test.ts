@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
-import { ARENA, explorerTx, fmtNear, loadAccount, loadKey } from "./chain.ts";
+import { ARENA, explorerTx, fmtNear, loadAccount, loadKey, warnIfArenaMissing } from "./chain.ts";
 import { NETWORK_ID, NETWORKS } from "./network.ts";
 
 // No keychain here: a successful load proves the env key was used and the file never read.
@@ -66,4 +66,30 @@ test("fmtNear renders yocto with fixed digits", () => {
   assert.equal(fmtNear(10n ** 24n), "1.00000");
   assert.equal(fmtNear("1500000000000000000000000", 2), "1.50");
   assert.equal(fmtNear(1n), "0.00000");
+});
+
+test("warnIfArenaMissing: mainnet warns on UNKNOWN_ACCOUNT only, testnet never asks", async () => {
+  const sent: string[] = [];
+  const rpc = (body: unknown, ok = true) =>
+    (async (_url: string | URL | Request, init?: RequestInit) => {
+      sent.push(String(init?.body));
+      if (!ok) throw new Error("ECONNRESET");
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+  const unknown = { error: { name: "HANDLER_ERROR", cause: { name: "UNKNOWN_ACCOUNT" } } };
+  const warn = console.warn;
+  const warned: string[] = [];
+  console.warn = (m: string) => warned.push(m);
+  try {
+    assert.equal(await warnIfArenaMissing("testnet", "a.testnet", "http://x", rpc(unknown)), false);
+    assert.equal(sent.length, 0);
+    assert.equal(await warnIfArenaMissing("mainnet", "arena.nearbuddy.near", "http://x", rpc(unknown)), true);
+    assert.match(JSON.parse(sent[0]!).params.request_type, /^view_account$/);
+    assert.match(warned[0]!, /mainnet arena arena\.nearbuddy\.near does not exist/);
+    assert.equal(await warnIfArenaMissing("mainnet", "a.near", "http://x", rpc({ result: { amount: "1" } })), false);
+    assert.equal(await warnIfArenaMissing("mainnet", "a.near", "http://x", rpc(unknown, false)), false);
+    assert.equal(warned.length, 1);
+  } finally {
+    console.warn = warn;
+  }
 });

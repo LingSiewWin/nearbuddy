@@ -125,3 +125,35 @@ def test_data_files_per_network(load):
     assert config.ATTEST_DIR.name == "attestations-mainnet"
     assert config.network_file(Path("/r/data/duels.json"), "mainnet") == Path("/r/data/duels-mainnet.json")
     assert config.network_file(Path("/r/dataset"), "mainnet") == Path("/r/dataset-mainnet")
+
+
+class _Resp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def test_warn_if_arena_missing(monkeypatch, capsys):
+    chain = importlib.import_module("chain")
+    calls: list[dict] = []
+    reply: list[object] = [{"error": {"name": "HANDLER_ERROR", "cause": {"name": "UNKNOWN_ACCOUNT"}}}]
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(json)
+        if isinstance(reply[0], Exception):
+            raise reply[0]
+        return _Resp(reply[0])
+
+    monkeypatch.setattr(chain.requests, "post", fake_post)
+    assert chain.warn_if_arena_missing("testnet", "a.testnet", "http://x") is False
+    assert calls == []  # testnet never asks
+    assert chain.warn_if_arena_missing("mainnet", "arena.nearbuddy.near", "http://x") is True
+    assert calls[0]["params"]["request_type"] == "view_account"
+    assert "mainnet arena arena.nearbuddy.near does not exist" in capsys.readouterr().out
+    reply[0] = {"result": {"amount": "1"}}
+    assert chain.warn_if_arena_missing("mainnet", "a.near", "http://x") is False
+    reply[0] = chain.requests.ConnectionError("reset")
+    assert chain.warn_if_arena_missing("mainnet", "a.near", "http://x") is False
+    assert capsys.readouterr().out == ""

@@ -2,7 +2,7 @@
 import "../../protocol/src/env.ts";
 import "./state.ts"; // before arena.ts: sets its per-network file paths
 import { createServer as httpServer } from "node:http";
-import { CONTRACT, loadAccount } from "../../protocol/src/chain.ts";
+import { CONTRACT, loadAccount, warnIfArenaMissing } from "../../protocol/src/chain.ts";
 import { NET } from "../../protocol/src/network.ts";
 import { Arena } from "./arena.ts";
 import { Guarantor } from "./guarantor.ts";
@@ -18,6 +18,7 @@ const account = loadAccount(SOLVER_ID);
 const guarantor = new Guarantor(account, SOLVER_ID);
 // Arena: POST /duel, /intent, /chaos, /resolve, /settle_follow, GET /arena (see arena.ts).
 const arena = new Arena(account, SOLVER_ID);
+void warnIfArenaMissing();
 void arena.bootstrap();
 // PAIR_EVERY_S > 0: pair idle enclave agents into duels every N seconds (self-hosted runners wait on GET /agent_duel).
 arena.startPairing(Number(process.env.PAIR_EVERY_S ?? 0));

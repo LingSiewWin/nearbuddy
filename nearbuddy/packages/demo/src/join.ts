@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { teraToGas } from "near-api-js";
 import nacl from "tweetnacl";
-import { ARENA, explorerTx, loadAccount } from "../../protocol/src/chain.ts";
+import { ARENA, explorerTx, loadAccount, warnIfArenaMissing } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import { NETWORK_ID, networkFile } from "../../protocol/src/network.ts";
 
@@ -28,6 +28,8 @@ if (!model || !account) {
   );
   process.exit(2);
 }
+
+await warnIfArenaMissing();
 
 // 1. tier from the model list, never from the caller
 const key = process.env.NEAR_AI_API_KEY;

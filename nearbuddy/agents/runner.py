@@ -52,7 +52,7 @@ from typing import Any
 import requests
 from nacl.signing import SigningKey
 
-from chain import ARENA, ASSETS, agent_tier_on_chain, view, wait_outcome
+from chain import ARENA, ASSETS, agent_tier_on_chain, view, wait_outcome, warn_if_arena_missing
 from config import ATTEST_DIR, DATA, ENV, NET
 from duelist import Duelist, DuelistError
 from intent_client import (
@@ -765,6 +765,7 @@ def run(
 
 if __name__ == "__main__":
     exit_on_sigterm()
+    warn_if_arena_missing()
     p = argparse.ArgumentParser()
     p.add_argument("--rounds", type=int, default=1)
     p.add_argument(

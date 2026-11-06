@@ -9,7 +9,7 @@ from typing import Any
 
 import requests
 
-from config import ENV, NET
+from config import ENV, NET, NETWORK
 
 RPC = ENV.get("NEAR_RPC", NET["rpc"])
 # public endpoints rate-limit bursts; views retry with backoff and alternate with a second endpoint
@@ -54,6 +54,28 @@ def view(method: str, args: dict[str, Any]) -> Any:
             continue
         return json.loads(bytes(r["result"]["result"]).decode())
     raise RuntimeError(f"after {RETRIES} attempts: {last}")
+
+
+def warn_if_arena_missing(network: str = NETWORK, arena: str = ARENA, rpc: str = RPC) -> bool:
+    """Mainnet startup check, read-only (one view_account, no tx), as warnIfArenaMissing in chain.ts: the mainnet
+    ids in config.NETWORKS are defaults for accounts not claimed yet. True when it warned; other RPC errors stay
+    silent."""
+    if network != "mainnet":
+        return False
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "query",
+        "params": {"request_type": "view_account", "finality": "final", "account_id": arena},
+    }
+    try:
+        r = requests.post(rpc, json=body, headers={"User-Agent": "nearbuddy/1"}, timeout=15).json()
+    except (requests.RequestException, ValueError):
+        return False
+    if (r.get("error") or {}).get("cause", {}).get("name") != "UNKNOWN_ACCOUNT":
+        return False
+    print(f"[network] mainnet arena {arena} does not exist (UNKNOWN_ACCOUNT on {rpc}); create it or set ARENA_CONTRACT")
+    return True
 
 
 def agent_tier_on_chain(pk: str) -> bool | None:
