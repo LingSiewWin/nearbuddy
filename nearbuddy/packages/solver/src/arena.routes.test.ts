@@ -204,3 +204,67 @@ test("oracle deposit memo is refreshed from get_config and the call retried once
   assert.ok(last[0]!.deposit < 777n && last[1]!.deposit === 777n, `deposits ${last.map((c) => c.deposit)}`);
   assert.ok(last.every((c) => c.methodName === "request_open_price" && c.args.duel_id === "9"));
 });
+
+test("POST /duel: an RPC wait error after open_duel is recovered from chain by findDuel, polling with deps.sleep", async () => {
+  const { calls, account } = fakeSolver((c) => {
+    if (c.methodName === "open_duel") throw new Error("Internal server error");
+    return null;
+  });
+  const slept: number[] = [];
+  const arena = new Arena(account, "s.testnet", { sleep: async (ms) => void slept.push(ms) });
+  const duel = { a: "A", b: "B", symbol: "wrap.near", close_at: "1700000000000000000" };
+  let landed = 0; // the tx lands after two polls: get_config shows duel 4 only from the third poll on
+  const duels: Record<string, unknown> = {
+    "4": { a: "A", b: "B", close_at: duel.close_at, resolved: false },
+    "3": { a: "A", b: "B", close_at: duel.close_at, resolved: true }, // an older, finished A-vs-B duel is not it
+    "2": { a: "X", b: "Y", close_at: "1", resolved: false },
+  };
+  await withRpc(
+    {
+      get_config: () => ({ oracle_deposit: "100", next_duel: ++landed >= 3 ? "5" : "4" }),
+      get_duel: (a) => duels[String(a.duel_id)] ?? null,
+    },
+    async () => {
+      const r = (await arena.route("POST", "/duel", JSON.stringify(duel), KEY))!;
+      assert.deepEqual(r.body, { duel_id: "4", tx: "" });
+    },
+  );
+  assert.equal(calls.filter((c) => c.methodName === "open_duel").length, 1, "never resent");
+  assert.deepEqual(slept, [3000, 3000]);
+  assert.ok(arena.openDuels.has("4"));
+});
+
+test("POST /duel: findDuel gives up after 6 polls and rethrows the RPC error", async () => {
+  const { account } = fakeSolver((c) => {
+    if (c.methodName === "open_duel") throw new Error("Internal server error");
+    return null;
+  });
+  const slept: number[] = [];
+  const arena = new Arena(account, "s.testnet", { sleep: async (ms) => void slept.push(ms) });
+  await withRpc({ get_config: () => ({ oracle_deposit: "100", next_duel: "0" }) }, async () => {
+    await assert.rejects(
+      arena.route("POST", "/duel", JSON.stringify({ a: "A", b: "B", symbol: "s", close_at: "1" }), KEY),
+      /Internal server error/,
+    );
+  });
+  assert.equal(slept.length, 6);
+});
+
+test("a 429 from the RPC is retried with exponential backoff through deps.sleep", async () => {
+  let n = 0;
+  const { calls, account } = fakeSolver(() => {
+    if (++n < 3) throw new Error("HTTP 429 Rate limit");
+    return { ok: true };
+  });
+  const slept: number[] = [];
+  const arena = new Arena(account, "s.testnet", { sleep: async (ms) => void slept.push(ms) });
+  const r = (await arena.route(
+    "POST",
+    "/register",
+    JSON.stringify({ agent_pk: "PK", model_id: "m", bond: "1" }),
+    KEY,
+  ))!;
+  assert.deepEqual(r.body, { tx: "TX3", agent: { ok: true } });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(slept, [1500, 3000]);
+});
