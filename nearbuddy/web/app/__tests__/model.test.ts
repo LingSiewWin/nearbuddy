@@ -4,7 +4,17 @@ import { describe, expect, test } from "bun:test";
 import { summary } from "../api/arena";
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
-import { duelEvents, type Focus, focusOf, latestStory, markPct, openOf, priceAt, type Side } from "../arena/model";
+import {
+  duelEvents,
+  type Focus,
+  focusOf,
+  latestStory,
+  markPct,
+  openOf,
+  priceAt,
+  type Side,
+  withTape,
+} from "../arena/model";
 import type { Tick } from "../lib/live";
 import { agent, duel, intent, NOW, ns, outcome, snap, YOCTO } from "./fixtures/snap";
 
@@ -330,5 +340,36 @@ describe("latestStory", () => {
 
   test("nothing attacked anywhere: no story", () => {
     expect(latestStory(newestFirst(call("i", 1, TARGET, 1)), none, [], modelOf)).toBeNull();
+  });
+});
+
+describe("withTape: a sealed call is a commit newer than the side's last reveal", () => {
+  const base = { tx: "t", block: 1, ok: true, signer: "s" };
+  const commit = (agent: string, at: number): ArenaEvent => ({
+    ...base,
+    at,
+    kind: "commit",
+    duel: 7,
+    agent,
+    commitment: "c",
+  });
+  const reveal = (agent: string, at: number): ArenaEvent => ({
+    ...base,
+    at,
+    kind: "reveal",
+    duel: 7,
+    agent,
+    side: "Short",
+    size: 5000,
+    nonce: "1",
+    tee: 2,
+  });
+  const f = { live: true, duel: 7, a: { ...side(null), agent: "a" }, b: { ...side(null), agent: "b" } } as Focus;
+  test("commit after the last reveal (or none): sealed; reveal after the commit: open", () => {
+    // newest first, as the tape keeps it
+    const g = withTape(f, [commit("a", 30), reveal("b", 25), commit("b", 20), reveal("a", 10)]);
+    expect(g?.a).toMatchObject({ side: "Short", sealed: true });
+    expect(g?.b).toMatchObject({ side: "Short", sealed: false });
+    expect(withTape(f, [commit("a", 5)])?.a).toMatchObject({ side: null, sealed: true });
   });
 });

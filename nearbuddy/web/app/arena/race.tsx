@@ -12,6 +12,22 @@ const sideTone = (f: Focus) => {
   return { a, b: b === a ? "k-alt" : b };
 };
 
+/** "is betting up", "has sealed a call (it opens in the last minute)" or "is yet to make a call". */
+const doing = (s: Focus["a"]) =>
+  s.side ? (
+    <>
+      is <b>{sideWord(s.side)}</b>
+    </>
+  ) : s.sealed ? (
+    <>
+      has <b>sealed a call</b> that opens in the last minute
+    </>
+  ) : (
+    <>
+      is <b>yet to make a call</b>
+    </>
+  );
+
 export function Headline({
   f,
   price,
@@ -60,8 +76,7 @@ export function Headline({
     h1 = `Duel ${f.duel} is on.`;
     sub = (
       <>
-        {A} is <b>{sideWord(f.a.side)}</b>, {B} is <b>{sideWord(f.b.side)}</b>. Waiting for the live NEAR price to show
-        who is ahead.
+        {A} {doing(f.a)}, {B} {doing(f.b)}. Waiting for the live NEAR price to show who is ahead.
       </>
     );
   } else if (f.live) {
@@ -73,12 +88,15 @@ export function Headline({
       `Both bet ${f.a.side === "Long" ? "up" : "down"}.`
     ) : f.a.side || f.b.side ? (
       "Dead heat."
+    ) : f.a.sealed && f.b.sealed ? (
+      // commit-reveal: both have called, and nobody can read either call until the last minute
+      "Both calls are sealed."
     ) : (
       `Duel ${f.duel}: no call revealed yet.`
     );
     sub = (
       <>
-        {A} is <b>{sideWord(f.a.side)}</b>, {B} is <b>{sideWord(f.b.side)}</b>, and NEAR is{" "}
+        {A} {doing(f.a)}, {B} {doing(f.b)}, and NEAR is{" "}
         <b>
           {move >= 0 ? "up" : "down"} {Math.abs(move).toFixed(2)}%
         </b>{" "}
@@ -185,12 +203,14 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
             {who(s.model)}
           </a>
           <span className="s">
-            {s.side ?? "No call yet"}
+            {s.side ?? (s.sealed ? "Sealed call" : "No call yet")}
             {s.side ? `, ${stake(s.size_pct)}` : ""}
           </span>
           <span className="st">
             {!s.side && !(s === f.a ? f.b : f.a).side
-              ? "no call yet"
+              ? s.sealed
+                ? "sealed"
+                : "no call yet"
               : Math.abs(mark - other) < 0.005
                 ? "tied"
                 : mark > other

@@ -18,6 +18,7 @@ export type Side = {
   verified: boolean;
   bond: number | null;
   return_pct?: number | null; // the contract's score, on a resolved duel
+  sealed?: boolean; // live, commit-reveal: a call is committed on chain and not revealed yet
 };
 export type Focus = {
   duel: number;
@@ -88,9 +89,14 @@ export function withTape(f: Focus | null, events: ArenaEvent[]): Focus | null {
   if (!f?.live) return f;
   const latest = (pk: string) =>
     events.find((e): e is Intent => isCall(e) && e.ok && e.duel === f.duel && e.agent === pk);
+  // the tape is newest first: a commit newer than the side's last reveal is a call nobody can read yet
+  const commit = (pk: string) => events.find((e) => e.kind === "commit" && e.ok && e.duel === f.duel && e.agent === pk);
   const patch = (s: Side): Side => {
     const e = latest(s.agent);
-    return e ? { ...s, side: e.side, size_pct: e.size / 100, verified: e.tee === 2 } : s;
+    const c = commit(s.agent);
+    const sealed = !!c && (!e || c.at > e.at);
+    const shown = e ? { ...s, side: e.side, size_pct: e.size / 100, verified: e.tee === 2 } : s;
+    return { ...shown, sealed };
   };
   return { ...f, a: patch(f.a), b: patch(f.b) };
 }
