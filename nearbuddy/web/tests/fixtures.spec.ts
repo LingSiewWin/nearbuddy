@@ -153,7 +153,7 @@ test("terminal: deploy 13 data still renders standings, commit-reveal off, solve
   await expect(page.locator("body")).toContainText("solver offline: no execution data");
 });
 
-test("duel: commit-reveal row and the no-reveal slashed marker", async ({ page }) => {
+test("terminal duel: commit-reveal row and the no-reveal slashed marker", async ({ page }) => {
   await stub(page, "duel", {
     at: now,
     rpc: "https://fixture.rpc",
@@ -165,7 +165,7 @@ test("duel: commit-reveal row and the no-reveal slashed marker", async ({ page }
     a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
     b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
   });
-  await page.goto("/duel/411");
+  await page.goto("/terminal/duel/411");
   const body = page.locator("body");
   await expect(body).toContainText("calls hidden until reveal · no reveal costs 5 % of bond");
   await expect(page.locator("span.ok", { hasText: "revealed" })).toBeVisible();
@@ -173,7 +173,7 @@ test("duel: commit-reveal row and the no-reveal slashed marker", async ({ page }
   await shot(page, "duel");
 });
 
-test("duel: deploy 13 data (no commit fields, no get_no_reveal) renders the sides box", async ({ page }) => {
+test("terminal duel: deploy 13 data (no commit fields, no get_no_reveal) renders the sides box", async ({ page }) => {
   await stub(page, "duel", {
     at: now,
     rpc: "https://fixture.rpc",
@@ -185,14 +185,14 @@ test("duel: deploy 13 data (no commit fields, no get_no_reveal) renders the side
     a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
     b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
   });
-  await page.goto("/duel/411");
+  await page.goto("/terminal/duel/411");
   await expect(page.locator(box("sides"))).toBeVisible();
   await expect(page.locator("body")).toContainText("this contract predates commit-reveal");
   await expect(page.locator("body")).not.toContainText("no-reveal slashed");
   await expect(page.locator("body")).toContainText("no proof");
 });
 
-test("agent: execution summary for this agent's followers", async ({ page }) => {
+test("terminal agent: execution summary for this agent's followers", async ({ page }) => {
   await stub(page, "agent", {
     at: now,
     rpc: "https://fixture.rpc",
@@ -210,7 +210,7 @@ test("agent: execution summary for this agent's followers", async ({ page }) => 
     duels: [],
     execution: quality.filter((q) => q.follower !== "carol.testnet"),
   });
-  await page.goto(`/agent/${encodeURIComponent(PK_A)}`);
+  await page.goto(`/terminal/agent/${encodeURIComponent(PK_A)}`);
   const body = page.locator("body");
   await expect(body).toContainText("alice.testnet  3 fills  avg +0.3 bps vs oracle mid  best +1.4  worst -0.8"); // null row counted, not averaged
   await expect(body).toContainText("bob.testnet  2 fills  avg +0.3 bps vs oracle mid  best +1.4  worst -0.8");
