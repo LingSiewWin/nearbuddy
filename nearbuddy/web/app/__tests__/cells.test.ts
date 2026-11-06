@@ -17,6 +17,7 @@ import {
   type Opened,
   pairingCells,
   pairingWord,
+  pairsOf,
   proven,
   quoteOut,
   revealCell,
@@ -140,6 +141,23 @@ describe("commit timeline", () => {
     );
     expect(text(timelineCells([], A, false))).toBe("no commit seen");
     expect(text(timelineCells(undefined, A, false))).toBe("no commit seen");
+  });
+});
+
+describe("pairs", () => {
+  test("duels group by agent pair whichever side each took, most recent pair first", () => {
+    const d = (id: number, a: string, b: string) => ({ id: String(id), a, b });
+    // pair 1 (P, Q) runs throughout; pair 2 (G, W) joins at #350
+    const duels = [d(352, "G", "W"), d(351, "Q", "P"), d(350, "W", "G"), d(349, "P", "Q"), d(330, "P", "Q")];
+    expect(pairsOf(duels)).toEqual([
+      { a: "G", b: "W", first: 350, last: 352, n: 2 },
+      { a: "P", b: "Q", first: 330, last: 351, n: 3 },
+    ]);
+    expect(pairsOf([])).toEqual([]);
+  });
+  test("the widest pair row fits the value column", () => {
+    const row = `${"x".repeat(26)} vs ${"y".repeat(26)}  #350-#9999 · 40 of last 40`;
+    expect(row.length).toBeLessThanOrEqual(VW);
   });
 });
 

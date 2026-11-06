@@ -12,6 +12,7 @@ import {
   fillCells,
   lastFills,
   legs,
+  type Pair,
   pairingWord,
   proven,
   quoteOut,
@@ -102,7 +103,7 @@ type Snap = {
   config: { next_duel: string; slash_bps: number; min_chaos_deposit: string } & CommitConfig;
   leaderboard: Agent[];
   duels: (Duel | null)[];
-  stats: { scanned: number; verified_decisions: number; attacks: number };
+  stats: { scanned: number; verified_decisions: number; attacks: number; pairs?: Pair[] };
   // absent: lifetime only. `complete` false: some oracle-era duel is unread, so the split is not shown
   eras?: {
     from: number;
@@ -179,6 +180,10 @@ export default function Arena() {
   const live = duels.find((d) => !d.resolved && countdown(d.close_at, now));
   const txOf = new Map((s?.solver?.intents ?? []).map((i) => [`${i.agent_pk}:${i.nonce}`, i.tx]));
   const agent = (pk: string) => lb.find((x) => x.pk === pk);
+  // pairs running in the scanned window; a one-off duel (a red-team probe) is not a pair
+  const pairs = (s?.stats.pairs ?? []).filter((p) => p.n > 1);
+  /** Model name without its org, cut for one pair row: "z-ai/glm-5.3-flash" → "glm-5.3-flash". */
+  const model = (pk: string) => (agent(pk)?.model_id.split("/").pop() ?? short(pk, 8)).slice(0, 26);
   const who = (pk: string): Cell[] => {
     const m = (agent(pk)?.model_id ?? "unregistered").slice(0, 26);
     return [
@@ -367,6 +372,22 @@ export default function Arena() {
 
         {boxTitle(2, "duels", "last 3 · newest first")}
         {"\n"}
+        {pairs.length > 1
+          ? pairs
+              .sort((x, y) => x.first - y.first) // pair 1 is the one that started first
+              .slice(0, 3)
+              .map((p, i) => (
+                <span key={`${p.a}|${p.b}`}>
+                  {rowx({ t: `pair ${i + 1}`, c: "dim" }, [
+                    { t: model(p.a), href: agentHref(p.a), title: p.a },
+                    " vs ",
+                    { t: model(p.b), href: agentHref(p.b), title: p.b },
+                    { t: `  #${p.first}-#${p.last} · ${p.n} of last ${s?.stats.scanned}`, c: "dim" }, // <= 91 wide
+                  ])}
+                  {"\n"}
+                </span>
+              ))
+          : null}
         {duels.map((d) => {
           const o = d.outcome;
           const inj = d.injections;

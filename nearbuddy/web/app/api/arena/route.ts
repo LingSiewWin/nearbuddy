@@ -7,7 +7,7 @@
 // and summed per agent; the operator-era alpha is the contract's lifetime alpha minus that sum.
 // ponytail: reads every oracle-era duel on a cold start; a per-era tally in the contract or an indexer
 // when that runs into thousands.
-import { proven as hasProof } from "../../cells";
+import { proven as hasProof, pairsOf } from "../../cells";
 import { eraSplit, ORACLE_ERA_FROM, oracleIds, type ScoredDuel, unread } from "../../eras";
 import { chunked, readDuel } from "../duels";
 import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
@@ -99,6 +99,7 @@ async function build(): Promise<string> {
     scanned: seen.length,
     verified_decisions: seen.reduce((s, d) => s + Number(proven(d.last_intent_a)) + Number(proven(d.last_intent_b)), 0),
     attacks: seen.reduce((s, d) => s + (d.resolved ? (d.outcome?.injections ?? 0) : d.injections.length), 0),
+    pairs: pairsOf(seen), // who has been dueling whom in the last SCAN duels
   };
   const body = jsonBody({
     at: Date.now(),

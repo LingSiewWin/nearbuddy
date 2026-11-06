@@ -570,6 +570,36 @@ test("agent: a resolved duel without an outcome is labelled, not open, and stays
   await expect(page.locator("span.open", { hasText: /^open\s+$/ })).toHaveCount(0); // no row reads "open"
 });
 
+test("arena: a second duel pair gets one row per pair in the duels box; a single pair gets none", async ({ page }) => {
+  const PK_G = "Z2xtLTUuMy1mbGFzaC1hZ2VudC1rZXktZml4dHVyZTA=";
+  const PK_W = "cXdlbjMuNi0zNWItYWdlbnQta2V5LWZpeHR1cmUwMDA=";
+  const two = arena(false);
+  two.leaderboard.push(agent(PK_G, "z-ai/glm-5.3-flash", 37), agent(PK_W, "Qwen/Qwen3.6-35B-A3B-FP8", 37));
+  Object.assign(two.stats, {
+    pairs: [
+      { a: PK_G, b: PK_W, first: 350, last: 358, n: 9 },
+      { a: PK_A, b: PK_B, first: 319, last: 357, n: 31 },
+      { a: PK_A, b: PK_G, first: 356, last: 356, n: 1 }, // a one-off probe: no row
+    ],
+  });
+  await stub(page, "arena", two);
+  await page.goto("/arena");
+  const body = page.locator("body");
+  await expect(body).toContainText("pair 1           DeepSeek-V3.1 vs Qwen3-30B-A3B  #319-#357 · 31 of last 40");
+  await expect(body).toContainText("pair 2           glm-5.3-flash vs Qwen3.6-35B-A3B-FP8  #350-#358 · 9 of last 40");
+  await expect(body).not.toContainText("pair 3");
+  await expect(page.locator(`a[title="${PK_G}"]`, { hasText: "glm-5.3-flash" })).toHaveAttribute(
+    "href",
+    `/agent/${encodeURIComponent(PK_G)}`,
+  );
+  const one = arena(false);
+  Object.assign(one.stats, { pairs: [{ a: PK_A, b: PK_B, first: 319, last: 357, n: 40 }] });
+  await stub(page, "arena", one);
+  await page.reload();
+  await expect(page.locator(box("duels"))).toBeVisible();
+  await expect(body).not.toContainText("pair 1");
+});
+
 test("duel: a resolved duel without an outcome says so instead of pending", async ({ page }) => {
   await stub(page, "events", events(null));
   await stub(page, "duel", {

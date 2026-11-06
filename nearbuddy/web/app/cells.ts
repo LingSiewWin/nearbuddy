@@ -224,3 +224,17 @@ export type FollowerQuote = {
 /** USDC out for one follower: its batch share when present, else the 1Click quote, else "?". */
 export const quoteOut = (q: FollowerQuote) =>
   q.quote_out ? usdc(q.quote_out) : (q.quote?.quote.amountOutFormatted ?? "?");
+
+/** Agent pairs dueling in a window of duels, most recent first: the arena can run more than one pair at once. */
+export type Pair = { a: string; b: string; first: number; last: number; n: number };
+export const pairsOf = (duels: { id: string; a: string; b: string }[]): Pair[] => {
+  const by = new Map<string, Pair>();
+  for (const d of duels) {
+    const [a, b] = [d.a, d.b].sort() as [string, string]; // one pair whichever side each agent took
+    const id = Number(d.id);
+    const p = by.get(`${a}|${b}`);
+    if (!p) by.set(`${a}|${b}`, { a, b, first: id, last: id, n: 1 });
+    else Object.assign(p, { first: Math.min(p.first, id), last: Math.max(p.last, id), n: p.n + 1 });
+  }
+  return [...by.values()].sort((x, y) => y.last - x.last);
+};
