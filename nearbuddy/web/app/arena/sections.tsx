@@ -6,6 +6,7 @@ import { useState } from "react";
 import type { Summary } from "../api/arena";
 import type { Decision } from "../api/dataset";
 import { SHOWN_WORD, shown, tally, UNTESTED_WHY } from "../lib/verdict";
+import { Cmd } from "../ui/cmd";
 import { Seal, useDrawer } from "../ui/drawer";
 import {
   account,
@@ -274,25 +275,6 @@ export function Standings({ s }: { s: Summary }) {
         because both models often make the same call.
       </p>
     </>
-  );
-}
-
-/** A command with a copy button. */
-function Cmd({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="cmd">
-      <code>{text}</code>
-      <button
-        type="button"
-        onClick={() => {
-          navigator.clipboard?.writeText(text).then(() => setCopied(true));
-          setTimeout(() => setCopied(false), 1500);
-        }}
-      >
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
   );
 }
 

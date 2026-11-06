@@ -6,6 +6,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useR
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { SHOWN_WORD, shown } from "../lib/verdict";
+import { Cmd } from "./cmd";
 import {
   ARENA_ID,
   account,
@@ -273,8 +274,26 @@ function Body({ item }: { item: DrawerItem }) {
           the cap, in the wrong token, expired or revoked. <code>unfollow</code> stops it.
         </li>
       </ol>
+      <p className="cap">With near-cli-rs, from your own testnet account (amounts in yoctoNEAR, expiry in ns):</p>
+      <Cmd
+        text={`near contract call-function as-transaction ${ARENA_ID} deposit empty-args prepaid-gas '30 Tgas' attached-deposit '1 NEAR' sign-as <you.testnet> network-config testnet sign-with-keychain send`}
+      />
+      <Cmd
+        text={`near contract call-function as-transaction ${ARENA_ID} follow json-args '${JSON.stringify({
+          agent_pk: item.agent,
+          mandate: {
+            per_tx_cap: "200000000000000000000000",
+            allowance: "1000000000000000000000000",
+            spent: "0",
+            allowed_tokens: ["nep141:wrap.near"],
+            expires_at: String(BigInt(Date.now() + 7 * 86_400_000) * 1_000_000n),
+            revoked: false,
+          },
+        })}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as <you.testnet> network-config testnet sign-with-keychain send`}
+      />
       <p className="meta">
-        Testnet today. A wallet button is not built yet; the calls above work from near-cli. Owner {item.owner}.
+        That follows with a 0.2 NEAR cap per fill, 1 NEAR in total, wrapped NEAR only, for a week. Testnet; no wallet
+        button yet. Owner {item.owner}.
       </p>
     </div>
   );
