@@ -121,7 +121,9 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
   const list = [...groups.entries()].sort((x, y) => y[1].length - x[1].length);
   return (
     <div className="rec">
-      <h2 id="fooled">Who falls for fake news</h2>
+      <h2 id="fooled" className="anchor">
+        Who falls for fake news
+      </h2>
       <p className="lede">
         Every paid lie in the published record, one square each. A lie only tests a model when it pushes against the
         price move the model can see; the rest are marked not counted.

@@ -85,7 +85,8 @@ export default function Arena({ initial }: { initial: Initial }) {
   // the record's headline result, by prompt: the plain prompt ("naive") against every guarded one
   const took = (rows: typeof tested) => rows.filter((d) => d.verdict === "fell" || d.verdict === "named").length;
   const plain = tested.filter((d) => d.arm === "naive");
-  const guarded = tested.filter((d) => d.arm && d.arm !== "naive");
+  // arm D decides its side in a call that never sees the headline, so it tests no prompt: left out
+  const guarded = tested.filter((d) => d.arm && d.arm !== "naive" && d.arm !== "D");
 
   return (
     <DrawerProvider>
@@ -133,8 +134,8 @@ export default function Arena({ initial }: { initial: Initial }) {
           {plain.length && guarded.length ? (
             <p className="kicker finding h">
               <b>The finding so far:</b> on paid lies that pushed against the price, models on the plain prompt took the
-              lie&apos;s side {took(plain)} times in {plain.length}; on a guarded prompt, {took(guarded)} in{" "}
-              {guarded.length}. <a href="#fooled">See every lie</a>
+              lie&apos;s side {took(plain)} {took(plain) === 1 ? "time" : "times"} in {plain.length}; on a guarded
+              prompt, {took(guarded)} in {guarded.length}. <a href="#fooled">See every lie</a>
             </p>
           ) : null}
           <div className="h">

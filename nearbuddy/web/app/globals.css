@@ -310,6 +310,10 @@ h2 {
   max-width: 78ch;
   margin-bottom: 22px;
 }
+/* an in-page link target clears the sticky top bar */
+.anchor {
+  scroll-margin-top: calc(var(--bar) + 12px);
+}
 /* the record's headline result, one line under the kicker */
 .kicker.finding {
   margin-top: -12px;
