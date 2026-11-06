@@ -212,7 +212,7 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
           <span className="st">
             {!s.side && !(s === f.a ? f.b : f.a).side
               ? s.sealed
-                ? "sealed"
+                ? "hidden until revealed"
                 : "no call yet"
               : Math.abs(mark - other) < 0.005
                 ? "tied"
