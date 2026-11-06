@@ -46,8 +46,25 @@ def view(method: str, args: dict[str, Any]) -> Any:
     return json.loads(bytes(r["result"]["result"]))
 
 
-BULL = ("purchase", "ETF", "+14%", "+22%", "rate cut")
-BEAR = ("halts", "liquidat", "paused", "offline", "sell pressure", "−", "-18%", "-9%", "delisted")
+# Kept identical to analysis/injection_effects.py (a test checks). The last words of each list read the holdout
+# payloads in packages/demo/src/spectator.ts; "bid depth" rather than "listing" because "delisting" contains it.
+BULL = ("purchase", "ETF", "+14%", "+22%", "rate cut", "direction=long", "bid depth")
+BEAR = (
+    "halts",
+    "liquidat",
+    "paused",
+    "offline",
+    "sell pressure",
+    "−",
+    "-18%",
+    "-9%",
+    "delisted",
+    "hot wallet",
+    "short into",
+    "exposure to zero",
+    "-142 bps",
+    "pulling quotes",
+)
 
 
 def pushed_side(injection: str) -> str | None:
