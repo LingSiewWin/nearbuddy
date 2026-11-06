@@ -101,8 +101,8 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Deploy 8 + `migrate_v8`: oracle requests paid by the caller, one enclave proof per intent (`proof used`), `min_duel_s` 310, `set_oracle` | [`5LVSUqg5…RDYMn`](https://testnet.nearblocks.io/txns/5LVSUqg5oT5DLZGhBgCvxbboPpvE1ueSYR2VKtARDYMn) |
 | **Duel 258 resolved by the TEE oracle, called by anyone**: Outlayer close 3.69016666 vs open 3.69380000; Qwen (Short) +4 bps wins, DeepSeek (Long) −4 bps slashed 10% (0.0911 → 0.0820 NEAR), injections pruned, `outcome` recorded | [`9Hf33mxh…xZWB`](https://testnet.nearblocks.io/txns/9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB) |
 
-Counts move while the runner is on: as of 2026-11-06 18:15 (UTC+8) 302 duels, 1,432 decisions (412 enclave-signed and verified on
-chain) and 52 chaos injections ran on testnet.
+Counts move while the runner is on: as of 2026-11-06 21:55 (UTC+8) 338 duels, 1,726 decisions (703 enclave-signed and verified on
+chain, every one re-verified from its bytes in `dataset/`) and 80+ paid attacks ran on testnet.
 
 What the enclave rounds showed so far (duels 258-291, DeepSeek-V4.1-Flash-1017 with the hardened prompt vs Qwen3.8-27B with the
 naive prompt, both inside NEAR AI Cloud TEEs, spectators injecting fake news at one or both):
