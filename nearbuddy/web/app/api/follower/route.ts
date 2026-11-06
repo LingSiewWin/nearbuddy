@@ -5,7 +5,7 @@
 // Receipt-level success only (lib/follower). Parsed arena txs are kept across requests, so a repeat scan fetches only
 // new hashes. A body is kept 30 s per account, a failed build 45 s.
 import { type FollowerRec, type MandateView, type SettledFill, TOKENS } from "../../cells";
-import { followedAgents, followerActivity, settledFills } from "../../lib/follower";
+import { followedAgents, followerActivity, forFollower, settledFills } from "../../lib/follower";
 import type { Tx } from "../../lib/verify";
 import { NET } from "../../network";
 import { ARENA, json, viewOn } from "../near";
@@ -75,7 +75,10 @@ async function arenaFills(account: string, fromMs: number) {
   for (const t of got) fillsByTx.set(t.transaction.hash, []);
   for (const f of settledFills(got, ARENA)) fillsByTx.get(f.tx)?.push(f);
   while (fillsByTx.size > 20_000) fillsByTx.delete(fillsByTx.keys().next().value as string);
-  const fills = inWindow.flatMap((t) => fillsByTx.get(t.hash) ?? []).filter((f) => f.follower === account);
+  const fills = forFollower(
+    inWindow.flatMap((t) => fillsByTx.get(t.hash) ?? []),
+    account,
+  );
   return {
     fills: fills.sort((x, y) => y.at_ms - x.at_ms),
     scan: { from_ms: fromMs, oldest_ms: list.at(-1)?.at_ms ?? null, txs: inWindow.length, complete },

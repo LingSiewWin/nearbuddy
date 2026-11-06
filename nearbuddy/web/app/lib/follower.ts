@@ -70,3 +70,7 @@ export function settledFills(txs: Tx[], arena: string): SettledFill[] {
     );
   });
 }
+
+/** The fills settled for one follower. A tx can carry several followers' settle callbacks (and the arena scan keeps
+ *  fills for every follower), so each fill is attributed by its own on_settle_follow args, never by the tx. */
+export const forFollower = (fills: SettledFill[], account: string) => fills.filter((f) => f.follower === account);

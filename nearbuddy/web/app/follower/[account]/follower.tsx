@@ -38,13 +38,18 @@ export function FollowerRecord({ params }: { params: Promise<{ account: string }
 
   const model = (pk: string) => r?.mandates.find((m) => m.agent_pk === pk)?.model_id ?? null;
   const scan = r?.fills_scan;
+  // an incomplete scan is a warning, not a footnote: fills before the cut-off exist but are not listed
   const fillsNote = !scan
-    ? ""
+    ? { t: "", c: "dim" }
     : scan.from_ms === null
-      ? "no follow yet: nothing to settle"
+      ? { t: "no follow yet: nothing to settle", c: "dim" }
       : scan.complete
-        ? `arena txs read back to its first follow (${scan.txs} txs)`
-        : `arena txs read back to ${scan.oldest_ms ? new Date(scan.oldest_ms).toISOString().slice(5, 16).replace("T", " ") : "?"} UTC only: older fills not shown`;
+        ? { t: `arena txs read back to its first follow (${scan.txs} txs)`, c: "dim" }
+        : {
+            t: `older fills not scanned: arena txs read back to ${scan.oldest_ms ? new Date(scan.oldest_ms).toISOString().slice(5, 16).replace("T", " ") : "?"} UTC only (${scan.txs} txs)`,
+            c: "warn",
+            title: "the scan stops after ~1200 arena txs; fills settled before that are not listed here",
+          };
   const empty = (text: string) => (
     <>
       {rowx("", [{ t: r ? text : "loading", c: "dim" }])}
@@ -134,7 +139,7 @@ export function FollowerRecord({ params }: { params: Promise<{ account: string }
               </span>
             ))
           : empty("none settled")}
-        {rowx("", [{ t: fillsNote, c: "dim" }])}
+        {rowx(scan && !scan.complete ? { t: "warning", c: "warn" } : "", [fillsNote])}
         {"\n"}
         {bottom()}
         {"\n\n"}

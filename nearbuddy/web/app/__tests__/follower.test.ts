@@ -12,7 +12,7 @@ import {
   tokenAmount,
   tokenName,
 } from "../cells";
-import { followedAgents, followerActivity, settledFills } from "../lib/follower";
+import { followedAgents, followerActivity, forFollower, settledFills } from "../lib/follower";
 import type { Tx } from "../lib/verify";
 import { type Cell, W } from "../tui";
 
@@ -86,6 +86,34 @@ describe("settledFills", () => {
       }),
     ]);
   });
+  test("two followers' settle callbacks in ONE tx: each follower gets only its own fills", () => {
+    const txs = fx().settle_txs;
+    const t = txs.find((x) => x.transaction.hash.startsWith("GBBTWC"))!;
+    const mine = receipt(txs, "GBBTWC", "on_settle_follow");
+    // a second callback in the same tx, for another follower, with two fills of which the report rejects one
+    const theirs = structuredClone(mine);
+    const args = fromB64(fc(theirs).args);
+    const OTHER = "other-follower.testnet";
+    args.follower = OTHER;
+    args.fills = [
+      { ...args.fills[0], intent_nonce: "9001", amount_out: "111" },
+      { ...args.fills[0], intent_nonce: "9002", amount_out: "222" },
+    ];
+    fc(theirs).args = b64json(args);
+    theirs.execution_outcome.outcome.status = {
+      SuccessValue: b64json({ settled: 1, debited: "1", rejected: [[1, "over cap"]] }),
+    };
+    t.receipts.push(theirs);
+    const all = settledFills(txs, ARENA);
+    expect(all.map((f) => [f.follower, f.intent_nonce, f.tx.slice(0, 6)])).toEqual([
+      [F, "1793987081039", "GBBTWC"],
+      [OTHER, "9001", "GBBTWC"],
+    ]);
+    expect(forFollower(all, F).map((f) => f.amount_out)).toEqual(["370560"]);
+    expect(forFollower(all, OTHER).map((f) => f.amount_out)).toEqual(["111"]); // 9002 rejected
+    expect(forFollower(all, "nobody.testnet")).toEqual([]);
+  });
+
   test("in a partly settled batch only the fills the report does not reject count", () => {
     const txs = fx().settle_txs;
     const r = receipt(txs, "GBBTWC", "on_settle_follow");

@@ -839,6 +839,19 @@ test("follower: a withdrawal past its delay reads ready; an account that follows
   await expect(body).toContainText("no calls to the arena");
 });
 
+test("follower: a scan that stopped before the first follow shows a warning row", async ({ page }) => {
+  const cut = Date.UTC(2026, 10, 6, 14, 5);
+  await stub(page, "follower", {
+    ...follower,
+    fills_scan: { from_ms: cut - 86_400_000, oldest_ms: cut, txs: 1200, complete: false },
+  });
+  await page.goto("/follower/nearbuddy-follower2.testnet");
+  const warn = page.locator("span.warn", { hasText: "older fills not scanned" });
+  await expect(warn).toHaveText("older fills not scanned: arena txs read back to 11-06 14:05 UTC only (1200 txs)");
+  await expect(page.locator("span.warn", { hasText: /^warning$/ })).toBeVisible(); // the row's label
+  await expect(page.locator("body")).not.toContainText("read back to its first follow");
+});
+
 test("agent: each follower links to its follower page", async ({ page }) => {
   await stub(page, "agent", {
     at: now,
