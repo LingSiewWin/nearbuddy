@@ -418,6 +418,7 @@ test("POST /duel without sigs still calls plain open_duel", async () => {
   });
   assert.equal(calls[0]!.methodName, "open_duel");
   assert.deepEqual(calls[0]!.args, duel);
+});
 
 test("GET /execution: a batched intent records every follower's fill against the duel's Outlayer open price", async () => {
   const fixture = JSON.parse(
