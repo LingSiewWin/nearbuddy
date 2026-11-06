@@ -21,6 +21,7 @@
 .duel .openlab {
   background: var(--bg);
   padding: 0 4px;
+  z-index: 1; /* above an attack flag's line, so the price stays readable */
 }
 .closelab {
   position: absolute;
@@ -70,6 +71,10 @@
   line-height: 1.45;
   text-align: left;
   color: inherit;
+}
+/* .trail clips sideways overflow, so the ring sits inside the row */
+.tr:focus-visible {
+  outline-offset: -2px;
 }
 .tm b {
   display: block;
