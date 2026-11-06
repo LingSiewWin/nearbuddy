@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import struct
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -138,13 +139,33 @@ def tee_proof(record: dict[str, Any], model_id: str, request_hash: bytes, respon
     }
 
 
+def _refused(e: requests.ConnectionError) -> bool:
+    return "Connection refused" in str(e)
+
+
 @dataclass
 class Solver:
+    """`restart_wait_s`: night-loop.sh restarts the solver between its batches, and a second pair's duel can straddle
+    that restart. A refused connection never reached the solver, so it is retried until the solver is back; any
+    other transport error may have landed (an intent, an open_duel) and is raised as before."""
+
     url: str
     secret: str = ""
+    restart_wait_s: float = 120
+
+    def _send(self, method: str, url: str, **kw: Any) -> requests.Response:
+        deadline = time.monotonic() + self.restart_wait_s
+        while True:
+            try:
+                return requests.request(method, url, **kw)
+            except requests.ConnectionError as e:
+                if not _refused(e) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(3)
 
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        r = requests.post(
+        r = self._send(
+            "POST",
             f"{self.url}{path}",
             data=json.dumps(body),
             headers={"content-type": "application/json", "x-arena-key": self.secret},
@@ -155,6 +176,6 @@ class Solver:
         return r.json()
 
     def get(self, path: str) -> dict[str, Any]:
-        r = requests.get(f"{self.url}{path}", timeout=30)
+        r = self._send("GET", f"{self.url}{path}", timeout=30)
         r.raise_for_status()
         return r.json()
