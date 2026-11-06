@@ -43,18 +43,19 @@ ARENA = ENV.get("ARENA_CONTRACT", "arena.nearbuddy-solver.testnet")
 ASSETS = {"NEAR/USD": "wrap.near"}
 
 
-def agent_key(name: str, tee: bool) -> SigningKey:
+def agent_key(name: str, tee: bool, tag: str = "") -> SigningKey:
     """Demo keys come straight from AGENT_SEED_*; TEE-backed duelists use a key derived from the same seed, so
-    the plain demo agents and the enclave-proved agents are distinct registrations on chain."""
+    the plain demo agents and the enclave-proved agents are distinct registrations on chain. `tag` derives one
+    more key per seed (the swapped-prompt control registers the other model under it)."""
     seed = ENV.get(f"AGENT_SEED_{name}", "")
     if not seed:
         return SigningKey.generate()
     raw = bytes.fromhex(seed)
-    return SigningKey(hashlib.sha256(raw + b"tee").digest() if tee else raw)
+    return SigningKey(hashlib.sha256(raw + b"tee" + tag.encode()).digest() if tee else raw)
 
 
-def make_duelist(name: str, model_client, hardened: bool) -> tuple[Duelist, SigningKey, Any]:
-    sk = agent_key(name, model_client.tee)
+def make_duelist(name: str, model_client, hardened: bool, tag: str = "") -> tuple[Duelist, SigningKey, Any]:
+    sk = agent_key(name, model_client.tee, tag)
 
     def complete(system: str, user: str) -> str:
         c: Completion = model_client.complete(system, user)
@@ -129,7 +130,7 @@ def resolve_duel(solver: Solver, duel_id: str, attempts: int = 4) -> dict[str, A
     return {"tx": txs[-1] if txs else "", "txs": txs, "outcome": outcome}
 
 
-def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str) -> list[dict[str, Any]]:
+def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str, swap: bool = False) -> list[dict[str, Any]]:
     if not ENV.get("ARENA_SECRET"):
         raise SystemExit("ARENA_SECRET missing in the env file: the solver refuses every POST without it")
     asset = ASSETS.get(symbol)
@@ -137,8 +138,11 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
         raise SystemExit(f"no oracle asset for {symbol}; known: {sorted(ASSETS)}")
     solver = Solver(solver_url, ENV["ARENA_SECRET"])
     model_a, model_b = client_from_env(ENV, "A"), client_from_env(ENV, "B")
-    a, ska, ca = make_duelist("A", model_a, hardened=True)
-    b, skb, cb = make_duelist("B", model_b, hardened=False)
+    if swap:  # control: the hardened prompt goes to model B and the naive prompt to model A, under separate keys
+        model_a, model_b = model_b, model_a
+    tag = "swap" if swap else ""
+    a, ska, ca = make_duelist("A", model_a, hardened=True, tag=tag)
+    b, skb, cb = make_duelist("B", model_b, hardened=False, tag=tag)
     for sk, m in ((ska, model_a), (skb, model_b)):
         try:
             solver.post("/register", {"agent_pk": pk_b64(sk), "model_id": m.model_id, "bond": bond, "tee": m.tee})
@@ -231,9 +235,10 @@ if __name__ == "__main__":
     p.add_argument("--symbol", default="NEAR/USD")
     p.add_argument("--bond", default="100000000000000000000000")  # 0.1 NEAR
     p.add_argument("--resolve", help="ask the oracle to resolve a closed duel id")
+    p.add_argument("--swap-prompts", action="store_true", help="control run: hardened prompt on model B, naive on model A")
     args = p.parse_args()
     if args.resolve:
         print(json.dumps(resolve_duel(Solver(ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), ENV.get("ARENA_SECRET", "")), args.resolve)))
         raise SystemExit(0)
-    out = run(args.rounds, args.duel_seconds, args.cycle_seconds, args.symbol, ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), args.bond)
+    out = run(args.rounds, args.duel_seconds, args.cycle_seconds, args.symbol, ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), args.bond, args.swap_prompts)
     print(json.dumps(out, indent=2))
