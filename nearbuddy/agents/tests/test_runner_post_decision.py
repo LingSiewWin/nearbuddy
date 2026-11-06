@@ -74,6 +74,28 @@ def test_posts_a_signed_zero_proof_intent_and_records_the_row(duelist):
     assert r["brief"] == "NEAR/USD last 3.66. Move since duel open: +27.4 bps."
 
 
+def test_batched_quote_records_each_followers_quote_out_not_the_batch_total(duelist):
+    # the solver's batched RFQ shape: one shared quote (amountOut = batch total), each follower's share in quote_out
+    shared = {"quote": {"amountOut": "3744739"}}
+    quotes = [
+        {"follower": "f1.testnet", "amount": "300", "quote": shared, "quote_out": "3209777", "price": 3.744739},
+        {"follower": "f3.testnet", "amount": "50", "quote": shared, "quote_out": "534962", "price": 3.744739},
+    ]
+
+    class BatchSolver(FakeSolver):
+        def post(self, path, body):
+            super().post(path, body)
+            return {"tx": "TX1", "quotes": quotes} if path == "/intent" else {"ok": True}
+
+    assert decide(BatchSolver(), duelist)[1] == "posted"
+    (r,) = rows()
+    assert r["quotes"] == [
+        {"follower": "f1.testnet", "amount": "300", "amountOut": "3209777"},
+        {"follower": "f3.testnet", "amount": "50", "amountOut": "534962"},
+    ]
+    assert sum(int(q["amountOut"]) for q in r["quotes"]) == 3744739
+
+
 def test_pending_injection_for_this_duel_reaches_the_prompt_and_is_consumed(duelist):
     d, sk, comp, model = duelist
     pk = pk_b64(sk)
