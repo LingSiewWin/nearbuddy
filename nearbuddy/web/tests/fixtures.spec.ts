@@ -116,6 +116,9 @@ const solverIntents = [
   },
 ];
 
+const OPEN_TX = "Cns1Xk9pQz7LmV4rT2wYb8NdF6sGa3eU1oKiH5jRcP9M";
+// GET /api/events body; `oldest_ms` far back so the duel sits inside the scanned window
+const events = (opened: unknown) => ({ at: now, window: 200, oldest_ms: now - 3 * 3_600_000, opened });
 const stub = (page: Page, path: string, body: unknown) =>
   page.route(`**/api/${path}**`, (r) => r.fulfill({ json: body, headers: { "cache-control": "no-store" } }));
 const shot = async (page: Page, name: string, from?: string, lines = 0) => {
@@ -130,7 +133,7 @@ const shot = async (page: Page, name: string, from?: string, lines = 0) => {
 test("arena: commit-reveal word and the execution box from solver quality", async ({ page }) => {
   await stub(page, "arena", arena(false));
   await page.goto("/arena");
-  await expect(page.locator("pre.wrap").first()).toContainText("commit-reveal on");
+  await expect(page.locator("pre.wrap").first()).toContainText("commit-reveal on · pairing: consent required");
   const exec = page.locator(box("execution"));
   await expect(exec).toBeVisible();
   const body = page.locator("body");
@@ -151,12 +154,14 @@ test("arena: deploy 13 data still renders standings, commit-reveal off, solver o
   await stub(page, "arena", arena(true));
   await page.goto("/arena");
   await expect(page.locator("pre.wrap").first()).toContainText("commit-reveal off");
+  await expect(page.locator("pre.wrap").first()).not.toContainText("pairing:");
   await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible();
   await expect(page.locator("span.ok", { hasText: "enclave" }).first()).toBeVisible(); // verified column
   await expect(page.locator("body")).toContainText("solver offline: no execution data");
 });
 
 test("duel: commit-reveal row and the no-reveal forfeit marker", async ({ page }) => {
+  await stub(page, "events", events({ duel_id: "411", method: "open_duel_consented", tx: OPEN_TX, at_ms: now - 360_000 }));
   await stub(page, "duel", {
     at: now,
     rpc: "https://fixture.rpc",
@@ -173,11 +178,14 @@ test("duel: commit-reveal row and the no-reveal forfeit marker", async ({ page }
   await expect(body).toContainText("calls hidden until reveal · no reveal = forfeit + 5 % of bond to the opponent");
   await expect(page.locator("span.ok", { hasText: "revealed" })).toBeVisible();
   await expect(page.locator("span.loss", { hasText: "no reveal: forfeit" })).toBeVisible();
+  await expect(page.locator("span.ok", { hasText: "both agents signed this duel" })).toBeVisible();
+  await expect(page.locator(`a[href$="/txns/${OPEN_TX}"]`)).toBeVisible();
   await expect(body).toContainText("no reveal = forfeit + no_reveal_bps of bond to the opponent (both: tie, to the protocol)");
   await shot(page, "duel");
 });
 
 test("duel: deploy 13 data (no commit fields, no get_no_reveal) renders the sides box", async ({ page }) => {
+  await page.route("**/api/events**", (r) => r.fulfill({ status: 502, json: { error: "fastnear down" } }));
   await stub(page, "duel", {
     at: now,
     rpc: "https://fixture.rpc",
@@ -194,6 +202,26 @@ test("duel: deploy 13 data (no commit fields, no get_no_reveal) renders the side
   await expect(page.locator("body")).toContainText("this contract predates commit-reveal");
   await expect(page.locator("body")).not.toContainText("no reveal:");
   await expect(page.locator("body")).toContainText("no proof");
+  await expect(page.locator("body")).toContainText("this contract predates consented pairing");
+});
+
+test("duel: open tx outside the scanned window falls back to today's require_consent, labelled", async ({ page }) => {
+  await stub(page, "events", events(null));
+  await stub(page, "duel", {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    oracle: "price-oracle.testnet",
+    config: { next_duel: "412", ...commitOn },
+    no_reveal: [false, false],
+    duel,
+    a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+    b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
+  });
+  await page.goto("/duel/411");
+  await expect(page.locator("span.ok", { hasText: "consent required" })).toBeVisible();
+  await expect(page.locator("body")).toContainText("from get_config now; the open tx is not in the scanned window");
+  await expect(page.locator("body")).not.toContainText("both agents signed");
 });
 
 test("agent: execution summary for this agent's followers", async ({ page }) => {

@@ -12,6 +12,7 @@ import {
   fillCells,
   lastFills,
   legs,
+  pairingWord,
   proven,
   quoteOut,
 } from "../cells";
@@ -216,6 +217,21 @@ export default function Arena() {
             >
               {commitWord(s.config)}
             </span>
+            {pairingWord(s.config) ? (
+              <>
+                <span className="dim"> · pairing: </span>
+                <span
+                  className={s.config.require_consent ? "ok" : "dim"}
+                  title={
+                    s.config.require_consent
+                      ? "both agents sign every pairing (open_duel_consented)"
+                      : "the owner may pair agents without their signatures"
+                  }
+                >
+                  {pairingWord(s.config)}
+                </span>
+              </>
+            ) : null}
             <span className="dim">
               {" "}
               · next close {live ? <span className="open">in {countdown(live.close_at, now)}</span> : "none open"}

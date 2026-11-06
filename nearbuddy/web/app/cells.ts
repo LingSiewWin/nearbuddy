@@ -1,13 +1,41 @@
 // Pure data-to-cells helpers for the commit-reveal and execution rows: no React state, no fetch, so
 // bun test checks them directly (app/__tests__). Every field is optional: a deploy-13 contract (no
 // commit-reveal) and a solver without quality data render as "off" or "none", never as an error.
-import { addrHref, type Cell, near, price8 } from "./tui";
+import { addrHref, type Cell, near, price8, short, txHref } from "./tui";
 
 /** The commit-reveal fields of `get_config`; absent on contracts that predate commit-reveal. */
 export type CommitConfig = { commit_reveal?: boolean; no_reveal_bps?: number; require_consent?: boolean };
 
 /** One word for the arena stats strip; a contract without the field has no commit-reveal. */
 export const commitWord = (c: CommitConfig | null | undefined) => (c?.commit_reveal ? "on" : "off");
+
+/** Arena stats strip: how duels get paired now; null on contracts without the field. */
+export const pairingWord = (c: CommitConfig | null | undefined) =>
+  c?.require_consent == null ? null : c.require_consent ? "consent required" : "open";
+
+/** The tx that opened a duel, as GET /api/events finds it in FastNEAR's tx window. */
+export type Opened = { duel_id: string; method: string; tx: string; at_ms: number };
+
+/** Duel box 1, `pairing` row: from the open tx's method when it is in the scanned window, else from today's
+ *  `require_consent` (labelled as such: the flag may have changed since the duel opened). */
+export const pairingCells = (opened: Opened | null | undefined, c: CommitConfig | null | undefined): Cell[] => {
+  const tx = (o: Opened): Cell[] => [
+    { t: `   ${o.method} tx `, c: "dim" },
+    { t: short(o.tx, 10), href: txHref(o.tx), title: o.tx },
+  ];
+  if (opened?.method === "open_duel_consented")
+    return [
+      { t: "both agents signed this duel", c: "ok", title: "each agent key signed consent_message for this pairing" },
+      ...tx(opened),
+    ];
+  if (opened?.method === "open_duel")
+    return [{ t: "opened by the owner, no agent signatures", c: "dim" }, ...tx(opened)];
+  if (c?.require_consent == null) return [{ t: "this contract predates consented pairing", c: "dim" }];
+  const why = { t: "   from get_config now; the open tx is not in the scanned window", c: "dim" };
+  return c.require_consent
+    ? [{ t: "consent required", c: "ok", title: "open_duel is refused; only open_duel_consented pairs agents" }, why]
+    : [{ t: "open", c: "dim", title: "the owner may pair agents without their signatures" }, why];
+};
 
 /** The contract's rule for a commitment left unrevealed at scoring (deploy 14). */
 export const NO_REVEAL_RULE =

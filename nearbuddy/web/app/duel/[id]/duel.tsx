@@ -2,7 +2,7 @@
 // One duel, btop-style: the two sides and their tier, the oracle prices and the scored outcome, the
 // attacks thrown at each side, and the three things a reader can check without trusting this page.
 import { use, useEffect, useState } from "react";
-import { type CommitConfig, commitCells, proven as hasProof, revealCell } from "../../cells";
+import { type CommitConfig, commitCells, proven as hasProof, type Opened, pairingCells, revealCell } from "../../cells";
 import {
   addrHref,
   agentHref,
@@ -66,6 +66,8 @@ type Duel = {
   outcome?: Outcome | null;
   open_price?: string | null;
 };
+/** GET /api/events: the duel's open tx from FastNEAR's window of the newest arena txs. */
+type Events = { at: number; window: number; oldest_ms: number | null; opened: Opened | null };
 type Rec = {
   at: number;
   rpc: string;
@@ -86,10 +88,15 @@ const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
 export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [r, setR] = useState<Rec | null>(null);
+  const [ev, setEv] = useState<Events | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     const tick = async () => {
+      // the tx index is optional enrichment: a FastNEAR outage leaves the contract view intact
+      getJson<Events>(`/api/events?duel=${encodeURIComponent(id)}`)
+        .then((j) => alive && setEv(j))
+        .catch(() => {});
       try {
         const j = await getJson<Rec>(`/api/duel?id=${encodeURIComponent(id)}`);
         if (alive) {
@@ -199,6 +206,8 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
             {sideRow("B", d.b, r?.b ?? null, d.last_intent_b)}
             {"\n"}
             {rowx("commit-reveal", commitCells(r?.config))}
+            {"\n"}
+            {rowx("pairing", pairingCells(ev?.opened, r?.config))}
             {"\n"}
             {r?.config?.commit_reveal || r?.no_reveal ? (
               <>

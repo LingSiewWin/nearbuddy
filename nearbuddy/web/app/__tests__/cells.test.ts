@@ -13,6 +13,9 @@ import {
   lastFills,
   legs,
   NO_REVEAL_RULE,
+  type Opened,
+  pairingCells,
+  pairingWord,
   proven,
   quoteOut,
   revealCell,
@@ -72,6 +75,34 @@ describe("commit-reveal", () => {
     expect(proven({ proof_hash: ZERO }, ZERO)).toBe(false);
     expect(proven({}, ZERO)).toBe(false);
     expect(proven(null, ZERO)).toBe(false);
+  });
+});
+
+describe("pairing", () => {
+  const opened = (method: string): Opened => ({ duel_id: "411", method, tx: "Cns1Xk9pQz7Lm", at_ms: NOW });
+  test("stats strip word: consent required, open, or nothing before the field existed", () => {
+    expect(pairingWord({ require_consent: true })).toBe("consent required");
+    expect(pairingWord({ require_consent: false })).toBe("open");
+    expect(pairingWord({ commit_reveal: false })).toBeNull();
+    expect(pairingWord(null)).toBeNull();
+  });
+  test("the open tx's method wins over the config: consented means both agents signed", () => {
+    const c = pairingCells(opened("open_duel_consented"), { require_consent: false });
+    expect(text(c)).toBe("both agents signed this duel   open_duel_consented tx Cns1Xk9pQz…");
+    expect(c[0]).toMatchObject({ c: "ok" });
+    expect(c[2]).toMatchObject({ href: "https://testnet.nearblocks.io/txns/Cns1Xk9pQz7Lm" });
+    expect(text(pairingCells(opened("open_duel"), { require_consent: true }))).toStartWith(
+      "opened by the owner, no agent signatures   open_duel tx",
+    );
+  });
+  test("without the open tx, today's require_consent is shown and labelled as such", () => {
+    const on = text(pairingCells(null, { require_consent: true }));
+    expect(on).toBe("consent required   from get_config now; the open tx is not in the scanned window");
+    expect(on.length).toBeLessThanOrEqual(VW);
+    expect(text(pairingCells(undefined, { require_consent: false }))).toStartWith("open   from get_config now");
+    expect(text(pairingCells(null, { next_duel: "412" } as CommitConfig))).toBe(
+      "this contract predates consented pairing",
+    );
   });
 });
 
