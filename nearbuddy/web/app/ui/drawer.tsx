@@ -38,12 +38,21 @@ async function recheck(tx: string): Promise<Check[]> {
   const txd = t.transactions?.[0];
   const fc = txd?.transaction?.actions?.find((a: { FunctionCall?: unknown }) => a.FunctionCall)?.FunctionCall;
   const args = fc ? JSON.parse(atob(fc.args)) : null;
-  const status = txd?.execution_outcome?.outcome?.status;
-  const ok = status && !("Failure" in status);
+  // A transaction's own status only says its first receipt was created; a contract panic (the tampered
+  // proof "bad tee signature") lives in a receipt outcome, so every receipt in the tree must have succeeded.
+  type Outcome = { status?: Record<string, unknown> };
+  const outcomes: Outcome[] = [
+    txd?.execution_outcome?.outcome,
+    ...(txd?.receipts ?? []).map((r: { execution_outcome?: { outcome?: Outcome } }) => r.execution_outcome?.outcome),
+  ].filter(Boolean);
+  const failed = outcomes.find((o) => o.status && "Failure" in o.status);
+  const why = failed ? JSON.stringify(failed.status).match(/panicked: ([^"\\]+)/)?.[1] : null;
   out.push({
-    label: "Transaction succeeded on NEAR",
-    ok: !!ok,
-    detail: `read from tx.test.fastnear.com, not from this site`,
+    label: failed ? "The contract refused this transaction" : "Every receipt succeeded on NEAR",
+    ok: outcomes.length > 0 && !failed,
+    detail: failed
+      ? `refused on chain${why ? `: ${why}` : ""} (read from tx.test.fastnear.com)`
+      : "read from tx.test.fastnear.com, not from this site",
   });
   out.push({
     label: "Request bytes hash to the chain's request_hash",
