@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["packages/**", "analysis/**", "web/app/**", "web/scripts/**", "!web/app/data"]
+    "includes": ["packages/**", "analysis/**", "web/app/**", "web/scripts/**", "!web/app/data", "!web/app/how/_kit"]
   },
   "formatter": {
     "enabled": true,
