@@ -401,6 +401,8 @@ describe("replyTo: the call fixed after the attack, not the first reveal after i
   test("a reveal whose commit came before the attack is not the reply; the next sealed one is", () => {
     const ev = [commit(50, "c1"), reveal(105, "r1"), commit(130, "c2"), reveal(250, "r2")];
     expect(replyTo(atk, ev)?.tx).toBe("r2");
+    // its commit scrolled out of the window: older than the attack, so never the reply
+    expect(replyTo(atk, [reveal(105, "r1")])).toBeNull();
   });
   test("a plain intent after the attack is the reply", () => {
     const plain: ArenaEvent = {

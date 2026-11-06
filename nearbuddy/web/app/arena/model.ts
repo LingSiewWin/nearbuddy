@@ -12,20 +12,19 @@ export const isCall = (e: ArenaEvent): e is Intent => e.kind === "intent" || e.k
 export type Attack = Extract<ArenaEvent, { kind: "attack" }>;
 /** When a call was fixed: a plain intent when it landed; a reveal when its commit landed (the agent's newest commit
  *  in the same duel at or before the reveal), since under commit-reveal the side was chosen then, not at the reveal. */
-export const fixedAt = (c: Intent, events: ArenaEvent[]) =>
-  c.kind === "reveal"
-    ? Math.max(
-        0,
-        ...events
-          .filter((e) => e.kind === "commit" && e.ok && e.duel === c.duel && e.agent === c.agent && e.at <= c.at)
-          .map((e) => e.at),
-      ) || c.at
-    : c.at;
+export const fixedAt = (c: Intent, events: ArenaEvent[]): number | null => {
+  if (c.kind !== "reveal") return c.at;
+  const commits = events
+    .filter((e) => e.kind === "commit" && e.ok && e.duel === c.duel && e.agent === c.agent && e.at <= c.at)
+    .map((e) => e.at);
+  // no commit in view: it is older than everything here (the window is contiguous), so not after any attack in it
+  return commits.length ? Math.max(...commits) : null;
+};
 /** The target's first call fixed after an attack: the call that could have read the lie. */
 export const replyTo = (a: Attack, events: ArenaEvent[]): Intent | null =>
   events
     .filter((e): e is Intent => isCall(e) && e.ok && e.duel === a.duel && e.agent === a.target)
-    .filter((c) => fixedAt(c, events) > a.at)
+    .filter((c) => (fixedAt(c, events) ?? Number.NEGATIVE_INFINITY) > a.at)
     .sort((x, y) => x.at - y.at)[0] ?? null;
 export type Side = {
   agent: string;
