@@ -1,6 +1,6 @@
 //! Wire types. Every struct here is byte-identical (borsh) to `packages/protocol/src/intent.ts`.
 use near_sdk::json_types::{Base64VecU8, U64, U128};
-use near_sdk::{near, AccountId};
+use near_sdk::{AccountId, near};
 
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

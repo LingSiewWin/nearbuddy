@@ -53,28 +53,52 @@ pub fn intent(pk: &[u8], duel: u64, side: Side, size: u16, nonce: u64) -> Intent
 }
 
 pub fn sign(sk: &SigningKey, i: &Intent) -> SignedIntent {
-    SignedIntent { intent: i.clone(), signature: Base64VecU8(sk.sign(&intent_message(i)).to_bytes().to_vec()) }
+    SignedIntent {
+        intent: i.clone(),
+        signature: Base64VecU8(sk.sign(&intent_message(i)).to_bytes().to_vec()),
+    }
 }
 
 /// Contract with the solver registered, a 60 s duel floor and a 10 s intent lock (`LOCK`).
 pub fn fresh(fee_bps: u16) -> Contract {
     ctx(OWNER, 0);
-    let mut c = Contract::init(OWNER.parse().unwrap(), ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 1_000, fee_bps, U128(MIN_CHAOS));
+    let mut c = Contract::init(
+        OWNER.parse().unwrap(),
+        ORACLE.parse().unwrap(),
+        U128(ORACLE_DEPOSIT),
+        1_000,
+        fee_bps,
+        U128(MIN_CHAOS),
+    );
     c.add_solver(SOLVER.parse().unwrap());
-    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, LOCK / 1_000_000_000);
+    c.set_oracle(
+        ORACLE.parse().unwrap(),
+        U128(ORACLE_DEPOSIT),
+        60,
+        LOCK / 1_000_000_000,
+    );
     c
 }
 
 /// `sk`'s proof of possession for `register_agent` called by `owner`.
 pub fn register_sig(sk: &SigningKey, owner: &str) -> Base64VecU8 {
-    Base64VecU8(sk.sign(&register_bytes(&owner.parse().unwrap())).to_bytes().to_vec())
+    Base64VecU8(
+        sk.sign(&register_bytes(&owner.parse().unwrap()))
+            .to_bytes()
+            .to_vec(),
+    )
 }
 
 /// OPERATOR registers key `seed` with BOND, signing the register message with that key.
 pub fn register(c: &mut Contract, seed: u8, model: &str, tee: bool) -> AgentView {
     let (sk, pk) = key(seed);
     ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(pk), model.into(), tee, register_sig(&sk, OPERATOR))
+    c.register_agent(
+        Base64VecU8(pk),
+        model.into(),
+        tee,
+        register_sig(&sk, OPERATOR),
+    )
 }
 
 /// Contract with solver registered and agents A (seed 1, TEE-backed) and B (seed 2, plain) bonded.
@@ -87,19 +111,40 @@ pub fn setup() -> (Contract, SigningKey, SigningKey) {
 }
 
 fn price_data(asset: &str, price8: u64, ts: u64) -> PriceData {
-    PriceData { timestamp: U64(ts), recency_duration_sec: 300, prices: vec![AssetOptionalPrice { asset_id: asset.into(), price: Some(OraclePrice { multiplier: U128(price8 as u128), decimals: 8 }) }] }
+    PriceData {
+        timestamp: U64(ts),
+        recency_duration_sec: 300,
+        prices: vec![AssetOptionalPrice {
+            asset_id: asset.into(),
+            price: Some(OraclePrice {
+                multiplier: U128(price8 as u128),
+                decimals: 8,
+            }),
+        }],
+    }
 }
 
 /// Outlayer answers `oracle_call`: the oracle account calls back with our contract as sender.
 fn oracle_answers(c: &mut Contract, d: u64, phase: &str, price8: u64, ts: u64) {
     ctx_at(ORACLE, 0, ts);
-    c.oracle_on_call(CONTRACT.parse().unwrap(), price_data("wrap.near", price8, ts), format!("{phase}:{d}"));
+    c.oracle_on_call(
+        CONTRACT.parse().unwrap(),
+        price_data("wrap.near", price8, ts),
+        format!("{phase}:{d}"),
+    );
 }
 
 /// Open a duel and let the oracle deliver the open price.
 pub fn open(c: &mut Contract) -> u64 {
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
-    let d = c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE)).0;
+    let d = c
+        .open_duel(
+            Base64VecU8(key(1).1),
+            Base64VecU8(key(2).1),
+            "wrap.near".into(),
+            U64(CLOSE),
+        )
+        .0;
     oracle_answers(c, d, "open", OPEN, NOW);
     d
 }
@@ -138,7 +183,12 @@ fn tee_intent(ska: &SigningKey, d: u64, nonce: u64, req: [u8; 32], res: [u8; 32]
 
 #[test]
 fn tee_text_matches_cloud_format() {
-    let t = tee_text(2, "deepseek-ai/DeepSeek-V4.1-Flash-1017", &[0xed; 32], &[0xc4; 32]);
+    let t = tee_text(
+        2,
+        "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        &[0xed; 32],
+        &[0xc4; 32],
+    );
     let s = String::from_utf8(t).unwrap();
     assert!(s.starts_with("deepseek-ai/DeepSeek-V4.1-Flash-1017:eded"));
     assert_eq!(s.len(), 36 + 1 + 64 + 1 + 64);
@@ -154,8 +204,19 @@ fn tee_intent_verified_on_chain() {
     let d = open(&mut c);
     let (req, res) = ([0xaa; 32], [0xbb; 32]);
     ctx(SOLVER, 0);
-    c.post_intent(tee_intent(&ska, d, 1, req, res), Some(tee_proof(&tee, 2, MODEL_A, req, res)));
-    assert_eq!(c.get_duel(U64(d)).unwrap().last_intent_a.unwrap().proof_hash.0, proof_hash(&req, &res));
+    c.post_intent(
+        tee_intent(&ska, d, 1, req, res),
+        Some(tee_proof(&tee, 2, MODEL_A, req, res)),
+    );
+    assert_eq!(
+        c.get_duel(U64(d))
+            .unwrap()
+            .last_intent_a
+            .unwrap()
+            .proof_hash
+            .0,
+        proof_hash(&req, &res)
+    );
     assert!(c.get_agent(Base64VecU8(key(1).1)).unwrap().tee);
 }
 
@@ -167,7 +228,10 @@ fn tee_proof_cannot_back_two_intents() {
     let d = open(&mut c);
     let (req, res) = ([0xaa; 32], [0xbb; 32]);
     ctx(SOLVER, 0);
-    c.post_intent(tee_intent(&ska, d, 1, req, res), Some(tee_proof(&tee, 2, MODEL_A, req, res)));
+    c.post_intent(
+        tee_intent(&ska, d, 1, req, res),
+        Some(tee_proof(&tee, 2, MODEL_A, req, res)),
+    );
     // same enclave completion, new nonce, opposite side
     let mut i = intent(&key(1).1, d, Side::Short, 5_000, 2);
     i.proof_hash = Base64VecU8(proof_hash(&req, &res));
@@ -198,7 +262,10 @@ fn tee_proof_must_match_signed_intent() {
     let (req, res) = ([0xaa; 32], [0xbb; 32]);
     ctx(SOLVER, 0);
     // valid enclave proof for one completion, intent commits to another
-    c.post_intent(tee_intent(&ska, d, 1, req, [0xcc; 32]), Some(tee_proof(&tee, 2, MODEL_A, req, res)));
+    c.post_intent(
+        tee_intent(&ska, d, 1, req, [0xcc; 32]),
+        Some(tee_proof(&tee, 2, MODEL_A, req, res)),
+    );
 }
 
 #[test]
@@ -208,7 +275,10 @@ fn tee_unregistered_signer_rejected() {
     let d = open(&mut c);
     let (req, res) = ([0xaa; 32], [0xbb; 32]);
     ctx(SOLVER, 0);
-    c.post_intent(tee_intent(&ska, d, 1, req, res), Some(tee_proof(&key(7).0, 2, MODEL_A, req, res)));
+    c.post_intent(
+        tee_intent(&ska, d, 1, req, res),
+        Some(tee_proof(&key(7).0, 2, MODEL_A, req, res)),
+    );
 }
 
 #[test]
@@ -220,7 +290,10 @@ fn tee_signature_for_other_model_rejected() {
     let (req, res) = ([0xaa; 32], [0xbb; 32]);
     ctx(SOLVER, 0);
     // enclave signed text names model B; agent A is registered as model A
-    c.post_intent(tee_intent(&ska, d, 1, req, res), Some(tee_proof(&tee, 2, MODEL_B, req, res)));
+    c.post_intent(
+        tee_intent(&ska, d, 1, req, res),
+        Some(tee_proof(&tee, 2, MODEL_B, req, res)),
+    );
 }
 
 #[test]
@@ -229,7 +302,10 @@ fn tee_agent_cannot_post_without_proof() {
     let (mut c, ska, _) = setup();
     let d = open(&mut c);
     ctx(SOLVER, 0);
-    c.post_intent(sign(&ska, &intent(&key(1).1, d, Side::Long, 5_000, 1)), None);
+    c.post_intent(
+        sign(&ska, &intent(&key(1).1, d, Side::Long, 5_000, 1)),
+        None,
+    );
 }
 
 #[test]
@@ -239,7 +315,10 @@ fn gateway_kind_verifies_without_model_prefix() {
     let d = open(&mut c);
     let (req, res) = ([0x18; 32], [0xd5; 32]);
     ctx(SOLVER, 0);
-    c.post_intent(tee_intent(&ska, d, 1, req, res), Some(tee_proof(&tee, 1, "anything", req, res)));
+    c.post_intent(
+        tee_intent(&ska, d, 1, req, res),
+        Some(tee_proof(&tee, 1, "anything", req, res)),
+    );
 }
 
 #[test]
@@ -273,7 +352,10 @@ fn post_b(c: &mut Contract, skb: &SigningKey, d: u64, side: Side, nonce: u64) {
 fn register_charges_storage_from_bond() {
     let (c, ..) = setup();
     let b = bond(&c, 2);
-    assert!(b < BOND && b > BOND - NEAR / 10, "bond {b} should be BOND minus a few KB of storage");
+    assert!(
+        b < BOND && b > BOND - NEAR / 10,
+        "bond {b} should be BOND minus a few KB of storage"
+    );
 }
 
 #[test]
@@ -288,7 +370,12 @@ fn register_twice_panics() {
 fn register_without_bond_panics() {
     let (mut c, ..) = setup();
     ctx(OPERATOR, 1);
-    c.register_agent(Base64VecU8(key(3).1), "m".into(), false, register_sig(&key(3).0, OPERATOR));
+    c.register_agent(
+        Base64VecU8(key(3).1),
+        "m".into(),
+        false,
+        register_sig(&key(3).0, OPERATOR),
+    );
 }
 
 #[test]
@@ -297,7 +384,12 @@ fn register_without_key_possession_panics() {
     // squatter knows B's public key but not its secret: signs with another key
     let mut c = fresh(0);
     ctx(FOLLOWER, BOND);
-    c.register_agent(Base64VecU8(key(2).1), MODEL_B.into(), false, register_sig(&key(3).0, FOLLOWER));
+    c.register_agent(
+        Base64VecU8(key(2).1),
+        MODEL_B.into(),
+        false,
+        register_sig(&key(3).0, FOLLOWER),
+    );
 }
 
 #[test]
@@ -306,7 +398,12 @@ fn register_sig_is_bound_to_the_caller() {
     // a valid proof made for OPERATOR cannot be replayed by FOLLOWER
     let mut c = fresh(0);
     ctx(FOLLOWER, BOND);
-    c.register_agent(Base64VecU8(key(2).1), MODEL_B.into(), false, register_sig(&key(2).0, OPERATOR));
+    c.register_agent(
+        Base64VecU8(key(2).1),
+        MODEL_B.into(),
+        false,
+        register_sig(&key(2).0, OPERATOR),
+    );
 }
 
 #[test]
@@ -329,7 +426,12 @@ fn register_model_id_too_long_panics() {
 fn open_duel_symbol_too_long_panics() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
-    c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "s".repeat(65), U64(CLOSE));
+    c.open_duel(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "s".repeat(65),
+        U64(CLOSE),
+    );
 }
 
 #[test]
@@ -353,7 +455,12 @@ fn open_duel_requires_free_agents() {
 fn open_duel_requires_oracle_deposit() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT - 1);
-    c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE));
+    c.open_duel(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "wrap.near".into(),
+        U64(CLOSE),
+    );
 }
 
 #[test]
@@ -370,9 +477,20 @@ fn open_price_lands_once() {
 fn only_oracle_delivers_prices() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
-    let d = c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE)).0;
+    let d = c
+        .open_duel(
+            Base64VecU8(key(1).1),
+            Base64VecU8(key(2).1),
+            "wrap.near".into(),
+            U64(CLOSE),
+        )
+        .0;
     ctx(OPERATOR, 0);
-    c.oracle_on_call(CONTRACT.parse().unwrap(), price_data("wrap.near", OPEN, NOW), format!("open:{d}"));
+    c.oracle_on_call(
+        CONTRACT.parse().unwrap(),
+        price_data("wrap.near", OPEN, NOW),
+        format!("open:{d}"),
+    );
 }
 
 #[test]
@@ -380,9 +498,20 @@ fn only_oracle_delivers_prices() {
 fn oracle_answer_to_foreign_request_rejected() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
-    let d = c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE)).0;
+    let d = c
+        .open_duel(
+            Base64VecU8(key(1).1),
+            Base64VecU8(key(2).1),
+            "wrap.near".into(),
+            U64(CLOSE),
+        )
+        .0;
     ctx(ORACLE, 0);
-    c.oracle_on_call(OPERATOR.parse().unwrap(), price_data("wrap.near", OPEN, NOW), format!("open:{d}"));
+    c.oracle_on_call(
+        OPERATOR.parse().unwrap(),
+        price_data("wrap.near", OPEN, NOW),
+        format!("open:{d}"),
+    );
 }
 
 #[test]
@@ -390,21 +519,41 @@ fn oracle_answer_to_foreign_request_rejected() {
 fn oracle_answer_for_wrong_asset_rejected() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
-    let d = c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE)).0;
+    let d = c
+        .open_duel(
+            Base64VecU8(key(1).1),
+            Base64VecU8(key(2).1),
+            "wrap.near".into(),
+            U64(CLOSE),
+        )
+        .0;
     ctx(ORACLE, 0);
-    c.oracle_on_call(CONTRACT.parse().unwrap(), price_data("eth.bridge.near", OPEN, NOW), format!("open:{d}"));
+    c.oracle_on_call(
+        CONTRACT.parse().unwrap(),
+        price_data("eth.bridge.near", OPEN, NOW),
+        format!("open:{d}"),
+    );
 }
 
 #[test]
 fn request_open_price_retries_until_answered() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
-    let d = c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE)).0;
+    let d = c
+        .open_duel(
+            Base64VecU8(key(1).1),
+            Base64VecU8(key(2).1),
+            "wrap.near".into(),
+            U64(CLOSE),
+        )
+        .0;
     ctx(OPERATOR, ORACLE_DEPOSIT);
     c.request_open_price(U64(d));
     oracle_answers(&mut c, d, "open", OPEN, NOW);
     ctx(OPERATOR, ORACLE_DEPOSIT);
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.request_open_price(U64(d))));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.request_open_price(U64(d))
+    }));
     assert!(r.is_err(), "retry after the price landed must be refused");
 }
 
@@ -420,7 +569,10 @@ fn post_intent_stores_last_intent_and_charges_bond() {
     assert_eq!(last.side, Side::Short);
     assert_eq!(last.nonce.0, 2);
     assert!(duel.last_intent_a.is_none());
-    assert!(bond(&c, 2) < before, "intent storage is paid from the agent bond");
+    assert!(
+        bond(&c, 2) < before,
+        "intent storage is paid from the agent bond"
+    );
 }
 
 #[test]
@@ -438,7 +590,10 @@ fn post_intent_at_close_panics() {
     let (mut c, _, skb) = setup();
     let d = open(&mut c);
     ctx_at(SOLVER, 0, CLOSE);
-    c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+    c.post_intent(
+        sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)),
+        None,
+    );
 }
 
 #[test]
@@ -447,7 +602,10 @@ fn post_intent_bad_size_panics() {
     let (mut c, _, skb) = setup();
     let d = open(&mut c);
     ctx(SOLVER, 0);
-    c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Long, 10_001, 1)), None);
+    c.post_intent(
+        sign(&skb, &intent(&key(2).1, d, Side::Long, 10_001, 1)),
+        None,
+    );
 }
 
 #[test]
@@ -457,7 +615,10 @@ fn post_intent_bad_sig_panics() {
     let d = open(&mut c);
     ctx(SOLVER, 0);
     // signed by A's key but claims B's pk
-    c.post_intent(sign(&ska, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+    c.post_intent(
+        sign(&ska, &intent(&key(2).1, d, Side::Long, 5_000, 1)),
+        None,
+    );
 }
 
 #[test]
@@ -465,8 +626,14 @@ fn anyone_may_relay_a_signed_intent() {
     let (mut c, _, skb) = setup();
     let d = open(&mut c);
     ctx(OPERATOR, 0);
-    c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
-    assert_eq!(c.get_duel(U64(d)).unwrap().last_intent_b.unwrap().nonce.0, 1);
+    c.post_intent(
+        sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)),
+        None,
+    );
+    assert_eq!(
+        c.get_duel(U64(d)).unwrap().last_intent_b.unwrap().nonce.0,
+        1
+    );
 }
 
 #[test]
@@ -475,7 +642,10 @@ fn post_intent_inside_lock_panics() {
     let (mut c, _, skb) = setup();
     let d = open(&mut c);
     ctx_at(SOLVER, 0, CLOSE - LOCK);
-    c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+    c.post_intent(
+        sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)),
+        None,
+    );
 }
 
 #[test]
@@ -484,7 +654,10 @@ fn post_intent_just_before_lock_ok() {
     assert_eq!(c.get_config().intent_lock_s, 10);
     let d = open(&mut c);
     ctx_at(SOLVER, 0, CLOSE - LOCK - 1);
-    c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+    c.post_intent(
+        sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)),
+        None,
+    );
     assert!(c.get_duel(U64(d)).unwrap().last_intent_b.is_some());
 }
 
@@ -528,7 +701,13 @@ pub fn mandate(cap: u128, allowance: u128, tokens: Vec<&str>) -> Mandate {
 }
 
 pub fn fill(nonce: u64, token: &str, amount: u128) -> Fill {
-    Fill { intent_nonce: U64(nonce), token: token.into(), amount_in: U128(amount), amount_out: U128(1), swap_tx: "0xabc".into() }
+    Fill {
+        intent_nonce: U64(nonce),
+        token: token.into(),
+        amount_in: U128(amount),
+        amount_out: U128(1),
+        swap_tx: "0xabc".into(),
+    }
 }
 
 const VAULT: u128 = 10 * NEAR;
@@ -572,8 +751,14 @@ fn follow_tee_agent_ok() {
     c.deposit();
     ctx(FOLLOWER, 0);
     c.follow(Base64VecU8(key(1).1), mandate(NEAR, VAULT, vec![]));
-    assert!(c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap()).is_some());
-    assert!(c.get_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap()).is_none());
+    assert!(
+        c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
+            .is_some()
+    );
+    assert!(
+        c.get_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap())
+            .is_none()
+    );
 }
 
 #[test]
@@ -614,7 +799,11 @@ fn fill_wrong_token_rejected() {
 fn fill_after_expiry_rejected() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
     ctx_at(SOLVER, 0, NOW + 1_000_000);
-    let r = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+    let r = c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        vec![fill(1, "usdc", 50)],
+    );
     assert_eq!(r.rejected[0].1, "mandate expired");
 }
 
@@ -648,7 +837,11 @@ fn foreign_nonce_rejected() {
 fn non_solver_cannot_settle() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
     ctx(OPERATOR, 0);
-    c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+    c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        vec![fill(1, "usdc", 50)],
+    );
 }
 
 #[test]
@@ -667,7 +860,13 @@ fn allowance_exhausted_rejected() {
     post_a(&mut c, &key(1).0, &key(7).0, d, Side::Short, 2);
     let r = settle(&mut c, vec![fill(2, "usdc", NEAR * 6 / 10)]);
     assert_eq!(r.rejected[0].1, "allowance exhausted");
-    assert_eq!(c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap()).unwrap().spent.0, NEAR);
+    assert_eq!(
+        c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
+            .unwrap()
+            .spent
+            .0,
+        NEAR
+    );
 }
 
 #[test]
@@ -676,7 +875,10 @@ fn absurd_follower_spent_is_rejected_not_panicked() {
     m.spent = U128(u128::MAX);
     let (mut c, _, v) = setup_follow(m);
     let r = settle(&mut c, vec![fill(1, "usdc", 50)]);
-    assert_eq!((r.settled, r.rejected[0].1.as_str()), (0, "allowance exhausted"));
+    assert_eq!(
+        (r.settled, r.rejected[0].1.as_str()),
+        (0, "allowance exhausted")
+    );
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
 }
 
@@ -693,7 +895,15 @@ fn list_followers_and_withdraw() {
 
 /// A TEE-backed agent posts through its enclave proof. The proof is unique per (agent, nonce):
 /// request hash = agent pk, response hash = nonce.
-fn post_tee(c: &mut Contract, sk: &SigningKey, model: &str, tee: &SigningKey, d: u64, side: Side, nonce: u64) {
+fn post_tee(
+    c: &mut Contract,
+    sk: &SigningKey,
+    model: &str,
+    tee: &SigningKey,
+    d: u64,
+    side: Side,
+    nonce: u64,
+) {
     let pk = sk.verifying_key().to_bytes();
     let (req, res) = (pk, [nonce as u8; 32]);
     let mut i = intent(&pk, d, side, 5_000, nonce);
@@ -709,7 +919,12 @@ fn post_a(c: &mut Contract, ska: &SigningKey, tee: &SigningKey, d: u64, side: Si
 
 fn inject(c: &mut Contract, d: u64, target: &[u8], deposit: u128) {
     ctx(OPERATOR, deposit);
-    c.inject_chaos(U64(d), Base64VecU8(target.to_vec()), "fake_news".into(), Base64VecU8(vec![3u8; 32]));
+    c.inject_chaos(
+        U64(d),
+        Base64VecU8(target.to_vec()),
+        "fake_news".into(),
+        Base64VecU8(vec![3u8; 32]),
+    );
 }
 
 fn resolve_at_close(c: &mut Contract, d: u64, close: u64) {
@@ -750,7 +965,12 @@ fn inject_kind_too_long_panics() {
     let (mut c, ..) = setup();
     let d = open(&mut c);
     ctx(OPERATOR, MIN_CHAOS);
-    c.inject_chaos(U64(d), Base64VecU8(key(1).1), "k".repeat(33), Base64VecU8(vec![3u8; 32]));
+    c.inject_chaos(
+        U64(d),
+        Base64VecU8(key(1).1),
+        "k".repeat(33),
+        Base64VecU8(vec![3u8; 32]),
+    );
 }
 
 #[test]
@@ -759,7 +979,10 @@ fn inject_pays_storage_then_pools_the_rest() {
     let d = open(&mut c);
     inject(&mut c, d, &key(1).1, MIN_CHAOS);
     let pool = c.get_duel(U64(d)).unwrap().pool.0;
-    assert!(pool < MIN_CHAOS && pool > MIN_CHAOS - NEAR / 100, "pool {pool}");
+    assert!(
+        pool < MIN_CHAOS && pool > MIN_CHAOS - NEAR / 100,
+        "pool {pool}"
+    );
 }
 
 #[test]
@@ -789,7 +1012,10 @@ fn resolve_scores_50_bps_slashes_and_prunes() {
     assert_eq!(duel.pool.0, 0);
     assert!(duel.injections.is_empty(), "injections pruned after finish");
     let o = duel.outcome.unwrap();
-    assert_eq!((o.pnl_a, o.pnl_b, o.slashed.0, o.injections), (25, -25, slashed, 1));
+    assert_eq!(
+        (o.pnl_a, o.pnl_b, o.slashed.0, o.injections),
+        (25, -25, slashed, 1)
+    );
     assert_eq!((o.open_price.0, o.close_price.0), (OPEN, UP));
     assert_eq!(o.winner.unwrap().0, key(1).1);
 }
@@ -884,9 +1110,17 @@ fn open_duel_respects_min_length() {
     let (mut c, ..) = setup();
     ctx(OWNER, 0);
     c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 330, 60);
-    assert_eq!((c.get_config().min_duel_s, c.get_config().intent_lock_s), (330, 60));
+    assert_eq!(
+        (c.get_config().min_duel_s, c.get_config().intent_lock_s),
+        (330, 60)
+    );
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
-    c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(NOW + 329_000_000_000));
+    c.open_duel(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "wrap.near".into(),
+        U64(NOW + 329_000_000_000),
+    );
 }
 
 #[test]
@@ -903,7 +1137,11 @@ fn stale_close_price_rejected() {
     let (mut c, ..) = setup();
     let d = open(&mut c);
     ctx_at(ORACLE, 0, CLOSE);
-    c.oracle_on_call(CONTRACT.parse().unwrap(), price_data("wrap.near", UP, CLOSE - 1), format!("close:{d}"));
+    c.oracle_on_call(
+        CONTRACT.parse().unwrap(),
+        price_data("wrap.near", UP, CLOSE - 1),
+        format!("close:{d}"),
+    );
 }
 
 #[test]
@@ -911,7 +1149,14 @@ fn stale_close_price_rejected() {
 fn resolve_without_open_price_panics() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
-    let d = c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE)).0;
+    let d = c
+        .open_duel(
+            Base64VecU8(key(1).1),
+            Base64VecU8(key(2).1),
+            "wrap.near".into(),
+            U64(CLOSE),
+        )
+        .0;
     ctx_at(OPERATOR, ORACLE_DEPOSIT, CLOSE);
     c.resolve_duel(U64(d));
 }
@@ -926,9 +1171,27 @@ fn zero_price_rejected() {
 
 #[test]
 fn price8_normalises_decimals() {
-    assert_eq!(price8(&OraclePrice { multiplier: U128(366_117_500), decimals: 8 }), 366_117_500);
-    assert_eq!(price8(&OraclePrice { multiplier: U128(366_117), decimals: 5 }), 366_117_000);
-    assert_eq!(price8(&OraclePrice { multiplier: U128(36_611_750_000), decimals: 10 }), 366_117_500);
+    assert_eq!(
+        price8(&OraclePrice {
+            multiplier: U128(366_117_500),
+            decimals: 8
+        }),
+        366_117_500
+    );
+    assert_eq!(
+        price8(&OraclePrice {
+            multiplier: U128(366_117),
+            decimals: 5
+        }),
+        366_117_000
+    );
+    assert_eq!(
+        price8(&OraclePrice {
+            multiplier: U128(36_611_750_000),
+            decimals: 10
+        }),
+        366_117_500
+    );
 }
 
 #[test]
@@ -944,7 +1207,12 @@ fn void_duel_after_a_day_frees_agents_without_slashing() {
     assert_eq!(bond(&c, 2), bond_b + pool / 2);
     let duel = c.get_duel(U64(d)).unwrap();
     assert!(duel.resolved && duel.injections.is_empty());
-    assert!(c.get_agent(Base64VecU8(key(1).1)).unwrap().in_duel.is_none());
+    assert!(
+        c.get_agent(Base64VecU8(key(1).1))
+            .unwrap()
+            .in_duel
+            .is_none()
+    );
     assert_eq!(c.get_agent(Base64VecU8(key(1).1)).unwrap().alpha_bps, 0);
 }
 
@@ -1001,8 +1269,16 @@ fn same_nonce_on_two_agents_settles_both() {
     c.follow(Base64VecU8(key(2).1), mandate(NEAR, VAULT, vec![]));
     let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
     ctx(SOLVER, 0);
-    let ra = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
-    let rb = c.settle_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+    let ra = c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        vec![fill(1, "usdc", 50)],
+    );
+    let rb = c.settle_follow(
+        Base64VecU8(key(2).1),
+        FOLLOWER.parse().unwrap(),
+        vec![fill(1, "usdc", 50)],
+    );
     assert_eq!((ra.settled, rb.settled), (1, 1));
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - 100);
 }
@@ -1021,9 +1297,16 @@ fn owner_withdraws_fees() {
     c.follow(Base64VecU8(key(1).1), mandate(NEAR, VAULT, vec![]));
     let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
     ctx(SOLVER, 0);
-    c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", NEAR)]);
+    c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        vec![fill(1, "usdc", NEAR)],
+    );
     assert_eq!(c.get_config().owner_fees.0, NEAR / 100);
-    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - NEAR - NEAR / 100);
+    assert_eq!(
+        c.get_vault(FOLLOWER.parse().unwrap()).0,
+        v - NEAR - NEAR / 100
+    );
     ctx(OWNER, 0);
     let _ = c.withdraw_fees();
     assert_eq!(c.get_config().owner_fees.0, 0);
@@ -1045,14 +1328,23 @@ fn fee_is_debited_from_follower_and_accrues_to_owner_not_solver() {
     c.follow(Base64VecU8(key(1).1), mandate(NEAR, NEAR, vec![]));
     let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
     ctx(SOLVER, 0);
-    let r = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", NEAR)]);
+    let r = c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        vec![fill(1, "usdc", NEAR)],
+    );
     let fee = NEAR / 100;
     assert_eq!((r.settled, r.debited.0), (1, NEAR + fee));
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - NEAR - fee);
     assert_eq!(c.get_vault(SOLVER.parse().unwrap()).0, NEAR);
     assert_eq!(c.get_config().owner_fees.0, fee);
-    let m = c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap()).unwrap();
-    assert_eq!(m.spent.0, NEAR, "the allowance is spent by the amount, not the fee");
+    let m = c
+        .get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
+        .unwrap();
+    assert_eq!(
+        m.spent.0, NEAR,
+        "the allowance is spent by the amount, not the fee"
+    );
 }
 
 #[test]
@@ -1087,7 +1379,10 @@ fn register_model_id_of_exactly_64_bytes_ok() {
     let model = "m".repeat(64);
     let a = register(&mut c, 1, &model, false);
     assert_eq!(a.model_id, model);
-    assert_eq!(c.get_agent(Base64VecU8(key(1).1)).unwrap().model_id.len(), 64);
+    assert_eq!(
+        c.get_agent(Base64VecU8(key(1).1)).unwrap().model_id.len(),
+        64
+    );
 }
 
 /// A relayer (anyone may relay) cannot forge an intent for B with another key's signature.
@@ -1097,7 +1392,10 @@ fn relayed_intent_signed_by_another_key_panics() {
     let (mut c, ska, _) = setup();
     let d = open(&mut c);
     ctx(OPERATOR, 0);
-    c.post_intent(sign(&ska, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+    c.post_intent(
+        sign(&ska, &intent(&key(2).1, d, Side::Long, 5_000, 1)),
+        None,
+    );
 }
 
 /// A registered agent that is not in the duel cannot post into it, even with a valid signature.
@@ -1108,7 +1406,10 @@ fn relayed_intent_from_agent_outside_the_duel_panics() {
     register(&mut c, 3, "m", false);
     let d = open(&mut c);
     ctx(OPERATOR, 0);
-    c.post_intent(sign(&key(3).0, &intent(&key(3).1, d, Side::Long, 5_000, 1)), None);
+    c.post_intent(
+        sign(&key(3).0, &intent(&key(3).1, d, Side::Long, 5_000, 1)),
+        None,
+    );
 }
 
 fn duel_key(d: u64) -> Vec<u8> {
@@ -1123,7 +1424,19 @@ fn migrate_duels_rewrites_v1_layout() {
     let (mut c, ..) = setup();
     let d = open(&mut c);
     let cur = c.get_duel(U64(d)).unwrap();
-    let old = DuelV1 { id: cur.id, a: cur.a, b: cur.b, symbol: cur.symbol, open_at: cur.open_at, close_at: cur.close_at, pool: cur.pool, injections: cur.injections, resolved: cur.resolved, last_intent_a: None, last_intent_b: None };
+    let old = DuelV1 {
+        id: cur.id,
+        a: cur.a,
+        b: cur.b,
+        symbol: cur.symbol,
+        open_at: cur.open_at,
+        close_at: cur.close_at,
+        pool: cur.pool,
+        injections: cur.injections,
+        resolved: cur.resolved,
+        last_intent_a: None,
+        last_intent_b: None,
+    };
     env::storage_write(&duel_key(d), &near_sdk::borsh::to_vec(&old).unwrap());
     assert!(Duel::try_from_slice(&env::storage_read(&duel_key(d)).unwrap()).is_err());
     ctx(OWNER, 0);
@@ -1140,17 +1453,40 @@ fn migrate_duels_rewrites_v2_layout_keeping_outcome() {
     let d = open(&mut c);
     let cur = c.get_duel(U64(d)).unwrap();
     let v2 = DuelV2 {
-        id: cur.id, a: cur.a.clone(), b: cur.b, symbol: cur.symbol, open_at: cur.open_at, close_at: cur.close_at, pool: U128(0),
-        injections: vec![Injection { kind: "x".into(), payload_hash: Base64VecU8(vec![3; 32]), target: cur.a.clone(), block: U64(1) }],
-        resolved: true, last_intent_a: None, last_intent_b: None,
-        outcome: Some(OutcomeV2 { open_price: U64(OPEN), close_price: U64(UP), pnl_a: 25, pnl_b: -25, winner: Some(cur.a), slashed: U128(7) }),
+        id: cur.id,
+        a: cur.a.clone(),
+        b: cur.b,
+        symbol: cur.symbol,
+        open_at: cur.open_at,
+        close_at: cur.close_at,
+        pool: U128(0),
+        injections: vec![Injection {
+            kind: "x".into(),
+            payload_hash: Base64VecU8(vec![3; 32]),
+            target: cur.a.clone(),
+            block: U64(1),
+        }],
+        resolved: true,
+        last_intent_a: None,
+        last_intent_b: None,
+        outcome: Some(OutcomeV2 {
+            open_price: U64(OPEN),
+            close_price: U64(UP),
+            pnl_a: 25,
+            pnl_b: -25,
+            winner: Some(cur.a),
+            slashed: U128(7),
+        }),
     };
     env::storage_write(&duel_key(d), &near_sdk::borsh::to_vec(&v2).unwrap());
     ctx(OWNER, 0);
     assert_eq!(c.migrate_duels(U64(d), U64(d)), 1);
     let m = Duel::try_from_slice(&env::storage_read(&duel_key(d)).unwrap()).unwrap();
     let o = m.outcome.unwrap();
-    assert_eq!((o.pnl_a, o.pnl_b, o.slashed.0, o.injections), (25, -25, 7, 1));
+    assert_eq!(
+        (o.pnl_a, o.pnl_b, o.slashed.0, o.injections),
+        (25, -25, 7, 1)
+    );
     assert_eq!(m.open_price.unwrap().0, OPEN);
     assert!(m.resolved);
 }
@@ -1173,11 +1509,18 @@ fn agent_duels_index_grows_and_pages_newest_first() {
     resolve_at_close(&mut c, d1, UP);
     let d2 = open(&mut c);
     assert_eq!(ids(c.agent_duels(a.clone(), 0, 10)), vec![d2, d1, d0]);
-    assert_eq!(ids(c.agent_duels(Base64VecU8(key(2).1), 0, 2)), vec![d2, d1], "both sides indexed, limit honoured");
+    assert_eq!(
+        ids(c.agent_duels(Base64VecU8(key(2).1), 0, 2)),
+        vec![d2, d1],
+        "both sides indexed, limit honoured"
+    );
     assert_eq!(ids(c.agent_duels(a.clone(), 1, 1)), vec![d1]);
     assert_eq!(ids(c.agent_duels(a.clone(), 2, 5)), vec![d0]);
     assert!(c.agent_duels(a, 3, 5).is_empty(), "offset past the end");
-    assert!(c.agent_duels(Base64VecU8(key(9).1), 0, 10).is_empty(), "unknown agent");
+    assert!(
+        c.agent_duels(Base64VecU8(key(9).1), 0, 10).is_empty(),
+        "unknown agent"
+    );
 }
 
 #[test]
@@ -1197,16 +1540,27 @@ fn migrate_v10_adds_empty_index_and_keeps_state() {
     c.agent_duels.flush();
     let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
     let tail = raw.split_off(raw.len() - 13);
-    assert_eq!(tail[..5], near_sdk::borsh::to_vec(&near_sdk::borsh::to_vec(&StorageKey::AgentDuels).unwrap()).unwrap());
+    assert_eq!(
+        tail[..5],
+        near_sdk::borsh::to_vec(&near_sdk::borsh::to_vec(&StorageKey::AgentDuels).unwrap())
+            .unwrap()
+    );
     assert_eq!(tail[5..], LOCK.to_le_bytes());
     env::storage_write(b"STATE", &raw);
     ctx(CONTRACT, 0);
     let mut m = Contract::migrate_v10();
     assert_eq!(m.get_config().next_duel.0, 1);
-    assert_eq!(m.get_config().intent_lock_s, 60, "lock takes the default until set_oracle");
+    assert_eq!(
+        m.get_config().intent_lock_s,
+        60,
+        "lock takes the default until set_oracle"
+    );
     assert!(m.get_agent(Base64VecU8(key(1).1)).unwrap().tee);
     assert!(m.get_duel(U64(d0)).unwrap().resolved);
-    assert!(m.agent_duels(Base64VecU8(key(1).1), 0, 10).is_empty(), "old duels are not back-filled");
+    assert!(
+        m.agent_duels(Base64VecU8(key(1).1), 0, 10).is_empty(),
+        "old duels are not back-filled"
+    );
     let d1 = open(&mut m);
     assert_eq!(ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)), vec![d1]);
 }
@@ -1226,10 +1580,20 @@ fn migrate_v11_adds_default_lock_and_keeps_index() {
     ctx(CONTRACT, 0);
     let mut m = Contract::migrate_v11();
     let cfg = m.get_config();
-    assert_eq!((cfg.next_duel.0, cfg.min_duel_s, cfg.intent_lock_s), (1, 60, 60));
+    assert_eq!(
+        (cfg.next_duel.0, cfg.min_duel_s, cfg.intent_lock_s),
+        (1, 60, 60)
+    );
     assert!(m.get_duel(U64(d0)).unwrap().resolved);
-    assert_eq!(ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)), vec![d0], "index survives");
+    assert_eq!(
+        ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)),
+        vec![d0],
+        "index survives"
+    );
     assert_eq!(bond(&m, 1), bond(&c, 1));
     let d1 = open(&mut m);
-    assert_eq!(ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)), vec![d1, d0]);
+    assert_eq!(
+        ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)),
+        vec![d1, d0]
+    );
 }
