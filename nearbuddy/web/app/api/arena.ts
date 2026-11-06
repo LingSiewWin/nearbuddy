@@ -255,6 +255,15 @@ export async function summary(s: Snap, now = Date.now()) {
     contract: s.contract,
     duels_total: Number(s.config.next_duel),
     live_duels: open.map((d) => Number(d.id)),
+    // the other open duels, so a page can say what else the tape is showing; `test`: a stub or red-team agent plays
+    also_live: open
+      .filter((d) => d !== live)
+      .map((d) => ({
+        duel: Number(d.id),
+        a: lb.find((x) => x.pk === d.a)?.model_id ?? null,
+        b: lb.find((x) => x.pk === d.b)?.model_id ?? null,
+        test: !(trusted(d.a) && trusted(d.b)),
+      })),
     rules: {
       duel_seconds_min: s.config.min_duel_s,
       decisions_locked_last_seconds: s.config.intent_lock_s,

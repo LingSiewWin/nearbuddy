@@ -89,6 +89,9 @@ describe("summary: records", () => {
     );
     expect(s.live?.duel).toBe(11);
     expect(s.live_duels).toEqual([12, 11]);
+    expect(s.also_live).toEqual([
+      { duel: 12, a: "stub/always-long", b: "deepseek-ai/DeepSeek-V4.1-Flash-1017", test: true },
+    ]);
   });
 
   test("stub and unverified agents are hidden from the standings; the rest keep their units", async () => {

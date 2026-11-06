@@ -166,7 +166,17 @@ const schemas = {
     network: t("string"),
     contract: t("string"),
     duels_total: t("integer"),
-    live_duels: arr(t("integer", "every open duel, newest first; `live` details the first")),
+    live_duels: arr(
+      t("integer", "every open duel, newest first; `live` details the newest between enclave-verified models"),
+    ),
+    also_live: arr(
+      obj({
+        duel: t("integer"),
+        a: orNull("string"),
+        b: orNull("string"),
+        test: t("boolean", "a stub or red-team agent plays in it"),
+      }),
+    ),
     rules: obj({
       duel_seconds_min: t("integer"),
       decisions_locked_last_seconds: t("integer"),

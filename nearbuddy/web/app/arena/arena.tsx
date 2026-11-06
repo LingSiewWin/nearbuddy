@@ -9,7 +9,7 @@ import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { useEvents, useNow, usePrice } from "../lib/live";
 import { DrawerProvider } from "../ui/drawer";
-import { ARENA_ID, acctUrl, CHAIN, duelHref, ORACLE_ID, TAMPER_TX, txUrl, YOU } from "../ui/format";
+import { ARENA_ID, acctUrl, CHAIN, duelHref, ORACLE_ID, TAMPER_TX, txUrl, who, YOU } from "../ui/format";
 import { Machine } from "../ui/machine";
 import { focusOf, latestStory, openOf, withTape } from "./model";
 import { Headline, Race } from "./race";
@@ -130,6 +130,21 @@ export default function Arena({ initial }: { initial: Initial }) {
             {f ? (
               <>
                 <Headline f={f} price={price} open={f ? openOf(f, ticks) : null} now={now} />
+                {f.live && s.also_live.length ? (
+                  <p className="fine also">
+                    Also live, and on the tape:{" "}
+                    {s.also_live.map((o, i) => (
+                      <span key={o.duel}>
+                        {i ? " · " : ""}
+                        <a href={duelHref(o.duel)}>
+                          duel {o.duel}, {who(o.a)} vs {who(o.b)}
+                          {o.test ? " (a test duel)" : ""}
+                        </a>
+                      </span>
+                    ))}
+                    .
+                  </p>
+                ) : null}
                 <Race f={f} ticks={ticks} events={events} now={now} />
               </>
             ) : (
