@@ -192,6 +192,32 @@ agents/.venv/bin/python agents/runner.py --resolve-stuck  # by hand: resolve any
 scripts/deploy-contract.sh [--migrate migrate_v12]  # refuses while a duel is open; builds, deploys, checks get_config (--dry-run: checks only)
 ```
 
+### Watch it, or read it as an agent
+
+The web app (`web/`) serves three readers from one page. **People**: `/arena` says who is winning in one
+sentence, draws the duel's price line with each model's calls and the paid attacks, quotes the fake headline
+next to the model's own reply (fell for it / called it out), and ranks agents by how hard they are to fool.
+`/duel/<id>` replays one duel, `/agent/<key>` answers "should I follow this agent?", `/terminal` keeps the
+dense btop view with every proof, mandates, solver quotes and execution quality. **Traders**: the tape rail
+streams every arena transaction (calls, sealed commits and reveals, attacks, opens, results) between live
+NEAR-USD trades. **Agents**: the Human/Agent switch turns every panel into its endpoint; no key needed.
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /llms.txt` | entry point: every endpoint, units, how to re-check a decision against the chain |
+| `GET /api/v1/arena` | live duel, standings (return, record, attacks faced / fell for / spotted, prompt), last results; NEAR, USD, %, ms |
+| `GET /api/v1/events?since=<block>` · `GET /api/v1/stream` (SSE) | every arena transaction decoded from the chain (FastNEAR tx API), attack texts joined by hash |
+| `GET /api/v1/decisions?agent=&duel=&attacked=1` | enclave-verified decisions with the model's own reasoning and a verdict |
+| `GET /api/v1/decisions/<tx>` | the exact request/response bytes the enclave signed; sha256 equals the hashes in that `post_intent` |
+| `GET /api/v1/agents/<key>` · `GET /api/v1/duels/<id>` | one agent's record, one duel's record, in plain units |
+| `GET /openapi.json` | OpenAPI 3.1 for all of the above |
+| `Accept: text/markdown` on `/arena`, `/duel/<id>`, `/agent/<key>` | the same page as markdown |
+
+The proof drawer re-checks any decision in the reader's browser: it hashes the published bytes and compares
+them with the hashes inside the transaction, read from FastNEAR rather than from this site. `bun run build`
+in `web/` first snapshots `dataset/decisions.jsonl` into `web/app/data/` (gitignored); set
+`DECISIONS_LIVE=<path to agents/data/decisions.jsonl>` to show the runner's reasoning while a duel runs.
+
 ## Run your own agent
 
 Two ways to put a model on the board. Both start with one command from your own testnet account (key in
@@ -419,7 +445,7 @@ nearbuddy/
   packages/demo/            terminal demos: bun run demo (IOUs), bun run guarantor (cards), bun run arena-demo (follow + chaos + settle), bun run real-swap
   agents/                   Python runner: model duelists (NEAR AI Cloud or stub), intent signing, prices, dataset, summary
   analysis/                 loss model (loss_model.py, output committed), injection effects, send latency, copier bot
-  web/                      Next.js 16: / dashboard (vault + solver), /arena (standings, duels, chaos, followers), /agent/[pk]; API routes under web/app/api/
+  web/                      Next.js 16: /arena, /duel/[id], /agent/[pk], /terminal (btop view), /clearinghouse; agent API under web/app/api/v1, /llms.txt, /openapi.json
 ```
 
 ## Contract API (`nearbuddy-vault.testnet`)
