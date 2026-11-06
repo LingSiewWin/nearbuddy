@@ -1,7 +1,9 @@
 // Live event tape for the arena contract, read from FastNEAR's public transaction API (no key): the newest
 // transactions to the contract, each decoded into one event from its method args and the contract's
-// EVENT_JSON logs (intent, open_price, resolve live in the same receipt tree). Attack payloads are only a
-// sha256 on chain; known texts (from the published dataset) are joined back by hash.
+// EVENT_JSON logs (intent, commit, open_price, resolve, no_reveal live in the same receipt tree). Attack
+// payloads are only a sha256 on chain; known texts (from the published dataset) are joined back by hash.
+// With commit_reveal on (deploy 14) a call lands in two steps: `commit` hides it (no side yet), `reveal`
+// makes it public and is the agent's intent from then on, so anything counting intents counts both kinds.
 // The account list is re-read at most every TTL ms (one fetch at a time, however many clients poll);
 // transactions are immutable, so their decoded events are kept by hash.
 import { attackText } from "./dataset";
@@ -18,6 +20,10 @@ type Base = { tx: string; at: number; block: number; ok: boolean; signer: string
 export type ArenaEvent = Base &
   (
     | { kind: "intent"; duel: number; agent: string; side: Side; size: number; nonce: string; tee: number }
+    // commit_intent: the agent fixed its next call as sha256(intent bytes || salt); the side is hidden until reveal
+    | { kind: "commit"; duel: number; agent: string; commitment: string }
+    // reveal_intent: the committed call, now public; same fields as an intent
+    | { kind: "reveal"; duel: number; agent: string; side: Side; size: number; nonce: string; tee: number }
     | {
         kind: "attack";
         duel: number;
@@ -35,10 +41,13 @@ export type ArenaEvent = Base &
         pnlB: number | null;
         open: number | null;
         close: number | null;
+        noReveal: string[]; // agents slashed for a commitment they never revealed
       }
     | { kind: "register"; agent: string; model: string; tee: boolean }
     | { kind: "other"; method: string }
   );
+export type CommitEvent = Extract<ArenaEvent, { kind: "commit" }>;
+export type RevealEvent = Extract<ArenaEvent, { kind: "reveal" }>;
 
 type AccountTx = { transaction_hash: string; tx_block_height: number; tx_block_timestamp: string; is_success: boolean };
 type FcAction = { FunctionCall?: { method_name: string; args: string; deposit: string } };
@@ -93,18 +102,29 @@ export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
   const ev = events(t);
   const find = (name: string) => ev.find((e) => e.event === name)?.data;
   switch (fc.method_name) {
-    case "post_intent": {
+    case "post_intent":
+    case "reveal_intent": {
       const i = (args.signed as { intent?: Record<string, unknown> } | undefined)?.intent ?? {};
-      const tee = (args.tee as { kind?: number } | undefined)?.kind ?? 0;
+      const tee = num(find("intent")?.tee) ?? (args.tee as { kind?: number } | undefined)?.kind ?? 0; // log: verified kind
       return {
         ...base,
-        kind: "intent",
+        kind: fc.method_name === "post_intent" ? "intent" : "reveal",
         duel: Number(i.duel_id),
         agent: String(i.agent_pk),
         side: i.side as Side,
         size: Number(i.size_bps),
         nonce: String(i.nonce),
         tee: base.ok ? tee : 0,
+      };
+    }
+    case "commit_intent": {
+      const c = find("commit");
+      return {
+        ...base,
+        kind: "commit",
+        duel: Number(c?.duel_id ?? args.duel_id),
+        agent: String(c?.agent_pk ?? args.agent_pk),
+        commitment: String(c?.commitment ?? args.commitment),
       };
     }
     case "inject_chaos": {
@@ -120,7 +140,8 @@ export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
         paid: fc.deposit,
       };
     }
-    case "open_duel": {
+    case "open_duel":
+    case "open_duel_consented": {
       const o = find("open_price");
       return {
         ...base,
@@ -142,6 +163,7 @@ export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
         pnlB: num(r?.pnl_b),
         open: num(r?.open),
         close: num(r?.close),
+        noReveal: ev.filter((e) => e.event === "no_reveal").map((e) => String(e.data.agent_pk)),
       };
     }
     case "register_agent":
