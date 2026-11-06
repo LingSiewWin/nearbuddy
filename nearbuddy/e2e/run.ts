@@ -460,6 +460,14 @@ async function main() {
   ARENA = id("arena");
   const INTENTS = intents.accountId; // the intents.near stand-in: mt_batch_balance_of, mt_transfer, stub_credit
   await intents.deployContract(new Uint8Array(stubWasm));
+  // only minters the stub account adds may stub_credit: the solver signs as the owner
+  await intents.callFunctionRaw({
+    contractId: INTENTS,
+    methodName: "add_minter",
+    args: { account_id: owner.accountId },
+    deposit: 0n,
+    gas: 30n * 10n ** 12n,
+  });
 
   // 3. deploy + init + config (all owner calls happen before the solver starts: it shares the owner key)
   await arena.deployContract(new Uint8Array(wasm));

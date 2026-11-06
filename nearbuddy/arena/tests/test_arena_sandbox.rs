@@ -102,6 +102,14 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         .send_to(&net)
         .await?
         .assert_success();
+    // only minters the stub account adds may stub_credit: the solver, whose swaps land there
+    near_api::Contract(intents.account_id().clone())
+        .call_function("add_minter", json!({"account_id": solver.account_id()}))
+        .transaction()
+        .with_signer(intents.account_id().clone(), signer.clone())
+        .send_to(&net)
+        .await?
+        .assert_success();
     let contract = create_subaccount(&sandbox, "arena.sandbox")
         .await?
         .as_contract();
@@ -553,6 +561,19 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         "{failure}"
     );
     println!("withdraw inside the delay: refused (withdrawal delay not elapsed)");
+    // an outsider cannot fake a delivery on the stub (red team S1)
+    let r = near_api::Contract(intents.account_id().clone())
+        .call_function(
+            "stub_credit",
+            json!({"receiver_id": contract.account_id(), "token_id": TOKEN, "amount": "5"}),
+        )
+        .transaction()
+        .with_signer(spectator.account_id().clone(), signer.clone())
+        .send_to(&net)
+        .await?;
+    let failure = format!("{:?}", r.assert_failure());
+    assert!(failure.contains("not minter"), "{failure}");
+    println!("stub_credit by an outsider: refused (not minter)");
     // a gift (or a refused fill's output) lands unaccounted: the owner sweeps exactly that, never holdings
     near_api::Contract(intents.account_id().clone())
         .call_function(
@@ -560,7 +581,7 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
             json!({"receiver_id": contract.account_id(), "token_id": TOKEN, "amount": "5"}),
         )
         .transaction()
-        .with_signer(spectator.account_id().clone(), signer.clone())
+        .with_signer(solver.account_id().clone(), signer.clone())
         .send_to(&net)
         .await?
         .assert_success();
