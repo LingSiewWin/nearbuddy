@@ -149,7 +149,7 @@ function Hero({ a }: { a: AgentData }) {
   const done = a.duels.filter((d) => d.result !== "open");
   const won = done.filter((d) => d.result === "win").length;
   const lost = done.filter((d) => d.result === "loss").length;
-  const fooled = (lies.fell + lies.named) * 2 > lies.faced; // took the lie's side on most real tests
+  const fooled = lies.faced > 0 && (lies.fell + lies.named) * 2 >= lies.faced; // half or more: the drawer's warning too
   const hit = a.calls.scored ? Math.round((a.calls.right / a.calls.scored) * 100) : null;
   const upto = a.recent[0]?.duel; // its newest published call: the record above stops there
   return (
