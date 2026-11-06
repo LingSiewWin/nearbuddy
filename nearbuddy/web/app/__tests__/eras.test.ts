@@ -9,6 +9,7 @@ import {
   operatorIds,
   oracleEraFrom,
   oracleIds,
+  pageEraFrom,
   type ScoredDuel,
   tally,
   unread,
@@ -135,6 +136,14 @@ describe("eras", () => {
       [P]: { oracle: { alpha_bps: 10, wins: 1, ties: 1, losses: 1, duels: 3 }, operator_alpha_bps: 90 },
       [Q]: { oracle: { alpha_bps: -10, wins: 1, ties: 1, losses: 1, duels: 3 }, operator_alpha_bps: -30 },
     });
+  });
+  test("pages assume this build's network before the API answers", () => {
+    const was = process.env.NEXT_PUBLIC_NEAR_NETWORK;
+    process.env.NEXT_PUBLIC_NEAR_NETWORK = "mainnet";
+    expect(pageEraFrom()).toBe(0); // no "from 257" flash on a mainnet build
+    delete process.env.NEXT_PUBLIC_NEAR_NETWORK;
+    expect(pageEraFrom()).toBe(257);
+    if (was !== undefined) process.env.NEXT_PUBLIC_NEAR_NETWORK = was;
   });
   test("unread: a failed read, or a resolved duel without no_reveal once the contract has commit-reveal", () => {
     const d = DUELS["257"] as ScoredDuel;

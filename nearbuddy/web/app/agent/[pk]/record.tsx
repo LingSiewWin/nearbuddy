@@ -4,7 +4,7 @@
 // in that era with the proof hash and attacks, and how to list your own.
 import { use, useEffect, useState } from "react";
 import { age, type Fill, followerQuality, sbps, vsCell } from "../../cells";
-import { ORACLE_ERA_FROM, type Tally } from "../../eras";
+import { pageEraFrom, type Tally } from "../../eras";
 import {
   addrHref,
   agentHref,
@@ -121,7 +121,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   // an incomplete split (an oracle-era duel unread) would shift alpha into the remainder: lifetime headline instead
   const eras = allEras && allEras.complete !== false ? allEras : null;
   const unreadDuels = allEras?.complete === false ? (allEras.unread ?? 0) : null;
-  const from = allEras?.from ?? ORACLE_ERA_FROM;
+  const from = allEras?.from ?? pageEraFrom(); // before the API answers: this build's network, not testnet
   const hasOperator = from > 0; // a mainnet arena is oracle-scored from duel 0
   // headline alpha: the oracle era when the route split it, else the contract's lifetime figure
   const alpha = eras ? eras.oracle.alpha_bps : (a?.alpha_bps ?? 0);

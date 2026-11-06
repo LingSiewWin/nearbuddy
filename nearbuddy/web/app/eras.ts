@@ -7,6 +7,8 @@
 export const oracleEraFrom = (network: string | undefined) => (network === "mainnet" ? 0 : 257);
 /** This deploy's boundary. Server side only: the browser bundle has no NEAR_NETWORK, so pages take `eras.from`. */
 export const ORACLE_ERA_FROM = oracleEraFrom(process.env.NEAR_NETWORK);
+/** The boundary a page assumes before the API answers. Next inlines NEXT_PUBLIC_ vars into the bundle at build. */
+export const pageEraFrom = () => oracleEraFrom(process.env.NEXT_PUBLIC_NEAR_NETWORK);
 
 export const isOracleEra = (id: string | number) => Number(id) >= ORACLE_ERA_FROM;
 
