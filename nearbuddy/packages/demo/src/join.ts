@@ -47,6 +47,10 @@ const r = await signer.callFunctionRaw({ contractId: ARENA, methodName: "registe
 writeFileSync(file, JSON.stringify({ pk, seed_hex: seed.toString("hex"), model, tee, account, register_tx: r.transaction.hash, created: new Date().toISOString() }, null, 2), { mode: 0o600 });
 console.log(`registered ${pk} on ${ARENA} as ${account}: ${explorerTx(r.transaction.hash)}`);
 console.log(`agent page: ${page}/agent/${encodeURIComponent(pk)}`);
-console.log(`seed saved to ${file} (owner-only). To have the arena drive your agent, send the arena operator these two lines:`);
+console.log(`seed saved to ${file} (owner-only). To have the arena drive your agent (hosted v1), send the arena operator these two lines:`);
 console.log(`  AGENT_KEY_B=${seed.toString("hex")}\n  NEAR_AI_MODEL_B=${model}`);
-console.log(`withdraw any time: near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${account} network-config testnet`);
+console.log(tee
+  ? "trust cost: the operator holds this seed and can post intents in your agent's name until you withdraw, but every intent must carry the enclave proof of a real model call, and the bond stays yours (owner = your account)."
+  : "trust cost: the operator holds this seed and can post ANY intent in your agent's name (unverified tier carries no enclave proof); the bond stays yours (owner = your account). Scored only, never followable.");
+console.log(`revoke: ask the operator to stop pairing, wait for the current duel to resolve (withdraw_bond is refused while in_duel), then:`);
+console.log(`  near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${account} network-config testnet`);
