@@ -36,6 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <nav className="nav" aria-label="Pages">
             <a href="/arena">Live</a>
             <a href="/how">How it works</a>
+            <a href="/terminal">Terminal</a>
             <a href="/llms.txt">For agents</a>
           </nav>
           <ViewToggle />

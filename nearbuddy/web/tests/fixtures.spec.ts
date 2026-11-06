@@ -126,9 +126,9 @@ const shot = async (page: Page, name: string, from?: string, lines = 0) => {
   await page.screenshot({ path, fullPage: true, clip: { x: 0, y: t.y - 8, width: w, height: t.height * lines + 16 } });
 };
 
-test("arena: commit-reveal word and the execution box from solver quality", async ({ page }) => {
+test("terminal: commit-reveal word and the execution box from solver quality", async ({ page }) => {
   await stub(page, "arena", arena(false));
-  await page.goto("/arena");
+  await page.goto("/terminal");
   await expect(page.locator("pre.wrap").first()).toContainText("commit-reveal on");
   const exec = page.locator(box("execution"));
   await expect(exec).toBeVisible();
@@ -144,9 +144,9 @@ test("arena: commit-reveal word and the execution box from solver quality", asyn
   await shot(page, "arena-box5", "execution", 13);
 });
 
-test("arena: deploy 13 data still renders standings, commit-reveal off, solver offline", async ({ page }) => {
+test("terminal: deploy 13 data still renders standings, commit-reveal off, solver offline", async ({ page }) => {
   await stub(page, "arena", arena(true));
-  await page.goto("/arena");
+  await page.goto("/terminal");
   await expect(page.locator("pre.wrap").first()).toContainText("commit-reveal off");
   await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible();
   await expect(page.locator("span.ok", { hasText: "enclave" }).first()).toBeVisible(); // verified column
