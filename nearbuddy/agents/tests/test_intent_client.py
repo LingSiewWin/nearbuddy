@@ -122,3 +122,13 @@ def test_runner_agent_key_uses_a_raw_builder_key(monkeypatch):
     assert bytes(runner.agent_key("B", True)) == seed  # raw seed wins, no sha256(seed||"tee") derivation
     monkeypatch.delitem(runner.ENV, "AGENT_KEY_B")
     assert bytes(runner.agent_key("B", True)) != seed
+
+
+def test_register_sig_covers_domain_and_owner():
+    import runner
+
+    sk = SigningKey(bytes([3] * 32))
+    sig = base64.b64decode(runner.register_sig(sk, "someone.testnet"))
+    sk.verify_key.verify(b"nearbuddy-register-v1" + b"someone.testnet", sig)
+    with pytest.raises(Exception):
+        sk.verify_key.verify(b"nearbuddy-register-v1" + b"other.testnet", sig)

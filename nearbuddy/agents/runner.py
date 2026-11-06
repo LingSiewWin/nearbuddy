@@ -59,6 +59,14 @@ def agent_key(name: str, tee: bool, tag: str = "") -> SigningKey:
     return SigningKey(hashlib.sha256(raw + (b"tee" if tee else b"") + tag.encode()).digest())
 
 
+REGISTER_DOMAIN = b"nearbuddy-register-v1"
+
+
+def register_sig(sk: SigningKey, owner: str) -> str:
+    """Proof of key possession for `register_agent`: ed25519 over `"nearbuddy-register-v1" || owner`."""
+    return base64.b64encode(sk.sign(REGISTER_DOMAIN + owner.encode()).signature).decode()
+
+
 def agent_tier_on_chain(pk: str) -> bool | None:
     """`get_agent(pk).tee`, or None when the agent is not registered yet."""
     a = view("get_agent", {"agent_pk": pk})
@@ -153,15 +161,18 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
     if not asset:
         raise SystemExit(f"no oracle asset for {symbol}; known: {sorted(ASSETS)}")
     solver = Solver(solver_url, ENV["ARENA_SECRET"])
+    lock_s = int((view("get_config", {}) or {}).get("intent_lock_s", 0) or 0)
     model_a, model_b = client_from_env(ENV, "A"), client_from_env(ENV, "B")
     if swap:  # control: the hardened prompt goes to model B and the naive prompt to model A, under separate keys
         model_a, model_b = model_b, model_a
     tag = "swap" if swap else ""
     a, ska, ca = make_duelist("A", model_a, hardened=True, tag=tag)
     b, skb, cb = make_duelist("B", model_b, hardened=False, tag=tag)
+    solver_id = ENV.get("SOLVER_ID", "nearbuddy-solver.testnet")  # the account that signs register_agent = on-chain owner
     for sk, m in ((ska, model_a), (skb, model_b)):
         try:
-            solver.post("/register", {"agent_pk": pk_b64(sk), "model_id": m.model_id, "bond": bond, "tee": m.tee})
+            solver.post("/register", {"agent_pk": pk_b64(sk), "model_id": m.model_id, "bond": bond, "tee": m.tee,
+                                      "register_sig": register_sig(sk, solver_id)})
             print(f"registered {pk_b64(sk)[:8]} as {m.model_id} tee={m.tee}")
         except RuntimeError as e:
             if "agent exists" not in str(e):
@@ -176,7 +187,10 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
         open_px = price(symbol, ENV.get("PYTH_API_KEY"))
         print(f"[round {rnd}] duel {duel_id} {symbol} spot {open_px / 1e8:,.4f} tx {opened['tx']}")
         closed = False
-        while not closed and time.time_ns() < close_at_ns - 25_000_000_000:  # leave 25 s for model + signature + chain round trip
+        # stop before the contract's intent lock (deploy 11: no intents in the last `intent_lock_s`), plus 25 s for
+        # model + signature + chain round trip
+        stop_ns = close_at_ns - (lock_s + 25) * 1_000_000_000
+        while not closed and time.time_ns() < stop_ns:
             px = price(symbol, ENV.get("PYTH_API_KEY"))
             pending = solver.get("/arena")["pending"]
             for d, sk, comp, model in ((a, ska, ca, model_a), (b, skb, cb, model_b)):
