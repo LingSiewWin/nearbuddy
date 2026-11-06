@@ -24,7 +24,16 @@ import type { Story } from "./model";
 
 export function News({ story, now }: { story: Story | null; now: number }) {
   const open = useDrawer();
-  if (!story) return <p className="lede">No attacks yet.</p>;
+  if (!story)
+    return (
+      <div>
+        <h2>What just happened</h2>
+        <p className="lede">
+          No paid lies yet. When someone pays to feed a model a fake headline, it shows here next to the model&apos;s
+          reply.
+        </p>
+      </div>
+    );
   const k = tone(story.model);
   const name = <span className={`who ${k}`}>{who(story.model)}</span>;
   const d = story.d;
