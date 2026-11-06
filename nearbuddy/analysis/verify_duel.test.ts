@@ -1,11 +1,22 @@
-// verify_duel against two real testnet duels saved with `--save` (arena views, the duel's FastNEAR txs, the
+// verify_duel against four real testnet duels saved with `--save` (arena views, the duel's FastNEAR txs, the
 // dataset rows): #373, two TEE agents, a decided duel; #363, red-team stub agents with commit-reveal, a consented
-// open, 32 injections and a no-reveal forfeit. Then each check is shown to fail on a one-field forgery.
+// open, 32 injections and a no-reveal forfeit (both deploy 14); #395, the first deploy-15 duel (per-duel lock, opener
+// refund, third-party chaos); #401, a red-team deploy-15 duel with real self-chaos. Then each check is shown to fail
+// on a one-field forgery, and the self-chaos rule also runs on a copy of #395 whose injection an agent's owner paid.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { b64 } from "../packages/protocol/src/index.ts";
-import { checkDuel, type Evidence, finishMath, type Line, pnlBps, price8 } from "./verify_duel.ts";
+import {
+  checkDuel,
+  type Evidence,
+  finishMath,
+  incomplete,
+  type Line,
+  pnlBps,
+  price8,
+  shieldGain,
+} from "./verify_duel.ts";
 
 const load = (id: string) =>
   JSON.parse(readFileSync(new URL(`./fixtures/verify_duel_${id}.json`, import.meta.url), "utf8")) as Evidence;
@@ -143,6 +154,87 @@ test("only a receipt's own outcome counts, never the tx-level status", () => {
   assert.deepEqual(result(lines, "injections"), ["SKIP"]);
 });
 
+test("a close receipt not indexed yet makes the evidence incomplete, with the right payout reason", () => {
+  for (const id of ["373", "363"]) {
+    const full = load(id);
+    assert.equal(incomplete(full), false);
+    // right after resolution FastNEAR may not have the close callback yet: drop its tx
+    const close = receipts(full, "oracle_on_call").find((r) => args(r).msg === `close:${id}`)!;
+    const lag = { ...load(id), before: null, after: null };
+    lag.txs = lag.txs.filter(
+      (t) => !t.receipts.some((r) => r.execution_outcome.block_hash === close.execution_outcome.block_hash),
+    );
+    assert.equal(incomplete(lag), true);
+    const payout = checkDuel(lag).find((l) => l.check === "payout")!;
+    assert.equal(payout.result, "SKIP");
+    assert.match(payout.detail, /not in the scanned txs yet/);
+    // the receipt is there but its block's state was not served: incomplete, and the archival hint
+    const pruned = { ...load(id), before: null };
+    assert.equal(incomplete(pruned), true);
+    assert.match(checkDuel(pruned).find((l) => l.check === "payout")!.detail, /VERIFY_ARCHIVAL_RPC/);
+  }
+  // nothing to wait for: an open duel, and a duel resolved without an outcome (testnet #0-21)
+  const e = load("373");
+  assert.equal(
+    incomplete({ ...e, txs: [], now: { ...e.now, duel: { ...e.now.duel!, resolved: false, outcome: null } } }),
+    false,
+  );
+  assert.equal(
+    incomplete({ ...e, txs: [], before: null, now: { ...e.now, duel: { ...e.now.duel!, outcome: null } } }),
+    false,
+  );
+});
+
+test("intent timing is judged only against a lock the duel recorded at open (deploy 15)", () => {
+  const e = load("395");
+  const timed = (x: Evidence) => checkDuel(x).filter((l) => l.check.match(/^intent [AB] (timing|commit)$/));
+  assert.ok(timed(e).length >= 2);
+  assert.deepEqual(fails(checkDuel(e)), []);
+  // opened before deploy 15: duel_lock answers today's global lock, which says nothing about this duel (testnet
+  // #250 read 60 s and its intents, posted 47 s before close, would FAIL against it)
+  const { intents_account: _, ...v14 } = e.open_block!.config;
+  const old = { ...e, open_block: { ...e.open_block!, config: v14 } };
+  assert.deepEqual(timed(old), []);
+  assert.deepEqual(result(checkDuel(old), "intent timing"), ["INFO"]);
+  assert.deepEqual(result(checkDuel({ ...e, open_block: null }), "intent timing"), ["INFO"]); // config unknown
+});
+
+test("deploy 15: a failed read of an injection block, the open block or duel_lock is incomplete too", () => {
+  for (const id of ["395", "401"]) assert.equal(incomplete(load(id)), false);
+  const e = load("401");
+  const blk = Object.keys(e.chaos_pools!)[0]!;
+  const { [blk]: _, ...rest } = e.chaos_pools!;
+  assert.equal(incomplete({ ...e, chaos_pools: rest }), true);
+  assert.equal(incomplete({ ...load("395"), open_block: null }), true);
+  assert.equal(incomplete({ ...load("395"), lock_ns: null }), true); // deploy 15 has duel_lock: null = a failed read
+  // evidence saved before these fields existed is not incomplete for lacking them
+  const { lock_ns: _l, chaos_pools: _c, open_block: _o, ...old } = load("395");
+  assert.equal(incomplete(old as Evidence), false);
+});
+
+test("an operator-era duel closes on the operator's resolve receipt: complete, payout checked", () => {
+  // testnet duels before #257 had no oracle callback: the operator key's signed `resolve` scored them. Recast #373's
+  // close callback as such a receipt (same block, so the saved before/after state still applies).
+  const e = load("373");
+  const close = receipts(e, "oracle_on_call").find((r) => args(r).msg === "close:373")!;
+  const o = e.now.duel!.outcome!;
+  fc(close).FunctionCall.method_name = "resolve";
+  setArgs(close, {
+    resolution: { duel_id: "373", open_price: o.open_price, close_price: o.close_price },
+    oracle_sig: "x",
+  });
+  assert.equal(incomplete(e), false);
+  const lines = checkDuel(e);
+  assert.deepEqual(result(lines, "oracle close"), ["SKIP"]); // no oracle callback, said as such
+  assert.deepEqual(result(lines, "payout"), ["PASS"]);
+  // a resolve for another duel does not close this one
+  setArgs(close, {
+    resolution: { duel_id: "372", open_price: o.open_price, close_price: o.close_price },
+    oracle_sig: "x",
+  });
+  assert.equal(incomplete({ ...e, before: null }), true);
+});
+
 test("the arithmetic matches the contract on hand-worked cases", () => {
   assert.equal(price8({ multiplier: "375033333", decimals: 8 }), 375033333n);
   assert.equal(price8({ multiplier: "3750333330", decimals: 9 }), 375033333n);
@@ -159,4 +251,125 @@ test("the arithmetic matches the contract on hand-worked cases", () => {
   // both withhold: both forfeit to owner fees, tie
   const both = finishMath([1000n, 2000n], 0n, [0, 0], [true, true], 1000, 500);
   assert.deepEqual([both.after, both.fees, both.aWins], [[950n, 1900n], 150n, null]);
+});
+
+// ---------------------------------------------------------------- deploy 15
+
+test("#395 (deploy 15): lock timing, opener refund, shield and chaos deposits all pass", () => {
+  const lines = checkDuel(load("395"));
+  assert.deepEqual(fails(lines), []);
+  for (const check of [
+    "opener refund",
+    "intent A timing",
+    "intent A commit",
+    "intent B commit",
+    "winner and slash",
+    "payout",
+    "shield",
+    "injection deposits",
+  ])
+    assert.deepEqual(result(lines, check), ["PASS"], check);
+  // B revealed 69.2 s before close, before the 60 s lock opened: legal, so INFO, not FAIL
+  assert.deepEqual(result(lines, "intent B timing"), ["INFO"]);
+  assert.ok(lines.find((l) => l.check === "opener refund")!.detail.includes("storage 272 B"));
+});
+
+test("the v14 fixtures keep v14 rules: owner-paid chaos earned shield there", () => {
+  // #363's winner A won on B's forfeit and got +32 shield from chaos its own owner paid; deploy 15 would give 0
+  const l363 = checkDuel(load("363"));
+  assert.deepEqual(result(l363, "shield"), ["PASS"]);
+  assert.ok(l363.find((l) => l.check === "shield")!.detail.startsWith("v14 rule"));
+  assert.ok(l363.find((l) => l.check === "shield")!.detail.includes("got A +32 B +0"));
+  const as15 = load("363");
+  as15.before!.config.intents_account = "intents.near";
+  assert.deepEqual(fails(checkDuel(as15)), ["shield"]); // v15 math: forfeit win, no shield
+});
+
+test("lock timing: a reveal at or after close_at fails, a post inside the lock fails", () => {
+  const e = load("395");
+  const close = BigInt(e.now.duel!.close_at);
+  const nonce = e.now.duel!.last_intent_a!.nonce; // the scored reveal (A revealed earlier intents too)
+  const reveal = receipts(e, "reveal_intent").find((r) => args(r).signed.intent.nonce === nonce)!;
+  reveal.execution_outcome.block_timestamp = String(close + 1_000_000_000n);
+  assert.deepEqual(result(checkDuel(e), "intent A timing"), ["FAIL"]);
+  const f = load("395");
+  const commit = receipts(f, "commit_intent")
+    .filter((r) => args(r).agent_pk === f.now.duel!.a)
+    .at(-1)!;
+  commit.execution_outcome.block_timestamp = String(close - 55_000_000_000n); // inside the 60 s lock, before the reveal
+  assert.deepEqual(result(checkDuel(f), "intent A commit"), ["FAIL"]);
+  const g = load("395");
+  g.lock_ns = null; // a contract without duel_lock: no timing lines
+  assert.deepEqual(result(checkDuel(g), "intent A timing"), []);
+});
+
+test("opener refund: a short refund fails; another arena receipt in the block makes it INFO", () => {
+  const e = load("395");
+  const transfer = e.txs
+    .flatMap((t) => t.receipts)
+    .filter((r) => r.receipt.predecessor_id === e.arena) // the arena's refund, not a system gas refund
+    .flatMap((r) => r.receipt.receipt.Action?.actions ?? [])
+    .find((a) => typeof a === "object" && a.Transfer) as { Transfer: { deposit: string } };
+  transfer.Transfer.deposit = (BigInt(transfer.Transfer.deposit) - 1n).toString();
+  assert.deepEqual(fails(checkDuel(e)), ["opener refund"]);
+  const f = load("395");
+  f.open_block!.others = 1;
+  assert.deepEqual(result(checkDuel(f), "opener refund"), ["INFO"]);
+});
+
+test("self-chaos (deploy 15): an owner's deposit goes to owner fees, never the pool, and earns no shield", () => {
+  // #395 with its one injection paid by the agents' owner: the pool never sees it, so the payout and the shield
+  // change accordingly. Bonds after are recomputed with finish() math for a 0 pool.
+  const e = load("395");
+  const owner = e.now.a!.owner;
+  const chaos = receipts(e, "inject_chaos")[0]!;
+  chaos.receipt.predecessor_id = owner;
+  const blk = chaos.execution_outcome.block_hash;
+  e.chaos_pools![blk] = ["0", "0"];
+  e.before!.duel!.pool = "0";
+  const bonds: [bigint, bigint] = [BigInt(e.before!.a!.bond), BigInt(e.before!.b!.bond)];
+  const m = finishMath(bonds, 0n, [4, -4], [false, false], e.before!.config.slash_bps, 1000);
+  e.after!.a!.bond = m.after[0].toString();
+  e.after!.b!.bond = m.after[1].toString();
+  e.after!.a!.shield = e.before!.a!.shield!;
+  const lines = checkDuel(e);
+  assert.deepEqual(fails(lines), []);
+  for (const check of ["payout", "shield", "injection deposits"])
+    assert.deepEqual(result(lines, check), ["PASS"], check);
+  assert.ok(lines.find((l) => l.check === "injection")!.detail.includes("-> owner fees (self-chaos"));
+  // the same owner-paid deposit landing in the pool, or earning shield, is what deploy 15 forbids
+  const into = structuredClone(e);
+  into.chaos_pools![blk] = ["0", "98940000000000000000000"];
+  assert.deepEqual(fails(checkDuel(into)), ["injection deposits"]);
+  const shielded = structuredClone(e);
+  shielded.after!.a!.shield = e.before!.a!.shield! + 1;
+  assert.deepEqual(fails(checkDuel(shielded)), ["shield"]);
+});
+
+test("#401 (deploy 15, red team): real self-chaos goes to owner fees and earns the winner no shield", () => {
+  // redteam1 owns both agents and paid one "self" injection at A; redteam2 paid four, two at each side; A won
+  const lines = checkDuel(load("401"));
+  assert.deepEqual(fails(lines), []);
+  for (const check of ["opener refund", "payout", "shield", "injection deposits"])
+    assert.deepEqual(result(lines, check), ["PASS"], check);
+  assert.ok(lines.find((l) => l.check === "injection deposits")!.detail.includes("1 self-paid, pool unchanged"));
+  assert.ok(lines.find((l) => l.check === "shield")!.detail.includes("expected A +2 B +0, got A +2 B +0"));
+  assert.equal(lines.filter((l) => l.detail.includes("-> owner fees (self-chaos")).length, 1);
+  // v14 math would credit the self-paid one too (+3) and count its deposit as pool money
+  const as14 = load("401");
+  delete as14.before!.config.intents_account;
+  assert.deepEqual(fails(checkDuel(as14)), ["shield", "injection deposits"]);
+});
+
+test("shieldGain: injections at the winner; deploy 15 drops owner-paid ones and every forfeit win", () => {
+  const t = [
+    { target: "A", self: false },
+    { target: "A", self: true },
+    { target: "B", self: false },
+  ];
+  assert.equal(shieldGain(t, "A", false, false), 2); // v14: all chaos at the winner
+  assert.equal(shieldGain(t, "A", true, false), 2); // v14 credited forfeit wins too
+  assert.equal(shieldGain(t, "A", false, true), 1); // v15: the owner-paid one does not count
+  assert.equal(shieldGain(t, "A", true, true), 0); // v15: no shield on a forfeit win
+  assert.equal(shieldGain(t, null, false, true), 0); // tie
 });

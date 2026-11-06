@@ -154,6 +154,10 @@ const chainEv = (event: string, method: string, pk: string, at_ms: number) => ({
 });
 const stub = (page: Page, path: string, body: unknown) =>
   page.route(`**/api/${path}**`, (r) => r.fulfill({ json: body, headers: { "cache-control": "no-store" } }));
+// every fixture duel page asks /api/verify once its duel is resolved: answer here, never from the network
+test.beforeEach(async ({ page }) => {
+  await stub(page, "verify", { duel_id: "411", status: "checked", command: "bun run verify-duel 411", counts: { PASS: 0, FAIL: 0, SKIP: 0, INFO: 0 }, lines: [] });
+});
 const shot = async (page: Page, name: string, from?: string, lines = 0) => {
   if (!process.env.SHOT) return;
   const path = `../docs/web-exec-${name}.png`;
@@ -682,4 +686,63 @@ test("terminal duel: a resolved duel without an outcome says so instead of pendi
   await expect(body).toContainText("none recorded");
   await expect(body).not.toContainText("pending: anyone can resolve");
   await expect(body).not.toContainText("undecided");
+});
+
+const duelBody = (d: unknown, noReveal: unknown = [false, false]) => ({
+  at: now,
+  rpc: "https://fixture.rpc",
+  contract: "arena.nearbuddy-solver.testnet",
+  oracle: "price-oracle.testnet",
+  config: { next_duel: "412", ...commitOn },
+  no_reveal: noReveal,
+  duel: d,
+  a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+  b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
+});
+
+test("terminal duel: a resolved duel shows the verifier's counts, its lines on demand, and the CLI line", async ({ page }) => {
+  await stub(page, "events", events(null));
+  await stub(page, "verify", {
+    duel_id: "411",
+    status: "checked",
+    command: "bun run verify-duel 411",
+    counts: { PASS: 2, FAIL: 0, SKIP: 1, INFO: 1 },
+    degraded: false,
+    lines: [
+      { result: "INFO", check: "duel", detail: "#411 wrap.near, resolved; scanned 40 txs" },
+      { result: "PASS", check: "opened", detail: "open_duel returned duel id 411, tx HUcaDY7W" },
+      { result: "PASS", check: "pnl A", detail: "+(close 2.5740 - open 2.5610) x 5000 / open = 25 bps, outcome 25" },
+      { result: "SKIP", check: "intent A completion bytes", detail: "not checkable without the row" },
+    ],
+  });
+  await stub(page, "duel", duelBody(duel));
+  await page.goto("/terminal/duel/411");
+  const body = page.locator("body");
+  await expect(body).toContainText("4 verified       2 PASS · 0 FAIL · 1 SKIP · 1 INFO   show 4 lines");
+  await expect(page.locator("span.loss", { hasText: "0 FAIL" })).toBeVisible();
+  await expect(body).toContainText("reproduce        bun run verify-duel 411");
+  await expect(body).not.toContainText("+(close 2.5740");
+  await page.getByRole("button", { name: "show 4 lines" }).click();
+  await expect(body).toContainText(
+    "PASS  pnl A                      +(close 2.5740 - open 2.5610) x 5000 / open = 25 bps",
+  );
+  await expect(page.locator("span.warn", { hasText: /^SKIP$/ })).toBeVisible(); // the line's result cell
+  await page.getByRole("button", { name: "hide lines" }).click();
+  await expect(body).not.toContainText("+(close 2.5740");
+  await shot(page, "duel-verified");
+});
+
+test("terminal duel: an open duel is never sent to the verifier", async ({ page }) => {
+  const asked: string[] = [];
+  await page.route("**/api/verify**", (r) => {
+    asked.push(r.request().url());
+    return r.fulfill({ status: 500, json: { error: "must not be called" } });
+  });
+  await stub(page, "events", events(null));
+  await stub(page, "duel", duelBody({ ...duel, resolved: false, close_at: NS(now + 120_000), outcome: null }, null));
+  await page.goto("/terminal/duel/411");
+  await expect(page.locator("body")).toContainText("4 verified       open   checked once the duel resolves");
+  await expect(page.locator("body")).toContainText("reproduce        bun run verify-duel 411");
+  await page.waitForTimeout(500);
+  expect(asked).toEqual([]);
 });

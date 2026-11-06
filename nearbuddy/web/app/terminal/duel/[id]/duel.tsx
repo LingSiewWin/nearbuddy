@@ -12,6 +12,9 @@ import {
   pairingCells,
   revealCell,
   timelineCells,
+  type Verify,
+  verifyLineCells,
+  verifySummary,
 } from "../../../cells";
 import { NO_OUTCOME, noOutcome } from "../../../eras";
 import {
@@ -135,6 +138,35 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
       clearInterval(t);
     };
   }, [id]);
+
+  // the verifier runs once the duel is resolved, never on an open one; a failed or degraded check retries a few times
+  const [vf, setVf] = useState<Verify | null>(null);
+  const [vErr, setVErr] = useState<string | null>(null);
+  const [showLines, setShowLines] = useState(false);
+  const resolved = !!r?.duel?.resolved;
+  useEffect(() => {
+    if (!resolved) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const go = async (left: number) => {
+      try {
+        const j = await getJson<Verify>(`/api/verify?duel=${encodeURIComponent(id)}`);
+        if (!alive) return;
+        setVf(j);
+        setVErr(null);
+        if (j.degraded && left) timer = setTimeout(() => go(left - 1), 65_000); // the route keeps it 60 s
+      } catch (e) {
+        if (!alive) return;
+        setVErr(e instanceof Error ? e.message : String(e));
+        if (left) timer = setTimeout(() => go(left - 1), 20_000);
+      }
+    };
+    go(3);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [id, resolved]);
 
   const d = r?.duel ?? null;
   const o = d?.outcome ?? null;
@@ -416,6 +448,41 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
         {rowx("3 contract", [
           { t: contract, href: addrHref(contract), title: "open on nearblocks" },
           `   get_duel {"duel_id":"${id}"} on any RPC returns this record`,
+        ])}
+        {"\n"}
+        {rowx(
+          "4 verified",
+          !d
+            ? [{ t: "-", c: "dim" }]
+            : !d.resolved
+              ? [
+                  { t: "open", c: "open" },
+                  { t: "   checked once the duel resolves", c: "dim" },
+                ]
+              : vf
+                ? verifySummary(vf, showLines, () => setShowLines(!showLines))
+                : [
+                    {
+                      t: vErr
+                        ? `verifier unavailable: ${vErr}`
+                        : "checking: the first look reads the duel's txs, ~20 s",
+                      c: "dim",
+                    },
+                  ],
+        )}
+        {"\n"}
+        {showLines
+          ? (vf?.lines ?? []).map((l, k) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the verifier's lines in its own order
+              <span key={k}>
+                {rowx("", verifyLineCells(l))}
+                {"\n"}
+              </span>
+            ))
+          : null}
+        {rowx("reproduce", [
+          { t: vf?.command ?? `bun run verify-duel ${id}`, c: "hi" },
+          { t: "   from nearbuddy/ in a checkout; public sources only, sends nothing", c: "dim" },
         ])}
         {"\n"}
         {bottom()}
