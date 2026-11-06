@@ -4,7 +4,7 @@
 // trail in the rail. Agent view swaps each panel for its endpoint. While the duel is open the data is
 // re-read every 10 s; once it is scored, never again.
 import { useEffect, useState } from "react";
-import { type Intent, isCall, markPct } from "../../arena/model";
+import { type Intent, isCall, markPct, openOf } from "../../arena/model";
 import { type Tick, useNow, usePrice } from "../../lib/live";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
 import { acctUrl, clock, mmss, near, pct, sideWord, stake, TAMPER_TX, txUrl, usd, who } from "../../ui/format";
@@ -109,7 +109,7 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
                 {now ? `, ${day(d.opened)} ${clock(d.opened)[0].slice(0, 5)} to ${clock(d.closes)[0].slice(0, 5)}` : ""}
               </span>
             </p>
-            <Head d={d} price={d.live ? (ticks.at(-1)?.p ?? null) : d.close} now={now} />
+            <Head d={d} price={d.live ? (ticks.at(-1)?.p ?? null) : d.close} open={openOf(d, ticks)} now={now} />
             <Race d={d} ticks={ticks} now={now} src={src} />
           </div>
           <Machine
@@ -167,10 +167,11 @@ const callOf = (s: DuelSide) =>
   s.side ? `bet ${s.side === "Long" ? "up" : "down"} with ${stake(s.size_pct)}` : "made no call";
 const nearAmt = (n: number) => `${Number(n.toFixed(4))} NEAR`;
 
-function Head({ d, price, now }: { d: DuelData; price: number | null; now: number }) {
+/** `open` is the race card's: Coinbase at the open while live (so the move matches the chart's), the oracle's once
+ *  scored. */
+function Head({ d, price, open, now }: { d: DuelData; price: number | null; open: number | null; now: number }) {
   const t = tones(d);
   const nm = (s: DuelSide) => <span className={`who ${s === d.a ? t.a : t.b}`}>{who(s.model)}</span>;
-  const open = d.open;
   const move = open && price ? ((price - open) / open) * 100 : null;
   const moved =
     move == null
