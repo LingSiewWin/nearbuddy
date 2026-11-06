@@ -24,7 +24,7 @@ const status = (txd: TxDetail | undefined) => {
   ].filter(Boolean) as Outcome[];
   const failed = outcomes.find((o) => o.status && "Failure" in o.status);
   const why = failed ? JSON.stringify(failed.status).match(/panicked: ([^"\\]+)/)?.[1] : null;
-  return { ok: outcomes.length > 0 && !failed, why };
+  return { ok: failed ? false : outcomes.length > 0 ? true : null, why };
 };
 
 test("the copied lines are still the ones in drawer.tsx", () => {
@@ -35,7 +35,7 @@ test("the copied lines are still the ones in drawer.tsx", () => {
     "].filter(Boolean);",
     'const failed = outcomes.find((o) => o.status && "Failure" in o.status);',
     'const why = failed ? JSON.stringify(failed.status).match(/panicked: ([^"\\\\]+)/)?.[1] : null;',
-    "ok: outcomes.length > 0 && !failed,",
+    "ok: failed ? false : outcomes.length > 0 ? true : null, // no outcomes read: no verdict",
   ])
     expect(src).toContain(line);
 });
@@ -52,7 +52,8 @@ describe("receipt status on real transactions", () => {
     expect(status(postIntent.tx as TxDetail)).toEqual({ ok: true, why: null });
   });
   test("no transaction, or one with no outcomes, is not a success", () => {
-    expect(status(undefined).ok).toBe(false);
-    expect(status({ receipts: [] }).ok).toBe(false);
+    // nothing read is no verdict (shown "Not available"), never a red mismatch
+    expect(status(undefined).ok).toBeNull();
+    expect(status({ receipts: [] }).ok).toBeNull();
   });
 });

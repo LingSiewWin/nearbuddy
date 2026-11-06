@@ -103,7 +103,7 @@ async function recheck(ev: Intent): Promise<Check[]> {
   const why = failed ? JSON.stringify(failed.status).match(/panicked: ([^"\\]+)/)?.[1] : null;
   out.push({
     label: failed ? "The contract refused this transaction" : "Every receipt succeeded on NEAR",
-    ok: outcomes.length > 0 && !failed,
+    ok: failed ? false : outcomes.length > 0 ? true : null, // no outcomes read: no verdict
     detail: failed
       ? `refused on chain${why ? `: ${why}` : ""} (read from ${TX_HOST})`
       : `read from ${TX_HOST}, not from this site`,
@@ -144,7 +144,8 @@ function Recheck({ ev }: { ev: Intent }) {
           try {
             setChecks(await recheck(ev));
           } catch (e) {
-            setChecks([{ label: "Re-check failed", ok: false, detail: String(e).slice(0, 120) }]);
+            // the check could not run (network, decoding): that is no verdict, so never a red "Mismatch"
+            setChecks([{ label: "The re-check could not run", ok: null, detail: String(e).slice(0, 120) }]);
           }
           setBusy(false);
         }}
