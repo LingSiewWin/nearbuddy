@@ -1,10 +1,11 @@
 // Arena routes for the solver. The solver account is the arena contract's owner and its only
-// registered solver: it opens duels for the runner, posts agent-signed intents, relays chaos,
-// submits oracle-signed resolutions and settles follower fills.
-//   POST /duel     {a, b, symbol, close_at}                  -> {duel_id, tx}
-//   POST /intent   SignedIntent                              -> {tx, quotes:[{follower, amount, quote}]}
+// registered solver: it opens duels for the runner, posts agent-signed intents (with their TEE
+// proofs), relays chaos, asks the oracle to resolve and settles follower fills.
+//   POST /register {agent_pk, model_id, bond, tee}           -> {tx, agent}
+//   POST /duel     {a, b, symbol, close_at}                  -> {duel_id, tx}   (symbol = oracle asset id, e.g. wrap.near)
+//   POST /intent   {signed: SignedIntent, tee?: TeeProof}    -> {tx, quotes:[{follower, amount, quote}]}
 //   POST /chaos    {payload}  (open)                         -> {payload_hash}; spectator then calls inject_chaos on chain
-//   POST /resolve  {resolution, oracle_sig}                  -> {tx}
+//   POST /resolve  {duel_id}                                 -> {tx}  (permissionless on chain; the oracle callback finishes the duel)
 //   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}
 //   GET  /arena                                              -> snapshot incl. pending injections with payloads
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -12,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 import { teraToGas, type Account } from "near-api-js";
 import { b64 } from "../../protocol/src/index.ts";
-import { verifyIntent, type Resolution, type SignedIntent } from "../../protocol/src/intent.ts";
+import { verifyIntent, verifyTeeProof, type SignedIntent, type TeeProof } from "../../protocol/src/intent.ts";
 import { ARENA, arenaView } from "../../protocol/src/chain.ts";
 import { quote, sellNearForUsdc, type Quote } from "./oneclick.ts";
 
@@ -43,6 +44,9 @@ function keyOk(h: string | string[] | undefined): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 const GAS = teraToGas("100");
+/** open_duel: oracle_call deposit (0.02 NEAR, mostly refunded by the oracle) plus the duel record's storage. */
+const OPEN_DUEL_GAS = teraToGas("250");
+const OPEN_DUEL_DEPOSIT = 35_000_000_000_000_000_000_000n;
 
 /** Pick the mandate-bounded amount to quote for one follower: min(cap, allowance - spent). */
 export function quoteAmount(m: Mandate): bigint {
@@ -73,12 +77,12 @@ export class Arena {
     } = {},
   ) {}
 
-  private async call(methodName: string, args: Record<string, unknown>, deposit = 0n): Promise<{ tx: string; value: unknown }> {
+  private async call(methodName: string, args: Record<string, unknown>, deposit = 0n, gas = GAS): Promise<{ tx: string; value: unknown }> {
     // Public RPCs rate-limit (-429); retry with backoff before failing the route.
     let r!: Awaited<ReturnType<Account["callFunctionRaw"]>>;
     for (let attempt = 0; ; attempt++) {
       try {
-        r = await this.solver.callFunctionRaw({ contractId: ARENA, methodName, args, gas: GAS, deposit });
+        r = await this.solver.callFunctionRaw({ contractId: ARENA, methodName, args, gas, deposit });
         break;
       } catch (e) {
         if (attempt >= 4 || !/429|Rate limit/i.test(String(e))) throw e; // never resend on timeout: the tx may have landed
@@ -91,21 +95,30 @@ export class Arena {
     return { tx: r.transaction.hash, value: raw ? JSON.parse(raw) : null };
   }
 
-  /** Register an agent with a bond paid by the solver account (the runner has no NEAR account). */
-  async register(agent_pk: string, model_id: string, bond: string) {
-    const r = await this.call("register_agent", { agent_pk, model_id }, BigInt(bond));
+  /** Register an agent with a bond paid by the solver account (the runner has no NEAR account).
+   *  `tee` commits the agent to a verified enclave proof on every intent. */
+  async register(agent_pk: string, model_id: string, bond: string, tee = false) {
+    const r = await this.call("register_agent", { agent_pk, model_id, tee }, BigInt(bond));
     return { tx: r.tx, agent: r.value };
   }
 
+  /** `symbol` is the oracle asset id (`wrap.near` = NEAR/USD on Outlayer). The open price arrives a few
+   *  seconds later through the oracle callback. */
   async openDuel(a: string, b: string, symbol: string, close_at: string) {
-    const r = await this.call("open_duel", { a, b, symbol, close_at });
+    const r = await this.call("open_duel", { a, b, symbol, close_at }, OPEN_DUEL_DEPOSIT, OPEN_DUEL_GAS);
     this.openDuels.add(String(r.value));
     return { duel_id: String(r.value), tx: r.tx };
   }
 
-  async postIntent(signed: SignedIntent) {
+  async postIntent(signed: SignedIntent, tee?: TeeProof) {
     if (!verifyIntent(signed)) throw new Error("bad intent signature");
-    const r = await this.call("post_intent", { signed });
+    if (tee) {
+      // same check the contract runs, so a bad record fails here without spending gas
+      const agent = await arenaView<{ model_id: string } | null>("get_agent", { agent_pk: signed.intent.agent_pk });
+      if (!agent) throw new Error("agent missing");
+      if (!verifyTeeProof(tee, agent.model_id, signed.intent.proof_hash)) throw new Error("bad tee proof");
+    }
+    const r = await this.call("post_intent", { signed, tee: tee ?? null });
     const quotes = await this.quotesFor(signed.intent.agent_pk);
     const rec: IntentRecord = { signed, tx: r.tx, quotes, at: Date.now() };
     this.intents.push(rec);
@@ -177,10 +190,11 @@ export class Arena {
     }
   }
 
-  async resolve(resolution: Resolution, oracle_sig: string) {
-    const tx = (await this.call("resolve", { resolution, oracle_sig })).tx;
-    this.openDuels.delete(resolution.duel_id);
-    for (const k of this.consumed) if (k.startsWith(`${resolution.duel_id}:`)) this.consumed.delete(k);
+  /** Ask the oracle for the close price. The contract finishes the duel when the oracle calls back;
+   *  `pending()` drops the duel once `get_duel` reports it resolved. */
+  async resolve(duel_id: string) {
+    const tx = (await this.call("resolve_duel", { duel_id }, 0n, OPEN_DUEL_GAS)).tx;
+    for (const k of this.consumed) if (k.startsWith(`${duel_id}:`)) this.consumed.delete(k);
     return { tx };
   }
 
@@ -238,13 +252,18 @@ export class Arena {
       return { code: 200, body: await this.openDuel(q.a, q.b, q.symbol, q.close_at) };
     }
     if (method === "POST" && url === "/register") {
-      const q = JSON.parse(body) as { agent_pk: string; model_id: string; bond: string };
-      return { code: 200, body: await this.register(q.agent_pk, q.model_id, q.bond) };
+      const q = JSON.parse(body) as { agent_pk: string; model_id: string; bond: string; tee?: boolean };
+      return { code: 200, body: await this.register(q.agent_pk, q.model_id, q.bond, q.tee === true) };
     }
-    if (method === "POST" && url === "/intent") return { code: 200, body: await this.postIntent(JSON.parse(body) as SignedIntent) };
+    if (method === "POST" && url === "/intent") {
+      const q = JSON.parse(body) as { signed?: SignedIntent; tee?: TeeProof } & Partial<SignedIntent>;
+      // accept both {signed, tee} and a bare SignedIntent (older demo)
+      const signed = q.signed ?? ({ intent: q.intent, signature: q.signature } as SignedIntent);
+      return { code: 200, body: await this.postIntent(signed, q.tee ?? undefined) };
+    }
     if (method === "POST" && url === "/resolve") {
-      const q = JSON.parse(body) as { resolution: Resolution; oracle_sig: string };
-      return { code: 200, body: await this.resolve(q.resolution, q.oracle_sig) };
+      const q = JSON.parse(body) as { duel_id: string };
+      return { code: 200, body: await this.resolve(String(q.duel_id)) };
     }
     if (method === "POST" && url === "/settle_follow") {
       const q = JSON.parse(body) as { agent_pk: string; follower: string; fills: Fill[] };
