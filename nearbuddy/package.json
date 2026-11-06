@@ -20,6 +20,7 @@
   "dependencies": {
     "borsh": "2.0.0",
     "near-api-js": "7.4.0",
+    "tweetnacl": "1.0.3",
     "viem": "2.57.16"
   },
   "devDependencies": {
