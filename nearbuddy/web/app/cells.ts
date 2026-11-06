@@ -1,7 +1,7 @@
 // Pure data-to-cells helpers for the commit-reveal and execution rows: no React state, no fetch, so
 // bun test checks them directly (app/__tests__). Every field is optional: a deploy-13 contract (no
 // commit-reveal) and a solver without quality data render as "off" or "none", never as an error.
-import { addrHref, type Cell, near, price8, short, txHref } from "./tui";
+import { addrHref, agentHref, type Cell, near, price8, short, txHref } from "./tui";
 
 /** The commit-reveal fields of `get_config`; absent on contracts that predate commit-reveal. */
 export type CommitConfig = { commit_reveal?: boolean; no_reveal_bps?: number; require_consent?: boolean };
@@ -238,3 +238,22 @@ export const pairsOf = (duels: { id: string; a: string; b: string }[]): Pair[] =
   }
   return [...by.values()].sort((x, y) => y.last - x.last);
 };
+
+/** The pairs box 2 lists: running pairs only (a one-off duel is a probe, not a pair), the `max` most recently
+ *  active kept, then shown oldest first so "pair 1" is the one that started first. Empty unless 2+ are running. */
+export const shownPairs = (pairs: Pair[] | null | undefined, max = 3): Pair[] => {
+  const running = (pairs ?? []).filter((p) => p.n > 1);
+  if (running.length < 2) return [];
+  return running
+    .sort((x, y) => y.last - x.last)
+    .slice(0, max)
+    .sort((x, y) => x.first - y.first);
+};
+
+/** One pair row: both models (cut to 26, linked to their agent pages), the duel span and the count in the window. */
+export const pairCells = (p: Pair, model: (pk: string) => string, scanned: number | undefined): Cell[] => [
+  { t: model(p.a).slice(0, 26), href: agentHref(p.a), title: p.a },
+  " vs ",
+  { t: model(p.b).slice(0, 26), href: agentHref(p.b), title: p.b },
+  { t: `  #${p.first}-#${p.last} · ${p.n} of last ${scanned ?? "?"}`, c: "dim" },
+];

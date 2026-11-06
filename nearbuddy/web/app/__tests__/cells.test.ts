@@ -15,6 +15,7 @@ import {
   legs,
   NO_REVEAL_RULE,
   type Opened,
+  pairCells,
   pairingCells,
   pairingWord,
   pairsOf,
@@ -22,6 +23,7 @@ import {
   quoteOut,
   revealCell,
   sbps,
+  shownPairs,
   timelineCells,
   usdc,
   vsCell,
@@ -155,9 +157,23 @@ describe("pairs", () => {
     ]);
     expect(pairsOf([])).toEqual([]);
   });
-  test("the widest pair row fits the value column", () => {
-    const row = `${"x".repeat(26)} vs ${"y".repeat(26)}  #350-#9999 · 40 of last 40`;
-    expect(row.length).toBeLessThanOrEqual(VW);
+  test("the widest pair row the arena builds fits the value column", () => {
+    const p = { a: "A", b: "B", first: 10_000, last: 10_039, n: 40 };
+    const long = (pk: string) => `${pk}-${"m".repeat(60)}`; // longer than any model name: pairCells cuts it
+    const cells = pairCells(p, long, 100);
+    expect(text(cells).length).toBeLessThanOrEqual(VW);
+    expect(text(cells)).toEndWith("  #10000-#10039 · 40 of last 100");
+    expect(cells[0]).toMatchObject({ href: "/agent/A", title: "A" });
+    expect(text(pairCells(p, long, undefined))).toEndWith("of last ?"); // an API without `scanned`
+  });
+  test("box 2 keeps the newest running pairs, then lists them oldest first", () => {
+    const pair = (a: string, first: number, last: number, n = 5) => ({ a, b: `${a}2`, first, last, n });
+    const four = [pair("old", 300, 330), pair("p1", 320, 365), pair("p2", 350, 364), pair("p3", 360, 366)];
+    // the pair last active at #330 drops, not the newest one
+    expect(shownPairs(four).map((p) => p.a)).toEqual(["p1", "p2", "p3"]);
+    expect(shownPairs([...four, pair("probe", 363, 363, 1)]).map((p) => p.a)).toEqual(["p1", "p2", "p3"]);
+    expect(shownPairs([pair("p1", 320, 365), pair("probe", 363, 363, 1)])).toEqual([]); // one running pair: no rows
+    expect(shownPairs(undefined)).toEqual([]);
   });
 });
 
