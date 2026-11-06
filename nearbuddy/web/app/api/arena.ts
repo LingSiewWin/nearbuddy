@@ -203,7 +203,12 @@ export async function summary(s: Snap, now = Date.now()) {
   const lb = s.leaderboard;
   const done = s.duels.filter((d) => d.resolved && d.outcome);
   const open = s.duels.filter((d) => !d.resolved);
-  const live = open[0]; // the newest; live_duels lists every open one
+  const trusted = (pk: string) => {
+    const a = lb.find((x) => x.pk === pk);
+    return !!a?.tee && !a.model_id.startsWith("stub/");
+  };
+  // the hero is the newest open duel between enclave-verified models; red-team or test duels never take it
+  const live = open.find((d) => trusted(d.a) && trusted(d.b)) ?? open[0]; // live_duels lists every open one
   const liveAttacks = await Promise.all(
     (live?.injections ?? []).map(async (j) => ({
       target: j.target,
@@ -219,7 +224,7 @@ export async function summary(s: Snap, now = Date.now()) {
     return { won, lost: mine.length - won - tied, tied, window: mine.length };
   };
   const standings = lb
-    .filter((a) => !a.model_id.startsWith("stub/"))
+    .filter((a) => a.tee && !a.model_id.startsWith("stub/")) // the rest stay on /terminal
     .map((a) => {
       const atk = ATTACKS.get(a.pk);
       return {

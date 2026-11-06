@@ -64,13 +64,20 @@ export default function Arena({ initial }: { initial: Initial }) {
       m.set(s.live.a.agent, s.live.a.model);
       m.set(s.live.b.agent, s.live.b.model);
     }
-    for (const e of events) if (e.kind === "register") m.set(e.agent, e.model);
+    // a refused registration (a squat attempt) must not rename the agent
+    for (const e of events) if (e.kind === "register" && e.ok) m.set(e.agent, e.model);
     return m;
   }, [s, dec.rows, initial.attacked, events]);
   const modelOf = useCallback((pk: string) => models.get(pk) ?? "unknown", [models]);
 
   const price = ticks.at(-1)?.p ?? null;
-  const story = latestStory(events, byTx, initial.attacked, modelOf);
+  const verified = new Set(s.standings.map((a) => a.agent)); // standings list enclave-verified agents only
+  const story = latestStory(events, byTx, initial.attacked, modelOf, (pk) => verified.has(pk));
+  const publishedTo = Math.max(
+    0,
+    ...dec.rows.map((d) => Number(d.duel)),
+    ...initial.attacked.map((d) => Number(d.duel)),
+  );
   // the clearest moments in the record: the newest lie that went against the price, taken and refused
   const tested = initial.attacked.filter((d) => d.test === "against");
   const fell = tested.findLast((d) => d.verdict === "fell" || d.verdict === "named");
@@ -137,7 +144,7 @@ export default function Arena({ initial }: { initial: Initial }) {
         </section>
         <section className="p-news">
           <div className="h news">
-            <News story={story} now={now} />
+            <News story={story} now={now} publishedTo={publishedTo} />
             <Squares attacked={initial.attacked} />
           </div>
           <Machine
@@ -195,7 +202,7 @@ export default function Arena({ initial }: { initial: Initial }) {
             </a>{" "}
             ·{" "}
             <a href={txUrl("8gnGLPvanrjF6R4FUKWvUn7HLJciKHszJAiRVY6ehGtR")} target="_blank" rel="noreferrer">
-              a follower filled inside its mandate ↗
+              a fill settled inside its mandate (testnet, priced by a dry 1Click quote) ↗
             </a>{" "}
             ·{" "}
             <a href={txUrl("EaefxJxRb6m9pPZ1nXG3GnYXsixqVBG5QL4eNq2LCN7F")} target="_blank" rel="noreferrer">

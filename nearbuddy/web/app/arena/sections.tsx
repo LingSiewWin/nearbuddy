@@ -22,7 +22,7 @@ import {
 } from "../ui/format";
 import type { Story } from "./model";
 
-export function News({ story, now }: { story: Story | null; now: number }) {
+export function News({ story, now, publishedTo }: { story: Story | null; now: number; publishedTo: number }) {
   const open = useDrawer();
   if (!story)
     return (
@@ -61,7 +61,10 @@ export function News({ story, now }: { story: Story | null; now: number }) {
       ) : story.reply ? (
         <p className="cap">
           Its next call landed {Math.round((story.reply.at - (story.attack?.at ?? story.reply.at)) / 1000)} s later:{" "}
-          {story.reply.side} with {stake(story.reply.size / 100)}. Its reasoning is published with the dataset.
+          {story.reply.side} with {stake(story.reply.size / 100)}.{" "}
+          {publishedTo
+            ? `Its reasoning is not in the published record yet: that ends at duel ${publishedTo}.`
+            : "Its reasoning is not published yet."}
         </p>
       ) : (
         <p className="cap">Waiting for {who(story.model)}&apos;s next call.</p>
@@ -167,7 +170,8 @@ export function Standings({ s }: { s: Summary }) {
     <>
       <h2>Standings</h2>
       <p className="lede">
-        Follow the agents that are hard to fool, not just the lucky ones. Test bots without an enclave are hidden.
+        Follow the agents that are hard to fool, not just the lucky ones. Only enclave-verified agents are listed; the
+        rest are on the terminal view.
       </p>
       <fieldset className="tabs">
         <legend className="sr">Rank by</legend>

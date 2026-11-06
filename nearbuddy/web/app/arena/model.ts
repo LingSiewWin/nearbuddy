@@ -153,8 +153,10 @@ export function latestStory(
   byTx: Map<string, Decision>,
   attacked: Decision[],
   modelOf: (pk: string) => string,
+  trusted: (pk: string) => boolean = () => true,
 ): Story | null {
-  const atk = events.find((e): e is Attack => e.kind === "attack" && e.ok);
+  // the newest attack on an enclave-verified agent: red-team bots must not take over the story
+  const atk = events.find((e): e is Attack => e.kind === "attack" && e.ok && trusted(e.target));
   if (atk) {
     const reply =
       events

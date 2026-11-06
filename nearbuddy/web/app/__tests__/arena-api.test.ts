@@ -71,12 +71,28 @@ describe("summary: records", () => {
     );
     const rec = Object.fromEntries(s.standings.map((x) => [x.agent, x.record]));
     expect(rec[A]).toEqual({ won: 2, lost: 1, tied: 1, window: 4 });
-    expect(rec[B]).toEqual({ won: 2, lost: 2, tied: 1, window: 5 });
+    expect(rec[B]).toBeUndefined(); // no enclave proof: not in the standings
   });
 
-  test("stub agents are hidden from the standings; the rest keep their units", async () => {
+  test("the hero is the newest open duel between enclave-verified models, not a newer test duel", async () => {
+    const C = "test-agent-c";
+    const s = await summary(
+      snap({
+        leaderboard: [...lb, agent(C, "Qwen/Qwen3.6-35B-A3B-FP8")],
+        duels: [
+          duel("12", STUB, B, { resolved: false, outcome: null }),
+          duel("11", A, C, { resolved: false, outcome: null }),
+        ],
+      }),
+      NOW,
+    );
+    expect(s.live?.duel).toBe(11);
+    expect(s.live_duels).toEqual([12, 11]);
+  });
+
+  test("stub and unverified agents are hidden from the standings; the rest keep their units", async () => {
     const s = await summary(snap({ leaderboard: lb }));
-    expect(s.standings.map((x) => x.agent)).toEqual([A, B]);
+    expect(s.standings.map((x) => x.agent)).toEqual([A]);
     expect(s.standings[0]).toMatchObject({
       model: "Qwen/Qwen3.8-27B",
       verified: true,
@@ -88,7 +104,7 @@ describe("summary: records", () => {
       calls: { scored: 0, right: 0 },
       prompt: null,
     });
-    expect(s.standings[1]).toMatchObject({ verified: false, return_pct: -0.5, in_duel: null });
+    expect(s.standings.find((x) => x.agent === B)).toBeUndefined();
   });
 });
 
