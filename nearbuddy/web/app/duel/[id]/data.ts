@@ -10,7 +10,7 @@ import { ms, nearOf, usd, ZERO } from "../../api/arena";
 import { attackText, type Decision, getDecisions } from "../../api/dataset";
 import { ARENA, viewOn } from "../../api/near";
 import { type ArenaEvent, decode, tape } from "../../api/tape";
-import type { Focus } from "../../arena/model";
+import { type Focus, sideFromTape } from "../../arena/model";
 import { proven } from "../../cells";
 import { NET } from "../../network";
 
@@ -178,7 +178,7 @@ export async function loadDuel(id: string): Promise<DuelData | null> {
   const forfeited = d.resolved
     ? ((await view("get_no_reveal", { duel_id: id }).catch(() => null)) as [boolean, boolean] | null)
     : null;
-  const side = (pk: string, ag: Agent | null, i: Duel["last_intent_a"], pnl: number | undefined): DuelSide => ({
+  const side = (pk: string, ag: Agent | null, i: Duel["last_intent_a"], pnl?: number): DuelSide => ({
     agent: pk,
     model: ag?.model_id ?? "unknown",
     side: i?.side ?? null,
@@ -195,8 +195,13 @@ export async function loadDuel(id: string): Promise<DuelData | null> {
     open: usd(o?.open_price ?? d.open_price),
     close: usd(o?.close_price),
     pot: nearOf(d.pool),
-    a: side(d.a, a, d.last_intent_a, o?.pnl_a),
-    b: side(d.b, b, d.last_intent_b, o?.pnl_b),
+    // live: the call and its seal from the tape, as on the arena, unless the contract holds a newer call (by nonce)
+    a: d.resolved
+      ? side(d.a, a, d.last_intent_a, o?.pnl_a)
+      : sideFromTape(side(d.a, a, d.last_intent_a), events, n, d.last_intent_a?.nonce),
+    b: d.resolved
+      ? side(d.b, b, d.last_intent_b, o?.pnl_b)
+      : sideFromTape(side(d.b, b, d.last_intent_b), events, n, d.last_intent_b?.nonce),
     winner: o?.winner ?? null,
     slashed: nearOf(o?.slashed, 4),
     lockS: c.intent_lock_s,

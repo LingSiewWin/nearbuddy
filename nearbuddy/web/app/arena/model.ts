@@ -113,22 +113,26 @@ export function focusOf(s: Summary): Focus | null {
   };
 }
 
-/** A live duel's sides with their newest call from the tape: the contract view behind the summary is cached
- *  for seconds, the tape is fresher, and the headline must not say "yet to make a call" beside a call. */
+/** A live side with its newest call and its seal both from the tape. The contract view is cached or read a moment
+ *  apart from the tape, so taking the call from one and the seal from the other can show a revealed call as still
+ *  sealed, or "yet to make a call" beside a call. Given the contract's call `nonce` (strictly increasing per agent
+ *  and duel), the newer of the two wins: when the tape lags (one poll, or a FastNEAR outage) the contract's call
+ *  stands and the newest commit the tape shows is at most the one it revealed. Order-agnostic, like `sealedIn`. */
+export function sideFromTape<S extends Side>(s: S, events: ArenaEvent[], duel: number, nonce?: string | null): S {
+  const e = events
+    .filter((x): x is Intent => isCall(x) && x.ok && x.duel === duel && x.agent === s.agent)
+    .reduce<Intent | undefined>((m, x) => (!m || x.at > m.at ? x : m), undefined);
+  const big = (v: string) => (/^\d+$/.test(v) ? BigInt(v) : -1n); // a malformed nonce never throws
+  if (nonce != null && (!e || big(nonce) > big(e.nonce))) return { ...s, sealed: false };
+  const shown = e ? { ...s, side: e.side, size_pct: e.size / 100, verified: e.tee === 2 } : s;
+  return { ...shown, sealed: sealedIn(events, duel, s.agent) };
+}
+
+/** A live duel's sides from the tape (see `sideFromTape`). No nonce: the arena's contract view is a cached summary,
+ *  usually older than the tape. ponytail: carry last_intent's nonce on Side if that summary ever gets fresher. */
 export function withTape(f: Focus | null, events: ArenaEvent[]): Focus | null {
   if (!f?.live) return f;
-  const latest = (pk: string) =>
-    events.find((e): e is Intent => isCall(e) && e.ok && e.duel === f.duel && e.agent === pk);
-  // the tape is newest first: a commit newer than the side's last reveal is a call nobody can read yet
-  const commit = (pk: string) => events.find((e) => e.kind === "commit" && e.ok && e.duel === f.duel && e.agent === pk);
-  const patch = (s: Side): Side => {
-    const e = latest(s.agent);
-    const c = commit(s.agent);
-    const sealed = !!c && (!e || c.at > e.at);
-    const shown = e ? { ...s, side: e.side, size_pct: e.size / 100, verified: e.tee === 2 } : s;
-    return { ...shown, sealed };
-  };
-  return { ...f, a: patch(f.a), b: patch(f.b) };
+  return { ...f, a: sideFromTape(f.a, events, f.duel), b: sideFromTape(f.b, events, f.duel) };
 }
 
 /** Return in % for one side if the duel were scored at `price`, by the contract's own rule: its last call,

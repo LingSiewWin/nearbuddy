@@ -15,6 +15,7 @@ import {
   replyTo,
   type Side,
   sealedIn,
+  sideFromTape,
   withTape,
 } from "../arena/model";
 import type { Tick } from "../lib/live";
@@ -373,6 +374,30 @@ describe("withTape: a sealed call is a commit newer than the side's last reveal"
     expect(g?.a).toMatchObject({ side: "Short", sealed: true });
     expect(g?.b).toMatchObject({ side: "Short", sealed: false });
     expect(withTape(f, [commit("a", 5)])?.a).toMatchObject({ side: null, sealed: true });
+  });
+  test("sideFromTape: the newest call in either order; the contract's call stands when the tape has none", () => {
+    const long = { ...f.a, side: "Long" as const, size_pct: 100 };
+    const oldestFirst = [
+      reveal("a", 10),
+      commit("a", 20),
+      { ...(reveal("a", 30) as object), side: "Long" } as ArenaEvent,
+    ];
+    expect(sideFromTape(f.a, oldestFirst, 7)).toMatchObject({ side: "Long", size_pct: 50, sealed: false });
+    expect(sideFromTape(f.a, [...oldestFirst].reverse(), 7)).toMatchObject({ side: "Long", sealed: false });
+    // the tape lags the contract: its newest event is the commit, so the call it shows is the older one, sealed
+    expect(sideFromTape(long, [reveal("a", 10), commit("a", 20)], 7)).toMatchObject({ side: "Short", sealed: true });
+    expect(sideFromTape(long, [], 7)).toMatchObject({ side: "Long", size_pct: 100, sealed: false });
+    expect(sideFromTape(long, [reveal("a", 10)], 8)).toMatchObject({ side: "Long", sealed: false }); // another duel
+    // with the contract's nonce the newer call wins: the tape's reveal is nonce 1
+    expect(sideFromTape(long, [reveal("a", 10), commit("a", 20)], 7, "2")).toMatchObject({
+      side: "Long",
+      sealed: false,
+    });
+    expect(sideFromTape(long, [reveal("a", 10), commit("a", 20)], 7, "1")).toMatchObject({
+      side: "Short",
+      sealed: true,
+    });
+    expect(sideFromTape(long, [], 7, "2")).toMatchObject({ side: "Long", sealed: false }); // the tape is down
   });
 });
 
