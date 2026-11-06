@@ -114,6 +114,11 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     .assert_success();
     // 60 s duel floor, 30 s intent lock: the duel below is 120 s, intents must land in its first 90 s
     call("set_oracle", json!({"oracle_account": oracle.account_id(), "oracle_deposit": NearToken::from_millinear(20).as_yoctonear().to_string(), "min_duel_s": 60, "intent_lock_s": 30}), &solver, zero).await?.assert_success();
+    // R8 on: every intent below also records when its side was taken, and scoring checks for
+    // agreeing calls (A Long and B Short disagree, so nobody is faded)
+    call("set_agree_flip", json!({"agree_flip_s": 30}), &solver, zero)
+        .await?
+        .assert_success();
     call(
         "add_tee_signer",
         json!({"signer": b64(&tee.verifying_key().to_bytes()), "label": "sandbox enclave"}),
