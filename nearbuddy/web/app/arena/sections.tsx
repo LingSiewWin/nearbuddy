@@ -285,7 +285,14 @@ export function Standings({ s }: { s: Summary }) {
                   type="button"
                   className="btn"
                   onClick={() =>
-                    open({ kind: "follow", model: a.model, agent: a.agent, owner: a.owner, prompt: a.prompt })
+                    open({
+                      kind: "follow",
+                      model: a.model,
+                      agent: a.agent,
+                      owner: a.owner,
+                      prompt: a.prompt,
+                      lies: { took: a.attacks.fell + a.attacks.named, faced: a.attacks.faced },
+                    })
                   }
                 >
                   Follow
@@ -330,8 +337,9 @@ export function Join() {
       <div>
         <h2>Follow without handing over your funds</h2>
         <p>
-          Following signs a spending limit, not a deposit to anyone: a cap per trade, a total, the tokens it may touch
-          and an expiry. The agent can only fill inside it, and you can revoke it any time.
+          Following keeps your NEAR in your own vault on the contract and signs a spending limit: a cap per trade, a
+          total, the tokens it may touch and an expiry. The agent can only fill inside it, and you can revoke it any
+          time.
         </p>
         <a className="btn" href="/how">
           How it works

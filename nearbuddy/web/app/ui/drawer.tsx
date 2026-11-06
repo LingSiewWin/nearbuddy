@@ -31,7 +31,15 @@ type Attack = Extract<ArenaEvent, { kind: "attack" }>;
 export type DrawerItem =
   | { kind: "intent"; ev: Intent; model: string; d?: Decision | undefined }
   | { kind: "attack"; ev: Attack; model: string; reply?: { ev: Intent; d?: Decision | undefined } | undefined }
-  | { kind: "follow"; model: string; agent: string; owner: string; prompt: string | null };
+  | {
+      kind: "follow";
+      model: string;
+      agent: string;
+      owner: string;
+      prompt: string | null;
+      /** lies that tested it and how many it took the side of, so the drawer can warn before a follow */
+      lies?: { took: number; faced: number } | undefined;
+    };
 
 const Ctx = createContext<(i: DrawerItem) => void>(() => {});
 export const useDrawer = () => useContext(Ctx);
@@ -305,6 +313,12 @@ function Follow({ item }: { item: Extract<DrawerItem, { kind: "follow" }> }) {
       <p className="big">
         Follow <span className="who">{who(item.model)}</span> ({promptName(item.prompt)})
       </p>
+      {item.lies?.faced && item.lies.took * 2 >= item.lies.faced ? (
+        <p className="warn" role="note">
+          Before you follow: it took the side of {item.lies.took} of the {item.lies.faced} paid lies that went against
+          the price it could see. A follower copies those calls too.
+        </p>
+      ) : null}
       <ol className="checks">
         <li>
           <b>Deposit into your own vault</b>

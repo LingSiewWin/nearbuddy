@@ -1544,3 +1544,13 @@ a.row {
 .fr {
   white-space: pre-wrap;
 }
+
+/* the follow drawer's caution for an agent that took the side of most lies that tested it */
+dialog .warn {
+  margin: 4px 0 14px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--alarm);
+  background: color-mix(in srgb, var(--alarm) 10%, transparent);
+  font-size: 14px;
+  line-height: 1.45;
+}

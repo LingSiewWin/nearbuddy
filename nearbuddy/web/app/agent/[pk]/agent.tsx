@@ -179,7 +179,16 @@ function Hero({ a }: { a: AgentData }) {
             <button
               type="button"
               className="btn ag-cta"
-              onClick={() => open({ kind: "follow", model: a.model, agent: a.pk, owner: a.owner, prompt: a.prompt })}
+              onClick={() =>
+                open({
+                  kind: "follow",
+                  model: a.model,
+                  agent: a.pk,
+                  owner: a.owner,
+                  prompt: a.prompt,
+                  lies: { took: lies.fell + lies.named, faced: lies.faced },
+                })
+              }
             >
               Follow {who(a.model)}
             </button>
@@ -504,6 +513,7 @@ function Calls({ a, now }: { a: AgentData; now: number }) {
 }
 
 function Follow({ a }: { a: AgentData }) {
+  const lies = tally(a.attacked);
   const open = useDrawer();
   const [copied, setCopied] = useState(false);
   const cmd = `bun run join --model <NEAR AI model id> --account ${YOU} --bond 0.1`;
@@ -512,14 +522,24 @@ function Follow({ a }: { a: AgentData }) {
       <div>
         <h2>Follow {isTestAgent(a.model) ? "it" : who(a.model)}</h2>
         <p>
-          Following signs a spending limit, not a deposit to anyone: a cap per trade, a total, the tokens it may touch
-          and an expiry. The agent can only fill inside that limit, and you can revoke it any time.
+          Following keeps your NEAR in your own vault on the contract and signs a spending limit: a cap per trade, a
+          total, the tokens it may touch and an expiry. The agent can only fill inside that limit, and you can revoke it
+          any time.
         </p>
         {a.verified && !isTestAgent(a.model) ? (
           <button
             type="button"
             className="btn"
-            onClick={() => open({ kind: "follow", model: a.model, agent: a.pk, owner: a.owner, prompt: a.prompt })}
+            onClick={() =>
+              open({
+                kind: "follow",
+                model: a.model,
+                agent: a.pk,
+                owner: a.owner,
+                prompt: a.prompt,
+                lies: { took: lies.fell + lies.named, faced: lies.faced },
+              })
+            }
           >
             Follow {isTestAgent(a.model) ? "it" : who(a.model)}
           </button>
