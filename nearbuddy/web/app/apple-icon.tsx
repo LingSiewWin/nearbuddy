@@ -11,6 +11,7 @@ const mark = await readFile(join(process.cwd(), "app/icon.svg"), "base64");
 export default function AppleIcon() {
   return new ImageResponse(
     <div style={{ display: "flex", width: "100%", height: "100%", background: "#17160F" }}>
+      {/* biome-ignore lint/performance/noImgElement: ImageResponse (Satori) draws plain <img>; next/image cannot render here */}
       <img src={`data:image/svg+xml;base64,${mark}`} width={180} height={180} alt="" />
     </div>,
     size,

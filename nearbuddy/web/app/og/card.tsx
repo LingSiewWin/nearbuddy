@@ -132,6 +132,7 @@ export async function drawCard(card: Card, size = OG) {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        {/* biome-ignore lint/performance/noImgElement: ImageResponse (Satori) draws plain <img>; next/image cannot render here */}
         <img src={`data:image/svg+xml;base64,${mark}`} width={44} height={44} alt="" />
         <div style={{ display: "flex", fontFamily: "Wide", fontSize: 30, letterSpacing: -0.3 }}>
           <span style={{ fontWeight: 800 }}>NearBuddy</span>
