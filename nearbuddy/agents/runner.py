@@ -210,7 +210,13 @@ def prepare_decision(
         print(f"  model call failed ({str(e)[:120]}); skipping this cycle")
         return None
     c = comp.last
-    sig_record = model.signature(c.chat_id) if c.chat_id else None
+    sig_error = None
+    try:
+        sig_record = model.signature(c.chat_id) if c.chat_id else None
+    except requests.RequestException as e:
+        if not _model_transient(e):
+            raise
+        sig_record, sig_error = None, f"transient: signature {str(e)[:200]}"
     tee = None
     if sig_record:
         try:
@@ -226,7 +232,7 @@ def prepare_decision(
                 "duel_id": duel_id,
                 "agent_pk": pk,
                 "model": model.model_id,
-                "error": "no tee proof",
+                "error": sig_error or "no tee proof",
                 "chat_id": c.chat_id,
                 "signature_record": sig_record,
             }

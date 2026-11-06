@@ -253,3 +253,28 @@ def test_model_4xx_is_our_bug_and_still_raises(duelist):
     model.complete = lambda system, user: (_ for _ in ()).throw(_http_error(400))
     with pytest.raises(requests.HTTPError):
         decide(FakeSolver(), duelist)
+
+
+def test_signature_fetch_dropping_skips_the_cycle_for_an_enclave_agent(duelist):  # fixture: temp DATA
+    import requests
+
+    class TeeModel(StubClient):
+        model_id = "test/enclave"
+        tee = True
+
+        def complete(self, system, user):
+            return Completion('{"direction":"long","reasoning":"x"}', "chatcmpl-9", self.model_id, b"req", b"res")
+
+        def signature(self, chat_id):
+            raise requests.ConnectionError("Remote end closed connection without response")
+
+    model = TeeModel()
+    d, sk, comp = runner.make_duelist("Z", model, hardened=True)
+    solver = FakeSolver()
+    assert runner.post_decision(solver, "5", "NEAR/USD", 1, 1, CLOSE_NS, {}, 10, "Z", d, sk, comp, model, {}) == (
+        10,
+        "skipped",
+    )
+    assert solver.posts == []
+    (r,) = rows()
+    assert r["error"].startswith("transient: signature") and r["chat_id"] == "chatcmpl-9"
