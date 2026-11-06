@@ -64,13 +64,17 @@ pub struct Contract {
     /// No intent lands in the last `intent_lock_ns` before `close_at`, so the final decision is made
     /// before the close price is knowable. Bounded to `min_duel_ns / 2` by `set_oracle`.
     pub(crate) intent_lock_ns: u64,
+    /// Duels opened and not yet finished or voided. While it is non-zero `set_oracle` may not lower
+    /// the lock or move the oracle, so a running duel keeps the rules it was opened under. Starts
+    /// at 0 in `migrate_v12`: duels open across that deploy are not counted and never gate.
+    pub(crate) open_duels: u64,
 }
 
-/// State layout of deploy 10 (before `intent_lock_ns`). Read once by `migrate_v11`.
+/// State layout of deploy 11 (before `open_duels`). Read once by `migrate_v12`.
 #[allow(dead_code)]
 #[derive(near_sdk::borsh::BorshDeserialize)]
 #[borsh(crate = "near_sdk::borsh")]
-pub struct ContractV10 {
+pub struct ContractV11 {
     owner: AccountId,
     oracle_account: AccountId,
     oracle_deposit: u128,
@@ -91,6 +95,7 @@ pub struct ContractV10 {
     used_proofs: LookupSet<Vec<u8>>,
     min_duel_ns: u64,
     agent_duels: LookupMap<Vec<u8>, Vec<u64>>,
+    intent_lock_ns: u64,
 }
 
 /// Seconds to ns with a sanity bound (a week), so a unit mix-up cannot set an absurd floor.
@@ -151,19 +156,20 @@ impl Contract {
             min_duel_ns: 0,
             agent_duels: LookupMap::new(StorageKey::AgentDuels),
             intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
+            open_duels: 0,
         }
     }
 
     // ---------------------------------------------------------------- migration
 
-    /// Deploy 10 → 11: add `intent_lock_ns` (60 s; `set_oracle` changes it). Collections keep
-    /// their prefixes.
-    /// Caller: the contract itself (private), once after the deploy-11 code lands. Deposit:
+    /// Deploy 11 → 12: add `open_duels`, starting at 0 (duels open across the deploy are not
+    /// counted; the counter only gates `set_oracle`). Collections keep their prefixes.
+    /// Caller: the contract itself (private), once after the deploy-12 code lands. Deposit:
     /// none. Panics: "no state", or the SDK private-method panic for any other caller.
     #[private]
     #[init(ignore_state)]
-    pub fn migrate_v11() -> Self {
-        let old: ContractV10 = env::state_read().expect("no state");
+    pub fn migrate_v12() -> Self {
+        let old: ContractV11 = env::state_read().expect("no state");
         Self {
             owner: old.owner,
             oracle_account: old.oracle_account,
@@ -185,7 +191,8 @@ impl Contract {
             used_proofs: old.used_proofs,
             min_duel_ns: old.min_duel_ns,
             agent_duels: old.agent_duels,
-            intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
+            intent_lock_ns: old.intent_lock_ns,
+            open_duels: 0,
         }
     }
 
@@ -198,8 +205,9 @@ impl Contract {
 
     /// Point at another price oracle account, change the deposit it needs, the duel length floor, or
     /// the intent lock (no intent in the last `intent_lock_s` of a duel; at most half the floor).
+    /// While any duel is open the lock may only grow and the oracle account may not change.
     /// Caller: owner. Deposit: none. Panics: "not owner", "intent_lock_s too large",
-    /// "min_duel_s too large".
+    /// "min_duel_s too large", "duels open".
     pub fn set_oracle(
         &mut self,
         oracle_account: AccountId,
@@ -209,10 +217,17 @@ impl Contract {
     ) {
         self.only_owner();
         require!(intent_lock_s <= min_duel_s / 2, "intent_lock_s too large");
+        let min_duel_ns = duel_floor_ns(min_duel_s);
+        let intent_lock_ns = intent_lock_s * 1_000_000_000;
+        require!(
+            self.open_duels == 0
+                || (oracle_account == self.oracle_account && intent_lock_ns >= self.intent_lock_ns),
+            "duels open"
+        );
         self.oracle_account = oracle_account;
         self.oracle_deposit = oracle_deposit.0;
-        self.min_duel_ns = duel_floor_ns(min_duel_s);
-        self.intent_lock_ns = intent_lock_s * 1_000_000_000;
+        self.min_duel_ns = min_duel_ns;
+        self.intent_lock_ns = intent_lock_ns;
     }
 
     /// Contract owner collects accrued settlement fees.

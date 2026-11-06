@@ -180,6 +180,9 @@ pub struct Config {
     pub fee_bps: u16,
     pub min_chaos_deposit: U128,
     pub next_duel: U64,
+    /// Duels opened and not yet finished or voided (counted from deploy 12 on); while non-zero,
+    /// `set_oracle` may not lower the lock or move the oracle.
+    pub open_duels: u64,
     pub owner_fees: U128,
 }
 

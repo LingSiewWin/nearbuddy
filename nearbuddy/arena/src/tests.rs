@@ -312,7 +312,8 @@ fn tee_agent_cannot_post_without_proof() {
 }
 
 #[test]
-fn gateway_kind_verifies_without_model_prefix() {
+#[should_panic(expected = "provider proof required")]
+fn tee_agent_gateway_proof_refused() {
     let (mut c, ska, _) = setup();
     let tee = tee_signer(&mut c);
     let d = open(&mut c);
@@ -322,6 +323,22 @@ fn gateway_kind_verifies_without_model_prefix() {
         tee_intent(&ska, d, 1, req, res),
         Some(tee_proof(&tee, 1, "anything", req, res)),
     );
+}
+
+#[test]
+fn plain_agent_may_attach_a_gateway_proof() {
+    let (mut c, _, skb) = setup();
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    let (req, res) = ([0x18; 32], [0xd5; 32]);
+    let mut i = intent(&key(2).1, d, Side::Short, 5_000, 1);
+    i.proof_hash = Base64VecU8(proof_hash(&req, &res));
+    ctx(SOLVER, 0);
+    c.post_intent(
+        sign(&skb, &i),
+        Some(tee_proof(&tee, 1, "anything", req, res)),
+    );
+    assert!(c.get_duel(U64(d)).unwrap().last_intent_b.is_some());
 }
 
 #[test]
@@ -1205,7 +1222,9 @@ fn void_duel_after_a_day_frees_agents_without_slashing() {
     let (bond_a, bond_b) = (bond(&c, 1), bond(&c, 2));
     let pool = c.get_duel(U64(d)).unwrap().pool.0;
     ctx_at(FOLLOWER, 0, CLOSE + VOID_AFTER_NS); // permissionless: a bystander voids it
+    assert_eq!(c.get_config().open_duels, 1);
     c.void_duel(U64(d));
+    assert_eq!(c.get_config().open_duels, 0);
     assert_eq!(bond(&c, 1), bond_a + pool / 2 + pool % 2);
     assert_eq!(bond(&c, 2), bond_b + pool / 2);
     let duel = c.get_duel(U64(d)).unwrap();
@@ -1448,23 +1467,30 @@ fn agent_duels_index_grows_and_pages_newest_first() {
 }
 
 #[test]
-fn migrate_v11_adds_default_lock_and_keeps_index() {
+fn migrate_v12_starts_open_duels_at_zero_and_keeps_index() {
     let (mut c, ..) = setup();
     let d0 = open(&mut c);
     resolve_at_close(&mut c, d0, UP);
-    // deploy-10 state: the current layout minus the trailing `intent_lock_ns` (u64)
+    // deploy-11 state: the current layout minus the trailing `open_duels` (u64)
     c.duels.flush();
     c.agents.flush();
     c.agent_duels.flush();
     let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
-    assert_eq!(raw.split_off(raw.len() - 8), LOCK.to_le_bytes());
+    assert_eq!(raw.split_off(raw.len() - 8), 0u64.to_le_bytes());
+    assert_eq!(&raw[raw.len() - 8..], LOCK.to_le_bytes());
     env::storage_write(b"STATE", &raw);
     ctx(CONTRACT, 0);
-    let mut m = Contract::migrate_v11();
+    let mut m = Contract::migrate_v12();
     let cfg = m.get_config();
     assert_eq!(
-        (cfg.next_duel.0, cfg.min_duel_s, cfg.intent_lock_s),
-        (1, 60, 60)
+        (
+            cfg.next_duel.0,
+            cfg.min_duel_s,
+            cfg.intent_lock_s,
+            cfg.open_duels
+        ),
+        (1, 60, 10, 0),
+        "lock survives, counter starts at zero"
     );
     assert!(m.get_duel(U64(d0)).unwrap().resolved);
     assert_eq!(
@@ -1478,4 +1504,126 @@ fn migrate_v11_adds_default_lock_and_keeps_index() {
         ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)),
         vec![d1, d0]
     );
+    assert_eq!(m.get_config().open_duels, 1);
+}
+
+// ---------------------------------------------------------------- second-audit follow-ups
+
+#[test]
+#[should_panic(expected = "duels open")]
+fn set_oracle_cannot_lower_lock_while_a_duel_is_open() {
+    let (mut c, ..) = setup();
+    open(&mut c);
+    ctx(OWNER, 0);
+    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, 9);
+}
+
+#[test]
+#[should_panic(expected = "duels open")]
+fn set_oracle_cannot_move_oracle_while_a_duel_is_open() {
+    let (mut c, ..) = setup();
+    open(&mut c);
+    ctx(OWNER, 0);
+    c.set_oracle("other-oracle.testnet".parse().unwrap(), U128(1), 60, 10);
+}
+
+#[test]
+fn set_oracle_may_raise_lock_while_open_and_anything_once_resolved() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    assert_eq!(c.get_config().open_duels, 1);
+    ctx(OWNER, 0);
+    c.set_oracle(ORACLE.parse().unwrap(), U128(1), 120, 20);
+    assert_eq!(c.get_config().intent_lock_s, 20);
+    resolve_at_close(&mut c, d, UP);
+    assert_eq!(c.get_config().open_duels, 0);
+    ctx(OWNER, 0);
+    c.set_oracle("other-oracle.testnet".parse().unwrap(), U128(1), 60, 5);
+    let cfg = c.get_config();
+    assert_eq!(
+        (cfg.oracle_account.as_str(), cfg.intent_lock_s),
+        ("other-oracle.testnet", 5)
+    );
+}
+
+#[test]
+#[should_panic(expected = "intent expired")]
+fn post_intent_expiring_before_close_panics() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    let mut i = intent(&key(2).1, d, Side::Long, 5_000, 1);
+    i.expires_at = U64(CLOSE - 1);
+    ctx(SOLVER, 0);
+    c.post_intent(sign(&skb, &i), None);
+}
+
+#[test]
+#[should_panic(expected = "stale nonce")]
+fn post_intent_below_last_nonce_panics() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    post_b(&mut c, &skb, d, Side::Long, 2);
+    post_b(&mut c, &skb, d, Side::Short, 1);
+}
+
+#[test]
+fn absurd_fill_amount_is_rejected_not_panicked() {
+    let mut c = fresh(100);
+    register(&mut c, 1, MODEL_A, true);
+    register(&mut c, 2, "m", false);
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    post_a(&mut c, &key(1).0, &tee, d, Side::Long, 1);
+    ctx(FOLLOWER, VAULT);
+    c.deposit();
+    ctx(FOLLOWER, 0);
+    c.follow(Base64VecU8(key(1).1), mandate(u128::MAX, u128::MAX, vec![]));
+    let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
+    let r = settle(&mut c, vec![fill(1, "usdc", u128::MAX / 50)]);
+    assert_eq!((r.settled, r.rejected[0].1.as_str()), (0, "fee overflow"));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
+}
+
+/// Open a duel and leave the open price unanswered.
+fn open_unpriced(c: &mut Contract, close_at: u64) -> u64 {
+    ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
+    c.open_duel(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "wrap.near".into(),
+        U64(close_at),
+    )
+    .0
+}
+
+#[test]
+fn open_price_from_inside_the_recency_window_ok() {
+    let (mut c, ..) = setup();
+    let d = open_unpriced(&mut c, CLOSE);
+    oracle_answers(&mut c, d, "open", OPEN, NOW - 300_000_000_000); // cached 300 s ago
+    assert_eq!(c.get_duel(U64(d)).unwrap().open_price.unwrap().0, OPEN);
+}
+
+#[test]
+#[should_panic(expected = "open price stale")]
+fn open_price_older_than_recency_rejected() {
+    let (mut c, ..) = setup();
+    let d = open_unpriced(&mut c, CLOSE);
+    oracle_answers(&mut c, d, "open", OPEN, NOW - 300_000_000_001);
+}
+
+#[test]
+#[should_panic(expected = "open price stale")]
+fn open_price_after_ten_minutes_rejected() {
+    let (mut c, ..) = setup();
+    let d = open_unpriced(&mut c, NOW + 3_600_000_000_000);
+    oracle_answers(&mut c, d, "open", OPEN, NOW + 600_000_000_001);
+}
+
+#[test]
+#[should_panic(expected = "open price stale")]
+fn open_price_at_close_rejected() {
+    let (mut c, ..) = setup();
+    let d = open_unpriced(&mut c, CLOSE);
+    oracle_answers(&mut c, d, "open", OPEN, CLOSE);
 }

@@ -9,6 +9,8 @@ use crate::{
 };
 
 const ORACLE_GAS: Gas = Gas::from_tgas(150);
+/// How long after `open_at` an open-phase oracle answer is still taken as the open price.
+const OPEN_PRICE_WINDOW_NS: u64 = 10 * 60 * 1_000_000_000;
 
 #[ext_contract(ext_oracle)]
 pub trait Oracle {
@@ -104,6 +106,7 @@ impl Contract {
             },
         );
         self.next_duel += 1;
+        self.open_duels += 1;
         self.duels.flush();
         self.agents.flush();
         self.agent_duels.flush();
@@ -144,13 +147,16 @@ impl Contract {
 
     /// Record an agent-signed intent for an open duel. Anyone may relay it: the signature is what
     /// binds the decision to the agent and the agent's bond pays its storage. Refused inside the
-    /// last `intent_lock_ns` of the duel. A TEE-backed agent must also present the enclave signature
-    /// over the completion that produced the decision.
+    /// last `intent_lock_ns` of the duel. A TEE-backed agent must also present the model enclave's
+    /// (kind 2) signature over the completion that produced the decision. The intent must outlive
+    /// `close_at` and carry a nonce above the agent's last posted one in this duel, so a relayer
+    /// cannot resurface an older decision.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     /// "agent_pk length", "proof_hash length", "bad size", "agent missing", "bad tee kind",
     /// "tee hash length", "unknown tee signer", "bad tee signature", "proof_hash mismatch",
-    /// "proof used", "tee proof required", "duel missing", "duel closed", "intent lock",
-    /// "bad target", "nonce used", "bad signature", "bond exhausted".
+    /// "proof used", "provider proof required", "tee proof required", "duel missing",
+    /// "duel closed", "intent lock", "intent expired", "bad target", "nonce used", "stale nonce",
+    /// "bad signature", "bond exhausted".
     pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
         let before = env::storage_usage();
         let i = &signed.intent;
@@ -167,6 +173,10 @@ impl Contract {
             Some(p) => {
                 self.verify_tee(p, &model_id, &i.proof_hash.0);
                 require!(!self.used_proofs.contains(&i.proof_hash.0), "proof used");
+                require!(
+                    p.kind == 2 || !self.tee_agents.contains(&i.agent_pk.0),
+                    "provider proof required"
+                );
                 p.kind
             }
             None => {
@@ -186,6 +196,7 @@ impl Contract {
             env::block_timestamp() + self.intent_lock_ns < duel.close_at.0,
             "intent lock"
         );
+        require!(i.expires_at.0 >= duel.close_at.0, "intent expired");
         let slot = if i.agent_pk.0 == duel.a.0 {
             &mut duel.last_intent_a
         } else if i.agent_pk.0 == duel.b.0 {
@@ -195,6 +206,9 @@ impl Contract {
         };
         let key = nonce_key(&i.agent_pk.0, i.nonce.0);
         require!(!self.used_nonces.contains(&key), "nonce used");
+        if let Some(prev) = slot.as_ref() {
+            require!(i.nonce.0 > prev.nonce.0, "stale nonce");
+        }
         require!(
             verify(&i.agent_pk.0, &intent_message(i), &signed.signature.0),
             "bad signature"
@@ -297,10 +311,12 @@ impl Contract {
     }
 
     /// Outlayer delivers the price here. `msg` is `open:<id>` or `close:<id>` as sent by
-    /// `ask_oracle`; `sender_id` is who called `oracle_call` and must be this contract.
+    /// `ask_oracle`; `sender_id` is who called `oracle_call` and must be this contract. An open price
+    /// is taken only when stamped within the oracle's recency window before `open_at` and at most
+    /// ten minutes after it (and before `close_at`), so a late answer cannot set a wrong open price.
     /// Caller: `oracle_account` only. Deposit: none. Panics: "not oracle", "not our request",
     /// "bad msg", "duel missing", "no price", "price overflow", "bad price", "resolved",
-    /// "duel open", "price before close", "no open price".
+    /// "open price stale", "duel open", "price before close", "no open price".
     pub fn oracle_on_call(&mut self, sender_id: AccountId, data: PriceData, msg: String) {
         require!(
             env::predecessor_account_id() == self.oracle_account,
@@ -312,8 +328,13 @@ impl Contract {
             .unwrap_or_else(|| env::panic_str("bad msg"));
         let id: u64 = id.parse().unwrap_or_else(|_| env::panic_str("bad msg"));
         let d = self.duels.get(&id).expect("duel missing");
-        let (symbol, resolved, close_at, open_price) =
-            (d.symbol.clone(), d.resolved, d.close_at.0, d.open_price);
+        let (symbol, resolved, open_at, close_at, open_price) = (
+            d.symbol.clone(),
+            d.resolved,
+            d.open_at.0,
+            d.close_at.0,
+            d.open_price,
+        );
         let price = data
             .prices
             .iter()
@@ -325,6 +346,14 @@ impl Contract {
         require!(!resolved, "resolved");
         match phase {
             "open" => {
+                let ts = data.timestamp.0;
+                let recency_ns = data.recency_duration_sec as u64 * 1_000_000_000;
+                require!(
+                    ts.saturating_add(recency_ns) >= open_at
+                        && ts <= open_at + OPEN_PRICE_WINDOW_NS
+                        && ts < close_at,
+                    "open price stale"
+                );
                 let d = self.duels.get_mut(&id).expect("duel missing");
                 if d.open_price.is_none() {
                     d.open_price = Some(U64(price));
@@ -364,6 +393,7 @@ impl Contract {
             d.injections.len() as u32,
         );
         d.resolved = true;
+        self.open_duels -= 1;
         d.pool = U128(0);
         d.injections = vec![];
         d.outcome = Some(Outcome {
@@ -399,6 +429,7 @@ impl Contract {
         let injections = std::mem::take(&mut duel.injections);
         duel.resolved = true;
         duel.pool = U128(0);
+        self.open_duels -= 1;
 
         let slash_bps = self.slash_bps as u128;
         let mut outcome = Outcome {

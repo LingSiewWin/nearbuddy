@@ -162,8 +162,14 @@ impl Contract {
             .checked_add(f.amount_in.0)
             .filter(|s| *s <= m.allowance.0)
             .ok_or("allowance exhausted")?;
-        let fee = f.amount_in.0 * self.fee_bps as u128 / 10_000;
-        let debit = f.amount_in.0 + fee;
+        // checked: `amount_in` is solver-supplied, so one absurd fill must not panic the batch
+        let fee = f
+            .amount_in
+            .0
+            .checked_mul(self.fee_bps as u128)
+            .ok_or("fee overflow")?
+            / 10_000;
+        let debit = f.amount_in.0.checked_add(fee).ok_or("fee overflow")?;
         let bal = self.vaults.get(follower).copied().unwrap_or(0);
         if bal < debit {
             return Err("insufficient");

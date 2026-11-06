@@ -53,6 +53,7 @@ impl Contract {
             fee_bps: self.fee_bps,
             min_chaos_deposit: U128(self.min_chaos_deposit),
             next_duel: U64(self.next_duel),
+            open_duels: self.open_duels,
             owner_fees: U128(self.owner_fees),
         }
     }
