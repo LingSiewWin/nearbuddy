@@ -1,0 +1,51 @@
+/* The /how page. Self-contained: it sets its own ground, ink and type rather than leaning on globals. */
+.how {
+  max-width: 1072px;
+  margin: 0 auto;
+  padding: 32px 16px 72px;
+  background: #17160f;
+  color: #eee9d8;
+  font-family: var(--font-archivo), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.how-title {
+  margin: 0 0 20px;
+  font-size: 28px;
+  font-weight: 650;
+  font-stretch: 125%;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.how-stage {
+  margin: 0;
+}
+
+.how-lines {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px 32px;
+  margin: 32px 0 0;
+  padding-top: 24px;
+  border-top: 1px solid #323026;
+}
+
+.how-lines dt {
+  margin-bottom: 6px;
+  color: #a39d89;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.how-lines dd {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+@media (max-width: 760px) {
+  .how-lines {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
