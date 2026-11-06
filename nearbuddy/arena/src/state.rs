@@ -127,8 +127,9 @@ pub struct Contract {
     /// NEAR deposited minus NEAR withdrawn through vaults, from deploy 15 on (vaults funded before
     /// it are not counted; withdrawals saturate at 0).
     pub(crate) vault_total: u128,
-    /// Duel id to the intent lock it was opened under. Duels opened before deploy 15 have no entry
-    /// and use `intent_lock_ns`.
+    /// Duel id to the intent lock it was opened under (ns), kept after the duel finishes so its lock
+    /// stays checkable through `duel_lock` (the opener paid for the entry). Duels opened before
+    /// deploy 15 have no entry and use `intent_lock_ns`.
     pub(crate) duel_locks: LookupMap<u64, u64>,
     /// Per token id, surplus `sweep_surplus` has approved and not yet seen confirmed: settles treat it
     /// as spent, so a fill can never be credited from balance that is on its way out.

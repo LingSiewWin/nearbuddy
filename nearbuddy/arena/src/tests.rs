@@ -3119,3 +3119,22 @@ fn a_landed_withdraw_transfer_changes_nothing_more() {
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - NEAR);
     assert!(c.get_pending_withdraw(FOLLOWER.parse().unwrap()).is_none());
 }
+
+#[test]
+fn duel_lock_reports_the_lock_a_duel_opened_under_and_keeps_it_after_close() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    assert_eq!(c.duel_lock(U64(d)), Some(U64(LOCK)));
+    // raising the global lock mid-duel does not change this duel's lock, nor the view
+    ctx(OWNER, 1);
+    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, 25);
+    assert_eq!(c.duel_lock(U64(d)), Some(U64(LOCK)));
+    // resolved: still checkable
+    resolve_at_close(&mut c, d, UP);
+    assert!(c.get_duel(U64(d)).unwrap().resolved);
+    assert_eq!(c.duel_lock(U64(d)), Some(U64(LOCK)));
+    // a duel from before deploy 15 has no entry and reads the global lock
+    c.duel_locks.remove(&d);
+    assert_eq!(c.duel_lock(U64(d)), Some(U64(25_000_000_000)));
+    assert_eq!(c.duel_lock(U64(99)), None);
+}

@@ -107,6 +107,17 @@ impl Contract {
         self.duels.get(&duel_id.0).cloned()
     }
 
+    /// The intent lock duel `duel_id` runs (or ran) under, in nanoseconds: no intent lands in its
+    /// last `duel_lock` before `close_at`. From deploy 15 this is the value stored when the duel
+    /// opened, kept after it finishes; for a duel opened earlier it is today's global lock, since
+    /// those duels read the global value. `None` for an unknown duel.
+    /// View: anyone, no deposit, no panics.
+    pub fn duel_lock(&self, duel_id: U64) -> Option<U64> {
+        self.duels
+            .contains_key(&duel_id.0)
+            .then(|| U64(self.lock_of(duel_id.0)))
+    }
+
     /// Duel ids an agent took part in, newest first, `limit` entries from offset `from`. Only duels
     /// opened from deploy 10 on are indexed; unknown agents return an empty list.
     /// View: anyone, no deposit, no panics.

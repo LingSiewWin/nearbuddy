@@ -630,6 +630,19 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         "GAS oracle_on_call (close, 32 injections scored) {:.2} TGas",
         gas_of(&r) as f64 / 1e12
     );
+    // the finished duel's lock stays readable (testnet RPCs refuse view_state on this contract)
+    let lock: Option<U64> = contract
+        .call_function("duel_lock", json!({"duel_id": duel_id.to_string()}))
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(
+        lock,
+        Some(U64(30_000_000_000)),
+        "opened under the 30 s lock"
+    );
+    println!("duel_lock after resolve: 30 s");
     let a: Value = contract
         .call_function("get_agent", json!({"agent_pk": b64(&pka)}))
         .read_only()

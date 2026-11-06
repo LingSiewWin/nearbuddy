@@ -575,7 +575,6 @@ impl Contract {
         );
         d.resolved = true;
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
-        self.duel_locks.remove(&duel_id.0);
         self.self_chaos.remove(&duel_id.0);
         d.pool = U128(0);
         d.injections = vec![];
@@ -620,7 +619,6 @@ impl Contract {
         duel.resolved = true;
         duel.pool = U128(0);
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
-        self.duel_locks.remove(&id);
 
         let slash_bps = self.slash_bps as u128;
         let mut outcome = Outcome {
