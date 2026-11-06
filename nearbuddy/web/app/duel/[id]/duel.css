@@ -1,0 +1,228 @@
+/* Duel page: the arena's grid and classes (globals.css), plus the trail rail, the attack stories, the proof
+   list and the race card's close line. Same tokens: colour means who, hatched red means a paid lie, Long is
+   filled and Short is outlined. */
+.crumb {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 13px;
+  color: var(--dim);
+  margin-bottom: 18px;
+}
+.crumb a {
+  color: var(--ink);
+}
+
+/* race card additions: the move between the oracle's open and close */
+.duel .band {
+  fill: rgba(238, 233, 216, 0.06);
+}
+.closelab {
+  position: absolute;
+  right: 6px;
+  font-size: 12px;
+  color: var(--ink);
+  font-stretch: 85%;
+  transform: translateY(-120%);
+}
+.openlab.below,
+.closelab.below {
+  transform: translateY(25%);
+}
+
+/* attack stories */
+.story + .story {
+  margin-top: 30px;
+  padding-top: 26px;
+  border-top: 1px solid var(--line);
+}
+.story .lead {
+  margin-top: 14px;
+}
+
+/* proof */
+.proof {
+  list-style: none;
+  margin-top: 14px;
+  max-width: 88ch;
+}
+.proof li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 24px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  font-size: 15px;
+}
+.proof li b {
+  font-weight: 650;
+}
+.proof li > span {
+  grid-column: 1;
+  color: var(--dim);
+  font-size: 14px;
+}
+.proof li > a,
+.proof li > i {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.proof li > i {
+  font-style: normal;
+  color: var(--faint);
+}
+.proof .links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 6px;
+}
+.proof .links a {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* the trail: the duel's rail, oldest first */
+.trail {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+.tr {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) auto;
+  gap: 0 12px;
+  align-items: start;
+  width: 100%;
+  padding: 12px 20px 13px 17px;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  color: inherit;
+}
+.tr .tm b {
+  display: block;
+  font-weight: 650;
+  font-size: 15px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+.tr .tm small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--faint);
+  font-stretch: 85%;
+  font-variant-numeric: tabular-nums;
+}
+.t-call {
+  border-left-color: var(--k);
+}
+.t-call .call {
+  font-weight: 600;
+}
+.t-call .call .who {
+  font-weight: 700;
+}
+.shape {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin: 0 7px 0 3px;
+  border: 1.5px solid var(--k);
+}
+.shape.long {
+  background: var(--k);
+}
+.tr .why {
+  margin-top: 3px;
+  color: var(--dim);
+}
+.vline {
+  margin-top: 6px;
+  font-weight: 700;
+}
+.vline.fell {
+  color: var(--alarm);
+}
+.vline span {
+  font-weight: 400;
+  color: var(--dim);
+}
+.t-fail .call {
+  color: var(--faint);
+  text-decoration: line-through;
+}
+.t-sealed .call {
+  font-weight: 400;
+  color: var(--dim);
+}
+.t-mark {
+  background: rgba(238, 233, 216, 0.04);
+  color: var(--dim);
+}
+.t-mark b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.t-attack {
+  position: relative;
+  border-left: 0;
+  padding-left: 20px;
+  background: rgba(255, 75, 75, 0.07);
+  cursor: pointer;
+}
+.t-attack::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: var(--hatch);
+}
+.t-attack:hover {
+  background: rgba(255, 75, 75, 0.13);
+}
+.t-attack b {
+  color: var(--alarm);
+}
+.tr .seal {
+  margin-top: 1px;
+}
+
+@media (max-width: 900px) {
+  .duel .p-tape {
+    position: relative;
+    height: auto;
+  }
+  .trail {
+    overflow: visible;
+  }
+  .tr {
+    grid-template-columns: 50px minmax(0, 1fr) auto;
+    gap: 0 10px;
+    padding: 12px 16px 13px 13px;
+  }
+  .t-attack {
+    padding-left: 16px;
+  }
+  .proof li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .proof li > a,
+  .proof li > i {
+    grid-column: 1;
+    grid-row: auto;
+    margin-top: 4px;
+  }
+  .closelab {
+    right: 0;
+  }
+}

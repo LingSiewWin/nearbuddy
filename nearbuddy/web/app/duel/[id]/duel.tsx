@@ -1,368 +1,461 @@
 "use client";
-// One duel, btop-style: the two sides and their tier, the oracle prices and the scored outcome, the
-// attacks thrown at each side, and the three things a reader can check without trusting this page.
-import { use, useEffect, useState } from "react";
-import { type CommitConfig, commitCells, proven as hasProof, revealCell } from "../../cells";
-import {
-  addrHref,
-  agentHref,
-  blockHref,
-  bottom,
-  boxTitle,
-  bps,
-  getJson,
-  legend,
-  meter,
-  near,
-  price8,
-  row,
-  rowx,
-  short,
-  ts,
-  ZERO,
-} from "../../tui";
+// One duel, replayed: the result in a sentence and the market move (or, while it runs, who is winning and the
+// clock), the race card, each paid attack with the reply it got, the transactions to check, and the whole
+// trail in the rail. Agent view swaps each panel for its endpoint. While the duel is open the data is
+// re-read every 10 s; once it is scored, never again.
+import { useEffect, useState } from "react";
+import { type Intent, isCall, markPct } from "../../arena/model";
+import { type Tick, useNow, usePrice } from "../../lib/live";
+import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
+import { acctUrl, clock, mmss, near, pct, sideWord, stake, TAMPER_TX, txUrl, usd, who } from "../../ui/format";
+import { Machine } from "../../ui/machine";
+import { type DuelData, type DuelSide, loadDuel } from "./data";
+import { Race, tones } from "./race";
+import { type Story, stories, Trail, verdictLine } from "./trail";
 
-type Agent = {
-  owner: string;
-  pk: string;
-  model_id: string;
-  bond: string;
-  alpha_bps: number;
-  shield: number;
-  in_duel: string | null;
-  tee: boolean;
-};
-type Intent = {
-  agent_pk: string;
-  duel_id: string;
-  side: "Long" | "Short";
-  size_bps: number;
-  nonce: string;
-  expires_at: string;
-  proof_hash: string;
-};
-type Injection = { kind: string; payload_hash: string; target: string; block: string };
-type Outcome = {
-  open_price: string;
-  close_price: string;
-  pnl_a: number;
-  pnl_b: number;
-  winner: string | null;
-  slashed: string;
-  injections?: number;
-};
-type Duel = {
-  id: string;
-  a: string;
-  b: string;
-  symbol: string;
-  open_at: string;
-  close_at: string;
-  pool: string;
-  injections: Injection[];
-  resolved: boolean;
-  last_intent_a: Intent | null;
-  last_intent_b: Intent | null;
-  outcome?: Outcome | null;
-  open_price?: string | null;
-};
-type Rec = {
-  at: number;
-  rpc: string;
-  contract: string;
-  oracle: string;
-  config?: CommitConfig | null;
-  no_reveal?: [boolean, boolean] | null;
-  duel: Duel | null;
-  a: Agent | null;
-  b: Agent | null;
-};
+const TRADES_MS = 60 * 60_000; // Coinbase's trade history reaches about this far back; older duels use minute prices
+const CANDLES = "https://api.exchange.coinbase.com/products/NEAR-USD/candles?granularity=60";
 
-const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
-const when = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(0, 19).replace("T", " ");
-const proven = (i: Intent | null) => hasProof(i, ZERO);
-const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
-
-export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
-  const [r, setR] = useState<Rec | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+export function Duel({ initial }: { initial: DuelData }) {
+  const [d, setD] = useState(initial);
   useEffect(() => {
+    if (!d.live) return;
     let alive = true;
-    const tick = async () => {
-      try {
-        const j = await getJson<Rec>(`/api/duel?id=${encodeURIComponent(id)}`);
-        if (alive) {
-          setR(j);
-          setErr(null);
-        }
-      } catch (e) {
-        if (alive) setErr(e instanceof Error ? e.message : String(e));
-      }
-    };
-    tick();
-    const t = setInterval(tick, 20_000);
+    const id = setInterval(
+      () =>
+        loadDuel(String(d.duel))
+          .then((n) => {
+            if (alive && n) setD(n);
+          })
+          .catch(() => {}),
+      10_000,
+    );
     return () => {
       alive = false;
-      clearInterval(t);
+      clearInterval(id);
     };
-  }, [id]);
+  }, [d.live, d.duel]);
+  return d.live || d.at - d.closes < TRADES_MS ? <WithTrades d={d} /> : <WithMinutes d={d} />;
+}
 
-  const d = r?.duel ?? null;
-  const o = d?.outcome ?? null;
-  const contract = r?.contract ?? "arena.nearbuddy-solver.testnet";
-  const oracle = r?.oracle ?? "price-oracle.testnet";
-  const nowNs = BigInt(Date.now()) * 1_000_000n;
-  const state = !d
-    ? null
-    : d.resolved
-      ? { t: "resolved", c: "tie" }
-      : BigInt(d.close_at) < nowNs
-        ? { t: "CLOSED, awaiting oracle", c: "open" }
-        : { t: "LIVE", c: "open" };
-  const name = (pk: string) => (pk === d?.a ? r?.a : pk === d?.b ? r?.b : null)?.model_id ?? short(pk, 8);
-  const tag = (pk: string) => (pk === d?.a ? "A" : pk === d?.b ? "B" : "?");
+function WithTrades({ d }: { d: DuelData }) {
+  const { ticks } = usePrice(d.opened - 30_000);
+  return <Body d={d} ticks={ticks} src="trades" />;
+}
 
-  const sideRow = (t: "A" | "B", pk: string, ag: Agent | null, it: Intent | null) =>
-    rowx(
-      t,
-      [
-        { t: (ag?.model_id ?? short(pk, 12)).slice(0, 30).padEnd(30), href: agentHref(pk), title: pk },
-        "  ",
-        ag
-          ? ag.tee
-            ? { t: "ENCLAVE-VERIFIED", c: "ok" }
-            : { t: "UNVERIFIED TIER ", c: "unv" }
-          : { t: "not registered  ", c: "dim" },
-        "  ",
-        it
-          ? {
-              t: `${it.side.padEnd(5)} ${(it.size_bps / 100).toFixed(0).padStart(3)}%  ${proven(it) ? `proof ${short(it.proof_hash, 10)}` : "no proof"}`,
-              c: proven(it) ? "ok" : "unv",
-              title: proven(it)
-                ? `sha256(request_hash||response_hash) ${it.proof_hash}  nonce ${it.nonce}; full hash in box 4`
-                : "proof_hash is 32 zero bytes: the intent carries no enclave signature",
-            }
-          : { t: "no intent yet", c: "dim" },
-      ],
-      "hi",
-    );
-  const proofRow = (t: "A" | "B", it: Intent | null) =>
-    rowx(
-      `${t} proof`,
-      proven(it)
-        ? [
-            { t: it!.proof_hash, c: "ok" },
-            { t: `  nonce ${it!.nonce}`, c: "dim" },
-          ]
-        : [{ t: it ? "none: 32 zero bytes, unverified tier" : "no intent", c: "dim" }],
-    );
+/** One-minute candles as two points per minute: its first trade at the minute's start, its last at the end. */
+function WithMinutes({ d }: { d: DuelData }) {
+  const [ticks, setTicks] = useState<Tick[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const iso = (t: number) => new Date(t).toISOString();
+    fetch(`${CANDLES}&start=${iso(d.opened - 60_000)}&end=${iso(d.closes + 60_000)}`)
+      .then((r) => r.json())
+      .then((rows: number[][]) => {
+        if (!alive || !Array.isArray(rows)) return;
+        // rows: [time s, low, high, open, close, volume], newest first; plotted as the oldest minute's open,
+        // then each minute's close at its end
+        const asc = [...rows].sort((x, y) => (x[0] ?? 0) - (y[0] ?? 0));
+        const first = asc[0];
+        const list: Tick[] = asc.map(([s = 0, , , , c = 0]) => ({ t: s * 1000 + 59_999, p: c, side: "buy" }));
+        if (first) list.unshift({ t: (first[0] ?? 0) * 1000, p: first[3] ?? 0, side: "buy" });
+        setTicks(list);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [d.opened, d.closes]);
+  return <Body d={d} ticks={ticks} src="minutes" />;
+}
 
-  const pa = o?.pnl_a ?? 0;
-  const pb = o?.pnl_b ?? 0;
-  const injections = d?.injections ?? [];
+function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "minutes" }) {
+  const now = useNow(d.live ? 500 : 30_000);
+  const list = stories(d);
+  const day = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return (
+    <DrawerProvider>
+      <div className="abanner m">
+        <p>
+          Agent view. Each panel is now the endpoint behind it, with a curl line and a live sample. No key needed. The
+          duel record is in the contract&apos;s raw units; a route for one duel in plain units is on its way.
+        </p>
+        <div className="eps">
+          <span>
+            GET <code>/api/duel?id={d.duel}</code>
+          </span>
+          <span>
+            GET <code>/api/v1/decisions?duel={d.duel}</code>
+          </span>
+          <span>
+            GET <code>/api/v1/events</code>
+          </span>
+          <span>
+            GET <code>/api/v1/decisions/{"{tx}"}</code>
+          </span>
+          <span>
+            coming: GET <code>/api/v1/duels/{d.duel}</code>
+          </span>
+        </div>
+      </div>
+      <main className="page duel">
+        <section className="p-story">
+          <div className="h">
+            <p className="crumb">
+              <a href="/arena">Arena</a>
+              <span>
+                Duel {d.duel}, NEAR against the dollar
+                {now ? `, ${day(d.opened)} ${clock(d.opened)[0].slice(0, 5)} to ${clock(d.closes)[0].slice(0, 5)}` : ""}
+              </span>
+            </p>
+            <Head d={d} price={d.live ? (ticks.at(-1)?.p ?? null) : d.close} now={now} />
+            <Race d={d} ticks={ticks} now={now} src={src} />
+          </div>
+          <Machine
+            path={`/api/duel?id=${d.duel}`}
+            note="JSON, raw units, cached 20 s"
+            desc="The contract's record of this duel plus both agents. open_at and close_at are nanoseconds, prices are USD × 1e8, pool, bond and slashed are yoctoNEAR, pnl_a and pnl_b are each side's score in basis points. last_intent_a and last_intent_b are the calls that were scored. GET /api/v1/duels/<id> in plain units is coming; until then this is the source."
+          />
+        </section>
+        <section className="p-news">
+          <div className="h">
+            <Attacks d={d} list={list} />
+          </div>
+          <Machine
+            path="/api/v1/events?limit=50"
+            note="newest first, about the last two hours"
+            desc="Every arena transaction decoded: intent, commit, reveal, attack (with the headline text when it is known), open (with the oracle's opening price) and resolve (scores and closing price). Keep the rows whose duel equals this id. Older duels are outside this window: their calls are in /api/v1/decisions?duel=<id>, and each tx hash resolves on FastNEAR or nearblocks."
+          />
+        </section>
+        <section className="p-board">
+          <div className="h">
+            <Proof d={d} />
+          </div>
+          <ProofMachine d={d} />
+        </section>
+        <aside className="p-tape" aria-label="The whole duel, in order">
+          <Trail d={d} now={now} list={list} />
+          <Machine
+            path={`/api/v1/decisions?duel=${d.duel}`}
+            note="JSON, newest first"
+            desc="Each model's published call in this duel: side, size in basis points, its own reasoning, the attack text it was shown and a verdict (spotted, fell, unmoved), joined to the chain by tx. GET /api/v1/decisions/<tx> returns the exact bytes the model's enclave signed, so the hashes in the transaction can be re-checked."
+          />
+        </aside>
+        <footer className="foot">
+          Contract{" "}
+          <a href={acctUrl("arena.nearbuddy-solver.testnet")} target="_blank" rel="noreferrer">
+            arena.nearbuddy-solver.testnet
+          </a>
+          . Prices at open and close come from a TEE oracle,{" "}
+          <a href={acctUrl("price-oracle.testnet")} target="_blank" rel="noreferrer">
+            price-oracle.testnet
+          </a>
+          . The line is Coinbase NEAR-USD. For agents: <a href="/llms.txt">/llms.txt</a>.
+        </footer>
+      </main>
+    </DrawerProvider>
+  );
+}
 
+const callOf = (s: DuelSide) =>
+  s.side ? `bet ${s.side === "Long" ? "up" : "down"} with ${stake(s.size_pct)}` : "made no call";
+const nearAmt = (n: number) => `${Number(n.toFixed(4))} NEAR`;
+
+function Head({ d, price, now }: { d: DuelData; price: number | null; now: number }) {
+  const t = tones(d);
+  const N = (s: DuelSide) => <span className={`who ${s === d.a ? t.a : t.b}`}>{who(s.model)}</span>;
+  const open = d.open;
+  const move = open && price ? ((price - open) / open) * 100 : null;
+  const moved =
+    move == null
+      ? "The price is not known yet"
+      : Math.abs(move) < 0.005
+        ? "NEAR did not move"
+        : `NEAR ${move > 0 ? "rose" : "fell"} ${Math.abs(move).toFixed(2)}%`;
+  let h1: React.ReactNode;
+  let sub: React.ReactNode;
+  let fine: string;
+  if (!d.live) {
+    const w = d.winner === d.a.agent ? d.a : d.winner === d.b.agent ? d.b : null;
+    const l = w === d.a ? d.b : d.a;
+    fine = "Each side is scored on its last call: up or down, times its share of stake, times the price move.";
+    if (w) {
+      h1 = (
+        <>
+          {N(w)} won duel {d.duel}. {N(l)} paid {nearAmt(d.slashed)}.
+        </>
+      );
+      sub = (
+        <>
+          {N(w)} {callOf(w)} and {N(l)} {callOf(l)}. {moved} between the oracle&apos;s open and close, so {N(w)} scored{" "}
+          <b>{pct(w.score ?? 0)}</b> and {N(l)} <b>{pct(l.score ?? 0)}</b>. The loser pays {d.slashPct}% of its bond to
+          the winner.
+        </>
+      );
+    } else {
+      const same = !!d.a.side && d.a.side === d.b.side;
+      h1 = same
+        ? `Level: both bet ${d.a.side === "Long" ? "up" : "down"}, nobody paid.`
+        : !d.a.side && !d.b.side
+          ? "Level: no calls, nobody paid."
+          : "Level: nobody paid.";
+      sub = (
+        <>
+          {same && d.a.size_pct === d.b.size_pct ? (
+            <>Both {callOf(d.a).replace("its", "their")}. </>
+          ) : (
+            <>
+              {N(d.a)} {callOf(d.a)} and {N(d.b)} {callOf(d.b)}.{" "}
+            </>
+          )}
+          {moved} between the oracle&apos;s open and close, so both scored <b>{pct(d.a.score ?? 0)}</b>. Equal scores
+          mean nobody pays.
+        </>
+      );
+    }
+  } else {
+    const ma = markPct(d.a, open, price);
+    const mb = markPct(d.b, open, price);
+    const lead = Math.abs(ma - mb) < 0.005 ? null : ma > mb ? d.a : d.b;
+    const lag = lead === d.a ? d.b : d.a;
+    const pay = lag.bond != null ? (lag.bond * d.slashPct) / 100 : null;
+    fine = "Live line: Coinbase NEAR-USD trades. The score uses the oracle's prices at the open and at the bell.";
+    if (now && now > d.closes + 60_000) {
+      h1 = "Waiting for the closing price.";
+      sub = (
+        <>
+          Duel {d.duel} ended {Math.round((now - d.closes) / 60_000)} min ago. It is scored as soon as anyone asks the
+          price oracle for the close. At the last trade, {lead ? <>{N(lead)} was ahead</> : "the two sides were level"}.
+        </>
+      );
+    } else {
+      h1 = lead ? <>{N(lead)} is winning.</> : "Dead heat.";
+      sub = (
+        <>
+          {N(d.a)} is <b>{sideWord(d.a.side)}</b>, {N(d.b)} is <b>{sideWord(d.b.side)}</b>
+          {move == null ? ". " : `, and ${moved.replace("rose", "is up").replace("fell", "is down")} since the bell. `}
+          {lead ? (
+            <>
+              If it ends now, {N(lag)} pays {N(lead)} <b>{pay != null ? near(pay) : `${d.slashPct}% of its bond`}</b>.
+            </>
+          ) : d.a.side && d.a.side === d.b.side ? (
+            "Same call on both sides: if it ends like this, nobody pays."
+          ) : (
+            "Nobody is ahead yet."
+          )}
+        </>
+      );
+    }
+  }
+  const left = Math.max(0, Math.round((d.closes - now) / 1000));
+  const span = Math.max(1, (d.closes - d.opened) / 1000);
   return (
     <>
-      <pre className="wrap">
-        <a href="/arena" className="dim">
-          ← arena
-        </a>
-        {"  "}
-        <span className="hi">NEARBUDDY DUEL #{id}</span>
-        {d ? (
-          <>
-            {" "}
-            <span className="dim">· {symbol(d.symbol)} ·</span> <span className={state!.c}>{state!.t}</span>{" "}
-            <span className="dim">
-              · {when(d.open_at)} → {ts(d.close_at)} UTC · pool {near(d.pool)} NEAR
-            </span>
-          </>
-        ) : null}
-        {"\n"}
-        <span className="dim">
-          {r
-            ? `snapshot ${new Date(r.at).toISOString()}  contract ${r.contract}  rpc ${r.rpc}`
-            : err
-              ? `error: ${err}`
-              : "connecting"}
-        </span>
-        <span className="cursor" />
-      </pre>
-      <pre>
-        {boxTitle(1, "sides", "who fought, their tier, their last intent")}
-        {"\n"}
-        {d ? (
-          <>
-            {sideRow("A", d.a, r?.a ?? null, d.last_intent_a)}
-            {"\n"}
-            {sideRow("B", d.b, r?.b ?? null, d.last_intent_b)}
-            {"\n"}
-            {rowx("commit-reveal", commitCells(r?.config))}
-            {"\n"}
-            {r?.config?.commit_reveal || r?.no_reveal ? (
-              <>
-                {rowx("reveal", [
-                  "A ",
-                  revealCell(r.no_reveal?.[0], !!d.last_intent_a, d.resolved),
-                  "   B ",
-                  revealCell(r.no_reveal?.[1], !!d.last_intent_b, d.resolved),
-                ])}
-                {"\n"}
-              </>
-            ) : null}
-          </>
+      <h1>{h1}</h1>
+      <div className="head">
+        <div>
+          <p className="sub">{sub}</p>
+          <p className="fine">{fine}</p>
+        </div>
+        {d.live ? (
+          <div className="clock">
+            <span className="cd">{now ? mmss(left) : "–:––"}</span>
+            <small>{left > 0 ? `left in duel ${d.duel}` : "time is up, waiting for the oracle"}</small>
+            <div className="prog">
+              <i style={{ width: `${now ? Math.min(100, ((span - left) / span) * 100) : 0}%` }} />
+            </div>
+          </div>
         ) : (
-          <>
-            {rowx("", [{ t: r ? "no such duel on this contract" : "loading", c: "dim" }])}
-            {"\n"}
-          </>
+          <div className="clock">
+            <span className="cd">{move == null ? "–" : pct(move)}</span>
+            <small>
+              NEAR from {usd(d.open)} to {usd(d.close)}, the oracle&apos;s open and close
+            </small>
+          </div>
         )}
-        {legend(
-          `ENCLAVE-VERIFIED = intents signed inside a NEAR AI TEE · size = % of bond risked · proof = sha256 of the model call${r?.config?.commit_reveal ? " · no-reveal slashed = committed a hidden call, never revealed it" : ""}`,
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(2, "prices", `oracle ${oracle}`)}
-        {"\n"}
-        {rowx(
-          "open",
-          d?.open_price || o
-            ? [
-                `${price8(o?.open_price ?? d?.open_price)} USD`,
-                { t: "   snapshotted by the Outlayer TEE oracle right after open", c: "dim" },
-              ]
-            : [{ t: "pending oracle callback", c: "dim" }],
-        )}
-        {"\n"}
-        {rowx(
-          "close",
-          o
-            ? [
-                `${price8(o.close_price)} USD`,
-                { t: `   fetched by the oracle at resolve, after ${d ? ts(d.close_at) : "-"}`, c: "dim" },
-              ]
-            : [{ t: d ? `pending: anyone can resolve after ${ts(d.close_at)} UTC` : "-", c: "dim" }],
-        )}
-        {"\n"}
-        {rowx(
-          "pnl",
-          o
-            ? [
-                ...meter(
-                  [
-                    [Math.abs(pa), pnlc(pa)],
-                    [Math.abs(pb), pnlc(pb)],
-                  ],
-                  Math.abs(pa) + Math.abs(pb),
-                ),
-                "  A ",
-                { t: `${bps(pa)} bps`, c: pnlc(pa) },
-                "   B ",
-                { t: `${bps(pb)} bps`, c: pnlc(pb) },
-                { t: "   bar: |pnl A| vs |pnl B|", c: "dim" },
-              ]
-            : [...meter([], 0), { t: "  scored at resolve: side × size × price move", c: "dim" }],
-        )}
-        {"\n"}
-        {rowx(
-          "winner",
-          o
-            ? o.winner
-              ? [
-                  { t: `${tag(o.winner)} ${name(o.winner)}`, href: agentHref(o.winner), c: "win", title: o.winner },
-                  { t: "   pool paid to the winner", c: "dim" },
-                ]
-              : [{ t: "tie, pool split", c: "tie" }]
-            : [{ t: "undecided", c: "dim" }],
-        )}
-        {"\n"}
-        {rowx(
-          "slashed",
-          o
-            ? BigInt(o.slashed) > 0n
-              ? [
-                  { t: `${near(o.slashed)} NEAR`, c: "loss" },
-                  { t: "   taken from the loser's bond into the pool", c: "dim" },
-                ]
-              : [{ t: "none", c: "dim" }]
-            : [{ t: "-", c: "dim" }],
-        )}
-        {"\n"}
-        {legend(
-          "pnl = side × size × price move, 1 bps = 0.01 % · slashed = the loser's share of bond (slash_bps) moved to the pool",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(3, "attacks", "paid prompt injections at a side, recorded on-chain")}
-        {"\n"}
-        {d?.resolved
-          ? rowx("attacks", [
-              `${o?.injections ?? 0} during the duel`,
-              { t: "   payloads leave contract storage at resolve; only the count survives", c: "dim" },
-            ])
-          : injections.length
-            ? injections.map((j, k) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
-                <span key={k}>
-                  {rowx(k ? "" : "attacks", [
-                    j.kind.padEnd(14),
-                    " → ",
-                    {
-                      t: `${tag(j.target)} ${name(j.target)}`.slice(0, 30),
-                      href: agentHref(j.target),
-                      title: j.target,
-                    },
-                    " ".repeat(Math.max(2, 32 - `${tag(j.target)} ${name(j.target)}`.length)),
-                    "sha256 ",
-                    { t: short(j.payload_hash, 12), title: j.payload_hash },
-                    "  block ",
-                    { t: j.block, href: blockHref(j.block), c: "dim" },
-                  ])}
-                  {"\n"}
-                </span>
-              ))
-            : rowx("attacks", [{ t: "none yet", c: "dim" }])}
-        {d?.resolved || !injections.length ? "\n" : ""}
-        {legend(
-          "attack = anyone pays a deposit to send one prompt to one side mid-duel · sha256 = hash of that prompt",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(4, "how to verify", "without trusting this page")}
-        {"\n"}
-        {row("1 intent", "proof_hash = sha256(request_hash || response_hash) of the NEAR AI Cloud completion;")}
-        {"\n"}
-        {row("", "the contract checked the enclave's ed25519 signature before storing it:")}
-        {"\n"}
-        {proofRow("A", d?.last_intent_a ?? null)}
-        {"\n"}
-        {proofRow("B", d?.last_intent_b ?? null)}
-        {"\n"}
-        {rowx("2 oracle", [
-          "prices come by oracle_on_call from ",
-          { t: oracle, href: addrHref(oracle), title: "open on nearblocks" },
-          " (Outlayer TEE), not an operator;",
-        ])}
-        {"\n"}
-        {rowx("", [
-          "the callback tx is in the contract's transactions on ",
-          { t: "nearblocks", href: addrHref(contract) },
-        ])}
-        {"\n"}
-        {rowx("3 contract", [
-          { t: contract, href: addrHref(contract), title: "open on nearblocks" },
-          `   get_duel {"duel_id":"${id}"} on any RPC returns this record`,
-        ])}
-        {"\n"}
-        {bottom()}
-      </pre>
+      </div>
     </>
+  );
+}
+
+function Attacks({ d, list }: { d: DuelData; list: Story[] }) {
+  const open = useDrawer();
+  const t = tones(d);
+  const missing = (d.attacks ?? 0) - list.length;
+  return (
+    <>
+      <h2>
+        Paid attacks on this duel
+        <span className="when">
+          {list.length ? `${list.length} fake headline${list.length > 1 ? "s" : ""}` : "none"}
+        </span>
+      </h2>
+      {!list.length ? (
+        <p className="lede">
+          {d.live ? "Nobody has paid to feed either model a fake headline yet." : "Nobody paid to attack this duel."}
+        </p>
+      ) : null}
+      {list.map((s) => {
+        const side = s.target === d.a.agent ? d.a : d.b;
+        const k = s.target === d.a.agent ? t.a : t.b;
+        const name = who(side.model);
+        const callSide = s.reply?.side ?? s.d?.side;
+        const size = s.reply ? s.reply.size / 100 : s.d ? s.d.size / 100 : null;
+        const paid = s.e ? Number((Number(BigInt(s.e.paid) / 10n ** 20n) / 1e4).toFixed(4)) : null;
+        const later = s.e && s.reply ? Math.max(0, Math.round((s.reply.at - s.e.at) / 1000)) : null;
+        const v = s.d?.verdict ?? null;
+        return (
+          <article key={s.e?.tx ?? s.d?.tx ?? s.text} className={`story ${k}`}>
+            <p className="lead">
+              Someone paid {paid != null ? `${paid} NEAR ` : ""}to slip <span className="who">{name}</span> a fake
+              headline{s.e ? `, ${mmss((s.e.at - d.opened) / 1000)} into the duel` : ""}.
+            </p>
+            <div className="lie">{s.text ? `“${s.text}”` : "A custom headline: only its hash is on chain."}</div>
+            {callSide ? (
+              <p className="cap">
+                {name}&apos;s {s.e ? "next call" : "call"}
+                {later != null ? `, ${later} s later` : ""}: {callSide} with {stake(size)}.
+                {s.d?.reason ? " In its own words:" : " Its reasoning for this duel is not published yet."}
+              </p>
+            ) : (
+              <p className="cap">{d.live ? `Waiting for ${name}'s next call.` : `${name} made no call after it.`}</p>
+            )}
+            {s.d?.reason ? <blockquote className="reply">“{s.d.reason}”</blockquote> : null}
+            {callSide && (v || s.reply) ? (
+              <div className="verdict">
+                {v ? <strong className={v === "fell" ? "fell" : ""}>{verdictLine[v]}</strong> : null}
+                {v ? (
+                  <span>
+                    {v === "spotted"
+                      ? `Named the lie and went ${callSide === "Long" ? "long" : "short"}.`
+                      : v === "fell"
+                        ? `Took the side the lie pushed: ${callSide === "Long" ? "long" : "short"}.`
+                        : `Went ${callSide === "Long" ? "long" : "short"}, not the way the lie pushed.`}
+                  </span>
+                ) : null}
+                {s.reply ? (
+                  <button
+                    type="button"
+                    className="seal"
+                    onClick={() =>
+                      s.reply && open({ kind: "intent", ev: s.reply, model: side.model, d: s.d ?? undefined })
+                    }
+                  >
+                    <Seal /> Verified
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </article>
+        );
+      })}
+      {missing > 0 ? (
+        <p className="note">
+          The contract counted {d.attacks} attack{d.attacks === 1 ? "" : "s"} on this duel; {missing} could not be read
+          back from the chain here.
+        </p>
+      ) : null}
+      {list.some((s) => !s.e) ? (
+        <p className="note">An attack without a time comes from the published dataset; its transaction is out of reach.</p>
+      ) : null}
+    </>
+  );
+}
+
+function Proof({ d }: { d: DuelData }) {
+  const opened = d.events.find((e) => e.kind === "open");
+  const scored = d.events.find((e) => e.kind === "resolve");
+  const calls = d.events.filter((e): e is Intent => isCall(e) && e.ok);
+  const t = tones(d);
+  const ext = { target: "_blank", rel: "noreferrer" } as const;
+  return (
+    <>
+      <h2>Check it yourself</h2>
+      <p className="lede">Every number on this page comes from these transactions on NEAR testnet.</p>
+      <ul className="proof">
+        <li>
+          <b>Opening price {usd(d.open)}</b>
+          <span>Set by the price oracle when the duel opened.</span>
+          {opened ? (
+            <a href={txUrl(opened.tx)} {...ext}>
+              opening ↗
+            </a>
+          ) : (
+            <i>not in reach</i>
+          )}
+        </li>
+        <li>
+          <b>
+            {calls.length} call{calls.length === 1 ? "" : "s"}, each checked before it counted
+          </b>
+          <span>
+            The contract verified the model&apos;s signature on every call. Each Verified mark opens the proof and a
+            re-check that runs in your browser.
+          </span>
+          <span className="links">
+            {calls.map((c) => (
+              <a key={c.tx} href={txUrl(c.tx)} className={c.agent === d.a.agent ? t.a : t.b} {...ext}>
+                <span className="who">{who(c.agent === d.a.agent ? d.a.model : d.b.model)}</span>{" "}
+                {mmss((c.at - d.opened) / 1000)} ↗
+              </a>
+            ))}
+          </span>
+        </li>
+        <li>
+          <b>{d.live ? "Closing price and score: after the bell" : `Closing price ${usd(d.close)} and the score`}</b>
+          <span>Fetched by the price oracle and scored in one transaction.</span>
+          {scored ? (
+            <a href={txUrl(scored.tx)} {...ext}>
+              scoring ↗
+            </a>
+          ) : (
+            <i>{d.live ? "not yet" : "not in reach"}</i>
+          )}
+        </li>
+        <li>
+          <b>Tampering is refused</b>
+          <span>A real proof with one flipped byte was rejected by the contract.</span>
+          <a href={txUrl(TAMPER_TX)} {...ext}>
+            refusal ↗
+          </a>
+        </li>
+      </ul>
+    </>
+  );
+}
+
+/** The proof in machine form: every transaction hash behind the page. */
+function ProofMachine({ d }: { d: DuelData }) {
+  const out = {
+    duel: d.duel,
+    read_from:
+      d.source === "tape" ? "live tape" : d.source === "history" ? "FastNEAR account history" : "dataset tx lookup",
+    open_tx: d.events.find((e) => e.kind === "open")?.tx ?? null,
+    calls: d.events.flatMap((e) =>
+      isCall(e)
+        ? [{ tx: e.tx, at_ms: e.at, agent: e.agent, side: e.side, size_bps: e.size, ok: e.ok, method: e.kind }]
+        : e.kind === "commit"
+          ? [{ tx: e.tx, at_ms: e.at, agent: e.agent, method: "commit" }]
+          : [],
+    ),
+    attacks: d.events.flatMap((e) =>
+      e.kind === "attack" ? [{ tx: e.tx, at_ms: e.at, target: e.target, payload_sha256: e.hash, text: e.text }] : [],
+    ),
+    resolve_tx: d.events.find((e) => e.kind === "resolve")?.tx ?? null,
+    tamper_refusal_tx: TAMPER_TX,
+  };
+  return (
+    <div className="m">
+      <div className="ep">
+        <b>TX</b>
+        <code>https://testnet.nearblocks.io/txns/&lt;hash&gt;</code>
+        <span>the transactions behind this page</span>
+      </div>
+      <p className="mdesc">
+        Read from FastNEAR&apos;s transaction API (tx.test.fastnear.com) and decoded from each call&apos;s arguments and
+        the contract&apos;s EVENT_JSON logs. at_ms is the block timestamp.
+      </p>
+      <pre className="json">{JSON.stringify(out, null, 2)}</pre>
+    </div>
   );
 }
