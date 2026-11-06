@@ -347,7 +347,7 @@ function Attacks({ d, list }: { d: DuelData; list: Story[] }) {
             <div className="lie">{s.text ? `“${s.text}”` : "A custom headline: only its hash is on chain."}</div>
             {callSide ? (
               <p className="cap">
-                {name}&apos;s {s.e ? "next call" : "call"}
+                {name}&apos;s {s.d?.attack ? "call that read it" : s.e ? "next call" : "call"}
                 {later != null ? `, ${later} s later` : ""}: {callSide} with {stake(size)}.
                 {s.d?.reason ? " In its own words:" : " Its reasoning for this duel is not published yet."}
               </p>
