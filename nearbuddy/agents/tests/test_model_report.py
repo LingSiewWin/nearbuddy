@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "analysis"))
 
 import experiment_report as er  # noqa: E402
+import injection_effects as ie  # noqa: E402
 import model_report as mr  # noqa: E402
 
 SETS = er.payload_sets(er.SPECTATOR.read_text())
@@ -91,30 +92,39 @@ def test_report_on_synthetic_rows():
         "11 rows, 8 TEE decisions with an intent across 3 duels (2 resolved on chain), 2 attacked"
     )
 
+    # Intervals count agent-duels (m), not decisions: Wilson at p = k/n over m. Worked by hand:
+    # wilson(1, 2) = [0.09, 0.91], wilson(1.5, 2) = [0.20, 0.97], wilson(2, 2) = [0.34, 1.00],
+    # wilson(1, 1) = [0.21, 1.00]
     cal = line("| M (naive) |", "## 1.").split(" | ")
-    assert cal[1] == "2/4 = 0.50 [0.15, 0.85] PROVISIONAL"  # Long share; NEAR up in 1 of its 2 duels
+    # Long 2/4 over 2 agent-duels; 3 of the 4 decisions sat in the up duel, so the decision-weighted base is 0.75
+    # while the per-duel up share is 1/2
+    assert cal[1] == "2/4 = 0.50 [0.09, 0.91] PROVISIONAL, 2 agent-duels (base 0.75)"
     assert cal[2] == "1/2 = 0.50"
-    assert cal[3].startswith("2/2 = 1.00")  # final calls: Long in up duel 1, Short in down duel 2
-    assert cal[4].startswith("1/2 = 0.50") and cal[5].startswith("2/2 = 1.00")  # always Long, momentum
-    assert cal[6].startswith("3/4 = 0.75")  # forward: three of four unattacked calls right to the close
+    # final calls: Long in up duel 1, Short in down duel 2
+    assert cal[3] == "2/2 = 1.00 [0.34, 1.00] PROVISIONAL, 2 agent-duels"
+    # always Long is right in duel 1 only: the model alone is right in duel 2 -> 1:0; momentum is right in both
+    assert cal[4] == "1/2; model BETTER 1:0 PROVISIONAL" and cal[5] == "2/2; model EVEN 0:0 PROVISIONAL"
+    assert cal[6] == "3/4 = 0.75 [0.20, 0.97] PROVISIONAL, 2 agent-duels |"  # forward: 3 of 4 right to the close
     assert line("| ALL GROUPS |", "## 1.").split(" | ")[3].startswith("3/3 = 1.00")  # + b's final Long in duel 1
+    assert line("| N (hardened) |", "## 1.").split(" | ")[1].endswith("(base 1.00)")  # duel 3 unresolved: out
 
     st = line("| M (naive) |", "## 2.").split(" | ")
-    assert st[1] == "n=1 2.00" and st[2].startswith("2/2 = 1.00") and st[5] == "1/6 |"
-    assert st[3].startswith("4/4 = 1.00")  # every unattacked call has the sign of its brief's move
+    assert st[1] == "n=1 2.00" and st[5] == "1/6 |"
+    assert st[2] == "2/2 = 1.00 [0.21, 1.00] PROVISIONAL, 1 agent-duels"  # both flips sit in one agent-duel
+    assert st[3] == "4/4 = 1.00 [0.34, 1.00] PROVISIONAL, 2 agent-duels"  # every call has its brief's sign
     assert line("| N (hardened) |", "## 2.").endswith("| 0/3 |")
     assert line("| N (hardened) |", "## 2.").split(" | ")[3].startswith("2/2 = 1.00")
 
-    assert line("| M (naive) | exchange halt | 1 | 1/1 = 1.00 ", "## 3.").endswith(
-        "(base 0.50) | 1/1 = 1.00 [0.21, 1.00] PROVISIONAL |"
+    assert line("| M (naive) | exchange halt | train | 1 | 1/1 = 1.00 ", "## 3.").endswith(
+        "(base 0.50) | 1/1 = 1.00 [0.21, 1.00] PROVISIONAL, 1 agent-duels |"
     )
-    assert line("| N (hardened) | whale | 1 | 0/1 = 0.00 ", "## 3.").endswith(
-        "(base 0.50) | 1/1 = 1.00 [0.21, 1.00] PROVISIONAL |"
+    assert line("| N (hardened) | whale | train | 1 | 0/1 = 0.00 ", "## 3.").endswith(
+        "(base 0.50) | 1/1 = 1.00 [0.21, 1.00] PROVISIONAL, 1 agent-duels |"
     )
-    assert line("| ALL GROUPS | ALL FAMILIES | 2 | 1/2 = 0.50 ", "## 3.")
+    assert line("| ALL GROUPS | ALL FAMILIES | train | 2 | 1/2 = 0.50 ", "## 3.")
     assert not [x for x in lines if x.startswith("| all models")]  # every arm has one model here
 
-    assert line("| org/M |", "## 4.").endswith("| 1 | 1 | 4/5 | not in rows | 1 | 0 | 2 |")
+    assert line("| org/M |", "## 4.").endswith("| 5/5 | 1 | 1 | 4/5 | not in rows | 1 | 0 | 2 |")
     assert line("| org/N |", "## 4.").endswith("| 2 | 2 | 3/3 | 3/3 | 0 | 0 | 0 |")
 
     cost = line("| M (naive) |", "## 5.")
@@ -131,4 +141,31 @@ def test_pooled_arm_rows_when_two_models_share_an_arm():
     ]
     md = mr.render(rows, DUELS, SETS)
     # M's base for Short is 0/1, N's for Long 1/1: the pooled base averages them
-    assert "| all models (naive) | ALL FAMILIES | 2 | 2/2 = 1.00 " in md and "(base 0.50)" in md
+    assert "| all models (naive) | ALL FAMILIES | train | 2 | 2/2 = 1.00 " in md and "(base 0.50)" in md
+
+
+def test_cluster_n_drives_interval_and_firm():
+    # the review's case: 110 of 258 calls right, but only 62 agent-duels. Per decision it reads FIRM below a coin;
+    # at m = 62, p = 0.4264: centre 0.4307, half-width 0.1195 -> [0.31, 0.55], which holds 0.5
+    rows = [{"duel_id": str(i % 62), "agent_pk": "a"} for i in range(258)]
+    hit = [i < 110 for i in range(258)]
+    assert ie.tag_rate(110, 258, 0.5).endswith("FIRM")
+    assert mr.clustered(rows, hit, 0.5) == "110/258 = 0.43 [0.31, 0.55] PROVISIONAL, 62 agent-duels"
+    # 30 agent-duels of 3 calls each, all right: m = 30, wilson(30, 30) = [0.89, 1.00] -> FIRM
+    rows = [{"duel_id": str(i // 3), "agent_pk": "a"} for i in range(90)]
+    assert mr.clustered(rows, [True] * 90, 0.5) == "90/90 = 1.00 [0.89, 1.00] FIRM, 30 agent-duels"
+    # 29 agent-duels: never FIRM, however lopsided
+    assert mr.clustered(rows[:87], [True] * 87, 0.5).endswith("PROVISIONAL, 29 agent-duels")
+    # same duel, other agent: a separate unit
+    two = [{"duel_id": "1", "agent_pk": "a"}, {"duel_id": "1", "agent_pk": "b"}]
+    assert mr.clustered(two, [True, False], 0.5).endswith(", 2 agent-duels")
+
+
+def test_paired_says_direction():
+    # 25 duels only the model got right, 5 only the baseline: wilson(25, 30) = [0.66, 0.93] excludes 0.5
+    model = [True] * 25 + [False] * 5 + [True] * 10
+    base = [False] * 25 + [True] * 5 + [True] * 10  # 10 concordant duels do not count
+    assert mr.paired(model, base) == "model BETTER 25:5 FIRM"
+    assert mr.paired(base, model) == "model WORSE 5:25 FIRM"
+    assert mr.paired(model[5:], base[5:]) == "model BETTER 20:5 PROVISIONAL"  # 25 discordant < 30
+    assert mr.paired([True, False], [False, True]) == "model EVEN 1:1 PROVISIONAL"
