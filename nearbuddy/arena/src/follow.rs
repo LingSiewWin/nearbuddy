@@ -139,7 +139,9 @@ impl Contract {
     }
 
     /// Pay a queued withdrawal once its delay has passed: `min(requested, vault now)`, since
-    /// fills settled during the delay may have lowered the vault.
+    /// fills settled during the delay may have lowered the vault. The vault is debited before the
+    /// transfer; `on_withdraw` re-credits it and restores the request if the transfer fails (a
+    /// deleted account), so the NEAR never sits in the contract unassigned.
     /// Caller: the vault owner. Deposit: 1 yoctoNEAR. Panics: "Requires attached deposit of
     /// exactly 1 yoctoNEAR", "no pending withdrawal", "withdrawal delay not elapsed".
     #[payable]
@@ -158,7 +160,31 @@ impl Contract {
         let pay = amount.min(bal);
         self.vaults.insert(who.clone(), bal - pay);
         self.vault_total = self.vault_total.saturating_sub(pay);
-        Promise::new(who).transfer(NearToken::from_yoctonear(pay))
+        Promise::new(who.clone())
+            .transfer(NearToken::from_yoctonear(pay))
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(CALLBACK_GAS)
+                    .on_withdraw(who, U128(pay), U128(amount), U64(ready_at)),
+            )
+    }
+
+    /// Outcome of `withdraw`'s transfer. On failure the NEAR came back to this contract: the vault
+    /// is re-credited with `pay` and the request (`amount`, `ready_at`) restored unless a new one was
+    /// queued meanwhile. Returns whether the transfer landed. Never panics.
+    /// Caller: this contract (private). Deposit: none.
+    #[private]
+    pub fn on_withdraw(&mut self, who: AccountId, pay: U128, amount: U128, ready_at: U64) -> bool {
+        if env::promise_result_checked(0, BYTES_PER_BALANCE).is_ok() {
+            return true;
+        }
+        let bal = self.vaults.get(&who).copied().unwrap_or(0);
+        self.vaults.insert(who.clone(), bal.saturating_add(pay.0));
+        self.vault_total = self.vault_total.saturating_add(pay.0);
+        if !self.pending_withdrawals.contains_key(&who) {
+            self.pending_withdrawals.insert(who, (amount.0, ready_at.0));
+        }
+        false
     }
 
     /// Attach (or replace) the caller's mandate for an agent. Only enclave-verified agents (TEE

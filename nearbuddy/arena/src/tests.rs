@@ -3068,3 +3068,54 @@ fn pnl_with_a_zero_open_price_panics() {
     ctx(OWNER, 0);
     pnl_bps(None, CLOSE, 0, UP);
 }
+
+// ---------------------------------------------------------------- withdraw transfer outcome (review suggestion 6)
+
+#[test]
+fn a_failed_withdraw_transfer_recredits_the_vault_and_the_request() {
+    let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(4 * NEAR));
+    let ready = NOW + GRACE;
+    ctx_at(FOLLOWER, 1, ready);
+    let _ = c.withdraw();
+    assert_eq!(
+        c.get_vault(FOLLOWER.parse().unwrap()).0,
+        v - 4 * NEAR,
+        "debited first"
+    );
+    let total = c.get_config().vault_total.0;
+    // the account was deleted meanwhile: the transfer fails and the NEAR comes back
+    callback_ctx(ready, vec![PromiseResult::Failed]);
+    assert!(!c.on_withdraw(
+        FOLLOWER.parse().unwrap(),
+        U128(4 * NEAR),
+        U128(4 * NEAR),
+        U64(ready)
+    ));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
+    assert_eq!(c.get_config().vault_total.0, total + 4 * NEAR);
+    assert_eq!(
+        c.get_pending_withdraw(FOLLOWER.parse().unwrap()),
+        Some((U128(4 * NEAR), U64(ready))),
+        "the request is back, already due"
+    );
+}
+
+#[test]
+fn a_landed_withdraw_transfer_changes_nothing_more() {
+    let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(NEAR));
+    ctx_at(FOLLOWER, 1, NOW + GRACE);
+    let _ = c.withdraw();
+    callback_ctx(NOW + GRACE, vec![PromiseResult::Successful(vec![])]);
+    assert!(c.on_withdraw(
+        FOLLOWER.parse().unwrap(),
+        U128(NEAR),
+        U128(NEAR),
+        U64(NOW + GRACE)
+    ));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - NEAR);
+    assert!(c.get_pending_withdraw(FOLLOWER.parse().unwrap()).is_none());
+}

@@ -84,9 +84,12 @@ enum Op {
         who: usize,
         milli: u64,
     },
-    /// `withdraw`: pay the queued withdrawal once its delay passed.
+    /// `withdraw`: pay the queued withdrawal once its delay passed; `fail` = the transfer bounces.
     Claim {
         who: usize,
+        fail: bool,
+        /// Claim before the delay instead of moving the clock to it.
+        early: bool,
     },
     /// A swap output landing in the arena's intents balance (the stub's `stub_credit`).
     Deliver {
@@ -319,7 +322,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (ag.clone(), 0u64..3_000).prop_map(|(agent, milli)| Op::Register { agent, milli }),
         2 => (0..4usize, 0u64..3_000).prop_map(|(who, milli)| Op::Deposit { who, milli }),
         1 => (0..4usize, 0u64..2_000).prop_map(|(who, milli)| Op::Withdraw { who, milli }),
-        1 => (0..4usize).prop_map(|who| Op::Claim { who }),
+        3 => (0..4usize, prop::bool::weighted(0.3), prop::bool::weighted(0.2)).prop_map(|(who, fail, early)| Op::Claim { who, fail, early }),
         4 => (any::<bool>(), 1u64..3_000_000).prop_map(|(wrap, units)| Op::Deliver { wrap, units }),
         4 => (0..3usize, any::<bool>(), 1u16..=120, prop::bool::weighted(0.3)).prop_map(|(who, wrap, pct, fail)| Op::WithdrawToken { who, wrap, pct, fail }),
         1 => (any::<bool>(), 1u16..=120, prop::bool::weighted(0.3)).prop_map(|(wrap, pct, fail)| Op::Sweep { wrap, pct, fail }),
@@ -766,7 +769,16 @@ impl World {
                 }
                 kind = Kind::Exact(ok as i128);
             }
-            Op::Claim { who } => {
+            Op::Claim { who, fail, early } => {
+                // an empty pick goes to an account with a queued request, so most draws claim one
+                let who = if self.requests[who].is_some() {
+                    who
+                } else {
+                    (0..4).find(|w| self.requests[*w].is_some()).unwrap_or(who)
+                };
+                if let (Some((_, ready_at)), false) = (self.requests[who], early) {
+                    self.now = self.now.max(ready_at);
+                }
                 let ok = self.call(ACCOUNTS[who], 1, |c| drop(c.withdraw())).is_ok();
                 if ok {
                     let (amt, ready_at) =
@@ -775,6 +787,8 @@ impl World {
                     let paid = pre.vaults[who] - self.snap().vaults[who];
                     assert_eq!(paid, amt.min(pre.vaults[who]), "pays min(requested, vault)");
                     self.vault_out[who] += paid;
+                    self.check_money(&pre, bal0, &trie0, Kind::Exact(1));
+                    return self.claim_outcome(who, paid, amt, ready_at, fail);
                 } else if let Some((_, ready_at)) = self.requests[who] {
                     assert!(self.now < ready_at, "a due withdrawal was refused");
                 }
@@ -1393,6 +1407,46 @@ impl World {
         self.vault_out[who] += amt_in + fees;
         self.vault_in[SOLVER_IX] += amt_in;
         self.check_money(pre, bal0, &trie0, Kind::Neutral);
+    }
+
+    /// `withdraw`'s transfer outcome. A bounced transfer returns the NEAR to the contract, and
+    /// `on_withdraw` must put exactly `paid` back in the vault and restore the request; a landed
+    /// one changes nothing.
+    fn claim_outcome(&mut self, who: usize, paid: u128, amt: u128, ready_at: u64, fail: bool) {
+        let (mid, bal1, trie1) = (self.snap(), self.balance, self.trie.clone());
+        if fail {
+            self.balance += paid; // the runtime refunds a failed transfer to its sender
+        }
+        self.results = vec![if fail { None } else { Some(vec![]) }];
+        let landed = self
+            .call(CONTRACT, 0, |c| {
+                c.on_withdraw(
+                    ACCOUNTS[who].parse().unwrap(),
+                    U128(paid),
+                    U128(amt),
+                    U64(ready_at),
+                )
+            })
+            .expect("on_withdraw never panics");
+        self.results.clear();
+        assert_eq!(landed, !fail);
+        let post = self.snap();
+        if fail {
+            assert_eq!(
+                post.vaults[who],
+                mid.vaults[who] + paid,
+                "a bounced withdraw re-credits exactly"
+            );
+            self.vault_out[who] -= paid;
+            self.requests[who] = Some((amt, ready_at));
+        } else {
+            assert_eq!(
+                post.vaults[who], mid.vaults[who],
+                "a landed withdraw moves nothing more"
+            );
+        }
+        // the refund arrived as balance and went back into the vault: balance - liabilities is fixed
+        self.check_money(&mid, bal1, &trie1, Kind::Neutral);
     }
 
     /// `withdraw_token` debits the holding first and forwards the yocto to `mt_transfer`; its
