@@ -5,6 +5,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
+import { followArgs, nearUsd, priceFloor } from "../lib/follow";
 import { SHOWN_WORD, shown } from "../lib/verdict";
 import { NET } from "../network";
 import { Cmd } from "./cmd";
@@ -260,28 +261,19 @@ function Body({ item }: { item: DrawerItem }) {
   return <Follow item={item} />;
 }
 
-/** USDC on NEAR (the token a deploy-15 mandate is filled in), as the solver's oneclick.ts names it. */
-const USDC = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
-const TICKER = "https://api.exchange.coinbase.com/products/NEAR-USD/ticker";
-
 /** How to follow an agent, with a follow command the contract accepts: deploy 15 refuses a mandate without a
  *  price floor, so the floor is 95% of NEAR's Coinbase price when the drawer opens. */
 function Follow({ item }: { item: Extract<DrawerItem, { kind: "follow" }> }) {
   const [price, setPrice] = useState<number | null>(null);
   useEffect(() => {
     let alive = true;
-    fetch(TICKER, { signal: AbortSignal.timeout(5_000) })
-      .then((r) => r.json())
-      .then((j: { price?: string }) => {
-        const p = Number(j.price);
-        if (alive && p > 0) setPrice(p);
-      })
-      .catch(() => {}); // no price: the command shows a placeholder and says how to fill it
+    // no price: the command shows a placeholder and the text says how to fill it
+    nearUsd().then((p) => alive && p != null && setPrice(p));
     return () => {
       alive = false;
     };
   }, []);
-  const floor = price ? String(Math.floor(price * 0.95 * 1e6)) : null;
+  const floor = price ? priceFloor(price) : null;
   return (
     <div className={tone(item.model)}>
       <h3>Follow without handing over funds</h3>
@@ -309,18 +301,7 @@ function Follow({ item }: { item: Extract<DrawerItem, { kind: "follow" }> }) {
         text={`near contract call-function as-transaction ${ARENA_ID} deposit empty-args prepaid-gas '30 Tgas' attached-deposit '1 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
       />
       <Cmd
-        text={`near contract call-function as-transaction ${ARENA_ID} follow json-args '${JSON.stringify({
-          agent_pk: item.agent,
-          mandate: {
-            per_tx_cap: "200000000000000000000000",
-            allowance: "1000000000000000000000000",
-            spent: "0",
-            allowed_tokens: [USDC],
-            expires_at: String(BigInt(Date.now() + 7 * 86_400_000) * 1_000_000n),
-            revoked: false,
-            min_out_per_near: floor ?? "<USDC units per NEAR>",
-          },
-        })}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
+        text={`near contract call-function as-transaction ${ARENA_ID} follow json-args '${JSON.stringify(followArgs(item.agent, { capNear: 0.2, allowanceNear: 1, days: 7, floor, now: Date.now() }))}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
       />
       <p className="meta">
         That follows with a 0.2 NEAR cap per fill, 1 NEAR in total, for a week, filled in USDC.{" "}
