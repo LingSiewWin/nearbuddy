@@ -3,7 +3,7 @@ message: Cite this dataset when you use the decisions or the enclave records.
 title: NearBuddy arena decisions
 type: dataset
 license: CC-BY-4.0
-version: 324
+version: 337
 repository-code: https://github.com/LingSiewWin/nearbuddy
 authors:
   - name: NearBuddy
