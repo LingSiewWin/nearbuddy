@@ -11,7 +11,7 @@ import { useEvents, useNow, usePrice } from "../lib/live";
 import { DrawerProvider } from "../ui/drawer";
 import { ARENA_ID, acctUrl, CHAIN, duelHref, ORACLE_ID, TAMPER_TX, txUrl, who, YOU } from "../ui/format";
 import { Machine } from "../ui/machine";
-import { type Attack, focusOf, latestStory, openOf, withTape } from "./model";
+import { type Attack, focusOf, latestStory, openOf, replyTo, withTape } from "./model";
 import { Headline, Race } from "./race";
 import { Join, News, Squares, Standings } from "./sections";
 import { Tape, TapeMachine } from "./tape";
@@ -88,6 +88,11 @@ export default function Arena({ initial }: { initial: Initial }) {
   // arm D decides its side in a call that never sees the headline, so it tests no prompt: left out
   const guarded = tested.filter((d) => d.arm && d.arm !== "naive" && d.arm !== "D");
 
+  // the live duel's newest paid lie (the tape is newest first) and the target's answer to it
+  const liveHit = f?.live
+    ? (events.find((e): e is Attack => e.kind === "attack" && e.ok && e.duel === f.duel) ?? null)
+    : null;
+
   return (
     <DrawerProvider>
       <a className="skip" href="#tape">
@@ -146,11 +151,8 @@ export default function Arena({ initial }: { initial: Initial }) {
                   price={price}
                   open={f ? openOf(f, ticks) : null}
                   now={now}
-                  attack={
-                    f.live
-                      ? (events.find((e): e is Attack => e.kind === "attack" && e.ok && e.duel === f.duel) ?? null)
-                      : null
-                  }
+                  attack={liveHit}
+                  answer={liveHit ? replyTo(liveHit, events) : null}
                 />
                 {s.also_live.length ? (
                   <p className="fine also">

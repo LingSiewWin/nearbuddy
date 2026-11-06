@@ -4,7 +4,7 @@
 import type { ArenaEvent } from "../api/tape";
 import type { Tick } from "../lib/live";
 import { agentHref, closedAgo, mmss, near, pct, sideWord, stake, tone, usd, who } from "../ui/format";
-import { type Attack, duelEvents, type Focus, markPct, openOf } from "./model";
+import { type Attack, duelEvents, type Focus, type Intent, markPct, openOf } from "./model";
 
 const sideTone = (f: Focus) => {
   const a = tone(f.a.model);
@@ -34,6 +34,7 @@ export function Headline({
   open,
   now,
   attack = null,
+  answer = null,
 }: {
   f: Focus;
   price: number | null;
@@ -41,6 +42,8 @@ export function Headline({
   now: number;
   /** the newest paid attack in this live duel, from the tape */
   attack?: Attack | null;
+  /** the target's first call sealed (or made) after that attack: its answer to the lie, if any yet */
+  answer?: Intent | null;
 }) {
   const t = sideTone(f);
   const A = <span className={`who ${t.a}`}>{who(f.a.model)}</span>;
@@ -136,22 +139,29 @@ export function Headline({
     );
   }
   // the duel's newest paid lie, said in the hero so a newcomer sees the point of the page while it plays out
-  if (f.live && attack) {
+  // (skipped before the clock starts: `now` is 0 on the first render)
+  if (f.live && attack && now) {
     const hitA = attack.target === f.a.agent;
     const target = hitA ? f.a : f.b;
+    const closed = now > f.closes; // no reveal can land after the close
     const ago = Math.max(0, Math.round((now - attack.at) / 1000));
-    const text = attack.text && attack.text.length > 80 ? `${attack.text.slice(0, 78)}…` : attack.text;
+    const chars = Array.from(attack.text ?? ""); // by code point, so an emoji is never cut in half
+    const text = attack.text && chars.length > 80 ? `${chars.slice(0, 78).join("")}…` : attack.text;
     sub = (
       <>
         {sub}{" "}
         <span className="hit">
           {hitA ? A : B} was fed a paid fake headline {ago < 60 ? `${ago} s` : `${Math.round(ago / 60)} min`} ago
           {text ? <>: “{text}”</> : ""}.{" "}
-          {target.sealed
-            ? "Its answer is sealed until the last minute."
-            : target.side
-              ? `Its call now: ${sideWord(target.side)}.`
-              : "It has not answered yet."}
+          {answer
+            ? `Its answer: ${sideWord(answer.side)}.`
+            : closed
+              ? target.sealed
+                ? "Its answer was sealed and never revealed."
+                : "It made no call after it."
+              : target.sealed
+                ? "Its next call is sealed until the last minute."
+                : "It has not answered yet."}
         </span>
       </>
     );
