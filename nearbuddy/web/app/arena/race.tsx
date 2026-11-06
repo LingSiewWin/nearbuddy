@@ -17,6 +17,7 @@ const doing = (s: Focus["a"]) =>
   s.side ? (
     <>
       is <b>{sideWord(s.side)}</b>
+      {s.sealed ? ", with a newer call sealed" : ""}
     </>
   ) : s.sealed ? (
     <>
