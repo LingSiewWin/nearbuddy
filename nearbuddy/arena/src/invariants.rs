@@ -1016,6 +1016,35 @@ impl World {
                     revoked_at: U64(12_345), // ignored on input: `follow` stores 0
                 };
                 let pk = Base64VecU8(self.pks[agent].clone());
+                if revoked {
+                    // exactly `unfollow`: stamped now (once), no other term changes, nothing stored
+                    // without a mandate
+                    kind = Kind::Neutral;
+                    self.call(ACCOUNTS[who], 0, |c| c.follow(pk, m))
+                        .expect("a revoking follow is an unfollow");
+                    match (pre.mandate(agent, who), self.snap().mandate(agent, who)) {
+                        (Some(a), Some(b)) => {
+                            let stamp = if a.revoked { a.revoked_at.0 } else { self.now };
+                            assert!(
+                                b.revoked && b.revoked_at.0 == stamp,
+                                "revoking follow stamps now"
+                            );
+                            let mut a = a.clone();
+                            (a.revoked, a.revoked_at) = (true, U64(stamp));
+                            assert_eq!(
+                                near_sdk::borsh::to_vec(&a).unwrap(),
+                                near_sdk::borsh::to_vec(&b).unwrap(),
+                                "a revoking follow changed another term"
+                            );
+                        }
+                        (a, b) => assert!(
+                            a.is_none() && b.is_none(),
+                            "a revoking follow created a mandate"
+                        ),
+                    }
+                    return self.check_money(&pre, bal0, &trie0, kind);
+                }
+                let stored_spent = pre.mandate(agent, who).map_or(0, |m| m.spent.0);
                 // model: a live mandate keeps its windows; a closed one ends its window at the revoke
                 // (or expiry) and a new one opens now, unless an older window is still in its grace
                 let now = self.now;
@@ -1054,6 +1083,7 @@ impl World {
                     self.windows.insert((agent, who), wins);
                     let m = self.snap().mandate(agent, who).cloned().expect("stored");
                     assert_eq!(m.revoked_at.0, 0, "follow resets revoked_at");
+                    assert_eq!(m.spent.0, stored_spent, "follow keeps the stored spent");
                 }
             }
             Op::Unfollow { who, agent } => {

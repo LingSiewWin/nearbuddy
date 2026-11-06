@@ -193,13 +193,19 @@ impl Contract {
     /// proof on every intent) can be followed. Storage is paid from the vault.
     /// Caller: a follower with a funded vault. Deposit: none; storage is debited from the
     /// vault. `min_out_per_near` must be set (clients derive it from the oracle mid less slippage), so
-    /// a solver can never settle a fill for a token amount of output. `revoked_at` is reset to 0.
+    /// a solver can never settle a fill for a token amount of output. `revoked_at` is reset to 0 and
+    /// `spent` is ignored: the stored one is kept (0 for a new mandate). `revoked: true` is exactly
+    /// `unfollow` (stamped now, grace applies; no other term changes, open while paused).
     /// Panics: "paused", "migrating", "agent missing", "agent unverified", "empty mandate",
     /// "price floor required", "refollow too soon", "insufficient". The record keeps when the
     /// follower followed: an update while the mandate is live keeps the window (fronted fills stay
     /// settleable); a re-follow after an unfollow or the expiry refuses only intents of the gap
     /// (see `VersionedMandate::refollowed`).
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
+        // a revoking "update" is an unfollow: stamped now, so fronted fills keep their grace
+        if mandate.revoked {
+            return self.unfollow(agent_pk);
+        }
         self.not_paused();
         self.not_migrating();
         require!(self.agents.contains_key(&agent_pk.0), "agent missing");
@@ -209,13 +215,20 @@ impl Contract {
             "empty mandate"
         );
         require!(mandate.min_out_per_near.0 > 0, "price floor required");
-        let mandate = Mandate {
-            revoked_at: U64(0),
-            ..mandate
-        };
         let who = env::predecessor_account_id();
         let key = follow_key(&agent_pk.0, &who);
         let now = env::block_timestamp();
+        // `spent` is the contract's ledger, never the follower's: lowering it would reopen the
+        // allowance, raising it would void fronted fills ("allowance exhausted")
+        let spent = self
+            .follows
+            .get(&key)
+            .map_or(U128(0), |v| v.current().spent);
+        let mandate = Mandate {
+            revoked_at: U64(0),
+            spent,
+            ..mandate
+        };
         let rec = match self.follows.get(&key) {
             Some(old) => old.refollowed(mandate, now, self.withdraw_delay_ns),
             None => VersionedMandate::V3(mandate, now),
