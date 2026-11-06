@@ -301,6 +301,17 @@ export function checkDuel(e: Evidence): Line[] {
     );
   else add("SKIP", "opened", "no successful open receipt for this id in the scanned txs");
   if (calls.open && e.open_block !== undefined) openerRefund(e, calls.open, add);
+  // duel_lock is the lock a duel ran under only when it opened under deploy 15, which records it at open; for an
+  // earlier duel the view answers today's global lock, so timing against it would be wrong
+  const lockKnown = e.lock_ns != null && !!e.open_block?.config.intents_account;
+  if (e.lock_ns != null && !lockKnown)
+    add(
+      "INFO",
+      "intent timing",
+      e.open_block
+        ? "not checked: the duel opened before deploy 15, so duel_lock is today's global lock, not this duel's"
+        : "not checked: the open block's config is not available, so the lock this duel ran under is unknown",
+    );
 
   // agents and their tier
   for (const [s, pk, ag] of sides) {
@@ -332,7 +343,7 @@ export function checkDuel(e: Evidence): Line[] {
       `intent ${s} signature`,
       `${stored.side} ${stored.size_bps} bps nonce ${stored.nonce}: ed25519 over intent_message by ${short(stored.agent_pk, 12)} (${c.method}, tx ${c.tx})`,
     );
-    if (e.lock_ns != null) timing(s, pk, c, BigInt(d.close_at), BigInt(e.lock_ns), calls.commits, add);
+    if (lockKnown) timing(s, pk, c, BigInt(d.close_at), BigInt(e.lock_ns!), calls.commits, add);
     const p = c.args.tee as TeeProof | null | undefined;
     if (!p) {
       add(

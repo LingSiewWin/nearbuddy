@@ -185,6 +185,20 @@ test("a close receipt not indexed yet makes the evidence incomplete, with the ri
   );
 });
 
+test("intent timing is judged only against a lock the duel recorded at open (deploy 15)", () => {
+  const e = load("395");
+  const timed = (x: Evidence) => checkDuel(x).filter((l) => l.check.match(/^intent [AB] (timing|commit)$/));
+  assert.ok(timed(e).length >= 2);
+  assert.deepEqual(fails(checkDuel(e)), []);
+  // opened before deploy 15: duel_lock answers today's global lock, which says nothing about this duel (testnet
+  // #250 read 60 s and its intents, posted 47 s before close, would FAIL against it)
+  const { intents_account: _, ...v14 } = e.open_block!.config;
+  const old = { ...e, open_block: { ...e.open_block!, config: v14 } };
+  assert.deepEqual(timed(old), []);
+  assert.deepEqual(result(checkDuel(old), "intent timing"), ["INFO"]);
+  assert.deepEqual(result(checkDuel({ ...e, open_block: null }), "intent timing"), ["INFO"]); // config unknown
+});
+
 test("deploy 15: a failed read of an injection block, the open block or duel_lock is incomplete too", () => {
   for (const id of ["395", "401"]) assert.equal(incomplete(load(id)), false);
   const e = load("401");
