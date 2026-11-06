@@ -70,7 +70,7 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
             {mine.map((i, n) => {
               const from = x(i.at);
               const to = x(mine[n + 1]?.at ?? end);
-              const w = Math.max(0.6, to - from);
+              const w = Math.max(0.6, to - from); // a label needs about 11% of a phone-width lane
               return (
                 <div
                   key={i.tx}
@@ -78,7 +78,7 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
                   style={{ left: `${from}%`, width: `${w}%` }}
                   title={`${i.side}, ${stake(i.size / 100)}`}
                 >
-                  {w > 7 ? <span>{i.side}</span> : null}
+                  {w > 11 ? <span>{i.side}</span> : null}
                 </div>
               );
             })}
