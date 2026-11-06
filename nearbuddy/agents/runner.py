@@ -667,8 +667,10 @@ def play_duel(
     commitment per player left at the end is the scored call, revealed only once the chain clock is inside the
     contract's intent lock (`close_at - lock_s`, see `hold_until_lock`), where nobody can commit a counter-call, and
     before close_at. A commit refused inside the lock ends the duel for that player with its held commitment still
-    hidden. On any other exit (Ctrl-C, SIGTERM, an error) held commitments are revealed at once, lock or not: a
-    shutdown must not leave a commitment to be slashed. Returns the last nonce used."""
+    hidden. If the loop fails (price feed, GET /arena, a commit error that may have landed) the commitments are still
+    held until the lock, then revealed and the error re-raised: a transient glitch must not open a call early. Only
+    Ctrl-C and SIGTERM reveal at once, lock or not: a shutdown must not leave a commitment to be slashed. Returns the
+    last nonce used."""
     held: dict[str, list[Commitment]] = {}
     closed = False
     try:
@@ -691,6 +693,11 @@ def play_duel(
                 time.sleep(cycle_seconds)
         if held and lock_s > 0:
             hold_until_lock(close_at_ns - lock_s * 1_000_000_000, close_at_ns)
+    except Exception as e:  # not KeyboardInterrupt / SystemExit (SIGTERM): those reveal at once, below
+        if held and lock_s > 0:
+            print(f"  duel loop failed ({type(e).__name__}: {str(e)[:100]}); holding commitments until the lock")
+            hold_until_lock(close_at_ns - lock_s * 1_000_000_000, close_at_ns)
+        raise
     finally:
         reveal_held(solver, held)
     return nonce

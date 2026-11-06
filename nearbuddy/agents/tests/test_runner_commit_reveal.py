@@ -266,6 +266,43 @@ def test_a_transport_failure_on_the_newest_candidate_still_tries_the_older_one(e
     assert rs[commits(solver)[0]]["revealed_tx"] == "R2"
 
 
+@pytest.mark.parametrize("where", ["price", "arena"])
+def test_a_transient_error_mid_duel_holds_the_commitments_until_the_lock(env, monkeypatch, where):
+    # duel #395's lesson, for errors: a price-feed or GET /arena glitch must not open the held calls early
+    clock, players = env
+    calls = {"n": 0}
+
+    def flaky(*_a):
+        calls["n"] += 1
+        if calls["n"] == 2:  # the second cycle
+            raise (
+                RuntimeError("price fetch failed after 4 attempts")
+                if where == "price"
+                else requests.ConnectionError("x")
+            )
+        return 366_000_000
+
+    solver = FakeSolver(clock)
+    if where == "price":
+        monkeypatch.setattr(runner, "price", flaky)
+    else:
+        real_get = solver.get
+        solver.get = lambda path: flaky() and real_get(path)
+    with pytest.raises((RuntimeError, requests.ConnectionError)):
+        play(solver, players)
+    assert solver.paths() == ["/commit", "/commit", "/reveal", "/reveal"]
+    assert all(LOCK_AT <= t < CLOSE_NS for t in reveal_times(solver)), reveal_times(solver)
+    assert all(r["revealed_tx"] for r in rows())
+
+
+def test_a_commit_error_that_may_have_landed_holds_until_the_lock_too(env):
+    clock, _ = env
+    solver = FakeSolver(clock, fail={("/commit", 2): requests.Timeout("read timed out")})
+    with pytest.raises(requests.Timeout):
+        play(solver, scripted(["Long", "Short"]))
+    assert reveal_times(solver) and all(LOCK_AT <= t < CLOSE_NS for t in reveal_times(solver))
+
+
 def test_a_timed_out_commit_that_never_landed_falls_back_to_the_held_one(env):
     clock, _ = env
     solver = FakeSolver(
