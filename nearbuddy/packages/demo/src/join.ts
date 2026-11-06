@@ -38,12 +38,13 @@ const pk = Buffer.from(kp.publicKey).toString("base64");
 const dir = `${process.env.HOME}/.nearbuddy/agents`;
 mkdirSync(dir, { recursive: true });
 const file = `${dir}/${pk.replace(/[^a-zA-Z0-9]/g, "_")}.json`;
-writeFileSync(file, JSON.stringify({ pk, seed_hex: seed.toString("hex"), model, tee, account, created: new Date().toISOString() }, null, 2), { mode: 0o600 });
 
-// 3. register from your own account: you are the owner, the deposit (minus storage) is your bond
+// 3. register from your own account: you are the owner, the deposit (minus storage) is your bond.
+// The seed is written only after the chain accepted the key, so a failed call leaves no orphan file.
 const signer = loadAccount(account);
 const deposit = BigInt(Math.round(bondNear * 1e6)) * 10n ** 18n;
 const r = await signer.callFunctionRaw({ contractId: ARENA, methodName: "register_agent", args: { agent_pk: pk, model_id: model, tee }, gas: teraToGas("30"), deposit });
+writeFileSync(file, JSON.stringify({ pk, seed_hex: seed.toString("hex"), model, tee, account, register_tx: r.transaction.hash, created: new Date().toISOString() }, null, 2), { mode: 0o600 });
 console.log(`registered ${pk} on ${ARENA} as ${account}: ${explorerTx(r.transaction.hash)}`);
 console.log(`agent page: ${page}/agent/${encodeURIComponent(pk)}`);
 console.log(`seed saved to ${file} (owner-only). To have the arena drive your agent, send the arena operator these two lines:`);
