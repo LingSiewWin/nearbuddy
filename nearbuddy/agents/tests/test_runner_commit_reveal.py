@@ -6,6 +6,7 @@ consent signatures on POST /duel."""
 import base64
 import hashlib
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -251,6 +252,27 @@ def test_without_a_lock_the_last_call_is_revealed_when_commits_stop(env):
     solver = FakeSolver(clock)
     play(solver, players[:1], lock_s=0)
     assert STOP_NS <= [t for p, _, t in solver.posts if p == "/reveal"][-1] < LOCK_AT
+
+
+def test_sigterm_while_a_reveal_lands_does_not_reveal_it_again(env):
+    clock, players = env
+
+    class KilledOnFirstReveal(FakeSolver):
+        def post(self, path, body):
+            out = super().post(path, body)
+            if path == "/reveal" and self.paths().count("/reveal") == 1:
+                os.kill(os.getpid(), signal.SIGTERM)  # the kill arrives after the reveal landed, before it returns
+            return out
+
+    solver = KilledOnFirstReveal(clock)
+    old = signal.getsignal(signal.SIGTERM)
+    runner.exit_on_sigterm()
+    try:
+        with pytest.raises(SystemExit):
+            play(solver, players[:1])
+    finally:
+        signal.signal(signal.SIGTERM, old)
+    assert solver.paths() == ["/commit", "/reveal"], "the landed reveal is not sent twice"
 
 
 SIGTERM_CHILD = """

@@ -47,6 +47,8 @@ import secrets
 import signal
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -569,8 +571,11 @@ def play_duel(
                 else:
                     status = "committed"
                     if label in held:
-                        status = reveal(solver, held[label])
-                        del held[label]  # only once the reveal returned: a raise leaves it for the final reveal
+                        # SIGTERM waits until `held` matches the chain: a kill between the landed reveal and the
+                        # `del` would make reveal_all open it again (refused, "no commitment", plus an error row)
+                        with sigterm_deferred():
+                            status = reveal(solver, held[label])
+                            del held[label]  # only once the reveal returned: a raise leaves it for the final reveal
                     if status != "closed":
                         nonce, status = commit_decision(solver, held, *args, attestations)
                 if status == "closed":
@@ -585,10 +590,36 @@ def play_duel(
     return nonce
 
 
+_sigterm = {"defer": 0, "pending": False}
+
+
+def _on_sigterm(*_: object) -> None:
+    if _sigterm["defer"]:
+        _sigterm["pending"] = True  # raised when the deferred block ends
+        return
+    sys.exit(143)
+
+
+@contextmanager
+def sigterm_deferred() -> Iterator[None]:
+    """A SIGTERM that arrives inside the block raises SystemExit (exit 143) only when the block ends, so the block
+    runs to completion. A flag, not a signal mask: Python runs handlers on the main thread whichever thread the
+    kernel picked, so masking the main thread alone does not defer anything."""
+    _sigterm["defer"] += 1
+    try:
+        yield
+    finally:
+        _sigterm["defer"] -= 1
+        if not _sigterm["defer"] and _sigterm["pending"]:
+            _sigterm["pending"] = False
+            sys.exit(143)
+
+
 def exit_on_sigterm() -> None:
     """SIGTERM (night-loop.sh, systemd, docker stop) kills Python without running `finally`; turn it into SystemExit
-    so play_duel still reveals its held commitments (an unrevealed one is slashed)."""
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    so play_duel still reveals its held commitments (an unrevealed one is slashed). Inside `sigterm_deferred` the
+    exit waits for the block to finish."""
+    signal.signal(signal.SIGTERM, _on_sigterm)
 
 
 def duel_request(ska: SigningKey, skb: SigningKey, symbol: str, close_at_ns: int, consent: bool) -> dict[str, Any]:
