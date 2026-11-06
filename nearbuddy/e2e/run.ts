@@ -29,6 +29,10 @@
 //      POST /settle_follow: the solver credits the output to the arena on the intents stub (stub_credit) and settles
 //      against that balance. Checks the dry-quote refusal, the holding credited, the replay refusal and
 //      withdraw_token of the holding to the follower's stub balance.
+//   0. duplicate broadcast (runs first, own account): one signed transfer sent twice with identical bytes, as
+//      sendFailover does when an endpoint times out after the broadcast, while the first copy is in flight and again
+//      once it is final. The node must answer with the transaction's own outcome, never InvalidNonce (which
+//      near-api-js would answer by re-signing: a second transfer).
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -36,7 +40,7 @@ import { createServer as httpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Account, JsonRpcProvider, KeyPairEd25519, type KeyPairString } from "near-api-js";
+import { Account, actions, JsonRpcProvider, KeyPairEd25519, type KeyPairString } from "near-api-js";
 import { b64 } from "../packages/protocol/src/index.ts";
 import {
   commitMessage,
@@ -437,6 +441,7 @@ async function main() {
     ["oracle", 20n],
     ["follower", 20n],
     ["intents", 10n],
+    ["dup", 5n],
   ] as const)
     await root.createSubAccount({ accountOrPrefix: id(n), publicKey: vk.public_key, nearToTransfer: near * NEAR });
   const acct = (n: string) => new Account(id(n), provider, vk.secret_key);
@@ -662,6 +667,34 @@ async function main() {
         early.join(", ") || `all ${revealed.length} inside`,
       );
     }
+  }
+
+  // ---- scenario 0: the same signed tx broadcast twice ---------------------------------------------
+  {
+    const sc = "0 duplicate broadcast";
+    const dup = acct("dup");
+    const signed = await dup.createSignedTransaction({ receiverId: dup.accountId, actions: [actions.transfer(1n)] });
+    const send = (w: "NONE" | "FINAL") =>
+      provider.sendTransactionUntil(signed, w).then(
+        (r) => ({ hash: r.transaction?.hash ?? "", status: r.status, error: "" }),
+        (e: Error) => ({ hash: "", status: undefined, error: `${e.name}: ${e.message}` }),
+      );
+    const first = await send("NONE"); // broadcast, no wait: the endpoint "timed out" after taking it
+    const inFlight = await send("FINAL"); // the failover's resend, identical bytes
+    check(
+      sc,
+      "resending an in-flight tx returns its outcome, not InvalidNonce",
+      !first.error && !inFlight.error && inFlight.hash !== "",
+      inFlight.error ||
+        `first ${first.error || "accepted"}, resend ${inFlight.hash} ${JSON.stringify(inFlight.status)}`,
+    );
+    const late = await send("FINAL"); // and once more after it is final
+    check(
+      sc,
+      "resending an executed tx returns its outcome, not InvalidNonce",
+      !late.error && late.hash === inFlight.hash,
+      late.error || `${late.hash} ${JSON.stringify(late.status)}`,
+    );
   }
 
   // ---- scenario 1: one commit-reveal duel ---------------------------------------------------------
