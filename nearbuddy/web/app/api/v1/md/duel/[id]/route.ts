@@ -1,7 +1,7 @@
 // GET /api/v1/md/duel/<id>  one duel as markdown: sides, prices, outcome, attacks, decisions with reasoning.
 // Served for /duel/<id> when the client prefers text/markdown; see proxy.ts.
 import { duelSummary, ID_RE } from "../../../../duel";
-import { agentLink, decisions, left, md, near, pointer, sides, time } from "../../md";
+import { agentLink, decisions, left, md, near, pointer, sides, time, untrusted } from "../../md";
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const o = new URL(req.url).origin;
@@ -35,7 +35,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       ? d.attacks
           .map(
             (x) =>
-              `- on ${agentLink(o, x.target)} (${x.kind}): "${x.text ?? `unknown text, sha256 ${x.payload_sha256}`}"`,
+              `- on ${agentLink(o, x.target)} (${x.kind}):\n${x.text ? untrusted("headline", x.text, "  ") : `  unknown text, sha256 ${x.payload_sha256}`}`,
           )
           .join("\n")
       : d.attack_count

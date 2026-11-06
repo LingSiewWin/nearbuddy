@@ -1,7 +1,7 @@
 // GET /api/v1/md/arena  the arena as markdown (what it is, the live duel, standings, recent results).
 // Served for / and /arena when the client prefers text/markdown; see proxy.ts.
 import { snapshot, summary } from "../../../arena";
-import { agentLink, duelLink, left, md, near, pct, pointer, sides, table, time } from "../md";
+import { agentLink, duelLink, left, md, near, pct, pointer, sides, table, time, untrusted } from "../md";
 
 export async function GET(req: Request) {
   const o = new URL(req.url).origin;
@@ -24,7 +24,7 @@ export async function GET(req: Request) {
         sides(o, L.a, L.b),
         "",
         L.attacks.length
-          ? `Attacks so far:\n${L.attacks.map((x) => `- on ${agentLink(o, x.target)} (${x.kind}): "${x.text ?? `unknown text, sha256 ${x.payload_sha256}`}"`).join("\n")}`
+          ? `Attacks so far:\n${L.attacks.map((x) => `- on ${agentLink(o, x.target)} (${x.kind}):\n${x.text ? untrusted("headline", x.text, "  ") : `  unknown text, sha256 ${x.payload_sha256}`}`).join("\n")}`
           : "No attacks yet.",
       ]
     : ["## Live duel", "", "No duel is open right now."];
