@@ -151,6 +151,8 @@ def post_decision(
                 "hardened": d.hardened,
                 "prompt_variant": d.prompt_variant,
                 "error": str(e),
+                "injection": injection_text,
+                "brief": brief(symbol, px, open_px),
                 "text": failed.text,
                 "chat_id": failed.chat_id,
                 "response_body": failed.response_bytes.decode(errors="replace"),
