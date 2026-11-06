@@ -304,7 +304,12 @@ deploy 15, `follower` sends the output to each follower's own `intents.near` bal
 a `.testnet` solver id and `follower` otherwise. Deploy 15 drops `list_followers`: set `FOLLOWERS=<account,...>`
 so the solver can read each mandate with `get_follow` (it adds every follower it has settled for). Deploy 15 counts the
 fee inside `per_tx_cap` and `allowance`, so the solver quotes the largest amount whose amount + fee fits
-(`fee_bps` from `get_config`). The solver caps its
+(`fee_bps` from `get_config`). Before quoting, the solver also skips a follower whose `allowed_tokens` excludes the
+side's output token (USDC on a Short, wNEAR on a Long; a USDC-only mandate gets no Long fills), and drops from the
+batch any follower whose quote misses its `min_out_per_near`, the same two checks `settle_follow` runs. Long fills
+carry no follower price protection: the quote is EXACT_OUTPUT wNEAR, so `amount_out` equals `amount_in` and the
+floor (output units per NEAR) passes whatever USDC the solver paid; only Short fills are priced by the floor. The
+solver caps its
 own exposure before quoting with `CAP_PER_FILL_YOCTO`, `CAP_PER_TICK_YOCTO` and `CAP_PER_DAY_YOCTO` (rolling 24 h,
 kept across restarts); unset means unlimited, and a follower over a cap is listed with the cap's name as its error.
 
