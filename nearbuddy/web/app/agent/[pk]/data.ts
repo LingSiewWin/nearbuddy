@@ -85,9 +85,10 @@ async function stamps(txs: string[]): Promise<Record<string, number>> {
 
 /** The agent page's data; null for a key the contract does not know. Throws when the chain read fails. */
 export async function load(pk: string): Promise<AgentData | null> {
-  const [raw, all, models] = await Promise.all([agentRecord(pk), getDecisions(), modelsByKey()]);
+  const [raw, all] = await Promise.all([agentRecord(pk), getDecisions()]);
   const a = raw.agent;
   if (!a) return null;
+  const models = await modelsByKey(); // after the record, so a throttled RPC sees one call at a time
   const mine = all.filter((d) => d.agent === pk);
   const attacked = mine.filter((d) => d.attack);
   const recent = mine.slice(-10).reverse();
