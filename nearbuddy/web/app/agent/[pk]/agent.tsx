@@ -356,6 +356,9 @@ function Story({ d, at, now }: { d: Decision; at: number | undefined; now: numbe
       <div>
         <p className="cap">Its own reasoning, signed inside its enclave:</p>
         <blockquote className="reply">“{d.reason}”</blockquote>
+        {d?.named_in && (d.verdict === "named" || d.verdict === "resisted") ? (
+          <p className="cap named-in">In its signed answer it {d.named_in}.</p>
+        ) : null}
         <div className="verdict">
           {shown(d) ? <strong className={shown(d) ?? ""}>{shownWord(d)}.</strong> : null}
           <span>

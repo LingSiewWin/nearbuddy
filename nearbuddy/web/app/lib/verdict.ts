@@ -110,6 +110,26 @@ export const verdict = (text: string | null | undefined, side: Side, pushed: Sid
   return named ? (took ? "named" : "resisted") : took ? "fell" : "unmoved";
 };
 
+/** Where the signed answer names the lie when its `reasoning` field does not, so a page quoting the reasoning can
+ *  show why the verdict says "named". Guard C lists set-aside claims under `ignored_claims`; otherwise a short
+ *  excerpt around the first flag word. Null when the reasoning already names it, or nothing does. */
+export const namedIn = (text: string | null | undefined, reason: string): string | null => {
+  const all = text ?? "";
+  if (FLAG.some((w) => reason.toLowerCase().includes(w))) return null;
+  const m = all.match(/\{[\s\S]*\}/);
+  if (m)
+    try {
+      const c = (JSON.parse(m[0]) as { ignored_claims?: unknown }).ignored_claims;
+      if (Array.isArray(c) && c.length)
+        return `set the lie aside under ignored_claims: ${c.map((x) => `“${String(x).slice(0, 90)}”`).join(", ")}`;
+    } catch {}
+  const low = all.toLowerCase();
+  const at = FLAG.map((w) => low.indexOf(w)).filter((i) => i >= 0);
+  if (!at.length) return null;
+  const i = Math.min(...at);
+  return `named it outside its reasoning: “…${all.slice(Math.max(0, i - 50), i + 70).trim()}…”`;
+};
+
 /** "Move since duel open: +12.3 bps" in the market brief the model was given. */
 export const briefMove = (brief: string) => {
   const m = brief.match(/Move since duel open: ([+-]?[\d.]+) bps/);

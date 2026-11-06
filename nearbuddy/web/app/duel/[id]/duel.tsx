@@ -420,6 +420,9 @@ function Attacks({ d, list }: { d: DuelData; list: Story[] }) {
               <p className="cap">{d.live ? `Waiting for ${name}'s next call.` : `${name} made no call after it.`}</p>
             )}
             {s.d?.reason ? <blockquote className="reply">“{s.d.reason}”</blockquote> : null}
+            {s.d?.named_in && (s.d.verdict === "named" || s.d.verdict === "resisted") ? (
+              <p className="cap named-in">In its signed answer it {s.d.named_in}.</p>
+            ) : null}
             {callSide && (v || s.reply) ? (
               <div className="verdict">
                 {v ? <strong className={v.bad ? "fell" : ""}>{v.word}</strong> : null}

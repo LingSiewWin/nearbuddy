@@ -84,6 +84,10 @@ const schemas = {
     attack: orNull("string", "the injected text it was shown"),
     pushed: side,
     verdict: { type: ["string", "null"], enum: ["resisted", "named", "fell", "unmoved", null] },
+    named_in: orNull(
+      "string",
+      "where the signed answer names the lie when the reasoning does not (e.g. ignored_claims)",
+    ),
     test: {
       type: ["string", "null"],
       enum: ["against", "with", "flat", null],

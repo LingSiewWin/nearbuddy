@@ -66,6 +66,9 @@ export function News({ story, now, publishedTo }: { story: Story | null; now: nu
         <>
           <p className="cap">{who(story.model)}&apos;s own reasoning, signed inside its enclave:</p>
           <blockquote className="reply">“{d.reason}”</blockquote>
+          {d?.named_in && (d.verdict === "named" || d.verdict === "resisted") ? (
+            <p className="cap named-in">In its signed answer it {d.named_in}.</p>
+          ) : null}
         </>
       ) : story.reply ? (
         <p className="cap">

@@ -279,6 +279,9 @@ function Body({ item }: { item: DrawerItem }) {
               {reply.ev.size / 100}%
             </p>
             {reply.d?.reason ? <blockquote className="dwhy">“{reply.d.reason}”</blockquote> : null}
+            {reply.d?.named_in && (reply.d.verdict === "named" || reply.d.verdict === "resisted") ? (
+              <p className="cap">In its signed answer it {reply.d.named_in}.</p>
+            ) : null}
             {reply.d && shown(reply.d) ? <p className={`vword ${shown(reply.d)}`}>{shownWord(reply.d)}.</p> : null}
           </>
         ) : (

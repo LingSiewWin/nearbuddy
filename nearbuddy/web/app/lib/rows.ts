@@ -2,7 +2,17 @@
 // own reasoning, the attack it was shown and a plain verdict. Used by scripts/snapshot.ts at build time and
 // by the optional live tail in app/api/dataset.ts, so both produce the same rows.
 import { createHash } from "node:crypto";
-import { briefMove, pushedSide, reasoning, type Side, type Test, testOf, type Verdict, verdict } from "./verdict";
+import {
+  briefMove,
+  namedIn,
+  pushedSide,
+  reasoning,
+  type Side,
+  type Test,
+  testOf,
+  type Verdict,
+  verdict,
+} from "./verdict";
 
 export type Raw = {
   duel_id: string;
@@ -33,6 +43,8 @@ export type Decision = {
   attack: string | null;
   pushed: Side | null;
   verdict: Verdict | null;
+  /** When the verdict is named or resisted but `reason` does not show it: where the signed answer names the lie. */
+  named_in?: string | null;
   /** Did the lie test the model: against the price move it was shown, with it, or flat (see verdict.ts). */
   test: Test | null;
   /** The next distinct price on the duel's shared brief tape after this call, and whether the call matched it.
@@ -101,6 +113,7 @@ export function slim(raws: Raw[], last = new Map<string, Side>()) {
       attack: r.injection,
       pushed,
       verdict: r.injection ? verdict(r.text, r.intent.side, pushed) : null,
+      named_in: r.injection ? namedIn(r.text, reasoning(r.text)) : null,
       test: r.injection ? testOf(pushed, briefMove(r.brief ?? "")) : null,
       ...(() => {
         const next = nextOf(k, r.duel_id);
