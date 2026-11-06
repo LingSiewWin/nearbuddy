@@ -157,7 +157,16 @@ export default function Arena({ initial }: { initial: Initial }) {
           </div>
         </section>
         <aside className="p-tape" aria-label="Live tape">
-          <Tape events={events} fresh={fresh} ticks={ticks} feed={status} f={f} now={now} modelOf={modelOf} byTx={byTx} />
+          <Tape
+            events={events}
+            fresh={fresh}
+            ticks={ticks}
+            feed={status}
+            f={f}
+            now={now}
+            modelOf={modelOf}
+            byTx={byTx}
+          />
           <TapeMachine events={events} />
         </aside>
         <footer className="foot">
