@@ -7,5 +7,7 @@ export default defineConfig({
   testDir: "tests",
   timeout: 90_000,
   use: { baseURL, viewport: { width: 1440, height: 1100 } },
-  webServer: process.env.BASE_URL ? undefined : { command: "bun run start -p 3013", url: baseURL, reuseExistingServer: true, timeout: 60_000 },
+  ...(process.env.BASE_URL
+    ? {}
+    : { webServer: { command: "bun run start -p 3013", url: baseURL, reuseExistingServer: true, timeout: 60_000 } }),
 });

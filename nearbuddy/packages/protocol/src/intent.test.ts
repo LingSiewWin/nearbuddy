@@ -51,7 +51,7 @@ test("intent sign/verify and tamper", () => {
   const s = signIntent(kp, i);
   assert.ok(verifyIntent(s));
   const sig = b64.dec(s.signature);
-  sig[0] ^= 1;
+  sig[0] = (sig[0] ?? 0) ^ 1;
   assert.ok(!verifyIntent({ ...s, signature: b64.enc(sig) }));
   assert.ok(!verifyIntent({ ...s, intent: { ...s.intent, size_bps: 5001 } }));
 });
@@ -87,7 +87,7 @@ test("a real NEAR AI Cloud enclave signature verifies, a flipped byte does not",
   assert.ok(!verifyTeeProof(realProof, "Qwen/Qwen3.8-27B", ph), "other model id");
   assert.ok(!verifyTeeProof(realProof, REAL.model, ZERO_PROOF), "intent commits to another completion");
   const res = fromHex(REAL.response_hash);
-  res[0] ^= 1;
+  res[0] = (res[0] ?? 0) ^ 1;
   assert.ok(
     !verifyTeeProof(
       { ...realProof, response_hash: b64.enc(res) },

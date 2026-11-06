@@ -60,7 +60,7 @@ test("quotesFor quotes each open follower with the mandate amount", async () => 
     ["f1.testnet", "f3.testnet"],
   );
   assert.deepEqual(asked, ["300", "50"]);
-  assert.equal(out[0].quote?.quote.amountOut, "3744739");
+  assert.equal(out[0]?.quote?.quote.amountOut, "3744739");
 });
 
 test("route: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {
@@ -77,8 +77,8 @@ test("route: unknown path is null; pending = on-chain injections whose payload w
   arena.openDuels.add("1");
   arena.payloads.set("H1", "BTC banned");
   const snap = (await arena.route("GET", "/arena", ""))!.body as { pending: Record<string, { payload: string }[]> };
-  assert.equal(snap.pending.A.length, 1);
-  assert.equal(snap.pending.A[0].payload, "BTC banned");
+  assert.equal(snap.pending.A?.length, 1);
+  assert.equal(snap.pending.A?.[0]?.payload, "BTC banned");
   arena.consume("A", "1", ["1"]);
   assert.equal(Object.keys(await arena.pending()).length, 0);
 });

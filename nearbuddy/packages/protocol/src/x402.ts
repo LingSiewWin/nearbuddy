@@ -22,7 +22,7 @@ export interface PaymentRequirements {
 }
 export interface PaymentRequired {
   x402Version: number;
-  error?: string;
+  error?: string | undefined;
   resource: { url: string; description?: string; mimeType?: string; serviceName?: string };
   accepts: PaymentRequirements[];
 }
@@ -39,7 +39,7 @@ export interface VerifyRequest {
 export interface VerifyResponse {
   isValid: boolean;
   payer?: string;
-  invalidReason?: string;
+  invalidReason?: string | undefined;
   extra?: Record<string, unknown>;
 }
 export interface SettlementResponse {

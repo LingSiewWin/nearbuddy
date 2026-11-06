@@ -139,7 +139,7 @@ export interface SwapResult {
   wrapTx: string;
   depositTx: string;
   status: SwapStatus;
-  amountOut?: string;
+  amountOut?: string | undefined;
   /** Wall-clock ms per leg: quote, the one deposit tx, 1Click from deposit to a final status. */
   legs: { quote_ms: number; deposit_ms: number; fill_ms: number };
 }

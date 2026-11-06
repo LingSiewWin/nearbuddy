@@ -28,7 +28,9 @@ export const countdown = (ns: string, nowMs: number) => {
 };
 
 /** One coloured/linked piece of a row. Plain strings are uncoloured text; `onClick` renders a button. */
-export type Cell = string | { t: string; c?: string; href?: string; title?: string; onClick?: () => void };
+export type Cell =
+  | string
+  | { t: string; c?: string | undefined; href?: string | undefined; title?: string | undefined; onClick?: () => void };
 
 /** Renders cells into at most `width` characters; returns the nodes and the characters used. */
 const cells = (list: Cell[], width: number, dc?: string): [ReactNode[], number] => {
