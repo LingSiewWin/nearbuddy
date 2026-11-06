@@ -15,6 +15,14 @@ Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this 
     AGENT_KEY_B=<seed> NEAR_AI_MODEL_B=<model> SOLVER_URL=https://... ARENA_SECRET=<shared> \\
         .venv/bin/python runner.py --only B --wait-pairing [--hardened]
 
+Commit-reveal (`--commit-reveal`, or on by itself when get_config says `commit_reveal: true`): each cycle an agent
+reveals its previous call (POST /reveal: intent, salt, tee; followers are quoted then) and commits the new one
+(POST /commit: sha256(intent bytes || salt) signed over commit_message). Commits stop at the intent lock; the last
+commitment is revealed before close_at, and on Ctrl-C too, since an unrevealed commitment is slashed. Rows gain
+`commitment`, `committed_tx`, `revealed_tx`. `--consent` (two-sided runs only) has both agents sign the duel terms
+so the solver opens it with open_duel_consented; a self-hosted `--only` runner holds one key, so it gets
+commit-reveal but never consent.
+
 Agents are ed25519 keys derived from AGENT_SEED_A / AGENT_SEED_B (hex, 32 bytes) in the env file,
 or fresh random keys when unset (then they are registered on every run). With NEAR_AI_API_KEY set the
 agents are registered as TEE-backed and the contract refuses any intent without a verified proof.
@@ -23,10 +31,14 @@ agents are registered as TEE-backed and the contract refuses any intent without 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
+import secrets
+import signal
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
@@ -35,10 +47,20 @@ from typing import Any
 
 from nacl.signing import SigningKey
 
-from chain import ASSETS, agent_tier_on_chain, view, wait_outcome
+from chain import ARENA, ASSETS, agent_tier_on_chain, view, wait_outcome
 from config import ATTEST_DIR, DATA, ENV
 from duelist import Duelist, DuelistError
-from intent_client import Solver, TeeProofError, proof_hash, sign_intent, tee_proof
+from intent_client import (
+    Solver,
+    TeeProofError,
+    commit_message,
+    commitment,
+    consent_message,
+    proof_hash,
+    sign_b64,
+    sign_intent,
+    tee_proof,
+)
 from keys import agent_key, pk_b64, register_sig
 from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
@@ -117,8 +139,10 @@ def resolve_duel(solver: Solver, duel_id: str, attempts: int = 4) -> dict[str, A
     return {"tx": txs[-1] if txs else "", "txs": txs, "outcome": outcome}
 
 
-def post_decision(
-    solver: Solver,
+Prepared = tuple[dict[str, Any], dict[str, Any] | None, list[dict[str, Any]], dict[str, Any]]
+
+
+def prepare_decision(
     duel_id: str,
     symbol: str,
     px: int,
@@ -126,16 +150,15 @@ def post_decision(
     close_at_ns: int,
     pending: dict[str, list[dict[str, Any]]],
     nonce: int,
-    label: str,
     d: Duelist,
     sk: SigningKey,
     comp: Tracked,
     model: ModelClient,
     attestations: dict[str, str | None],
-) -> tuple[int, str]:
-    """One decision for one agent: prompt the model with the brief and any pending injection, re-encode the
-    enclave signature as the `TeeProof`, post the signed intent through the solver and append one dataset row.
-    Returns (nonce, status): "posted", "skipped" (no decision or no proof) or "closed" (chain clock passed close_at)."""
+) -> Prepared | None:
+    """Prompt the model with the brief and any pending injection and re-encode the enclave signature as the
+    `TeeProof`. Returns (intent with this `nonce`, tee, injections used, dataset row), or None when there is no
+    decision or no proof (that row is already recorded)."""
     pk = pk_b64(sk)
     inj = [i for i in pending.get(pk, []) if i["duel_id"] == duel_id]
     injection_text = "\n".join(i["payload"] for i in inj) or None
@@ -158,7 +181,7 @@ def post_decision(
                 "response_body": failed.response_bytes.decode(errors="replace"),
             }
         )
-        return nonce, "skipped"
+        return None
     c = comp.last
     sig_record = model.signature(c.chat_id) if c.chat_id else None
     tee = None
@@ -182,8 +205,7 @@ def post_decision(
             }
         )
         print(f"  {pk[:8]} no verifiable enclave signature for {c.chat_id}; decision not posted")
-        return nonce, "skipped"
-    nonce += 1
+        return None
     intent = {
         "agent_pk": pk,
         "duel_id": duel_id,
@@ -212,10 +234,57 @@ def post_decision(
         "attestation_file": attestations.get(model.model_id),
         "intent": intent,
     }
+    return intent, tee, inj, row
+
+
+def _late(e: RuntimeError) -> str | None:
+    """The contract refused because the chain clock passed close_at or entered the intent lock."""
+    return next((w for w in ("duel closed", "intent lock") if w in str(e)), None)
+
+
+def _quotes(posted: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "follower": q["follower"],
+            "amount": q["amount"],
+            # batched RFQ: each follower's share is `quote_out`; the shared quote's amountOut is the batch total
+            "amountOut": q.get("quote_out") or (q.get("quote") or {}).get("quote", {}).get("amountOut"),
+        }
+        for q in posted.get("quotes", [])
+    ]
+
+
+def post_decision(
+    solver: Solver,
+    duel_id: str,
+    symbol: str,
+    px: int,
+    open_px: int,
+    close_at_ns: int,
+    pending: dict[str, list[dict[str, Any]]],
+    nonce: int,
+    label: str,
+    d: Duelist,
+    sk: SigningKey,
+    comp: Tracked,
+    model: ModelClient,
+    attestations: dict[str, str | None],
+) -> tuple[int, str]:
+    """One decision for one agent, posted in the clear: `prepare_decision`, then the signed intent through the
+    solver and one dataset row. Returns (nonce, status): "posted", "skipped" (no decision or no proof) or "closed"
+    (chain clock passed close_at or entered the intent lock)."""
+    prep = prepare_decision(
+        duel_id, symbol, px, open_px, close_at_ns, pending, nonce + 1, d, sk, comp, model, attestations
+    )
+    if prep is None:
+        return nonce, "skipped"
+    nonce += 1
+    intent, tee, inj, row = prep
+    pk = intent["agent_pk"]
     try:
         posted = solver.post("/intent", {"signed": sign_intent(sk, intent), "tee": tee})
     except RuntimeError as e:
-        late = next((w for w in ("duel closed", "intent lock") if w in str(e)), None)
+        late = _late(e)
         if late is None:
             raise
         # chain clock passed close_at or entered the intent lock: keep the paid decision, stop prompting this duel
@@ -224,26 +293,184 @@ def post_decision(
         return nonce, "closed"
     if inj:
         solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
-    record(
-        {
-            **row,
-            "tx": posted["tx"],
-            "quotes": [
-                {
-                    "follower": q["follower"],
-                    "amount": q["amount"],
-                    # batched RFQ: each follower's share is `quote_out`; the shared quote's amountOut is the batch total
-                    "amountOut": q.get("quote_out") or (q.get("quote") or {}).get("quote", {}).get("amountOut"),
-                }
-                for q in posted.get("quotes", [])
-            ],
-        }
-    )
+    record({**row, "tx": posted["tx"], "quotes": _quotes(posted)})
     print(
         f"  {label} {intent['side']} nonce {nonce} tee={'kind ' + str(tee['kind']) if tee else 'none'} "
         f"tx {posted['tx']} quotes {len(posted.get('quotes', []))}"
     )
     return nonce, "posted"
+
+
+@dataclass
+class Commitment:
+    """A committed call waiting for its reveal: what `POST /reveal` sends and the dataset row it completes."""
+
+    label: str
+    signed: dict[str, Any]
+    salt: bytes
+    tee: dict[str, Any] | None
+    row: dict[str, Any]
+
+
+def _refused(e: RuntimeError) -> bool:
+    """The solver or the contract verifiably refused the call (nothing stored on chain), as opposed to a transport
+    error or an RPC wait that dropped after the tx may have landed."""
+    return _late(e) is not None or any(w in str(e) for w in ("panicked", "commit_intent failed", "bad commit"))
+
+
+def commit_decision(
+    solver: Solver,
+    held: dict[str, Commitment],
+    duel_id: str,
+    symbol: str,
+    px: int,
+    open_px: int,
+    close_at_ns: int,
+    pending: dict[str, list[dict[str, Any]]],
+    nonce: int,
+    label: str,
+    d: Duelist,
+    sk: SigningKey,
+    comp: Tracked,
+    model: ModelClient,
+    attestations: dict[str, str | None],
+) -> tuple[int, str]:
+    """Commit-reveal, step 1: decide as `post_decision` does, then post only sha256(intent bytes || salt), signed by
+    the agent over `commit_message`. The call stays hidden (no quotes, nothing to copy) until `reveal`. The
+    commitment goes into `held[label]` before the POST: a commit that lands behind a timeout or a dropped RPC wait
+    must still be revealed, or the bond is slashed. Only a verifiable refusal takes it out again. Returns
+    (nonce, status): "committed", "skipped" or "closed" (inside the intent lock)."""
+    prep = prepare_decision(
+        duel_id, symbol, px, open_px, close_at_ns, pending, nonce + 1, d, sk, comp, model, attestations
+    )
+    if prep is None:
+        return nonce, "skipped"
+    nonce += 1
+    intent, tee, inj, row = prep
+    pk = intent["agent_pk"]
+    salt = secrets.token_bytes(32)
+    c = commitment(intent, salt)
+    p = Commitment(label, sign_intent(sk, intent), salt, tee, {**row, "commitment": base64.b64encode(c).decode()})
+    p.row["committed_tx"] = None  # unknown until the solver answers
+    held[label] = p
+    try:
+        committed = solver.post(
+            "/commit",
+            {
+                "duel_id": duel_id,
+                "agent_pk": pk,
+                "commitment": p.row["commitment"],
+                "sig": sign_b64(sk, commit_message(ARENA, duel_id, c)),
+            },
+        )
+    except RuntimeError as e:
+        if not _refused(e):
+            raise  # may have landed: stays held, the final reveal settles it
+        del held[label]
+        late = _late(e)
+        if late is None:
+            raise
+        record({**p.row, "revealed_tx": None, "tx": None, "error": late})
+        print(f"  late commitment for {pk[:8]} not posted ({late})")
+        return nonce, "closed"
+    p.row["committed_tx"] = committed["tx"]
+    if inj:  # the model has seen the injection; it is consumed at commit, like a posted intent
+        solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
+    print(f"  {label} committed nonce {nonce} tx {committed['tx']}")
+    return nonce, "committed"
+
+
+def reveal(solver: Solver, p: Commitment) -> str:
+    """Commit-reveal, step 2: open the commitment (intent, salt, tee). The solver quotes followers here. Records the
+    decision's dataset row. Returns "revealed", or "closed" when the chain refused it as late."""
+    try:
+        posted = solver.post("/reveal", {"signed": p.signed, "salt": base64.b64encode(p.salt).decode(), "tee": p.tee})
+    except RuntimeError as e:
+        late = _late(e)
+        if late is None:
+            raise
+        record({**p.row, "revealed_tx": None, "tx": None, "error": late})
+        print(f"  late reveal for {p.label} ({late}): the commitment stays unrevealed")
+        return "closed"
+    record({**p.row, "revealed_tx": posted["tx"], "tx": posted["tx"], "quotes": _quotes(posted)})
+    i = p.signed["intent"]
+    n_quotes = len(posted.get("quotes", []))
+    print(f"  {p.label} revealed {i['side']} nonce {i['nonce']} tx {posted['tx']} quotes {n_quotes}")
+    return "revealed"
+
+
+def reveal_all(solver: Solver, held: dict[str, Commitment]) -> None:
+    """Reveal every held commitment (an unrevealed one is slashed). One failure, transport errors included, must
+    not strand the others."""
+    for label in list(held):
+        p = held.pop(label)
+        try:
+            reveal(solver, p)
+        except Exception as e:  # requests' ConnectionError/Timeout are not RuntimeError
+            record({**p.row, "revealed_tx": None, "tx": None, "error": f"reveal failed: {str(e)[:200]}"})
+            print(f"  reveal for {label} failed: {type(e).__name__}: {str(e)[:120]}")
+
+
+Player = tuple[str, Duelist, SigningKey, Tracked, ModelClient]
+
+
+def play_duel(
+    solver: Solver,
+    duel_id: str,
+    symbol: str,
+    open_px: int,
+    close_at_ns: int,
+    stop_ns: int,
+    players: list[Player],
+    nonce: int,
+    cycle_seconds: int,
+    attestations: dict[str, str | None],
+    commit_reveal: bool = False,
+) -> int:
+    """Every `cycle_seconds` until `stop_ns` (the intent lock plus a margin) each player decides once. Plain mode
+    posts the intent. Commit-reveal mode first reveals the player's previous commitment, then commits the new call;
+    the last commitments are revealed after `stop_ns` (reveals are allowed up to close_at) and also on any exit,
+    Ctrl-C included, so no commitment is left to be slashed. Returns the last nonce used."""
+    held: dict[str, Commitment] = {}
+    closed = False
+    try:
+        while not closed and time.time_ns() < stop_ns:
+            px = price(symbol, ENV.get("PYTH_API_KEY"))
+            pending = solver.get("/arena")["pending"]
+            for label, d, sk, comp, model in players:
+                args = (duel_id, symbol, px, open_px, close_at_ns, pending, nonce, label, d, sk, comp, model)
+                if not commit_reveal:
+                    nonce, status = post_decision(solver, *args, attestations)
+                else:
+                    status = "committed"
+                    if label in held:
+                        status = reveal(solver, held[label])
+                        del held[label]  # only once the reveal returned: a raise leaves it for the final reveal
+                    if status != "closed":
+                        nonce, status = commit_decision(solver, held, *args, attestations)
+                if status == "closed":
+                    closed = True
+                    break
+            if not closed:
+                time.sleep(cycle_seconds)
+    finally:
+        reveal_all(solver, held)
+    return nonce
+
+
+def exit_on_sigterm() -> None:
+    """SIGTERM (night-loop.sh, systemd, docker stop) kills Python without running `finally`; turn it into SystemExit
+    so play_duel still reveals its held commitments (an unrevealed one is slashed)."""
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+
+
+def duel_request(ska: SigningKey, skb: SigningKey, symbol: str, close_at_ns: int, consent: bool) -> dict[str, Any]:
+    """`POST /duel` body; with `consent` both agents sign `consent_message` and the solver calls open_duel_consented."""
+    body: dict[str, Any] = {"a": pk_b64(ska), "b": pk_b64(skb), "symbol": symbol, "close_at": str(close_at_ns)}
+    if consent:
+        msg = consent_message(ARENA, body["a"], body["b"], symbol, close_at_ns)
+        body |= {"sig_a": sign_b64(ska, msg), "sig_b": sign_b64(skb, msg)}
+    return body
 
 
 def wait_for_duel(solver: Solver, pk: str, poll_s: int, skip: str | None = None) -> str:
@@ -257,11 +484,20 @@ def wait_for_duel(solver: Solver, pk: str, poll_s: int, skip: str | None = None)
 
 
 def run_single(
-    name: str, hardened: bool, cycle_seconds: int, poll_seconds: int, symbol: str, solver_url: str, bond: str
+    name: str,
+    hardened: bool,
+    cycle_seconds: int,
+    poll_seconds: int,
+    symbol: str,
+    solver_url: str,
+    bond: str,
+    commit_reveal: bool = False,
 ) -> None:
     """Self-hosted mode: drive one agent (`AGENT_KEY_<name>` or the derived key) from this machine. The solver
     pairs it (PAIR_EVERY_S) and opens the duel; this process only decides, proves and posts for its own side,
-    then asks the oracle to resolve once and waits for the next pairing. Runs until interrupted."""
+    then asks the oracle to resolve once and waits for the next pairing. Runs until interrupted.
+    Commit-reveal applies here (flag or get_config). Consent does not: open_duel_consented needs the opponent's
+    signature too, which this process does not hold, so the solver's pairing loop opens the duel unconsented."""
     if not ENV.get("ARENA_SECRET"):
         raise SystemExit("ARENA_SECRET missing: the solver refuses every POST without it")
     solver = Solver(solver_url, ENV["ARENA_SECRET"])
@@ -302,18 +538,22 @@ def run_single(
             f"[duel {duel_id}] {sym} vs {other[:8]} open {open_px / 1e8:,.4f} "
             f"closes in {(close_at_ns - time.time_ns()) // 1_000_000_000} s"
         )
-        closed = False
-        lock_s = int((view("get_config", {}) or {}).get("intent_lock_s", 0) or 0)
+        cfg = view("get_config", {}) or {}
+        lock_s = int(cfg.get("intent_lock_s", 0) or 0)
         stop_ns = close_at_ns - (lock_s + 25) * 1_000_000_000  # intent lock + model/signature/chain round trip
-        while not closed and time.time_ns() < stop_ns:
-            px = price(sym, ENV.get("PYTH_API_KEY"))
-            pending = solver.get("/arena")["pending"]
-            nonce, status = post_decision(
-                solver, duel_id, sym, px, open_px, close_at_ns, pending, nonce, name, d, sk, comp, model, attestations
-            )
-            closed = status == "closed"
-            if not closed:
-                time.sleep(cycle_seconds)
+        nonce = play_duel(
+            solver,
+            duel_id,
+            sym,
+            open_px,
+            close_at_ns,
+            stop_ns,
+            [(name, d, sk, comp, model)],
+            nonce,
+            cycle_seconds,
+            attestations,
+            commit_reveal or bool(cfg.get("commit_reveal")),
+        )
         while time.time_ns() < close_at_ns + 2_000_000_000:
             time.sleep(1)
         # permissionless on chain; the solver pays the oracle deposit. Once: the other side or the operator may
@@ -376,6 +616,8 @@ def run(
     bond: str,
     swap: bool = False,
     variants: str = "",
+    commit_reveal: bool = False,
+    consent: bool = False,
 ) -> list[dict[str, Any]]:
     if not ENV.get("ARENA_SECRET"):
         raise SystemExit("ARENA_SECRET missing in the env file: the solver refuses every POST without it")
@@ -383,7 +625,12 @@ def run(
     if not asset:
         raise SystemExit(f"no oracle asset for {symbol}; known: {sorted(ASSETS)}")
     solver = Solver(solver_url, ENV["ARENA_SECRET"])
-    lock_s = int((view("get_config", {}) or {}).get("intent_lock_s", 0) or 0)
+    cfg = view("get_config", {}) or {}
+    lock_s = int(cfg.get("intent_lock_s", 0) or 0)
+    # the contract can require either; the flags turn them on against a contract that only allows them
+    commit_reveal = commit_reveal or bool(cfg.get("commit_reveal"))
+    consent = consent or bool(cfg.get("require_consent"))
+    print(f"commit-reveal {'on' if commit_reveal else 'off'}, consent {'on' if consent else 'off'}")
     model_a, model_b = client_from_env(ENV, "A"), client_from_env(ENV, "B")
     if swap:  # control: the hardened prompt goes to model B and the naive prompt to model A, under separate keys
         model_a, model_b = model_b, model_a
@@ -415,9 +662,7 @@ def run(
     for rnd in range(rounds):
         free_agents(solver, [pk_b64(ska), pk_b64(skb)])
         close_at_ns = (time.time_ns() // 1_000_000_000 + duel_seconds) * 1_000_000_000
-        opened = solver.post(
-            "/duel", {"a": pk_b64(ska), "b": pk_b64(skb), "symbol": asset, "close_at": str(close_at_ns)}
-        )
+        opened = solver.post("/duel", duel_request(ska, skb, asset, close_at_ns, consent))
         duel_id = str(opened["duel_id"])
         if variants:  # treatment slot: agent A's arm is a function of the duel id, agent B stays the naive control
             a.variant = pick_variant(duel_id, variants)
@@ -426,35 +671,23 @@ def run(
             f"[round {rnd}] duel {duel_id} {symbol} spot {open_px / 1e8:,.4f} tx {opened['tx']} "
             f"A prompt {a.prompt_variant}"
         )
-        closed = False
         # stop before the contract's intent lock (deploy 11: no intents in the last `intent_lock_s`), plus 25 s for
         # model + signature + chain round trip
         stop_ns = close_at_ns - (lock_s + 25) * 1_000_000_000
-        while not closed and time.time_ns() < stop_ns:
-            px = price(symbol, ENV.get("PYTH_API_KEY"))
-            pending = solver.get("/arena")["pending"]
-            for label, d, sk, comp, model in (("A", a, ska, ca, model_a), ("B", b, skb, cb, model_b)):
-                nonce, status = post_decision(
-                    solver,
-                    duel_id,
-                    symbol,
-                    px,
-                    open_px,
-                    close_at_ns,
-                    pending,
-                    nonce,
-                    label,
-                    d,
-                    sk,
-                    comp,
-                    model,
-                    attestations,
-                )
-                if status == "closed":
-                    closed = True
-                    break
-            if not closed:
-                time.sleep(cycle_seconds)
+        players: list[Player] = [("A", a, ska, ca, model_a), ("B", b, skb, cb, model_b)]
+        nonce = play_duel(
+            solver,
+            duel_id,
+            symbol,
+            open_px,
+            close_at_ns,
+            stop_ns,
+            players,
+            nonce,
+            cycle_seconds,
+            attestations,
+            commit_reveal,
+        )
         while time.time_ns() < close_at_ns + 2_000_000_000:
             time.sleep(1)
         resolved = resolve_duel(solver, duel_id)
@@ -475,6 +708,7 @@ def run(
 
 
 if __name__ == "__main__":
+    exit_on_sigterm()
     p = argparse.ArgumentParser()
     p.add_argument("--rounds", type=int, default=1)
     p.add_argument(
@@ -510,6 +744,16 @@ if __name__ == "__main__":
     )
     p.add_argument("--hardened", action="store_true", help="with --only: use the hardened prompt (default naive)")
     p.add_argument("--poll-seconds", type=int, default=10)
+    p.add_argument(
+        "--commit-reveal",
+        action="store_true",
+        help="commit each call as sha256(intent || salt), reveal it next cycle (on anyway when get_config says so)",
+    )
+    p.add_argument(
+        "--consent",
+        action="store_true",
+        help="both agents sign the duel terms; the solver opens it with open_duel_consented (not with --only)",
+    )
     args = p.parse_args()
     arms = "".join(args.variants.upper().split(","))
     if arms and (len(set(arms)) != len(arms) or not set(arms) <= set(VARIANTS)):
@@ -530,6 +774,8 @@ if __name__ == "__main__":
     if args.only:
         if not args.wait_pairing:
             p.error("--only needs --wait-pairing: the solver opens the duel, this process only plays one side")
+        if args.consent:
+            p.error("--consent needs both agents' signatures; with --only this process holds one key")
         run_single(
             args.only,
             args.hardened,
@@ -538,6 +784,7 @@ if __name__ == "__main__":
             args.symbol,
             ENV.get("SOLVER_URL", "http://127.0.0.1:4020"),
             args.bond,
+            args.commit_reveal,
         )
         raise SystemExit(0)
     out = run(
@@ -549,5 +796,7 @@ if __name__ == "__main__":
         args.bond,
         args.swap_prompts,
         arms,
+        args.commit_reveal,
+        args.consent,
     )
     print(json.dumps(out, indent=2))
