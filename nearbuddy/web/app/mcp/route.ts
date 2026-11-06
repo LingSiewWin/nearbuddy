@@ -334,6 +334,7 @@ const TOOLS: Tool[] = [
     run: async (a) => {
       const r = await verifyDuel(new Request(`http://mcp.local/api/verify?duel=${a.id}`));
       const body = (await r.json()) as { error?: string };
+      if ((body as { status?: string }).status === "missing") fail("no duel with that id");
       return r.ok ? body : fail(body.error ?? `verifier answered ${r.status}`);
     },
   },
@@ -384,6 +385,8 @@ const unsentinel = (v: string | null) => {
   const m = v?.match(/^=\?base64\?(.*)\?=$/);
   return m ? Buffer.from(m[1] as string, "base64").toString("utf8") : v;
 };
+
+export const maxDuration = 60; // verify_duel's cold check pages FastNEAR for 10-20 s
 
 export async function POST(req: Request) {
   // ponytail: same-origin only for browsers (DNS rebinding); add an allowlist when a browser MCP client needs one
