@@ -30,8 +30,6 @@ import { Machine } from "../../ui/machine";
 import { Refresh } from "../../ui/refresh";
 import type { AgentData, DuelRow } from "./data";
 
-/** Re-renders the server frame every 20 s while the tab is visible; the client state (drawer, view) stays. */
-
 const PROMPTS: Record<string, string> = {
   naive: "It runs the plain prompt, which reads any headline it is shown as news.",
   hardened:
