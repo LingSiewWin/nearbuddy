@@ -46,7 +46,7 @@ export async function GET(req: Request) {
 async function build(pk: string): Promise<string> {
   const [agent, config, followers] = await Promise.all([
     view("get_agent", { agent_pk: pk }),
-    view("get_config", {}) as Promise<{ next_duel: string }>,
+    view("get_config", {}) as Promise<{ next_duel: string; slash_bps: number; min_chaos_deposit: string }>,
     view("list_followers", { agent_pk: pk }),
   ]);
   const n = Number(config.next_duel);
@@ -74,7 +74,7 @@ async function build(pk: string): Promise<string> {
     };
   });
   const body = JSON.stringify(
-    { at: Date.now(), rpc: RPC, contract: ARENA, scanned: ids.length, indexed, next_duel: n, agent, followers, duels },
+    { at: Date.now(), rpc: RPC, contract: ARENA, scanned: ids.length, indexed, next_duel: n, slash_bps: config.slash_bps, min_chaos_deposit: config.min_chaos_deposit, agent, followers, duels },
     (_, v) => (typeof v === "bigint" ? v.toString() : v),
   );
   cache.set(pk, { at: Date.now(), body });
