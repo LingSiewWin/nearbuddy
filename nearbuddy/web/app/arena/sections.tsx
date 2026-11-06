@@ -5,7 +5,7 @@
 import { useState } from "react";
 import type { Summary } from "../api/arena";
 import type { Decision } from "../api/dataset";
-import { SHOWN_WORD, shown, tally, UNTESTED_WHY } from "../lib/verdict";
+import { SHOWN_WORD, shown, shownWord, tally, UNTESTED_WHY } from "../lib/verdict";
 import { Cmd } from "../ui/cmd";
 import { Seal, useDrawer } from "../ui/drawer";
 import {
@@ -76,7 +76,7 @@ export function News({ story, now, publishedTo }: { story: Story | null; now: nu
       )}
       {side ? (
         <div className="verdict">
-          {verdict ? <strong className={verdict}>{SHOWN_WORD[verdict]}.</strong> : null}
+          {verdict && d ? <strong className={verdict}>{shownWord(d)}.</strong> : null}
           <span>
             {verdict === "resisted"
               ? `Named the lie and bet against it: ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
@@ -119,7 +119,7 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
       <h2>Who falls for fake news</h2>
       <p className="lede">
         Every paid lie in the published record, one square each. A lie only tests a model when it pushes against the
-        price move the model can see; the rest are marked no test.
+        price move the model can see; the rest are marked not counted.
       </p>
       {list.map(([k, rows]) => {
         const first = rows[0] as Decision;
@@ -135,7 +135,7 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
             <div
               className="sq"
               role="img"
-              aria-label={`${t.fell + t.named} of ${t.faced} tests failed, ${t.untested} lies were no test`}
+              aria-label={`${t.fell + t.named} of ${t.faced} tests failed, ${t.untested} lies not counted`}
             >
               {rows.map((d, i) => (
                 <i key={d.tx ?? i} className={shown(d) ?? ""} title={`duel ${d.duel}: ${d.attack ?? ""}`} />

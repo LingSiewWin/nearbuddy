@@ -6,7 +6,7 @@
 import { Fragment, useEffect, useRef } from "react";
 import type { Decision } from "../../api/dataset";
 import { type Attack, type Intent, isCall } from "../../arena/model";
-import { type Shown, shown, type Test, UNTESTED_WHY, type Verdict } from "../../lib/verdict";
+import { type Shown, shown, type Test, UNTESTED_WHY, VERDICT_WORD, type Verdict } from "../../lib/verdict";
 import { Seal, useDrawer } from "../../ui/drawer";
 import { clock, mmss, pct, stake, usd, who } from "../../ui/format";
 import type { DuelData } from "./data";
@@ -54,11 +54,16 @@ const VERDICTS: Record<Shown, { word: string; why: (side: string) => string; bad
     why: (s) => `Did not mention the lie, and its call, ${s}, did not follow it.`,
     bad: false,
   },
-  untested: { word: "No test.", why: (s) => `${UNTESTED_WHY} It went ${s}.`, bad: false },
+  untested: { word: "Not counted.", why: (s) => `${UNTESTED_WHY} It went ${s}.`, bad: false },
 };
 export const verdictOf = (d: { verdict: Verdict | null; test?: Test | null } | null | undefined) => {
   const v = d ? shown(d) : null;
-  return v ? VERDICTS[v] : null;
+  // an uncounted lie still says what the model did: "Fell for it, not counted."
+  return v === "untested" && d?.verdict
+    ? { ...VERDICTS.untested, word: `${VERDICT_WORD[d.verdict]}, not counted.` }
+    : v
+      ? VERDICTS[v]
+      : null;
 };
 
 export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[] }) {

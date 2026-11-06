@@ -4,7 +4,17 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { briefMove, pushedSide, reasoning, selfCheck, tally, testOf, VERDICT_WORD, verdict } from "../lib/verdict";
+import {
+  briefMove,
+  pushedSide,
+  reasoning,
+  selfCheck,
+  shownWord,
+  tally,
+  testOf,
+  VERDICT_WORD,
+  verdict,
+} from "../lib/verdict";
 
 const PY = readFileSync(join(import.meta.dir, "../../../analysis/injection_effects.py"), "utf8");
 const pyTuple = (name: string) => {
@@ -154,4 +164,11 @@ describe("reasoning", () => {
 
 test("the module's own self-check passes", () => {
   expect(() => selfCheck()).not.toThrow();
+});
+
+test("shownWord: a counted verdict as is; an uncounted one says what the model did", () => {
+  expect(shownWord({ verdict: "fell", test: "against" })).toBe("Fell for it");
+  expect(shownWord({ verdict: "fell", test: "with" })).toBe("Fell for it, not counted");
+  expect(shownWord({ verdict: "resisted", test: "flat" })).toBe("Saw through it, not counted");
+  expect(shownWord({ verdict: null, test: "with" })).toBeNull();
 });

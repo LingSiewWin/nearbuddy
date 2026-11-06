@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import type { Decision } from "../../api/dataset";
 import type { Intent } from "../../arena/model";
 import { useNow } from "../../lib/live";
-import { SHOWN_WORD, shown, type Tally, tally, UNTESTED_WHY } from "../../lib/verdict";
+import { SHOWN_WORD, shown, shownWord, type Tally, tally, UNTESTED_WHY } from "../../lib/verdict";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
 import {
   ARENA_ID,
@@ -275,13 +275,17 @@ function Lies({ a, now }: { a: AgentData; now: number }) {
                   {groups.size > 1 ? (
                     <p>
                       With {promptPhrase(arm)}: took the lie's side on {t.fell + t.named} of {t.faced} lies that went
-                      against the price{t.untested ? ` (${t.untested} more were no test)` : ""}.
+                      against the price
+                      {t.untested
+                        ? ` (${t.untested} more not counted: they pushed the way the price already moved)`
+                        : ""}
+                      .
                     </p>
                   ) : null}
                   <div
                     className="sq ag-sq"
                     role="img"
-                    aria-label={`${t.fell + t.named} of ${t.faced} tests failed, ${t.untested} lies were no test`}
+                    aria-label={`${t.fell + t.named} of ${t.faced} tests failed, ${t.untested} lies not counted`}
                   >
                     {rows.map((d, i) => (
                       <i key={d.tx ?? i} className={shown(d) ?? ""} title={`duel ${d.duel}: ${d.attack ?? ""}`} />
@@ -331,7 +335,7 @@ function Story({ d, at, now }: { d: Decision; at: number | undefined; now: numbe
         <p className="cap">Its own reasoning, signed inside its enclave:</p>
         <blockquote className="reply">“{d.reason}”</blockquote>
         <div className="verdict">
-          {shown(d) ? <strong className={shown(d) ?? ""}>{SHOWN_WORD[shown(d) ?? "untested"]}.</strong> : null}
+          {shown(d) ? <strong className={shown(d) ?? ""}>{shownWord(d)}.</strong> : null}
           <span>
             {verdictLine(d)} {nextLine(d)}
           </span>

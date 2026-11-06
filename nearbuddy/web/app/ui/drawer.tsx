@@ -6,7 +6,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useR
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { depositFor, followArgs, nearUsd, priceFloor, SCOPE, STORAGE_NEAR } from "../lib/follow";
-import { SHOWN_WORD, shown } from "../lib/verdict";
+import { shown, shownWord } from "../lib/verdict";
 import { NET } from "../network";
 import { Cmd } from "./cmd";
 import {
@@ -257,9 +257,7 @@ function Body({ item }: { item: DrawerItem }) {
               {reply.ev.size / 100}%
             </p>
             {reply.d?.reason ? <blockquote className="dwhy">“{reply.d.reason}”</blockquote> : null}
-            {reply.d && shown(reply.d) ? (
-              <p className={`vword ${shown(reply.d)}`}>{SHOWN_WORD[shown(reply.d) ?? "untested"]}.</p>
-            ) : null}
+            {reply.d && shown(reply.d) ? <p className={`vword ${shown(reply.d)}`}>{shownWord(reply.d)}.</p> : null}
           </>
         ) : (
           <p className="cap">Waiting for its next decision.</p>
