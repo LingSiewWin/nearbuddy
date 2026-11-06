@@ -310,6 +310,20 @@ h2 {
   max-width: 78ch;
   margin-bottom: 22px;
 }
+/* the hero's scoring notes, folded under one line so the first screen stays short */
+details.fine > summary {
+  cursor: pointer;
+  list-style: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line);
+}
+details.fine > summary::-webkit-details-marker {
+  display: none;
+}
+details.fine[open] > summary {
+  margin-bottom: 4px;
+}
 /* the live duel's newest paid lie, on its own line under the hero sentence */
 .sub .lie-now {
   display: block;

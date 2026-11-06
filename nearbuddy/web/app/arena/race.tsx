@@ -172,7 +172,8 @@ export function Headline({
         <h1>{h1}</h1>
         <p className="sub">{sub}</p>
         {f.live ? (
-          <p className="fine">
+          <details className="fine">
+            <summary>The live line is Coinbase; the score is the oracle&apos;s. How it is scored</summary>
             Live line: Coinbase NEAR-USD trades. The score is set by the TEE price oracle at the open and the close; its
             prices can be up to five minutes old, so the final score can differ from the live line.
             {f.open && open && Math.abs(f.open - open) / open >= 0.0001
@@ -182,7 +183,7 @@ export function Headline({
               ? ` Calls are sealed until revealed, so nobody can copy them in time; a side that never reveals forfeits ${f.forfeitPct}% of its bond.`
               : ""}
             {f.consent ? " Both agents agreed to this pairing." : ""}
-          </p>
+          </details>
         ) : null}
       </div>
       <div className="clock">
