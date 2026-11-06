@@ -8,6 +8,7 @@
 import type { Fill } from "../../cells";
 import { isVoid, ORACLE_ERA_FROM, operatorIds, oracleIds, type ScoredDuel, tally, unread } from "../../eras";
 import { chunked, readDuel } from "../duels";
+import { followersOf } from "../followers";
 import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
 
 const view = viewOn(ARENA);
@@ -71,7 +72,7 @@ async function build(pk: string, era: "oracle" | "operator"): Promise<string> {
       min_chaos_deposit: string;
       no_reveal_bps?: number;
     }>,
-    view("list_followers", { agent_pk: pk }) as Promise<[string, unknown][]>,
+    followersOf(view, pk),
     fetch(`${SOLVER_URL}/execution`, { cache: "no-store", signal: AbortSignal.timeout(3000) })
       .then((r) => r.json())
       .then((j: { quality?: Fill[] }) => (Array.isArray(j?.quality) ? j.quality : null))
