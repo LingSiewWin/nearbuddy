@@ -24,8 +24,11 @@
 //   2. SIGTERM mid-duel: the runner is killed after its second commit round; its held commitments must still be
 //      revealed, and the duel resolves with no no-reveal flag. Stub A and B take opposite sides, so this duel is
 //      decided: the loser's bond is slashed and the winner is paid the pool.
-//   3. follower fill: two enclave agents (this script plays the enclave signer), a follower with a mandate on one,
-//      commit + reveal with a TeeProof through the solver, then POST /settle_follow with the dry quote.
+//   3. follower fill (deploy 15): two enclave agents (this script plays the enclave signer), a follower with a
+//      mandate on one whose price floor comes from a quote, commit + reveal with a TeeProof through the solver, then
+//      POST /settle_follow: the solver credits the output to the arena on the intents stub (stub_credit) and settles
+//      against that balance. Checks the dry-quote refusal, the holding credited, the replay refusal and
+//      withdraw_token of the holding to the follower's stub balance.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -47,6 +50,8 @@ import {
 const ROOT = new URL("..", import.meta.url).pathname;
 const ARENA_DIR = join(ROOT, "arena");
 const WASM = join(ARENA_DIR, "target/near/nearbuddy_arena.wasm");
+const STUB_DIR = join(ROOT, "intents-stub");
+const STUB_WASM = join(STUB_DIR, "target/near/nearbuddy_intents_stub.wasm");
 const TMP = mkdtempSync(join(tmpdir(), "nearbuddy-e2e-"));
 const NEAR = 10n ** 24n;
 const MILLI = 10n ** 21n;
@@ -213,10 +218,13 @@ async function rpc<T = J>(method: string, params: unknown): Promise<T> {
 }
 let ARENA = "";
 async function view<T = J>(method: string, args: Record<string, unknown> = {}): Promise<T> {
+  return viewAt<T>(ARENA, method, args);
+}
+async function viewAt<T = J>(contract: string, method: string, args: Record<string, unknown> = {}): Promise<T> {
   const r = await rpc<{ result: number[] }>("query", {
     request_type: "call_function",
     finality: "optimistic", // txs return at EXECUTED_OPTIMISTIC; a final read lags them by a couple of blocks
-    account_id: ARENA,
+    account_id: contract,
     method_name: method,
     args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
   });
@@ -371,11 +379,14 @@ async function main() {
   const t0 = Date.now();
   log(`temp dir ${TMP}`);
   if (!process.env.E2E_SKIP_BUILD) {
-    log("building the contract (cargo near build non-reproducible-wasm)");
-    const b = spawnSync("cargo", ["near", "build", "non-reproducible-wasm"], { cwd: ARENA_DIR, stdio: "inherit" });
-    if (b.status !== 0) throw new Error("cargo near build failed");
+    for (const dir of [ARENA_DIR, STUB_DIR]) {
+      log(`building  (cargo near build non-reproducible-wasm)`);
+      const b = spawnSync("cargo", ["near", "build", "non-reproducible-wasm"], { cwd: dir, stdio: "inherit" });
+      if (b.status !== 0) throw new Error(`cargo near build failed in `);
+    }
   }
   const wasm = readFileSync(WASM);
+  const stubWasm = readFileSync(STUB_WASM);
 
   // 1. sandbox
   const bin = sandboxBin();
@@ -416,16 +427,16 @@ async function main() {
     ["owner", 100n],
     ["oracle", 20n],
     ["follower", 20n],
+    ["intents", 10n],
   ] as const)
     await root.createSubAccount({ accountOrPrefix: id(n), publicKey: vk.public_key, nearToTransfer: near * NEAR });
   const acct = (n: string) => new Account(id(n), provider, vk.secret_key);
-  const [arena, owner, oracleAcct, follower] = ["arena", "owner", "oracle", "follower"].map(acct) as [
-    Account,
-    Account,
-    Account,
-    Account,
-  ];
+  const [arena, owner, oracleAcct, follower, intents] = ["arena", "owner", "oracle", "follower", "intents"].map(
+    acct,
+  ) as [Account, Account, Account, Account, Account];
   ARENA = id("arena");
+  const INTENTS = intents.accountId; // the intents.near stand-in: mt_batch_balance_of, mt_transfer, stub_credit
+  await intents.deployContract(new Uint8Array(stubWasm));
 
   // 3. deploy + init + config (all owner calls happen before the solver starts: it shares the owner key)
   await arena.deployContract(new Uint8Array(wasm));
@@ -436,18 +447,26 @@ async function main() {
     slash_bps: 1000,
     fee_bps: Number(FEE_BPS),
     min_chaos_deposit: (100n * MILLI).toString(),
+    intents_account: INTENTS,
+    max_vault_total: (1000n * NEAR).toString(),
   });
-  await call(owner, "add_solver", { account_id: owner.accountId });
-  await call(owner, "set_oracle", {
-    oracle_account: oracleAcct.accountId,
-    oracle_deposit: ORACLE_DEPOSIT.toString(),
-    min_duel_s: MIN_DUEL_S,
-    intent_lock_s: LOCK_S,
-  });
-  await call(owner, "set_commit_reveal", { enabled: true, no_reveal_bps: 1000 });
+  // deploy 15: owner calls take exactly 1 yoctoNEAR
+  await call(owner, "add_solver", { account_id: owner.accountId }, 1n);
+  await call(
+    owner,
+    "set_oracle",
+    {
+      oracle_account: oracleAcct.accountId,
+      oracle_deposit: ORACLE_DEPOSIT.toString(),
+      min_duel_s: MIN_DUEL_S,
+      intent_lock_s: LOCK_S,
+    },
+    1n,
+  );
+  await call(owner, "set_commit_reveal", { enabled: true, no_reveal_bps: 1000 }, 1n);
   const enclave = KeyPairEd25519.fromRandom();
   const enclavePk = b64.enc(enclave.getPublicKey().data);
-  await call(owner, "add_tee_signer", { signer: enclavePk, label: "e2e enclave stand-in" });
+  await call(owner, "add_tee_signer", { signer: enclavePk, label: "e2e enclave stand-in" }, 1n);
   const cfg = await view("get_config");
   log(
     `arena ${ARENA} deployed: commit_reveal ${cfg.commit_reveal}, min_duel_s ${cfg.min_duel_s}, lock ${cfg.intent_lock_s}s`,
@@ -479,6 +498,7 @@ async function main() {
     ARENA_PAYLOADS: join(TMP, "arena-payloads.json"),
     ARENA_HISTORY: join(TMP, "arena-history.json"),
     PAIR_EVERY_S: "0",
+    FOLLOWERS: follower.accountId, // deploy 15 has no list_followers: the solver reads this follower's mandate
     ...(offline ? { ONECLICK_URL: offline } : {}),
   });
   await until("solver", async () => (await fetch(`${SOLVER_URL}/pairing`)).ok, 30_000);
@@ -712,14 +732,17 @@ async function main() {
     else check(sc, "runner opened a duel", false, r.lines.slice(-5).join(" | "));
   }
 
-  // ---- scenario 3: follower mandate filled through settle_follow ---------------------------------
+  // ---- scenario 3: follower mandate filled through settle_follow (deploy 15) -----------------------
   {
     const sc = "3 follower fill";
-    log(`${sc}: two enclave agents, a follower on one, commit + reveal with a TeeProof, settle_follow`);
+    log(`${sc}: two enclave agents, a follower on one, commit + reveal with a TeeProof, verified settle_follow`);
     const MODEL = "e2e/enclave-model";
     const [t1, t2] = [KeyPairEd25519.fromRandom(), KeyPairEd25519.fromRandom()];
     const pk = (k: KeyPairEd25519) => b64.enc(k.getPublicKey().data);
-    const regMsg = new Uint8Array(Buffer.concat([Buffer.from("nearbuddy-register-v1"), Buffer.from(owner.accountId)]));
+    // deploy 15 binds the contract id into the register bytes: sign what the contract says it verifies
+    const regMsg = new Uint8Array(
+      Buffer.from(await view<string>("register_message", { owner: owner.accountId }), "base64"),
+    );
     for (const k of [t1, t2])
       await post("/register", {
         agent_pk: pk(k),
@@ -729,6 +752,17 @@ async function main() {
         register_sig: b64.enc(k.sign(regMsg).signature),
       });
     const cap = 200n * MILLI;
+    // the mandate's price floor: 95% of a quote for the cap (the stand-in offline, 1Click live)
+    if (offline) process.env.ONECLICK_URL = offline;
+    const { quote, sellNearForUsdc, USDC_NEAR } = await import("../packages/solver/src/oneclick.ts");
+    const { priceFloor } = await import("../packages/protocol/src/chain.ts");
+    let floor = 1n;
+    try {
+      const fq = await quote(sellNearForUsdc(cap, owner.accountId.replace(/\.testnet$/, ".near")));
+      floor = priceFloor(cap, BigInt(fq.quote.amountOut));
+    } catch (e) {
+      log(`${sc}: no quote for the floor (${String(e).slice(0, 80)}); floor 1`);
+    }
     await call(follower, "deposit", {}, 2n * NEAR);
     const vault0 = BigInt(await view<string>("get_vault", { account: follower.accountId }));
     const now = await chainNow();
@@ -741,6 +775,7 @@ async function main() {
         allowed_tokens: [],
         expires_at: (now + 3600n * S).toString(),
         revoked: false,
+        min_out_per_near: floor.toString(),
       },
     });
     const vault1 = BigInt(await view<string>("get_vault", { account: follower.accountId }));
@@ -750,10 +785,11 @@ async function main() {
     await until("open price", async () => (await view("get_duel", { duel_id: duelId })).open_price, 30_000);
     const req = createHash("sha256").update("e2e request bytes").digest();
     const res = createHash("sha256").update("e2e response bytes").digest();
+    // Short sells NEAR for USDC: the follower's output is USDC, priced by the floor above
     const intent: Intent = {
       agent_pk: pk(t1),
       duel_id: duelId,
-      side: "Long",
+      side: "Short",
       size_bps: 5000,
       nonce: "1",
       expires_at: (closeAt + 60n * S).toString(),
@@ -778,11 +814,11 @@ async function main() {
     const q = (revealed.quotes ?? []).find((x: J) => x.follower === follower.accountId);
     check(
       sc,
-      "follower quoted at reveal",
+      "follower quoted at reveal (from FOLLOWERS: deploy 15 has no list_followers)",
       !!q && (!OFFLINE || !!q.quote), // live, a 1Click outage still counts as quoted (the error is the entry)
       q
         ? q.quote
-          ? `dry quote out ${q.quote_out}`
+          ? `quote out ${q.quote_out} to ${q.recipient}`
           : `quote error: ${String(q.error).slice(0, 80)}`
         : JSON.stringify(revealed.quotes),
     );
@@ -802,20 +838,40 @@ async function main() {
         );
       } else log(`${sc}: live spot price unavailable; quote_out plausibility not checked`);
     }
+    check(
+      sc,
+      "the batched quote delivers to the arena",
+      !q?.quote || q.recipient === ARENA.replace(/\.testnet$/, ".near"),
+      `recipient ${q?.recipient}`,
+    );
     const amountIn = q ? BigInt(q.amount) : cap;
-    const fill = {
+    const amountOut = q?.quote_out ? BigInt(q.quote_out) : (amountIn * floor) / NEAR + 1n;
+    const fill = (swap_tx: string) => ({
       intent_nonce: "1",
-      token: "nep141:wrap.near",
+      token: USDC_NEAR,
       amount_in: amountIn.toString(),
-      amount_out: q?.quote_out ?? "0",
-      swap_tx: `dry-quote:${q?.quote?.quote?.depositAddress ?? q?.quote?.correlationId ?? "none"}`,
-    };
-    const settled = await post("/settle_follow", { agent_pk: pk(t1), follower: follower.accountId, fills: [fill] });
+      amount_out: amountOut.toString(),
+      swap_tx,
+    });
+    // a dry quote is not a swap: refused before any chain call
+    const dry = await post("/settle_follow", {
+      agent_pk: pk(t1),
+      follower: follower.accountId,
+      fills: [fill("dry-quote:e2e")],
+    }).catch((e) => String(e));
+    check(
+      sc,
+      "a dry-quote fill is refused",
+      typeof dry === "string" && dry.includes("400") && dry.includes("dry quote unsettleable"),
+      String(dry).slice(0, 120),
+    );
+    // the swap: the solver credits amount_out to the arena on the stub, then settle_follow reads that balance
+    const settled = await post("/settle_follow", { agent_pk: pk(t1), follower: follower.accountId, fills: [fill("")] });
     const vault2 = BigInt(await view<string>("get_vault", { account: follower.accountId }));
     const debit = amountIn + (amountIn * FEE_BPS) / 10_000n;
     check(
       sc,
-      "settle_follow settles the fill inside the mandate",
+      "settle_follow settles the fill against the arena's intents balance",
       settled.report?.settled === 1 &&
         settled.report.rejected.length === 0 &&
         settled.report.debited === debit.toString(),
@@ -827,14 +883,38 @@ async function main() {
       vault1 - vault2 === debit,
       `vault ${vault0} -> ${vault1} (follow storage) -> ${vault2}`,
     );
-    const m = await view("get_follow", { agent_pk: pk(t1), follower: follower.accountId });
-    check(sc, "mandate spent updated", m?.spent === amountIn.toString(), `spent ${m?.spent}`);
-    const again = await post("/settle_follow", { agent_pk: pk(t1), follower: follower.accountId, fills: [fill] });
+    const holding = BigInt(await view<string>("get_holding", { follower: follower.accountId, token_id: USDC_NEAR }));
+    const accounted = BigInt(await view<string>("get_accounted", { token_id: USDC_NEAR }));
     check(
       sc,
-      "a replayed fill is rejected",
-      again.report?.settled === 0 && again.report.rejected?.[0]?.[1] === "duplicate fill",
-      JSON.stringify(again.report?.rejected),
+      "holding credited == amount_out, and accounted with it",
+      holding === amountOut && accounted === amountOut,
+      `holding ${holding} accounted ${accounted} amount_out ${amountOut}`,
+    );
+    const m = await view("get_follow", { agent_pk: pk(t1), follower: follower.accountId });
+    check(sc, "mandate spent updated by the debit (fee inside)", m?.spent === debit.toString(), `spent ${m?.spent}`);
+    const again = await post("/settle_follow", {
+      agent_pk: pk(t1),
+      follower: follower.accountId,
+      fills: [fill("")],
+    }).catch((e) => String(e));
+    check(
+      sc,
+      "a replayed fill is refused (nothing settled: the transaction fails)",
+      typeof again === "string" && again.includes("duplicate fill"),
+      String(again).slice(0, 160),
+    );
+    // the follower takes the output to its own account on the stub
+    const out = await call(follower, "withdraw_token", { token_id: USDC_NEAR, amount: holding.toString() }, 1n);
+    const onStub = BigInt(
+      await viewAt<string>(INTENTS, "mt_balance_of", { account_id: follower.accountId, token_id: USDC_NEAR }),
+    );
+    const left = BigInt(await view<string>("get_holding", { follower: follower.accountId, token_id: USDC_NEAR }));
+    check(
+      sc,
+      "withdraw_token moves the holding to the follower's intents balance",
+      out.value === true && onStub === holding && left === 0n,
+      `returned ${out.value}, stub balance ${onStub}, holding left ${left}, tx ${out.hash}`,
     );
   }
 
