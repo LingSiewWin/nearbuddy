@@ -3,6 +3,7 @@
 // three duels with every decision's proof, and who follows whom under a mandate. One vocabulary:
 // "enclave-verified" for an intent signed inside a NEAR AI TEE, "attack" for a paid prompt injection.
 import { useEffect, useState } from "react";
+import { type CommitConfig, commitWord, proven } from "../cells";
 import {
   addrHref,
   agentHref,
@@ -83,7 +84,7 @@ type Snap = {
   at: number;
   rpc: string;
   contract: string;
-  config: { next_duel: string; slash_bps: number; min_chaos_deposit: string };
+  config: { next_duel: string; slash_bps: number; min_chaos_deposit: string } & CommitConfig;
   leaderboard: Agent[];
   duels: (Duel | null)[];
   stats: { scanned: number; verified_decisions: number; attacks: number };
@@ -150,7 +151,7 @@ export default function Arena() {
   const proof = (i: Intent | null): Cell =>
     !i
       ? { t: "no intent yet", c: "dim" }
-      : i.proof_hash === ZERO
+      : !proven(i, ZERO)
         ? {
             t: "no proof (unverified tier)",
             c: "unv",
@@ -196,6 +197,13 @@ export default function Arena() {
             <span className="ok">{s.stats.verified_decisions} verified decisions</span>
             <span className="dim">, </span>
             <span className="warn">{s.stats.attacks} attacks</span>
+            <span className="dim"> · commit-reveal </span>
+            <span
+              className={s.config.commit_reveal ? "ok" : "dim"}
+              title={s.config.commit_reveal ? "calls hidden until reveal" : "intents are posted in the clear"}
+            >
+              {commitWord(s.config)}
+            </span>
             <span className="dim">
               {" "}
               · next close {live ? <span className="open">in {countdown(live.close_at, now)}</span> : "none open"}

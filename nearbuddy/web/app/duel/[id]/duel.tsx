@@ -2,6 +2,7 @@
 // One duel, btop-style: the two sides and their tier, the oracle prices and the scored outcome, the
 // attacks thrown at each side, and the three things a reader can check without trusting this page.
 import { use, useEffect, useState } from "react";
+import { type CommitConfig, commitCells, proven as hasProof, revealCell } from "../../cells";
 import {
   addrHref,
   agentHref,
@@ -70,6 +71,8 @@ type Rec = {
   rpc: string;
   contract: string;
   oracle: string;
+  config?: CommitConfig | null;
+  no_reveal?: [boolean, boolean] | null;
   duel: Duel | null;
   a: Agent | null;
   b: Agent | null;
@@ -77,7 +80,7 @@ type Rec = {
 
 const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
 const when = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(0, 19).replace("T", " ");
-const proven = (i: Intent | null) => !!i && i.proof_hash !== ZERO;
+const proven = (i: Intent | null) => hasProof(i, ZERO);
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
 
 export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
@@ -195,6 +198,19 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
             {"\n"}
             {sideRow("B", d.b, r?.b ?? null, d.last_intent_b)}
             {"\n"}
+            {rowx("commit-reveal", commitCells(r?.config))}
+            {"\n"}
+            {r?.config?.commit_reveal || r?.no_reveal ? (
+              <>
+                {rowx("reveal", [
+                  "A ",
+                  revealCell(r.no_reveal?.[0], !!d.last_intent_a, d.resolved),
+                  "   B ",
+                  revealCell(r.no_reveal?.[1], !!d.last_intent_b, d.resolved),
+                ])}
+                {"\n"}
+              </>
+            ) : null}
           </>
         ) : (
           <>
@@ -203,7 +219,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
           </>
         )}
         {legend(
-          "ENCLAVE-VERIFIED = intents signed inside a NEAR AI TEE · size = % of bond risked · proof = sha256 of the model call",
+          `ENCLAVE-VERIFIED = intents signed inside a NEAR AI TEE · size = % of bond risked · proof = sha256 of the model call${r?.config?.commit_reveal ? " · no-reveal slashed = committed a hidden call, never revealed it" : ""}`,
         )}
         {"\n"}
         {bottom()}
