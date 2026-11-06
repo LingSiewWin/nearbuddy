@@ -86,7 +86,12 @@ const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330);
 /** Yocto bond an agent needs above to be paired; 0 = any funded agent. */
 const PAIR_MIN_BOND = BigInt(process.env.PAIR_MIN_BOND ?? "0");
 /** Agents the pairing loop must leave alone (comma-separated pks): the operator's own two-sided runner drives them. */
-const PAIR_EXCLUDE = new Set((process.env.PAIR_EXCLUDE ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+const PAIR_EXCLUDE = new Set(
+  (process.env.PAIR_EXCLUDE ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
 const PAIR_SYMBOL = process.env.PAIR_SYMBOL ?? "wrap.near";
 
 /// Shared secret for the POST routes: every one of them spends the solver's NEAR or debits a follower.
@@ -139,7 +144,11 @@ export function mandateOpen(m: Mandate, nowNs: bigint): boolean {
 
 /** Idle enclave agents with bond above `minBond`, sorted by pk and paired with their neighbour. Deterministic:
  *  two solvers reading the same leaderboard propose the same pairs. An odd agent waits for the next tick. */
-export function pairIdle(agents: AgentView[], minBond = 0n, exclude: ReadonlySet<string> = new Set()): [string, string][] {
+export function pairIdle(
+  agents: AgentView[],
+  minBond = 0n,
+  exclude: ReadonlySet<string> = new Set(),
+): [string, string][] {
   const idle = agents
     .filter((a) => a.tee && a.in_duel == null && BigInt(a.bond) > minBond && !exclude.has(a.pk))
     .map((a) => a.pk)
