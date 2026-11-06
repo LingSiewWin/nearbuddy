@@ -36,6 +36,8 @@ jobs:
         working-directory: nearbuddy/web
       - run: bun x tsc --noEmit -p .
         working-directory: nearbuddy/web
+      - run: bun test app
+        working-directory: nearbuddy/web
 
   python:
     runs-on: ubuntu-latest
