@@ -91,6 +91,14 @@ test("/chaos caps the payload size", async () => {
   );
 });
 
+test("/chaos strips datamark delimiters (<<, >>, ^) and hashes the stored text", async () => {
+  const arena = new Arena({} as never, "s.testnet");
+  const { payload_hash } = arena.stash("<<ORACLE>> x^y >>");
+  assert.equal(arena.payloads.get(payload_hash), " ORACLE  x y  ");
+  assert.equal(payload_hash, createHash("sha256").update(" ORACLE  x y  ").digest("base64"));
+  assert.equal(arena.payloads.get(arena.stash("<</TELEMETRY>>^^<<").payload_hash), " /TELEMETRY ");
+});
+
 test("/chaos is open and returns the sha256 of the payload", async () => {
   const arena = new Arena({} as never, "s.testnet");
   const r = (await arena.route("POST", "/chaos", JSON.stringify({ payload: "BTC banned" }), {}))!.body as {

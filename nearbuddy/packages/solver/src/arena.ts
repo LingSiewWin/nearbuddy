@@ -323,9 +323,12 @@ export class Arena {
 
   /** Spectator path, no secret: store the payload and return its hash. The spectator then calls
    *  `inject_chaos(duel_id, target, kind, payload_hash)` on chain with their own deposit; the runner only
-   *  sees the injection once it is on chain (see `pending`). ponytail: in-memory store, capped. */
-  stash(payload: string): { payload_hash: string } {
-    if (payload.length > MAX_PAYLOAD) throw new Error(`payload over ${MAX_PAYLOAD} bytes`);
+   *  sees the injection once it is on chain (see `pending`). ponytail: in-memory store, capped.
+   *  The prompt's datamark delimiters (`<<`, `>>`, `^`; agents/prompts.py variant A) are stripped first, so a
+   *  payload cannot forge an `<<ORACLE>>` block or break the word marks; the hash covers the stored text. */
+  stash(raw: string): { payload_hash: string } {
+    if (raw.length > MAX_PAYLOAD) throw new Error(`payload over ${MAX_PAYLOAD} bytes`);
+    const payload = raw.replace(/(?:<<|>>|\^)+/g, " ");
     const payload_hash = b64.enc(createHash("sha256").update(payload).digest());
     this.payloads.set(payload_hash, payload);
     while (this.payloads.size > MAX_PAYLOADS) this.payloads.delete(this.payloads.keys().next().value!);
