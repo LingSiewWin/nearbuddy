@@ -174,7 +174,7 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
             >
               {when(e.at)}
               <p>
-                <b>Someone paid to attack {who(sideOf(e.target).model)}.</b>{" "}
+                <b>Attack on {who(sideOf(e.target).model)}</b>, paid by {e.signer}.{" "}
                 {e.text ? `“${e.text}”` : "A custom headline; only its hash is on chain."}
               </p>
               <span />

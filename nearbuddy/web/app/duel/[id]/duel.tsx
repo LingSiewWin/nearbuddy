@@ -308,8 +308,18 @@ function Attacks({ d, list }: { d: DuelData; list: Story[] }) {
         return (
           <article key={s.e?.tx ?? s.d?.tx ?? s.text} className={`story ${k}`}>
             <p className="lead">
-              Someone paid {paid != null ? `${paid} NEAR ` : ""}to slip <span className="who">{name}</span> a fake
-              headline{s.e ? `, ${mmss((s.e.at - d.opened) / 1000)} into the duel` : ""}.
+              <span className="who">{name}</span> was fed a fake headline
+              {s.e ? `, ${mmss((s.e.at - d.opened) / 1000)} into the duel` : ""}.
+              {s.e ? (
+                <span className="payer">
+                  {" "}
+                  Paid by{" "}
+                  <a href={acctUrl(s.e.signer)} target="_blank" rel="noreferrer">
+                    {s.e.signer}
+                  </a>
+                  {paid != null ? `, ${paid} NEAR` : ""}.
+                </span>
+              ) : null}
             </p>
             <div className="lie">{s.text ? `“${s.text}”` : "A custom headline: only its hash is on chain."}</div>
             {callSide ? (

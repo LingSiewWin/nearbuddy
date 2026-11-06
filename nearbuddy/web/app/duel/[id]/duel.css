@@ -39,6 +39,10 @@
 .story .lead {
   margin-top: 14px;
 }
+.payer {
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
 
 /* the trail: the duel's rail, oldest first */
 .trail {
