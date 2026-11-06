@@ -232,7 +232,8 @@ def post_decision(
                 {
                     "follower": q["follower"],
                     "amount": q["amount"],
-                    "amountOut": (q.get("quote") or {}).get("quote", {}).get("amountOut"),
+                    # batched RFQ: each follower's share is `quote_out`; the shared quote's amountOut is the batch total
+                    "amountOut": q.get("quote_out") or (q.get("quote") or {}).get("quote", {}).get("amountOut"),
                 }
                 for q in posted.get("quotes", [])
             ],
