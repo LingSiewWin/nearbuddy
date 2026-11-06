@@ -2,7 +2,7 @@
 // The fast lane: the live reference price with its flash and sparkline, each side's position and mark, then
 // every on-chain arena event newest first with the trades between events folded into "trades xN" rows, so
 // the tape keeps moving between decisions. Rows open the drawer (proof for a call, the story for an attack).
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import type { Tick } from "../lib/live";
@@ -18,8 +18,13 @@ type Feed = "connecting" | "live" | "offline";
 function Quote({ ticks, f, feed }: { ticks: Tick[]; f: Focus | null; feed: Feed }) {
   const last = ticks.at(-1);
   const prev = useRef<number | null>(null);
-  const dir = last && prev.current != null && last.p !== prev.current ? (last.p > prev.current ? "up" : "dn") : "";
-  if (last) prev.current = last.p;
+  const [dir, setDir] = useState("");
+  // the flash direction is decided after render, so StrictMode's double render cannot erase it
+  useEffect(() => {
+    if (!last) return;
+    if (prev.current != null && last.p !== prev.current) setDir(last.p > prev.current ? "up" : "dn");
+    prev.current = last.p;
+  }, [last]);
   const span = ticks.filter((k) => k.t >= (last?.t ?? 0) - 5 * 60_000);
   const lo = Math.min(...span.map((k) => k.p));
   const hi = Math.max(...span.map((k) => k.p));
@@ -40,7 +45,9 @@ function Quote({ ticks, f, feed }: { ticks: Tick[]; f: Focus | null; feed: Feed 
         <polyline points={pts} fill="none" stroke="var(--dim)" strokeWidth="1.2" vectorEffect="non-scaling-stroke" />
       </svg>
       <div className="qmeta">
-        <span>NEAR/USD on Coinbase, {feed === "live" ? "live" : feed === "connecting" ? "connecting…" : "reconnecting…"}</span>
+        <span>
+          NEAR/USD on Coinbase, {feed === "live" ? "live" : feed === "connecting" ? "connecting…" : "reconnecting…"}
+        </span>
         {open && last ? (
           <span>
             <b>{pct(((last.p - open) / open) * 100)}</b> since the bell
@@ -296,7 +303,11 @@ export function Tape({
         <div className="t1">
           <h2>Tape</h2>
           <span className={`rate${stale ? " stale" : ""}`} title="Every arena transaction; times are your local time">
-            {!lastAt ? "no arena transactions yet" : now ? `last arena transaction ${ago(lastAt, now)}` : "every arena transaction"}
+            {!lastAt
+              ? "no arena transactions yet"
+              : now
+                ? `last arena transaction ${ago(lastAt, now)}`
+                : "every arena transaction"}
           </span>
         </div>
         <Quote ticks={ticks} f={f} feed={feed} />
