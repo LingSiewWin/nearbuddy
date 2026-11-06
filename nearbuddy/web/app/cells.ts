@@ -279,3 +279,44 @@ export const kindCell = (kind: string, width = KIND_W): Cell => {
   const t = label.length > width ? `${label.slice(0, width - 1)}…` : label.padEnd(width);
   return mode ? { t, title: kind } : t;
 };
+
+/** GET /api/verify: a resolved duel re-checked from public sources (the CLI's `verify-duel`), or "open". */
+export type VerifyLine = { result: "PASS" | "FAIL" | "SKIP" | "INFO"; check: string; detail: string };
+export type Verify = {
+  duel_id: string;
+  status: "checked" | "open" | "missing";
+  command: string;
+  counts?: Record<VerifyLine["result"], number>;
+  lines?: VerifyLine[];
+  degraded?: boolean;
+};
+const VERIFY_CLASS = { PASS: "ok", FAIL: "loss", SKIP: "warn", INFO: "dim" } as const;
+const VERIFY_HINT = {
+  PASS: "re-derived from public data and matches the contract",
+  FAIL: "public data contradicts the contract's record",
+  SKIP: "not checkable from the data at hand (see the line)",
+  INFO: "context, not a check",
+} as const;
+
+/** Duel box 4, `verified` row: the counts (FAIL red even at 0 so a reader sees it was counted), then the toggle. */
+export const verifySummary = (v: Verify, open: boolean, toggle: () => void): Cell[] =>
+  v.counts
+    ? [
+        ...(["PASS", "FAIL", "SKIP", "INFO"] as const).flatMap((r, i): Cell[] => [
+          i ? { t: " · ", c: "dim" } : "",
+          { t: `${v.counts?.[r] ?? 0} ${r}`, c: VERIFY_CLASS[r], title: VERIFY_HINT[r] },
+        ]),
+        v.degraded ? { t: "  (a past-block read failed, retrying)", c: "dim" } : "",
+        "   ",
+        { t: open ? "hide lines" : `show ${v.lines?.length ?? 0} lines`, onClick: toggle },
+      ]
+    : [{ t: v.status, c: "dim" }];
+
+/** One verifier line: result, check, detail (cut at the box edge, whole on hover). */
+export const verifyLineCells = (l: VerifyLine): Cell[] => [
+  { t: l.result.padEnd(4), c: VERIFY_CLASS[l.result] },
+  "  ",
+  { t: l.check.slice(0, 26).padEnd(26), c: "dim" },
+  " ",
+  { t: l.detail, title: l.detail },
+];

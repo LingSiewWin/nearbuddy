@@ -27,6 +27,10 @@ import {
   shownPairs,
   timelineCells,
   usdc,
+  type Verify,
+  type VerifyLine,
+  verifyLineCells,
+  verifySummary,
   vsCell,
 } from "../cells";
 import { type Cell, W, ZERO } from "../tui";
@@ -144,6 +148,34 @@ describe("commit timeline", () => {
     );
     expect(text(timelineCells([], A, false))).toBe("no commit seen");
     expect(text(timelineCells(undefined, A, false))).toBe("no commit seen");
+  });
+});
+
+describe("verified row", () => {
+  const line = (result: VerifyLine["result"], check: string, detail = "d") => ({ result, check, detail });
+  const v: Verify = {
+    duel_id: "373",
+    status: "checked",
+    command: "bun run verify-duel 373",
+    counts: { PASS: 20, FAIL: 0, SKIP: 2, INFO: 2 },
+    lines: [line("PASS", "opened"), line("SKIP", "intent A completion bytes"), line("FAIL", "payout")],
+  };
+  test("counts in the CLI's order, FAIL shown even at 0, then the toggle", () => {
+    expect(text(verifySummary(v, false, () => {}))).toBe("20 PASS · 0 FAIL · 2 SKIP · 2 INFO   show 3 lines");
+    expect(text(verifySummary(v, true, () => {}))).toEndWith("hide lines");
+    const cells = verifySummary(v, false, () => {});
+    expect(cells.find((c) => typeof c !== "string" && c.t === "0 FAIL")).toMatchObject({ c: "loss" });
+    expect(text(verifySummary({ ...v, degraded: true }, false, () => {}))).toContain(
+      "(a past-block read failed, retrying)",
+    );
+    expect(text(verifySummary({ duel_id: "9", status: "open", command: "c" }, false, () => {}))).toBe("open");
+  });
+  test("a line keeps its columns; the detail is cut at the box edge, whole on hover", () => {
+    const long = line("FAIL", "a check name longer than twenty-six", "x".repeat(300));
+    const cells = verifyLineCells(long);
+    expect(text(cells).indexOf("x")).toBe(33); // 4 + 2 + 26 + 1
+    expect(cells[0]).toMatchObject({ t: "FAIL", c: "loss" });
+    expect(cells[4]).toMatchObject({ title: "x".repeat(300) });
   });
 });
 
