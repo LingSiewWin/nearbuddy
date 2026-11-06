@@ -74,6 +74,8 @@ interface PairedDuel {
 const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330);
 /** Yocto bond an agent needs above to be paired; 0 = any funded agent. */
 const PAIR_MIN_BOND = BigInt(process.env.PAIR_MIN_BOND ?? "0");
+/** Agents the pairing loop must leave alone (comma-separated pks): the operator's own two-sided runner drives them. */
+const PAIR_EXCLUDE = new Set((process.env.PAIR_EXCLUDE ?? "").split(",").map((s) => s.trim()).filter(Boolean));
 const PAIR_SYMBOL = process.env.PAIR_SYMBOL ?? "wrap.near";
 
 /// Shared secret for the POST routes: every one of them spends the solver's NEAR or debits a follower.
@@ -126,9 +128,9 @@ export function mandateOpen(m: Mandate, nowNs: bigint): boolean {
 
 /** Idle enclave agents with bond above `minBond`, sorted by pk and paired with their neighbour. Deterministic:
  *  two solvers reading the same leaderboard propose the same pairs. An odd agent waits for the next tick. */
-export function pairIdle(agents: AgentView[], minBond = 0n): [string, string][] {
+export function pairIdle(agents: AgentView[], minBond = 0n, exclude: ReadonlySet<string> = new Set()): [string, string][] {
   const idle = agents
-    .filter((a) => a.tee && a.in_duel == null && BigInt(a.bond) > minBond)
+    .filter((a) => a.tee && a.in_duel == null && BigInt(a.bond) > minBond && !exclude.has(a.pk))
     .map((a) => a.pk)
     .sort();
   const pairs: [string, string][] = [];
@@ -173,7 +175,7 @@ export class Arena {
   async pairOnce(): Promise<string[]> {
     const agents = await (this.deps.leaderboard ?? (() => arenaView<AgentView[]>("leaderboard", {})))();
     const opened: string[] = [];
-    for (const [a, b] of pairIdle(agents, PAIR_MIN_BOND)) {
+    for (const [a, b] of pairIdle(agents, PAIR_MIN_BOND, PAIR_EXCLUDE)) {
       const close_at = (BigInt(Date.now()) * 1_000_000n + BigInt(DUEL_SECONDS) * 1_000_000_000n).toString();
       try {
         const r = await this.openDuel(a, b, PAIR_SYMBOL, close_at);
@@ -202,7 +204,7 @@ export class Arena {
         .finally(() => (this.pairingRun = null));
     }, everyS * 1000).unref();
     console.log(
-      `[arena] pairing idle enclave agents every ${everyS}s into ${DUEL_SECONDS}s duels (min bond ${PAIR_MIN_BOND} yocto)`,
+      `[arena] pairing idle enclave agents every ${everyS}s into ${DUEL_SECONDS}s duels (min bond ${PAIR_MIN_BOND} yocto, ${PAIR_EXCLUDE.size} excluded)`,
     );
   }
 

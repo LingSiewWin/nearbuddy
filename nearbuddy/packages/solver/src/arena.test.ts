@@ -170,3 +170,9 @@ test("route: GET /agent_duel returns the agent's open duel from get_agent, decod
   assert.deepEqual(seen, ["a+b=", "zzzz"]);
   assert.deepEqual((await arena.route("GET", "/pairing", ""))!.body, { every_s: 0, next_at: 0, last: [] });
 });
+
+test("pairIdle leaves excluded agents (the operator's own runner pair) alone", () => {
+  const mk = (pk: string) => ({ pk, tee: true, in_duel: null, bond: "1" }) as never;
+  const pairs = pairIdle([mk("c"), mk("a"), mk("b"), mk("d")], 0n, new Set(["a"]));
+  assert.deepEqual(pairs, [["b", "c"]]);
+});
