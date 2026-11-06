@@ -23,9 +23,8 @@ async function ids(request: APIRequestContext) {
 /** Waits for the page's own h1 (not the loading frame), then checks width, headings and text. */
 async function check(page: Page, path: string) {
   await page.goto(path);
-  const h1 = page.locator("main h1");
-  await expect(h1).toBeVisible({ timeout: 30_000 });
-  await expect(h1).not.toHaveText(/^Reading /, { timeout: 45_000 });
+  // while the server streams, the loading frame's h1 and the page's can both be in the DOM for a moment
+  await expect(page.locator("main h1").filter({ hasNotText: /^Reading / })).toBeVisible({ timeout: 45_000 });
   await expect(page.locator("h1")).toHaveCount(1);
   const { sw, cw, text } = await page.evaluate(() => ({
     sw: document.documentElement.scrollWidth,
