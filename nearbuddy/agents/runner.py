@@ -54,7 +54,9 @@ def agent_key(name: str, tee: bool, tag: str = "") -> SigningKey:
     if not seed:
         return SigningKey.generate()
     raw = bytes.fromhex(seed)
-    return SigningKey(hashlib.sha256(raw + b"tee" + tag.encode()).digest() if tee else raw)
+    if not tee and not tag:
+        return SigningKey(raw)
+    return SigningKey(hashlib.sha256(raw + (b"tee" if tee else b"") + tag.encode()).digest())
 
 
 def make_duelist(name: str, model_client, hardened: bool, tag: str = "") -> tuple[Duelist, SigningKey, Any]:
