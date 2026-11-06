@@ -7,7 +7,8 @@
 #
 #   scripts/deploy-contract.sh                       # code-only deploy
 #   scripts/deploy-contract.sh --migrate migrate_v12 # deploy + state migration in one tx
-#   scripts/deploy-contract.sh --dry-run             # checks only (source + chain), prints the commands
+#   scripts/deploy-contract.sh --migrate migrate_v15 --migrate-args '{"intents_account":"…","max_vault_total":"…"}'
+#   scripts/deploy-contract.sh --dry-run            # checks only (source + chain), prints the commands
 #
 # Signs with the legacy keychain key of the contract account (ARENA_CONTRACT, default arena.nearbuddy-solver.testnet).
 set -u
@@ -16,16 +17,17 @@ cd "$(dirname "$0")/.." || exit 1
 ARENA="${ARENA_CONTRACT:-arena.nearbuddy-solver.testnet}"
 WASM=arena/target/near/nearbuddy_arena.wasm
 DEPLOY_LOG=/tmp/nearbuddy-deploys.log
-migrate="" force=0 dry=0 build=1
+migrate="" margs="{}" force=0 dry=0 build=1
 
 die() { echo "deploy-contract: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --migrate) [ -n "${2-}" ] || die "--migrate needs a method name"; migrate=$2; shift 2 ;;
+    --migrate-args) [ -n "${2-}" ] || die "--migrate-args needs a JSON object"; margs=$2; shift 2 ;;
     --force) force=1; shift ;;
     --no-build) build=0; shift ;;
     --dry-run) dry=1; shift ;;
-    -h | --help) echo "usage: $0 [--migrate <init(ignore_state) method>] [--force] [--no-build] [--dry-run]"; exit 0 ;;
+    -h | --help) echo "usage: $0 [--migrate <init(ignore_state) method> [--migrate-args <json>]] [--force] [--no-build] [--dry-run]"; exit 0 ;;
     *) die "unknown argument '$1' (see --help)" ;;
   esac
 done
@@ -43,10 +45,10 @@ chain() {
     python3 - <<'PY'
 import base64, json, os, sys, time, urllib.request
 
-def view(method):
+def view(method, args=b"{}"):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "query", "params": {
         "request_type": "call_function", "finality": "final", "account_id": os.environ["ARENA"],
-        "method_name": method, "args_base64": base64.b64encode(b"{}").decode()}}).encode()
+        "method_name": method, "args_base64": base64.b64encode(args).decode()}}).encode()
     last = ""
     for attempt, url in enumerate(os.environ["RPCS"].split() * 3):
         try:
@@ -62,7 +64,7 @@ def view(method):
 
 cfg = view("get_config")
 stuck = [{"model_id": a["model_id"], "pk": a["pk"], "in_duel": a["in_duel"]}
-         for a in view("leaderboard") if a.get("in_duel") is not None]
+         for a in view("leaderboard", b'{"from":0,"limit":100}') if a.get("in_duel") is not None]
 print(json.dumps({"next_duel": cfg["next_duel"], "open_duels": cfg.get("open_duels"),
                   "intent_lock_s": cfg.get("intent_lock_s"), "in_duel": stuck}))
 PY
@@ -85,7 +87,7 @@ sys.exit(0 if (s["open_duels"] or 0) == 0 and not s["in_duel"] else 1)' && retur
 
 build_cmd=(cargo near build non-reproducible-wasm)
 if [ -n "$migrate" ]; then
-  init=(with-init-call "$migrate" json-args '{}' prepaid-gas '100 Tgas' attached-deposit '0 NEAR')
+  init=(with-init-call "$migrate" json-args "$margs" prepaid-gas '100 Tgas' attached-deposit '0 NEAR')
 else
   init=(without-init-call)
 fi
