@@ -195,7 +195,11 @@ def prepare_decision(
                 "brief": brief(symbol, px, open_px),
                 "text": failed.text,
                 "chat_id": failed.chat_id,
+                # the exact request too, so the prompt and the max_tokens cap of a failed call are reproducible
+                "request_body": failed.request_bytes.decode(errors="replace"),
                 "response_body": failed.response_bytes.decode(errors="replace"),
+                "request_hash": failed.request_hash.hex() if failed.request_bytes else None,
+                "response_hash": failed.response_hash.hex() if failed.response_bytes else None,
             }
         )
         return None
