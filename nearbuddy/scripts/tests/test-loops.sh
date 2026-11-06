@@ -22,7 +22,7 @@ wait_for() { # seconds, condition
 setup() {
   T=$(mktemp -d)
   mkdir -p "$T/scripts" "$T/bin" "$T/run" "$T/agents/.venv/bin" "$T/arena/target/near" "$T/arena/src" "$T/fake"
-  cp "$SCRIPTS"/night-loop.sh "$SCRIPTS"/second-loop.sh "$SCRIPTS"/deploy-contract.sh "$T/scripts/"
+  cp "$SCRIPTS"/night-loop.sh "$SCRIPTS"/second-loop.sh "$SCRIPTS"/deploy-contract.sh "$SCRIPTS"/loop-env.sh "$T/scripts/"
   : > "$T/arena/src/lib.rs"
   echo wasm > "$T/arena/target/near/nearbuddy_arena.wasm"
   # the runner: records its arguments; a batch takes FAKE_BATCH_S; resolve-stuck marks the arena idle (and, with
@@ -38,6 +38,11 @@ case "$*" in
     echo '{"still_in_duel": []}' ;;
   *) sleep "${FAKE_BATCH_S:-1}" ;;
 esac
+SH
+  # ps: real, except `ps eww` (env of a process) appends $RUN/ps-env, so the restart fallback is deterministic
+  cat > "$T/bin/ps" << 'SH'
+#!/bin/sh
+if [ "$1" = eww ]; then shift; echo "$(/bin/ps -ww "$@") $(cat "$NEARBUDDY_RUN_DIR/ps-env" 2>/dev/null)"; else exec /bin/ps "$@"; fi
 SH
   printf '#!/bin/sh\nexec sleep 3\n' > "$T/bin/bun"     # solver and spectator
   printf '#!/bin/sh\nexit 0\n' > "$T/bin/curl"          # the solver answers
@@ -199,7 +204,53 @@ out=$(SOLVER_URL="http://127.0.0.1:$(free_port)" bash "$T/scripts/deploy-contrac
 expect "--at-boundary treats a closed solver port as pairing off" 'printf "%s" "$out" | grep -q "pairing: no solver on" && printf "%s" "$out" | grep -q "would touch the stop files"'
 teardown
 
+# the restart line carries the launch env: the real night-loop.sh writes its restart file; restarting from the printed
+# line brings back the same env and argv (and no secret, and no --start-batch)
+setup
+echo 0 > "$T/run/open_duels"
+rpc_up
+cmdf="$T/run/nearbuddy-night-loop.cmd"
+(cd "$T" && unset NEAR_NETWORK NEAR_AI_MODEL_B TARGET PAYLOAD_SET NEARBUDDY_DATA &&
+  AGENTS='pk+A/1=,pkB' NEAR_AI_MODEL_A='model with space' SPECTATOR_ID=spec.testnet NEAR_AI_API_KEY=sekrit \
+    FAKE_BATCH_S=30 bash scripts/night-loop.sh --until "$(far_until)" --rounds 3 --start-batch 5 > "$T/run/driver.log" 2>&1 &)
+if wait_for 20 '[ -s "$cmdf" ]'; then
+  pid1=$(head -1 "$cmdf")
+  launch=$(sed -n '2,4p' "$cmdf")
+  out=$(bash "$T/scripts/deploy-contract.sh" --at-boundary --no-build --dry-run 2>&1)
+  line=$(printf '%s\n' "$out" | grep -F "rm -f $T/run/nearbuddy-night-loop.stop && ")
+  want_env=$(printf '%q ' "AGENTS=pk+A/1=,pkB" "NEAR_AI_MODEL_A=model with space" SPECTATOR_ID=spec.testnet "NEARBUDDY_RUN_DIR=$T/run")
+  expect "the restart line carries the launch env and argv, minus --start-batch" 'printf "%s" "$line" | grep -qF "cd $T && rm -f $T/run/nearbuddy-night-loop.stop && ${want_env}nohup bash scripts/night-loop.sh --until $(far_until) --rounds 3 >"'
+  expect "the restart line carries no secret" '! printf "%s" "$line" | grep -q sekrit && ! grep -q sekrit "$cmdf"'
+  touch "$T/run/nearbuddy-night-loop.stop"
+  kill "$pid1" 2>/dev/null # mid-batch; its EXIT trap removes the pidfile
+  wait_for 20 '! kill -0 $pid1 2>/dev/null'
+  (eval "${line/nohup /FAKE_BATCH_S=30 nohup }") # what the operator pastes (plus a long fake batch)
+  if wait_for 20 '[ -s "$cmdf" ] && [ "$(head -1 "$cmdf")" != "$pid1" ]'; then
+    pid2=$(head -1 "$cmdf")
+    expect "the restart line removed the stop file before starting the loop" '[ ! -e "$T/run/nearbuddy-night-loop.stop" ]'
+    expect "the restarted loop has the same launch env, cwd and argv" '[ "$(sed -n "2,4p" "$cmdf")" = "$launch" ]'
+    kill "$pid2" 2>/dev/null # started from $T with a relative path: teardown's pkill would not match it
+    wait_for 20 '! kill -0 $pid2 2>/dev/null'
+  else
+    fail "the printed restart line did not start a loop: $line"
+  fi
+else
+  fail "night-loop.sh wrote no restart file: $(tail -3 "$T/run/driver.log")"
+fi
+teardown
 
+# a loop started before restart files: the line comes from ps args plus the LOOP_ENV part of `ps eww`; a restart file
+# left by another pid is ignored
+setup
+echo 0 > "$T/run/open_duels"
+rpc_up
+fake_loop night-loop.sh "$T/run/nearbuddy-night-loop.pid" "$T/run/nearbuddy-night-loop.stop"
+printf 'AGENTS=pkA,pkB TARGET=b NEAR_AI_API_KEY=sekrit' > "$T/run/ps-env"
+printf '1\n/stale\nAGENTS=stale \nbash stale.sh \n' > "$T/run/nearbuddy-night-loop.cmd"
+out=$(bash "$T/scripts/deploy-contract.sh" --at-boundary --no-build --dry-run 2>&1)
+expect "the ps fallback keeps the allowlisted launch env" 'printf "%s" "$out" | grep -qF "rm -f $T/run/nearbuddy-night-loop.stop && AGENTS=pkA\,pkB TARGET=b nohup bash $T/fake/night-loop.sh --until 0530 --rounds 10 >"'
+expect "the ps fallback drops what is not allowlisted, a stale restart file is ignored" '! printf "%s" "$out" | grep -q "sekrit\|stale"'
+teardown
 
 echo "$fails failed"
 [ "$fails" = 0 ]

@@ -14,7 +14,8 @@
 # --at-boundary touches the stop files of night-loop.sh and second-loop.sh, waits (up to BOUNDARY_WAIT_S, 7200 s)
 # until both loop pids have exited, then until get_config.open_duels is 0 and no agent is in_duel (running
 # `runner.py --resolve-stuck` for each pair once if not, then up to IDLE_WAIT_S, 900 s), then deploys as above.
-# It never restarts the loops: on exit it prints the exact commands that do, from each loop's own command line.
+# It never restarts the loops: on exit it prints the exact commands that do, from the restart file each loop writes
+# at start (<RUN>/<loop>.cmd: launch cwd, the launch env in scripts/loop-env.sh's LOOP_ENV, argv), else from `ps`.
 # The solver's own pairing loop (PAIR_EVERY_S, GET /pairing) opens duels too, so every deploy refuses while it is on:
 # --at-boundary checks before touching anything, and the last check right before the tx repeats it (and the idle
 # check). --force overrides both refusals on a plain deploy, never under --at-boundary.
@@ -22,6 +23,7 @@
 # Signs with the legacy keychain key of the contract account (ARENA_CONTRACT, default arena.nearbuddy-solver.testnet).
 set -u
 cd "$(dirname "$0")/.." || exit 1
+. scripts/loop-env.sh
 
 ARENA="${ARENA_CONTRACT:-arena.nearbuddy-solver.testnet}"
 WASM=arena/target/near/nearbuddy_arena.wasm
@@ -139,12 +141,31 @@ fi
 deploy_cmd=(near contract deploy "$ARENA" use-file "$WASM" "${init[@]}" network-config testnet sign-with-legacy-keychain send)
 
 # ---- --at-boundary: stop both duel loops between batches, wait for an idle arena --------------------------------
-# name | pidfile | stop file | driver log | resolve-stuck command
+# name | pidfile | stop file | driver log | resolve-stuck command | restart file (written by the loop, loop-env.sh)
 LOOPS=(
-  "night-loop|$RUN/nearbuddy-night-loop.pid|$RUN/nearbuddy-night-loop.stop|$RUN/nearbuddy-night-driver.log|$PY -u agents/runner.py --resolve-stuck"
-  "second-loop|$RUN/nearbuddy-pair2-loop.pid|$RUN/nearbuddy-pair2-loop.stop|$RUN/nearbuddy-pair2-driver.log|$PY -u agents/runner.py --pair-tag p2 --resolve-stuck"
+  "night-loop|$RUN/nearbuddy-night-loop.pid|$RUN/nearbuddy-night-loop.stop|$RUN/nearbuddy-night-driver.log|$PY -u agents/runner.py --resolve-stuck|$RUN/nearbuddy-night-loop.cmd"
+  "second-loop|$RUN/nearbuddy-pair2-loop.pid|$RUN/nearbuddy-pair2-loop.stop|$RUN/nearbuddy-pair2-driver.log|$PY -u agents/runner.py --pair-tag p2 --resolve-stuck|$RUN/nearbuddy-pair2-loop.cmd"
 )
 loop_pid() { local p; p=$(cat "$1" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo "$p"; }
+# restart_line <pid> <stop file> <driver log> <restart file>: from the loop's own restart file when it names this
+# pid; else (a loop started before restart files) from `ps`: argv minus --start-batch, plus the LOOP_ENV variables
+# `ps eww` shows. ponytail: the ps fallback splits on spaces, so a value or argument with a space is cut; the
+# restart file has no such limit.
+restart_line() {
+  local pid=$1 stop=$2 drv=$3 cmdf=$4 cpid cwd env argv k v
+  if [ -r "$cmdf" ] && { read -r cpid && read -r cwd && read -r env && read -r argv; } < "$cmdf" && [ "$cpid" = "$pid" ]; then
+    echo "cd $cwd && rm -f $stop && ${env:+$env }nohup $argv > $drv 2>&1 &"
+    return
+  fi
+  argv=$(ps -o args= -p "$pid" | sed -E 's/ --start-batch [0-9]+//')
+  cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+  env=""
+  for k in "${LOOP_ENV[@]}"; do
+    v=$(ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n "s/^$k=//p" | head -1)
+    [ -n "$v" ] && env+="$(printf '%q' "$k=$v") "
+  done
+  echo "cd ${cwd:-$PWD} && rm -f $stop && ${env}nohup $argv > $drv 2>&1 &"
+}
 restart_lines=()
 print_restart() {
   [ ${#restart_lines[@]} -gt 0 ] || return 0
@@ -174,20 +195,17 @@ loops_gone() {
   done
 }
 at_boundary() {
-  local l name pf stop drv pid args cwd
+  local l name pf stop drv cmdf pid
   # the solver's pairing loop would open duels behind the stopped loops' backs: refuse before touching anything
   if ! pairing_off; then
     [ "$dry" = 1 ] || die "refusing --at-boundary: $PAIRING_HINT"
     echo "--dry-run: a real run would refuse here: $PAIRING_HINT"
   fi
   for l in "${LOOPS[@]}"; do
-    IFS='|' read -r name pf stop drv _ <<< "$l"
+    IFS='|' read -r name pf stop drv _ cmdf <<< "$l"
     pid=$(loop_pid "$pf")
     if [ -z "$pid" ]; then echo "$name: not running"; continue; fi
-    # its own command line and directory, minus --start-batch (a restart carries on from the batch log)
-    args=$(ps -o args= -p "$pid" | sed -E 's/ --start-batch [0-9]+//')
-    cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
-    restart_lines+=("cd ${cwd:-$PWD} && rm -f $stop && nohup $args > $drv 2>&1 &")
+    restart_lines+=("$(restart_line "$pid" "$stop" "$drv" "$cmdf")")
     echo "$name: pid $pid, stop file $stop"
   done
   if [ "$dry" = 1 ]; then
@@ -205,7 +223,7 @@ at_boundary() {
   echo "both loops stopped"
   idle_now && return 0
   for l in "${LOOPS[@]}"; do
-    IFS='|' read -r name _ _ _ stuck <<< "$l"
+    IFS='|' read -r name _ _ _ stuck _ <<< "$l"
     echo "resolving stuck duels for $name: $stuck"
     $stuck || echo "$name resolve-stuck exit $?"
   done

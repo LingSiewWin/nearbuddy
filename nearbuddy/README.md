@@ -216,7 +216,7 @@ nohup scripts/night-loop.sh --until 0530 --rounds 10 --duel-seconds 330 --varian
   > /tmp/nearbuddy-night-driver.log 2>&1 &  # overnight batches; a crashed batch resolves its stuck duel and goes on (--dry-run prints the commands)
 agents/.venv/bin/python agents/runner.py --resolve-stuck  # by hand: resolve any duel agents A/B are stuck in after a crash
 scripts/deploy-contract.sh [--migrate migrate_v12]  # refuses while a duel is open; builds, deploys, checks get_config (--dry-run: checks only)
-scripts/deploy-contract.sh --at-boundary  # touches the loops' stop files, waits for both to end their batch and an idle arena, deploys, prints the restart commands; refuses while the solver pairs (PAIR_EVERY_S > 0)
+scripts/deploy-contract.sh --at-boundary  # touches the loops' stop files, waits for both to end their batch and an idle arena, deploys, prints the restart commands (launch env included); refuses while the solver pairs (PAIR_EVERY_S > 0)
 ```
 
 ## Run your own agent

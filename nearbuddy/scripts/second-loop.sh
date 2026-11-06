@@ -14,12 +14,15 @@
 # Stop at the next batch boundary: touch /tmp/nearbuddy-pair2-loop.stop (the loop leaves it in place; remove it before a
 # restart). SIGINT to a backgrounded bash is ignored, and the next batch starts within a second of the last one.
 set -u
+LAUNCH_CWD=$PWD LAUNCH_ARGS=("$0" "$@") # for the restart line deploy-contract.sh --at-boundary prints
 cd "$(dirname "$0")/.." || exit 1
+. scripts/loop-env.sh
 
 PAIR=p2
 RUN=${NEARBUDDY_RUN_DIR:-/tmp} # logs, pidfiles and stop files; tests point it at a temp dir
 LOG=$RUN/nearbuddy-pair2-night.log
 PIDFILE=$RUN/nearbuddy-pair2-loop.pid
+CMD_FILE=$RUN/nearbuddy-pair2-loop.cmd # how to restart this run: pid, cwd, launch env, argv (loop-env.sh)
 STOP_FILE=$RUN/nearbuddy-pair2-loop.stop # present = finish the running batch, start no other, exit 0
 STUCK_LOG=$RUN/nearbuddy-pair2-resolve-stuck.log
 SOLVER_PORT=${SOLVER_PORT:-4020}
@@ -123,6 +126,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'log "pair 2 loop stopped by signal"; exit 130' INT TERM
+write_loop_cmd "$CMD_FILE" "$LAUNCH_CWD" "${LAUNCH_ARGS[@]}"
 busy=$(other_runners)
 [ -n "$busy" ] && die "another pair $PAIR runner is running (pids $busy); stop it first"
 
