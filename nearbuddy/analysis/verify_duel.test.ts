@@ -185,18 +185,53 @@ test("a close receipt not indexed yet makes the evidence incomplete, with the ri
   );
 });
 
-test("intent timing is judged only against a lock the duel recorded at open (deploy 15)", () => {
+test("intent timing is judged against the lock in force at open: duel_lock (deploy 15) or intent_lock_s before", () => {
   const e = load("395");
   const timed = (x: Evidence) => checkDuel(x).filter((l) => l.check.match(/^intent [AB] (timing|commit)$/));
   assert.ok(timed(e).length >= 2);
   assert.deepEqual(fails(checkDuel(e)), []);
   // opened before deploy 15: duel_lock answers today's global lock, which says nothing about this duel (testnet
-  // #250 read 60 s and its intents, posted 47 s before close, would FAIL against it)
-  const { intents_account: _, ...v14 } = e.open_block!.config;
-  const old = { ...e, open_block: { ...e.open_block!, config: v14 } };
-  assert.deepEqual(timed(old), []);
-  assert.deepEqual(result(checkDuel(old), "intent timing"), ["INFO"]);
+  // #250 read 60 s and its intents, posted 47 s before close, would FAIL against it); the open block's
+  // intent_lock_s is the lock that applied, so timing uses that and ignores duel_lock
+  const { intents_account: _, intent_lock_s: _l, ...v14 } = e.open_block!.config;
+  const at = (lock_s: number | undefined) => ({
+    ...e,
+    lock_ns: "999000000000", // today's global lock: must not be used
+    open_block: { ...e.open_block!, config: lock_s === undefined ? v14 : { ...v14, intent_lock_s: lock_s } },
+  });
+  const lines60 = checkDuel(at(60));
+  assert.deepEqual(result(lines60, "intent A timing"), ["PASS"]); // revealed 54.1 s before close, inside 60 s
+  assert.deepEqual(result(lines60, "intent B timing"), ["INFO"]); // 69.2 s: before the lock opened
+  assert.ok(lines60.find((l) => l.check === "intent A timing")!.detail.includes("(lock 60.0 s)"));
+  const lines30 = checkDuel(at(30));
+  assert.deepEqual(result(lines30, "intent A timing"), ["INFO"]); // 54.1 s is before a 30 s lock opened
+  assert.deepEqual(result(lines30, "intent A commit"), ["PASS"]);
+  const unknown = at(undefined);
+  assert.deepEqual(timed(unknown), []);
+  assert.deepEqual(result(checkDuel(unknown), "intent timing"), ["INFO"]); // no lock in the open block's config
   assert.deepEqual(result(checkDuel({ ...e, open_block: null }), "intent timing"), ["INFO"]); // config unknown
+});
+
+test("a duel that straddled deploy 15 gets no shield or deposit verdict, only a note", () => {
+  // opened under v14, finished under v15 (or the reverse): injections and finish() ran under different rules
+  for (const side of ["open", "callback"] as const) {
+    const e = load("401");
+    if (side === "open") delete e.open_block!.config.intents_account;
+    else delete e.before!.config.intents_account;
+    const lines = checkDuel(e);
+    assert.deepEqual(fails(lines), [], side);
+    assert.deepEqual(result(lines, "shield"), ["SKIP"], side);
+    assert.deepEqual(result(lines, "injection deposits"), ["SKIP"], side);
+    assert.ok(lines.find((l) => l.check === "shield")!.detail.includes("straddled deploy 15"), side);
+    assert.deepEqual(result(lines, "payout"), ["PASS"], side); // finish()'s payout math is the same in both
+    assert.ok(
+      lines.some((l) => l.detail.includes("depending on the deploy it landed under")),
+      side,
+    );
+  }
+  // the evidence saved before open_block existed cannot tell, so it keeps the callback's rules
+  const { open_block: _o, ...noOpen } = load("401");
+  assert.deepEqual(result(checkDuel(noOpen), "shield"), ["PASS"]);
 });
 
 test("deploy 15: a failed read of an injection block, the open block or duel_lock is incomplete too", () => {
@@ -355,9 +390,11 @@ test("#401 (deploy 15, red team): real self-chaos goes to owner fees and earns t
   assert.ok(lines.find((l) => l.check === "injection deposits")!.detail.includes("1 self-paid, pool unchanged"));
   assert.ok(lines.find((l) => l.check === "shield")!.detail.includes("expected A +2 B +0, got A +2 B +0"));
   assert.equal(lines.filter((l) => l.detail.includes("-> owner fees (self-chaos")).length, 1);
-  // v14 math would credit the self-paid one too (+3) and count its deposit as pool money
+  // v14 math would credit the self-paid one too (+3) and count its deposit as pool money (a duel opened and
+  // finished under v14; changing only one side is a straddle, tested below)
   const as14 = load("401");
   delete as14.before!.config.intents_account;
+  delete as14.open_block!.config.intents_account;
   assert.deepEqual(fails(checkDuel(as14)), ["shield", "injection deposits"]);
 });
 
