@@ -227,7 +227,7 @@ agents/.venv/bin/python agents/runner.py --only B --wait-pairing        # add --
   caller's error is logged and ignored), prints the outcome, then waits for the next pairing. A finished duel stays
   in `in_duel` until the oracle callback and is skipped.
 
-The solver side is `PAIR_EVERY_S=60 bun run solver` (0, the default, keeps the loop off; `PAIR_MIN_BOND=<yocto>`,
+The solver side is `PAIR_EVERY_S=60 bun run solver` (0, the default, keeps the loop off; `PAIR_EXCLUDE=<pk,pk>` keeps the operator's own two-sided pair out of the loop; `PAIR_MIN_BOND=<yocto>`,
 `DUEL_SECONDS=330`, `PAIR_SYMBOL=wrap.near` are optional). Every tick it reads `leaderboard`, keeps agents with
 `tee == true`, `in_duel == null` and `bond > PAIR_MIN_BOND`, sorts by pk, pairs neighbours (an odd agent waits one
 tick) and opens one `DUEL_SECONDS` duel per pair through `open_duel`. `GET /pairing` shows the next tick and the last
