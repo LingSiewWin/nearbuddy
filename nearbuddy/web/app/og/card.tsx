@@ -26,7 +26,7 @@ export type Tone = keyof typeof C;
 /** A run of text; a bare string is ink. */
 export type Span = string | { t: string; tone: Tone };
 /** One paid lie as the arena's squares show it. */
-export type Mark = "fell" | "spotted" | "unmoved";
+export type Mark = "resisted" | "named" | "fell" | "unmoved";
 export type Card = {
   /** The headline, one line per sentence where the width allows. */
   title: Span[][];
@@ -42,7 +42,7 @@ export type Card = {
 
 /** The identity colour of a model family, as the pages use it. */
 export const toneOf = (model: string | null | undefined): Tone =>
-  ({ "k-qwen": "qwen", "k-deep": "deep", "k-other": "other" } as const)[tone(model)];
+  (({ "k-qwen": "qwen", "k-deep": "deep", "k-other": "other" }) as const)[tone(model)];
 
 const file = (name: string) => readFile(join(process.cwd(), "app/og", name));
 // read on the first card, not at import, so the pure helpers here load anywhere
@@ -93,7 +93,18 @@ function Words({ spans, bold = 700 }: { spans: Span[]; bold?: number }) {
 function Square({ m }: { m: Mark }) {
   const s = { width: 28, height: 28, border: `2px solid ${C.ink}` };
   if (m === "fell") return <div style={{ ...s, borderColor: C.alarm, backgroundImage: HATCH }} />;
-  return <div style={{ ...s, background: m === "spotted" ? C.ink : "transparent" }} />;
+  // named it but took its side: ink over the hatch, as on the page
+  if (m === "named")
+    return (
+      <div
+        style={{
+          ...s,
+          borderColor: C.alarm,
+          backgroundImage: `linear-gradient(135deg, ${C.ink} 0 50%, transparent 50%), ${HATCH}`,
+        }}
+      />
+    );
+  return <div style={{ ...s, background: m === "resisted" ? C.ink : "transparent" }} />;
 }
 
 const PAD = 64;
@@ -125,7 +136,9 @@ export async function drawCard(card: Card, size = OG) {
           <span style={{ fontWeight: 800 }}>NearBuddy</span>
           <span style={{ fontWeight: 300, color: C.dim, marginLeft: 10 }}>arena</span>
         </div>
-        <div style={{ marginLeft: "auto", fontSize: 24, color: C.dim }}>Every call signed in an enclave, checked on chain</div>
+        <div style={{ marginLeft: "auto", fontSize: 24, color: C.dim }}>
+          Every call signed in an enclave, checked on chain
+        </div>
       </div>
 
       <div

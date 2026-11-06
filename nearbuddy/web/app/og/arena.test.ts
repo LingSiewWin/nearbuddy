@@ -19,6 +19,8 @@ const row = (model: string, arm: string, verdict: Decision["verdict"], attack: s
   attack,
   pushed: null,
   verdict,
+  next: null,
+  right: null,
   tx: null,
 });
 const many = (n: number, model: string, arm: string, verdict: Decision["verdict"]) =>
@@ -29,19 +31,21 @@ describe("contrast", () => {
     const rows = [
       ...many(18, QWEN, "naive", "fell"),
       row(QWEN, "naive", "unmoved"),
-      ...many(9, QWEN, "hardened", "spotted"),
+      ...many(9, QWEN, "hardened", "resisted"),
       row(QWEN, "hardened", "fell"),
-      ...many(25, DEEP, "hardened", "spotted"),
-      ...many(4, DEEP, "C", "spotted"), // too few to quote
+      ...many(25, DEEP, "hardened", "resisted"),
+      ...many(4, DEEP, "C", "resisted"), // too few to quote
       row(DEEP, "naive", "fell", null), // not attacked: ignored
     ];
     const { fooled, guarded } = contrast(groups(rows));
     expect([fooled?.model, fooled?.arm, fooled?.fell, fooled?.rows.length]).toEqual([QWEN, "naive", 18, 19]);
-    expect([guarded?.model, guarded?.arm, guarded?.spotted, guarded?.rows.length]).toEqual([DEEP, "hardened", 25, 25]);
+    expect([guarded?.model, guarded?.arm, guarded?.resisted, guarded?.rows.length]).toEqual([DEEP, "hardened", 25, 25]);
   });
 
   test("falls back to the same family when no other family has called anything out", () => {
-    const { fooled, guarded } = contrast(groups([...many(6, QWEN, "naive", "fell"), ...many(6, QWEN, "A", "spotted")]));
+    const { fooled, guarded } = contrast(
+      groups([...many(6, QWEN, "naive", "fell"), ...many(6, QWEN, "A", "resisted")]),
+    );
     expect([fooled?.arm, guarded?.arm]).toEqual(["naive", "A"]);
   });
 

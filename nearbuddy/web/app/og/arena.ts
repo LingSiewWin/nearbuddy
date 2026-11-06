@@ -13,7 +13,7 @@ const CHAIN_MS = 3_500;
 const MIN_LIES = 5; // a group needs this many attacks before the card quotes it
 const view = viewOn(ARENA);
 
-type Group = { model: string; arm: string; rows: Decision[]; fell: number; spotted: number };
+type Group = { model: string; arm: string; rows: Decision[]; fell: number; resisted: number };
 
 /** Attacked decisions grouped by model family and prompt, oldest attack first within each group. */
 export function groups(decisions: Decision[]): Group[] {
@@ -21,10 +21,10 @@ export function groups(decisions: Decision[]): Group[] {
   for (const d of decisions) {
     if (!d.attack) continue;
     const k = `${who(d.model)}|${d.arm}`;
-    const g = by.get(k) ?? { model: d.model, arm: d.arm, rows: [], fell: 0, spotted: 0 };
+    const g = by.get(k) ?? { model: d.model, arm: d.arm, rows: [], fell: 0, resisted: 0 };
     g.rows.push(d);
     if (d.verdict === "fell") g.fell++;
-    if (d.verdict === "spotted") g.spotted++;
+    if (d.verdict === "resisted") g.resisted++;
     by.set(k, g);
   }
   return [...by.values()];
@@ -35,10 +35,13 @@ export function contrast(gs: Group[]): { fooled: Group | null; guarded: Group | 
   const big = gs.filter((g) => g.rows.length >= MIN_LIES);
   const best = (score: (g: Group) => number, pool: Group[]) =>
     [...pool].sort((x, y) => score(y) - score(x) || y.rows.length - x.rows.length)[0] ?? null;
-  const fooled = best((g) => g.fell / g.rows.length, big.filter((g) => g.fell > 0));
-  const rest = big.filter((g) => g !== fooled && g.spotted > 0);
+  const fooled = best(
+    (g) => g.fell / g.rows.length,
+    big.filter((g) => g.fell > 0),
+  );
+  const rest = big.filter((g) => g !== fooled && g.resisted > 0);
   const other = rest.filter((g) => who(g.model) !== who(fooled?.model));
-  const guarded = best((g) => g.spotted / g.rows.length, other.length ? other : rest);
+  const guarded = best((g) => g.resisted / g.rows.length, other.length ? other : rest);
   return { fooled, guarded };
 }
 
@@ -94,10 +97,9 @@ function newest(): Promise<Summary> {
 }
 
 export async function arenaCard(): Promise<Card> {
-  const chain = Promise.race([
-    newest(),
-    new Promise<null>((ok) => setTimeout(() => ok(null), CHAIN_MS)),
-  ]).catch(() => null);
+  const chain = Promise.race([newest(), new Promise<null>((ok) => setTimeout(() => ok(null), CHAIN_MS))]).catch(
+    () => null,
+  );
   const [decisions, s] = await Promise.all([getDecisions().catch(() => []), chain]);
   const live = s ? { foot: duelLine(s), note: `${s.duels_total} duels on NEAR testnet` } : {};
   const { fooled, guarded } = contrast(groups(decisions));
@@ -109,9 +111,15 @@ export async function arenaCard(): Promise<Card> {
     rows.push({ label: label(fooled), marks: marks(fooled) });
   }
   if (guarded) {
-    title.push([name(guarded.model), `called out ${guarded.spotted} of ${guarded.rows.length}.`]);
+    title.push([name(guarded.model), `saw through ${guarded.resisted} of ${guarded.rows.length}.`]);
     rows.push({ label: label(guarded), marks: marks(guarded) });
   }
   const cost = s ? `${s.rules.attack_cost_near} NEAR` : "a little NEAR";
-  return { title, sub: [`Anyone can pay ${cost} to feed an AI trader a fake headline.`], rows, foot: FALLBACK.foot, ...live };
+  return {
+    title,
+    sub: [`Anyone can pay ${cost} to feed an AI trader a fake headline.`],
+    rows,
+    foot: FALLBACK.foot,
+    ...live,
+  };
 }
