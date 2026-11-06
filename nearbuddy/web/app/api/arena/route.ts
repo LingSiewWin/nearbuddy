@@ -10,6 +10,7 @@
 import { proven as hasProof, pairsOf } from "../../cells";
 import { eraSplit, ORACLE_ERA_FROM, oracleIds, type ScoredDuel, unread } from "../../eras";
 import { chunked, readDuel } from "../duels";
+import { followersOf } from "../followers";
 import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
 
 const SCAN = Number(process.env.ARENA_SCAN ?? 40);
@@ -91,7 +92,7 @@ async function build(): Promise<string> {
     ),
   };
   const followers = Object.fromEntries(
-    await Promise.all(leaderboard.map(async (a) => [a.pk, await view("list_followers", { agent_pk: a.pk })])),
+    await Promise.all(leaderboard.map(async (a) => [a.pk, await followersOf(view, a.pk)])),
   );
   const seen = scanned.filter((d): d is Duel => !!d);
   const proven = (i: Intent | null) => hasProof(i, ZERO);

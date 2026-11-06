@@ -29,7 +29,7 @@ process.env.ARENA_SECRET ??= "route-test-secret";
 const { Arena, ARENA_SECRET } = await import("./arena.ts");
 const KEY = { "x-arena-key": ARENA_SECRET };
 
-type Call = { methodName: string; args: Record<string, unknown>; deposit: bigint; gas: bigint };
+type Call = { contractId?: string; methodName: string; args: Record<string, unknown>; deposit: bigint; gas: bigint };
 /** Fake `Account`: records every call; `reply(call)` returns the JSON value or throws. */
 function fakeSolver(reply: (c: Call) => unknown = () => null) {
   const calls: Call[] = [];
@@ -435,6 +435,7 @@ test("GET /execution: a batched intent records every follower's fill against the
   const asked: string[] = [];
   const { account } = fakeSolver();
   const arena = new Arena(account, "s.testnet", {
+    config: async () => ({ oracle_deposit: "0" }),
     listFollowers: async () => [
       ["f1.testnet", mandate("750000000000000000000000")], // 0.75 NEAR
       ["f2.testnet", mandate("250000000000000000000000")], // 0.25 NEAR
@@ -480,6 +481,7 @@ test("GET /execution: no oracle mid (no Outlayer price, spot down) records nothi
   ) as import("./oneclick.ts").Quote;
   const { account } = fakeSolver();
   const arena = new Arena(account, "s.testnet", {
+    config: async () => ({ oracle_deposit: "0" }),
     listFollowers: async () => [
       [
         "f1.testnet",
@@ -511,6 +513,7 @@ test("B17: the day cap's ledger survives a solver restart (history file)", async
     readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8"),
   ) as import("./oneclick.ts").Quote;
   const deps = {
+    config: async () => ({ oracle_deposit: "0" }),
     listFollowers: async (): Promise<[string, import("./arena.ts").Mandate][]> => [
       [
         "f1.testnet",
@@ -540,4 +543,163 @@ test("B17: the day cap's ledger survives a solver restart (history file)", async
     if (old === undefined) delete process.env.CAP_PER_DAY_YOCTO;
     else process.env.CAP_PER_DAY_YOCTO = old;
   }
+});
+
+// ---------------------------------------------------------------- deploy 15 (verified settlement)
+
+const MANDATE = {
+  allowance: "1000",
+  spent: "0",
+  per_tx_cap: "600",
+  allowed_tokens: [],
+  expires_at: "1900000000000000000",
+  revoked: false,
+};
+const V15 = async () => ({ oracle_deposit: "0", intents_account: "intents-stub.testnet" });
+
+test("POST /intent: a landed intent answers 200 with its tx even when the follower view throws", async () => {
+  const { calls, account } = fakeSolver();
+  const arena = new Arena(account, "s.testnet");
+  const r = await withRpc(
+    {
+      get_config: () => ({ oracle_deposit: "0" }),
+      list_followers: () => {
+        throw new Error("429 Too Many Requests");
+      },
+    },
+    () => arena.route("POST", "/intent", JSON.stringify(signed(KeyPair.fromRandom("ed25519"))), KEY),
+  );
+  assert.equal(r!.code, 200);
+  const body = r!.body as { tx: string; quotes: unknown[]; quote_error?: string };
+  assert.equal(body.tx, "TX1");
+  assert.deepEqual(body.quotes, []);
+  assert.ok(body.quote_error, "the quote failure is reported in the body");
+  assert.equal(calls[0]!.methodName, "post_intent");
+  assert.equal(arena.intents.length, 1, "the landed intent is recorded");
+});
+
+test("deploy 15: followers come from get_follow for followers this solver settled for, not list_followers", async () => {
+  const { account } = fakeSolver();
+  const asked: string[] = [];
+  const arena = new Arena(account, "s.testnet", {
+    config: V15,
+    getFollow: async (_pk, f) => {
+      asked.push(f);
+      return f === "f1.testnet" ? MANDATE : null;
+    },
+  });
+  arena.fills.push(
+    { agent_pk: "pk", follower: "f1.testnet", report: null, tx: "T" },
+    { agent_pk: "pk", follower: "gone.testnet", report: null, tx: "T" },
+  );
+  assert.deepEqual(await arena.followersOf("pk"), [["f1.testnet", MANDATE]]);
+  assert.deepEqual(asked.sort(), ["f1.testnet", "gone.testnet"]);
+  const r = await arena.route("GET", "/followers?pk=pk", "");
+  assert.deepEqual(r!.body, [["f1.testnet", MANDATE]]);
+});
+
+test("deploy 15: one batched quote with the arena as recipient, on mainnet too", async () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8"),
+  ) as import("./oneclick.ts").Quote;
+  const recipients: string[] = [];
+  const old = process.env.FILL_RECIPIENT;
+  delete process.env.FILL_RECIPIENT;
+  try {
+    const arena = new Arena(fakeSolver().account, "nearbuddy-solver.near", {
+      config: V15,
+      listFollowers: async () => [
+        ["f1.near", MANDATE],
+        ["f2.near", MANDATE],
+      ],
+      quote: async (req) => {
+        recipients.push(`${req.recipient} ${req.recipientType} ${req.amount}`);
+        return fixture;
+      },
+      oracleMid: async () => null,
+    });
+    const q = await arena.quotesFor("pk", "Short");
+    assert.deepEqual(recipients, ["arena.nearbuddy-solver.near INTENTS 1200"]);
+    assert.deepEqual(
+      q.map((x) => x.recipient),
+      ["arena.nearbuddy-solver.near", "arena.nearbuddy-solver.near"],
+    );
+  } finally {
+    if (old !== undefined) process.env.FILL_RECIPIENT = old;
+  }
+});
+
+test("deploy 15 on testnet: settle credits the stub with the batch's output first, then settles", async () => {
+  const { calls, account } = fakeSolver((c) => (c.methodName === "settle_follow" ? { settled: 2 } : null));
+  const arena = new Arena(account, "s.testnet", { config: V15 });
+  const fill = (n: string, token: string, out: string) => ({
+    intent_nonce: n,
+    token,
+    amount_in: "10",
+    amount_out: out,
+    swap_tx: "",
+  });
+  const body = JSON.stringify({
+    agent_pk: "pk",
+    follower: "f1.testnet",
+    fills: [fill("1", "nep141:usdc", "3"), fill("2", "nep141:usdc", "4")],
+  });
+  const r = await arena.route("POST", "/settle_follow", body, KEY);
+  assert.equal(r!.code, 200);
+  assert.deepEqual(
+    calls.map((c) => [c.contractId, c.methodName]),
+    [
+      ["intents-stub.testnet", "stub_credit"],
+      ["arena.nearbuddy-solver.testnet", "settle_follow"],
+    ],
+  );
+  assert.deepEqual(calls[0]!.args, {
+    receiver_id: "arena.nearbuddy-solver.testnet",
+    token_id: "nep141:usdc",
+    amount: "7",
+  });
+  const sent = calls[1]!.args.fills as { swap_tx: string }[];
+  assert.deepEqual(
+    sent.map((f) => f.swap_tx),
+    ["stub:TX1", "stub:TX1"],
+  );
+  assert.deepEqual(arena.fills.at(-1)?.report, { settled: 2 });
+});
+
+test("deploy 15: a dry-quote fill is refused with 400 before any chain call", async () => {
+  const { calls, account } = fakeSolver();
+  const arena = new Arena(account, "s.testnet", { config: V15 });
+  const fills = [{ intent_nonce: "1", token: "t", amount_in: "1", amount_out: "1", swap_tx: "dry-quote:1" }];
+  const r = await arena.route("POST", "/settle_follow", JSON.stringify({ agent_pk: "pk", follower: "f", fills }), KEY);
+  assert.equal(r!.code, 400);
+  assert.match((r!.body as { error: string }).error, /dry quote unsettleable/);
+  assert.equal(calls.length, 0);
+});
+
+test("deploy 14: settle passes fills through untouched (no stub credit)", async () => {
+  const { calls, account } = fakeSolver();
+  const arena = new Arena(account, "s.testnet", { config: async () => ({ oracle_deposit: "0" }) });
+  const fills = [{ intent_nonce: "1", token: "t", amount_in: "1", amount_out: "1", swap_tx: "dry-quote:1" }];
+  await arena.route("POST", "/settle_follow", JSON.stringify({ agent_pk: "pk", follower: "f", fills }), KEY);
+  assert.deepEqual(
+    calls.map((c) => c.methodName),
+    ["settle_follow"],
+  );
+});
+
+test("pairOnce reads the leaderboard paged {from: 0, limit: 100}", async () => {
+  let args: Record<string, unknown> | null = null;
+  const arena = new Arena(fakeSolver().account, "s.testnet", {
+    config: async () => ({ oracle_deposit: "0", require_consent: false }),
+  });
+  await withRpc(
+    {
+      leaderboard: (a) => {
+        args = a;
+        return [];
+      },
+    },
+    () => arena.pairOnce(),
+  );
+  assert.deepEqual(args, { from: 0, limit: 100 });
 });

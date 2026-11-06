@@ -27,6 +27,7 @@ def fake_view(method, args):
     if method == "get_duel":
         return {"injections": [{"k": 1}] if args["duel_id"] == "1" else [], "resolved": args["duel_id"] == "1"}
     if method == "leaderboard":
+        assert args == {"from": 0, "limit": 100}  # paged from deploy 15; the view before it ignores args
         return [{"model_id": "m1", "alpha_bps": 50, "shield": 1, "bond": str(10**24)}]
     raise AssertionError(method)
 

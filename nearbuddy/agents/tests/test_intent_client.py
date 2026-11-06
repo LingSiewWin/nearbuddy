@@ -193,11 +193,33 @@ def test_agent_key_uses_a_raw_builder_key(monkeypatch):
     assert bytes(agent_key("B", True)) != seed
 
 
-def test_register_sig_covers_domain_and_owner():
+def test_register_sig_signs_the_contracts_register_message():
     from keys import register_sig
 
     sk = SigningKey(bytes([3] * 32))
-    sig = base64.b64decode(register_sig(sk, "someone.testnet"))
+    v2 = b"nearbuddy-register-v2arena.testnet\x00someone.testnet"  # deploy 15: domain, contract, 0x00, owner
+    asked = []
+
+    def view(method, args):
+        asked.append((method, args))
+        return base64.b64encode(v2).decode()
+
+    sig = base64.b64decode(register_sig(sk, "someone.testnet", view))
+    assert asked == [("register_message", {"owner": "someone.testnet"})]
+    sk.verify_key.verify(v2, sig)
+    with pytest.raises(BadSignatureError):
+        sk.verify_key.verify(b"nearbuddy-register-v1" + b"someone.testnet", sig)
+
+
+def test_register_sig_falls_back_to_v1_bytes_when_the_view_fails():
+    from keys import register_sig
+
+    sk = SigningKey(bytes([3] * 32))
+
+    def down(method, args):
+        raise RuntimeError("after 5 attempts: 429")
+
+    sig = base64.b64decode(register_sig(sk, "someone.testnet", down))
     sk.verify_key.verify(b"nearbuddy-register-v1" + b"someone.testnet", sig)
     with pytest.raises(BadSignatureError):
         sk.verify_key.verify(b"nearbuddy-register-v1" + b"other.testnet", sig)

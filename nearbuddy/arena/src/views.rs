@@ -4,7 +4,9 @@ use near_sdk::{AccountId, env, near};
 
 use crate::{
     Agent, AgentView, Config, Contract, ContractExt, Duel, Intent, Mandate, commit_bytes,
-    consent_bytes, hex, intent_message, register_bytes, tee_text,
+    consent_bytes,
+    follow::{follow_key, holding_key},
+    hex, intent_message, register_bytes, tee_text,
 };
 
 #[near]
@@ -27,18 +29,39 @@ impl Contract {
         U128(self.vaults.get(&account).copied().unwrap_or(0))
     }
 
-    /// The follower's mandate for an agent, if any. View: anyone, no deposit, no panics.
+    /// The follower's mandate for an agent, if any. Followers per agent are not enumerable on
+    /// chain: index the `follow` / `unfollow` events.
+    /// View: anyone, no deposit. Panics: "migrating".
     pub fn get_follow(&self, agent_pk: Base64VecU8, follower: AccountId) -> Option<Mandate> {
+        self.not_migrating();
         self.follows
-            .get(&agent_pk.0)?
-            .iter()
-            .find(|(f, _)| *f == follower)
-            .map(|(_, m)| m.clone())
+            .get(&follow_key(&agent_pk.0, &follower))
+            .map(|v| v.current().clone())
     }
 
-    /// Every follower and mandate attached to an agent. View: anyone, no deposit, no panics.
-    pub fn list_followers(&self, agent_pk: Base64VecU8) -> Vec<(AccountId, Mandate)> {
-        self.follows.get(&agent_pk.0).cloned().unwrap_or_default()
+    /// Fill output credited to `follower` in `token_id` and not yet withdrawn.
+    /// View: anyone, no deposit, no panics.
+    pub fn get_holding(&self, follower: AccountId, token_id: String) -> U128 {
+        U128(
+            self.holdings
+                .get(&holding_key(&follower, &token_id))
+                .copied()
+                .unwrap_or(0),
+        )
+    }
+
+    /// This contract's `intents_account` balance of `token_id` already credited to holdings.
+    /// View: anyone, no deposit, no panics.
+    pub fn get_accounted(&self, token_id: String) -> U128 {
+        U128(self.accounted.get(&token_id).copied().unwrap_or(0))
+    }
+
+    /// `(amount, ready_at_ns)` of the account's queued vault withdrawal, if any.
+    /// View: anyone, no deposit, no panics.
+    pub fn get_pending_withdraw(&self, account: AccountId) -> Option<(U128, U64)> {
+        self.pending_withdrawals
+            .get(&account)
+            .map(|(a, t)| (U128(*a), U64(*t)))
     }
 
     /// Owner, oracle and fee settings plus the next duel id. View: anyone, no deposit, no panics.
@@ -58,6 +81,12 @@ impl Contract {
             commit_reveal: self.commit_reveal,
             no_reveal_bps: self.no_reveal_bps,
             require_consent: self.require_consent,
+            intents_account: self.intents_account.clone(),
+            withdraw_delay_s: self.withdraw_delay_ns / 1_000_000_000,
+            paused: self.paused,
+            max_vault_total: U128(self.max_vault_total),
+            vault_total: U128(self.vault_total),
+            migrating: self.follows_cursor.is_some(),
         }
     }
 
@@ -78,6 +107,17 @@ impl Contract {
         self.duels.get(&duel_id.0).cloned()
     }
 
+    /// The intent lock duel `duel_id` runs (or ran) under, in nanoseconds: no intent lands in its
+    /// last `duel_lock` before `close_at`. From deploy 15 this is the value stored when the duel
+    /// opened, kept after it finishes; for a duel opened earlier it is today's global lock, since
+    /// those duels read the global value. `None` for an unknown duel.
+    /// View: anyone, no deposit, no panics.
+    pub fn duel_lock(&self, duel_id: U64) -> Option<U64> {
+        self.duels
+            .contains_key(&duel_id.0)
+            .then(|| U64(self.lock_of(duel_id.0)))
+    }
+
     /// Duel ids an agent took part in, newest first, `limit` entries from offset `from`. Only duels
     /// opened from deploy 10 on are indexed; unknown agents return an empty list.
     /// View: anyone, no deposit, no panics.
@@ -93,18 +133,23 @@ impl Contract {
             .collect()
     }
 
-    /// Agents sorted by alpha, then shield, descending.
+    /// Agents sorted by alpha, then shield, descending; `limit` (at most 100) from rank `from`.
+    /// ponytail: sorts every agent per call; a sorted index once agents number in the thousands.
     /// View: anyone, no deposit, no panics.
-    pub fn leaderboard(&self) -> Vec<AgentView> {
-        let mut v: Vec<AgentView> = self.agents.values().map(|a| self.view_of(a)).collect();
+    pub fn leaderboard(&self, from: u32, limit: u32) -> Vec<AgentView> {
+        let mut v: Vec<&Agent> = self.agents.values().collect();
         v.sort_by(|x, y| (y.alpha_bps, y.shield).cmp(&(x.alpha_bps, x.shield)));
-        v
+        v.into_iter()
+            .skip(from as usize)
+            .take(limit.min(100) as usize)
+            .map(|a| self.view_of(a))
+            .collect()
     }
 
-    /// The exact bytes an agent key signs to be registered by `owner`.
+    /// The exact bytes an agent key signs to be registered by `owner` on this contract.
     /// View: anyone, no deposit, no panics.
     pub fn register_message(&self, owner: AccountId) -> Base64VecU8 {
-        Base64VecU8(register_bytes(&owner))
+        Base64VecU8(register_bytes(&env::current_account_id(), &owner))
     }
 
     /// Whether side a / side b of a scored duel left a commitment unrevealed and was slashed

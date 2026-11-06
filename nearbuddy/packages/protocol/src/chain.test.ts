@@ -4,7 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
-import { ARENA, explorerTx, fmtNear, loadAccount, loadKey, warnIfArenaMissing } from "./chain.ts";
+import {
+  ARENA,
+  exitDeposit,
+  explorerTx,
+  fmtNear,
+  isDeploy15,
+  loadAccount,
+  loadKey,
+  priceFloor,
+  registerMessage,
+  warnIfArenaMissing,
+} from "./chain.ts";
 import { NETWORK_ID, NETWORKS } from "./network.ts";
 
 // No keychain here: a successful load proves the env key was used and the file never read.
@@ -92,4 +103,41 @@ test("warnIfArenaMissing: mainnet warns on UNKNOWN_ACCOUNT only, testnet never a
   } finally {
     console.warn = warn;
   }
+});
+
+/** Fake arena view answering by method name; a missing method throws like a MethodNotFound view. */
+const fakeView =
+  (answers: Record<string, unknown>) =>
+  async <T>(method: string, _args: Record<string, unknown>): Promise<T> => {
+    if (!(method in answers)) throw new Error(`MethodNotFound ${method}`);
+    return answers[method] as T;
+  };
+
+test("deploy detection and exit deposit: get_config with intents_account is deploy 15 (1 yocto), without is 14 (none)", async () => {
+  const v14 = fakeView({ get_config: { oracle_deposit: "1" } });
+  const v15 = fakeView({ get_config: { oracle_deposit: "1", intents_account: "intents.near" } });
+  assert.equal(await isDeploy15(v14), false);
+  assert.equal(await isDeploy15(v15), true);
+  assert.equal(await exitDeposit(v14), 0n);
+  assert.equal(await exitDeposit(v15), 1n);
+});
+
+test("registerMessage signs what the contract's view returns, v1 bytes when the view fails", async () => {
+  const v2 = Buffer.from("nearbuddy-register-v2arena.testnet\u0000me.testnet");
+  const fromView = await registerMessage("me.testnet", fakeView({ register_message: v2.toString("base64") }));
+  assert.deepEqual(fromView, v2);
+  const fallback = await registerMessage("me.testnet", fakeView({}));
+  assert.equal(fallback.toString(), "nearbuddy-register-v1me.testnet");
+});
+
+test("priceFloor: 95% of the quoted output per NEAR, never 0, and a fill at the quote clears it", () => {
+  const NEAR = 10n ** 24n;
+  // 0.2 NEAR -> 744_947 USDC units (3.72 USD/NEAR): floor 95% of 3_724_735 per NEAR
+  const floor = priceFloor(NEAR / 5n, 744_947n);
+  assert.equal(floor, 3_538_498n);
+  // the contract's check: amount_out * 10^24 >= amount_in * floor
+  assert.ok(744_947n * NEAR >= (NEAR / 5n) * floor);
+  assert.ok(700_000n * NEAR < (NEAR / 5n) * floor, "6% worse is refused");
+  assert.equal(priceFloor(NEAR, 0n), 1n);
+  assert.throws(() => priceFloor(0n, 1n), /amountIn must be positive/);
 });

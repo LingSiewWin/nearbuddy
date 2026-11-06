@@ -11,9 +11,10 @@ impl Contract {
     /// Accept intents signed by this NEAR AI Cloud enclave key. The owner takes it from
     /// `GET /v1/attestation/report` after verifying the Intel and NVIDIA quotes off chain; the
     /// report bytes are published in the dataset so anyone can redo that check.
-    /// Caller: owner. Deposit: none. Panics: "not owner", "signer length", "label too long".
+    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "signer length", "label too long".
+    #[payable]
     pub fn add_tee_signer(&mut self, signer: Base64VecU8, label: String) {
-        self.only_owner();
+        self.only_owner_yocto();
         require!(signer.0.len() == 32, "signer length");
         require!(label.len() <= 64, "label too long");
         self.tee_signers.insert(signer.0.clone());
@@ -25,9 +26,10 @@ impl Contract {
     }
 
     /// Stop accepting intents proved by this enclave key; intents already accepted stand.
-    /// Caller: owner. Deposit: none. Panics: "not owner".
+    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner".
+    #[payable]
     pub fn remove_tee_signer(&mut self, signer: Base64VecU8) {
-        self.only_owner();
+        self.only_owner_yocto();
         self.tee_signers.remove(&signer.0);
     }
 
@@ -36,7 +38,7 @@ impl Contract {
     /// `agent_pk`'s ed25519 signature over `register_message(caller)`, so nobody can squat a
     /// published key.
     /// Caller: anyone; the caller becomes the agent owner. Deposit: the bond, above the
-    /// record's storage cost. Panics: "agent_pk length", "model_id too long", "agent exists",
+    /// record's storage cost. Panics: "paused", "agent_pk length", "model_id too long", "agent exists",
     /// "bad register signature", "bond required".
     #[payable]
     pub fn register_agent(
@@ -46,13 +48,14 @@ impl Contract {
         tee: bool,
         register_sig: Base64VecU8,
     ) -> AgentView {
+        self.not_paused();
         require!(agent_pk.0.len() == 32, "agent_pk length");
         require!(model_id.len() <= 64, "model_id too long");
         require!(!self.agents.contains_key(&agent_pk.0), "agent exists");
         require!(
             verify(
                 &agent_pk.0,
-                &register_bytes(&env::predecessor_account_id()),
+                &register_bytes(&env::current_account_id(), &env::predecessor_account_id()),
                 &register_sig.0
             ),
             "bad register signature"
@@ -89,9 +92,11 @@ impl Contract {
     }
 
     /// Agent owner takes bond back. Refused while the agent is in an open duel.
-    /// Caller: the agent owner. Deposit: none. Panics: "agent missing", "not owner", "in duel",
-    /// "insufficient".
+    /// Caller: the agent owner. Deposit: 1 yoctoNEAR. Panics: "agent missing", "not owner",
+    /// "in duel", "insufficient".
+    #[payable]
     pub fn withdraw_bond(&mut self, agent_pk: Base64VecU8, amount: U128) -> Promise {
+        near_sdk::assert_one_yocto();
         let agent = self.agents.get_mut(&agent_pk.0).expect("agent missing");
         require!(agent.owner == env::predecessor_account_id(), "not owner");
         require!(agent.in_duel.is_none(), "in duel");

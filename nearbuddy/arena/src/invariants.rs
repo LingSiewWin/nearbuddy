@@ -1,5 +1,8 @@
 //! Property tests over random operation sequences: money conservation, bond and vault bounds,
-//! mandate limits, duel finality and slash arithmetic.
+//! mandate limits, duel finality and slash arithmetic; from deploy 15 also verified settlement
+//! (fills credited only against delivered, unaccounted output; sum(holdings) == accounted per token),
+//! `withdraw_token` (debit first, exact re-credit on a failed transfer), the vault delay (never paid
+//! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted).
 //!
 //! Every operation runs like a transaction on chain: the contract is read from the mocked trie,
 //! the method runs, and on success the struct is written back and the collections flushed. A
@@ -23,14 +26,14 @@ use ed25519_dalek::{Signer, SigningKey};
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::mock::{MockAction, with_mocked_blockchain};
 use near_sdk::test_utils::{VMContextBuilder, get_created_receipts};
-use near_sdk::{AccountId, MockedBlockchain, NearToken, env, test_vm_config};
+use near_sdk::{AccountId, MockedBlockchain, NearToken, PromiseResult, env, test_vm_config};
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::test_runner::Config as PropConfig;
 
 use crate::tests::{
-    CONTRACT, MIN_CHAOS, MODEL_A, NEAR, NOW, ORACLE, ORACLE_DEPOSIT, OWNER, SOLVER, key,
-    register_sig, sign,
+    CONTRACT, INTENTS, MIN_CHAOS, MODEL_A, NEAR, NOW, ORACLE, ORACLE_DEPOSIT, OWNER, SOLVER,
+    VAULT_CAP, key, register_sig, sign,
 };
 use crate::*;
 
@@ -43,6 +46,10 @@ const START_BALANCE: u128 = 100 * NEAR;
 const SEC: u64 = 1_000_000_000;
 const MILLI: u128 = NEAR / 1_000;
 const OPEN_PRICE: u64 = 366_000_000;
+/// Token ids the fills, deliveries and withdrawals use; index 0 is the `wrap` side.
+const TOKENS: [&str; 2] = ["wrap.near", "usdc.near"];
+/// `withdraw_delay_ns` default: the vault delay and the grace a fronted fill keeps.
+const DELAY: u64 = 900 * SEC;
 
 fn agent_owner(i: usize) -> String {
     format!("op{i}.testnet")
@@ -58,6 +65,8 @@ struct FillSpec {
     nonce: usize,
     milli: u64,
     wrap: bool,
+    /// Output units claimed; checked against the floor and the delivered, unaccounted balance.
+    out: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -70,9 +79,37 @@ enum Op {
         who: usize,
         milli: u64,
     },
+    /// `request_withdraw`: queue a vault withdrawal.
     Withdraw {
         who: usize,
         milli: u64,
+    },
+    /// `withdraw`: pay the queued withdrawal once its delay passed; `fail` = the transfer bounces.
+    Claim {
+        who: usize,
+        fail: bool,
+        /// Claim before the delay instead of moving the clock to it.
+        early: bool,
+    },
+    /// A swap output landing in the arena's intents balance (the stub's `stub_credit`).
+    Deliver {
+        wrap: bool,
+        units: u64,
+    },
+    /// `withdraw_token`, then its callback with the transfer succeeding or failing.
+    WithdrawToken {
+        who: usize,
+        wrap: bool,
+        /// Percent of the holding (over 100 = more than held, refused).
+        pct: u16,
+        fail: bool,
+    },
+    /// Owner `sweep_surplus`, its balance check, then the transfer's callback.
+    Sweep {
+        wrap: bool,
+        /// Percent of the unaccounted surplus (over 100 = more than free, refused).
+        pct: u16,
+        fail: bool,
     },
     Follow {
         who: usize,
@@ -83,6 +120,8 @@ enum Op {
         only_wrap: bool,
         ttl_s: u64,
         revoked: bool,
+        /// `min_out_per_near`; 0 is refused by `follow`.
+        floor: u64,
     },
     Unfollow {
         who: usize,
@@ -114,6 +153,8 @@ enum Op {
         duel: usize,
         b_side: bool,
         milli: u64,
+        /// Paid by the owner of side a (shield farming): a fee, never shield.
+        own: bool,
     },
     Resolve {
         duel: usize,
@@ -157,17 +198,21 @@ fn follow(
         any::<bool>(),
         ttl_s,
         prop::bool::weighted(0.1),
+        prop_oneof![1 => Just(0u64), 9 => 1u64..2_000_000],
     )
         .prop_map(
-            |(who, agent, allowance, cap, spent_pct, only_wrap, ttl_s, revoked)| Op::Follow {
-                who,
-                agent,
-                allowance,
-                cap,
-                spent_pct,
-                only_wrap,
-                ttl_s,
-                revoked,
+            |(who, agent, allowance, cap, spent_pct, only_wrap, ttl_s, revoked, floor)| {
+                Op::Follow {
+                    who,
+                    agent,
+                    allowance,
+                    cap,
+                    spent_pct,
+                    only_wrap,
+                    ttl_s,
+                    revoked,
+                    floor,
+                }
             },
         )
 }
@@ -221,7 +266,20 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
         vec(post(), 4..8),
         vec(reveal(), 2..4),
     )
-        .prop_map(|(r, d, f, o, p, v)| [r, d, f, o, p, v].concat())
+        .prop_map(|(r, d, f, o, p, v)| {
+            // outputs already delivered to the arena, so early settles find a receipt
+            let deliver = vec![
+                Op::Deliver {
+                    wrap: true,
+                    units: 5_000_000,
+                },
+                Op::Deliver {
+                    wrap: false,
+                    units: 5_000_000,
+                },
+            ];
+            [r, d, f, o, p, v, deliver].concat()
+        })
 }
 
 fn reveal() -> impl Strategy<Value = Op> {
@@ -252,12 +310,22 @@ fn op() -> impl Strategy<Value = Op> {
         0..6usize,
         prop_oneof![3 => 0u64..300, 1 => 0u64..1_500],
         any::<bool>(),
+        prop_oneof![1 => Just(0u64), 9 => 0u64..3_000_000],
     )
-        .prop_map(|(nonce, milli, wrap)| FillSpec { nonce, milli, wrap });
+        .prop_map(|(nonce, milli, wrap, out)| FillSpec {
+            nonce,
+            milli,
+            wrap,
+            out,
+        });
     prop_oneof![
         1 => (ag.clone(), 0u64..3_000).prop_map(|(agent, milli)| Op::Register { agent, milli }),
         2 => (0..4usize, 0u64..3_000).prop_map(|(who, milli)| Op::Deposit { who, milli }),
         1 => (0..4usize, 0u64..2_000).prop_map(|(who, milli)| Op::Withdraw { who, milli }),
+        3 => (0..4usize, prop::bool::weighted(0.3), prop::bool::weighted(0.2)).prop_map(|(who, fail, early)| Op::Claim { who, fail, early }),
+        4 => (any::<bool>(), 1u64..3_000_000).prop_map(|(wrap, units)| Op::Deliver { wrap, units }),
+        4 => (0..3usize, any::<bool>(), 1u16..=120, prop::bool::weighted(0.3)).prop_map(|(who, wrap, pct, fail)| Op::WithdrawToken { who, wrap, pct, fail }),
+        1 => (any::<bool>(), 1u16..=120, prop::bool::weighted(0.3)).prop_map(|(wrap, pct, fail)| Op::Sweep { wrap, pct, fail }),
         2 => follow(fol.clone(), followable()),
         1 => (fol.clone(), followable()).prop_map(|(who, agent)| Op::Unfollow { who, agent }),
         // b = a + 1..=3 (mod 4): the same-agent refusal is covered by the unit tests
@@ -265,7 +333,7 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(a, off, len_s, milli, open_price, consented)| Op::Open { a, b: (a + off) % AGENTS, len_s, milli, open_price, consented }),
         10 => post(),
         6 => reveal(),
-        3 => (0..8usize, any::<bool>(), 0u64..500).prop_map(|(duel, b_side, milli)| Op::Chaos { duel, b_side, milli }),
+        3 => (0..8usize, any::<bool>(), 0u64..500, prop::bool::weighted(0.3)).prop_map(|(duel, b_side, milli, own)| Op::Chaos { duel, b_side, milli, own }),
         3 => (0..8usize, prop_oneof![Just(0i64), -500i64..500]).prop_map(|(duel, move_bps)| Op::Resolve { duel, move_bps }),
         5 => (fol, followable(), vec(fill, 0..5)).prop_map(|(who, agent, fills)| Op::Settle { who, agent, fills }),
         1 => (0..8usize).prop_map(|duel| Op::Void { duel }),
@@ -320,8 +388,9 @@ enum Kind {
     /// Keeps the storage it adds (new records plus growth, freed bytes not refunded), paid out of
     /// the value the caller brings or the agent's bond.
     PaysStorage,
-    /// `open_duel`: keeps the whole deposit above `oracle_deposit` (storage plus any overpay).
-    Open,
+    /// Keeps exactly this much (the 1 yocto an owner or exit call attaches and does not forward;
+    /// minus 1 when a callback forwards the yocto it holds).
+    Exact(i128),
 }
 
 struct DuelM {
@@ -329,6 +398,8 @@ struct DuelM {
     b: usize,
     close_at: u64,
     chaos_in: u128,
+    /// Per accepted injection: (aimed at side b, paid by an agent owner).
+    chaos: Vec<(bool, bool)>,
     /// Borsh bytes at the first check that saw it finished; must never change afterwards.
     final_bytes: Option<Vec<u8>>,
 }
@@ -336,6 +407,7 @@ struct DuelM {
 #[derive(Clone)]
 struct Snap {
     bonds: [Option<u128>; AGENTS],
+    shields: [Option<u32>; AGENTS],
     in_duel: [Option<u64>; AGENTS],
     vaults: [u128; 4],
     duels: Vec<Duel>,
@@ -346,6 +418,11 @@ struct Snap {
     mandates: Vec<(usize, usize, Mandate)>,
     /// Per duel: does side a / b hold an unrevealed commitment.
     commits: Vec<[bool; 2]>,
+    /// Per account and token (0 wrap.near, 1 usdc.near): output credited and not withdrawn.
+    holdings: [[u128; 2]; 4],
+    accounted: [u128; 2],
+    sweeping: [u128; 2],
+    outflow_seq: u64,
 }
 
 impl Snap {
@@ -398,6 +475,14 @@ struct World {
     posted: [Vec<u64>; AGENTS],
     settled: HashSet<(usize, usize, u64)>,
     proofs: u64,
+    /// The arena's balance on the intents stub per token (0 wrap.near, 1 usdc.near).
+    intents_bal: [u128; 2],
+    /// Promise results the next call sees (a callback's view or transfer outcome): `None` = failed.
+    results: Vec<Option<Vec<u8>>>,
+    /// Queued vault withdrawals: (amount, ready_at).
+    requests: [Option<(u128, u64)>; 4],
+    /// Per token, holdings debited by `withdraw_token` whose transfer has not confirmed yet.
+    in_flight: [u128; 2],
 }
 
 impl World {
@@ -421,16 +506,29 @@ impl World {
             posted: Default::default(),
             settled: HashSet::new(),
             proofs: 0,
+            intents_bal: [0; 2],
+            results: vec![],
+            requests: [None; 4],
+            in_flight: [0; 2],
         };
         w.env(OWNER, 0);
-        let mut c = Contract::init(
+        let c = Contract::init(
             OWNER.parse().unwrap(),
             ORACLE.parse().unwrap(),
             U128(ORACLE_DEPOSIT),
             cfg.slash_bps,
             cfg.fee_bps,
             U128(MIN_CHAOS),
+            INTENTS.parse().unwrap(),
+            U128(VAULT_CAP),
         );
+        env::state_write(&c);
+        drop(c);
+        w.usage = env::storage_usage();
+        w.trie = with_mocked_blockchain(|b| b.take_storage());
+        // owner setters take exactly 1 yocto each (deploy 15); the context attaches it to every call
+        w.env(OWNER, 1);
+        let mut c: Contract = env::state_read().expect("state");
         c.add_solver(SOLVER.parse().unwrap());
         c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, 10);
         c.add_tee_signer(Base64VecU8(key(TEE_SEED).1), "prop".into());
@@ -438,6 +536,7 @@ impl World {
         c.set_require_consent(cfg.require_consent);
         env::state_write(&c);
         drop(c);
+        w.balance = env::account_balance().as_yoctonear();
         w.usage = env::storage_usage();
         w.trie = with_mocked_blockchain(|b| b.take_storage());
         w
@@ -457,7 +556,13 @@ impl World {
             ctx,
             cached(test_vm_config),
             cached(near_sdk::RuntimeFeesConfig::test),
-            vec![],
+            self.results
+                .iter()
+                .map(|r| match r {
+                    Some(b) => PromiseResult::Successful(b.clone()),
+                    None => PromiseResult::Failed,
+                })
+                .collect(),
             self.trie.clone(),
             Default::default(),
             None,
@@ -512,7 +617,11 @@ impl World {
                     .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
                     .unwrap_or_default();
                 assert!(!is_bug(&msg), "contract panicked on arithmetic: {msg}");
-                Err(msg)
+                // `env::panic_str` reaches the mock as `HostError(GuestPanic { panic_msg: ".." })`
+                Err(match msg.split_once("panic_msg: \"") {
+                    Some((_, rest)) => rest.split('"').next().unwrap_or_default().to_string(),
+                    None => msg,
+                })
             }
         }
     }
@@ -523,16 +632,27 @@ impl World {
         let agent = |i: usize| c.agents.get(&self.pks[i]);
         let mut mandates = vec![];
         for (ai, pk) in self.pks.iter().enumerate() {
-            for (f, m) in c.follows.get(pk).into_iter().flatten() {
-                let who = ACCOUNTS
-                    .iter()
-                    .position(|a| *a == f.as_str())
-                    .expect("unknown follower");
-                mandates.push((ai, who, m.clone()));
+            for (who, f) in ACCOUNTS.iter().enumerate() {
+                let key = crate::follow::follow_key(pk, &f.parse().unwrap());
+                if let Some(m) = c.follows.get(&key) {
+                    mandates.push((ai, who, m.current().clone()));
+                }
             }
         }
+        let tok = |m: &near_sdk::store::LookupMap<String, u128>, t: usize| {
+            m.get(TOKENS[t]).copied().unwrap_or(0)
+        };
+        let holdings = std::array::from_fn(|i| {
+            std::array::from_fn(|t| {
+                let k = crate::follow::holding_key(&ACCOUNTS[i].parse().unwrap(), TOKENS[t]);
+                c.holdings.get(&k).copied().unwrap_or(0)
+            })
+        });
+        let accounted = std::array::from_fn(|t| tok(&c.accounted, t));
+        let sweeping = std::array::from_fn(|t| tok(&c.sweeping, t));
         Snap {
             bonds: std::array::from_fn(|i| agent(i).map(|a| a.bond.0)),
+            shields: std::array::from_fn(|i| agent(i).map(|a| a.shield)),
             in_duel: std::array::from_fn(|i| agent(i).and_then(|a| a.in_duel.map(|d| d.0))),
             vaults: std::array::from_fn(|i| {
                 let id: AccountId = ACCOUNTS[i].parse().unwrap();
@@ -551,6 +671,10 @@ impl World {
                     [&x.a, &x.b].map(|pk| c.commitments.get(&commit_key(d, &pk.0)).is_some())
                 })
                 .collect(),
+            holdings,
+            accounted,
+            sweeping,
+            outflow_seq: c.outflow_seq,
         }
     }
 
@@ -609,7 +733,6 @@ impl World {
         let pre = self.snap();
         let (bal0, trie0) = (self.balance, self.trie.clone());
         let mut kind = Kind::Neutral;
-        let mut open_keep = 0u128;
         match op.clone() {
             Op::Register { agent, milli } => {
                 kind = Kind::PaysStorage;
@@ -637,12 +760,67 @@ impl World {
             }
             Op::Withdraw { who, milli } => {
                 let amt = milli as u128 * MILLI;
-                if self
-                    .call(ACCOUNTS[who], 0, |c| drop(c.withdraw(U128(amt))))
-                    .is_ok()
-                {
-                    self.vault_out[who] += amt;
+                let ok = self
+                    .call(ACCOUNTS[who], 1, |c| c.request_withdraw(U128(amt)))
+                    .is_ok();
+                if ok {
+                    assert!(self.requests[who].is_none(), "a second request was queued");
+                    self.requests[who] = Some((amt, self.now + DELAY));
                 }
+                kind = Kind::Exact(ok as i128);
+            }
+            Op::Claim { who, fail, early } => {
+                // an empty pick goes to an account with a queued request, so most draws claim one
+                let who = if self.requests[who].is_some() {
+                    who
+                } else {
+                    (0..4).find(|w| self.requests[*w].is_some()).unwrap_or(who)
+                };
+                if let (Some((_, ready_at)), false) = (self.requests[who], early) {
+                    self.now = self.now.max(ready_at);
+                }
+                let ok = self.call(ACCOUNTS[who], 1, |c| drop(c.withdraw())).is_ok();
+                if ok {
+                    let (amt, ready_at) =
+                        self.requests[who].take().expect("paid without a request");
+                    assert!(self.now >= ready_at, "withdraw paid before its delay");
+                    let paid = pre.vaults[who] - self.snap().vaults[who];
+                    assert_eq!(paid, amt.min(pre.vaults[who]), "pays min(requested, vault)");
+                    self.vault_out[who] += paid;
+                    self.check_money(&pre, bal0, &trie0, Kind::Exact(1));
+                    return self.claim_outcome(who, paid, amt, ready_at, fail);
+                } else if let Some((_, ready_at)) = self.requests[who] {
+                    assert!(self.now < ready_at, "a due withdrawal was refused");
+                }
+                kind = Kind::Exact(ok as i128);
+            }
+            Op::Deliver { wrap, units } => {
+                self.intents_bal[!wrap as usize] += units as u128;
+            }
+            Op::WithdrawToken {
+                who,
+                wrap,
+                pct,
+                fail,
+            } => {
+                // an empty pick goes to the largest holding, so most draws exercise a real withdrawal
+                let (who, t) = if pre.holdings[who][!wrap as usize] > 0 {
+                    (who, !wrap as usize)
+                } else {
+                    (0..4)
+                        .flat_map(|w| [(w, 0), (w, 1)])
+                        .max_by_key(|&(w, t)| pre.holdings[w][t])
+                        .unwrap()
+                };
+                let amt = (pre.holdings[who][t] * pct as u128 / 100).max(1);
+                return self.withdraw_token(&pre, who, t, amt, fail);
+            }
+            Op::Sweep { wrap, pct, fail } => {
+                let t = !wrap as usize;
+                let free = self.intents_bal[t]
+                    .saturating_sub(pre.accounted[t])
+                    .saturating_sub(pre.sweeping[t]);
+                return self.sweep(&pre, t, (free * pct as u128 / 100).max(1), fail);
             }
             Op::Follow {
                 who,
@@ -653,6 +831,7 @@ impl World {
                 only_wrap,
                 ttl_s,
                 revoked,
+                floor,
             } => {
                 kind = Kind::PaysStorage;
                 let allowance = allowance as u128 * MILLI;
@@ -667,13 +846,31 @@ impl World {
                     },
                     expires_at: U64(self.now + ttl_s * SEC),
                     revoked,
+                    min_out_per_near: U128(floor as u128),
+                    revoked_at: U64(12_345), // ignored on input: `follow` stores 0
                 };
                 let pk = Base64VecU8(self.pks[agent].clone());
-                let _ = self.call(ACCOUNTS[who], 0, |c| c.follow(pk, m));
+                let r = self.call(ACCOUNTS[who], 0, |c| c.follow(pk, m));
+                if floor == 0 {
+                    assert!(r.is_err(), "a follow without a price floor was accepted");
+                }
+                if r.is_ok() {
+                    let m = self.snap().mandate(agent, who).cloned().expect("stored");
+                    assert_eq!(m.revoked_at.0, 0, "follow resets revoked_at");
+                }
             }
             Op::Unfollow { who, agent } => {
                 let pk = Base64VecU8(self.pks[agent].clone());
                 let _ = self.call(ACCOUNTS[who], 0, |c| c.unfollow(pk));
+                if let (Some(a), Some(b)) =
+                    (pre.mandate(agent, who), self.snap().mandate(agent, who))
+                {
+                    let stamp = if a.revoked { a.revoked_at.0 } else { self.now };
+                    assert!(
+                        b.revoked && b.revoked_at.0 == stamp,
+                        "unfollow stamps revoked_at once"
+                    );
+                }
             }
             Op::Open {
                 a,
@@ -683,7 +880,7 @@ impl World {
                 open_price,
                 consented,
             } => {
-                kind = Kind::Open;
+                kind = Kind::PaysStorage; // the excess over storage and the oracle deposit is refunded
                 let dep = ORACLE_DEPOSIT + milli as u128 * MILLI;
                 let close_at = self.now + len_s * SEC;
                 let (pa, pb) = (
@@ -716,11 +913,11 @@ impl World {
                         b,
                         close_at,
                         chaos_in: 0,
+                        chaos: vec![],
                         final_bytes: None,
                     });
-                    open_keep = dep - ORACLE_DEPOSIT;
                     if open_price {
-                        self.check_money(&pre, bal0, &trie0, kind, open_keep);
+                        self.check_money(&pre, bal0, &trie0, kind);
                         return self.oracle(id, "open", OPEN_PRICE);
                     }
                 }
@@ -808,6 +1005,7 @@ impl World {
                 duel,
                 b_side,
                 milli,
+                own,
             } => {
                 kind = Kind::PaysStorage;
                 let Some(d) = self.duel(duel, |i| {
@@ -824,8 +1022,13 @@ impl World {
                     }]
                     .clone(),
                 );
+                let payer = if own {
+                    agent_owner(self.duels[d].a)
+                } else {
+                    "spectator.testnet".into()
+                };
                 if self
-                    .call("spectator.testnet", amt, |c| {
+                    .call(&payer, amt, |c| {
                         c.inject_chaos(
                             U64(d as u64),
                             target,
@@ -835,7 +1038,10 @@ impl World {
                     })
                     .is_ok()
                 {
-                    self.duels[d].chaos_in += amt;
+                    self.duels[d].chaos.push((b_side, own));
+                    if !own {
+                        self.duels[d].chaos_in += amt;
+                    }
                 }
             }
             Op::Resolve { duel, move_bps } => {
@@ -849,7 +1055,7 @@ impl World {
                     })
                     .is_ok()
                 {
-                    self.check_money(&pre, bal0, &trie0, kind, 0);
+                    self.check_money(&pre, bal0, &trie0, kind);
                     let open = pre.duels[d]
                         .open_price
                         .expect("resolve needs an open price")
@@ -881,10 +1087,11 @@ impl World {
             Op::WithdrawBond { agent, milli } => {
                 let amt = milli as u128 * MILLI;
                 let (owner, pk) = (agent_owner(agent), Base64VecU8(self.pks[agent].clone()));
-                if self
-                    .call(&owner, 0, |c| drop(c.withdraw_bond(pk, U128(amt))))
-                    .is_ok()
-                {
+                let ok = self
+                    .call(&owner, 1, |c| drop(c.withdraw_bond(pk, U128(amt))))
+                    .is_ok();
+                kind = Kind::Exact(ok as i128);
+                if ok {
                     assert!(
                         pre.in_duel[agent].is_none(),
                         "bond withdrawn while in a duel"
@@ -893,11 +1100,12 @@ impl World {
                 }
             }
             Op::WithdrawFees => {
-                let _ = self.call(OWNER, 0, |c| drop(c.withdraw_fees()));
+                let ok = self.call(OWNER, 1, |c| drop(c.withdraw_fees())).is_ok();
+                kind = Kind::Exact(ok as i128);
             }
             Op::Advance { secs } => self.now += secs * SEC,
         }
-        self.check_money(&pre, bal0, &trie0, kind, open_keep);
+        self.check_money(&pre, bal0, &trie0, kind);
     }
 
     /// Records an accepted intent (posted or revealed) of agent `ag`.
@@ -932,7 +1140,7 @@ impl World {
             self.check_slash(&pre, id as usize);
             self.pending.retain(|k, _| k.0 != id as usize);
         }
-        self.check_money(&pre, bal0, &trie0, Kind::Neutral, 0);
+        self.check_money(&pre, bal0, &trie0, Kind::Neutral);
     }
 
     /// Property 5, with bonds as they stood at resolution. A side holding an unrevealed commitment
@@ -994,6 +1202,25 @@ impl World {
         assert_eq!(post.bonds[a], Some(na), "bond a after resolution");
         assert_eq!(post.bonds[b], Some(nb), "bond b after resolution");
         assert_eq!(post.fees, fees, "owner fees after resolution");
+        // 5b. shield grows only by third-party chaos the winner outlasted on the price: never from
+        // chaos an agent owner paid, never on a forfeit win, never for the loser or on a tie
+        let won = |side_b: bool| a_wins == Some(!side_b);
+        for (side_b, ag) in [(false, a), (true, b)] {
+            let earned = if won(side_b) && nr == [false; 2] {
+                self.duels[d]
+                    .chaos
+                    .iter()
+                    .filter(|(at_b, own)| *at_b == side_b && !own)
+                    .count() as u32
+            } else {
+                0
+            };
+            assert_eq!(
+                post.shields[ag],
+                pre.shields[ag].map(|s| s + earned),
+                "shield after resolution"
+            );
+        }
         for (i, before, after) in [(a, ba, na), (b, bb, nb)] {
             if after >= before {
                 self.bond_in[i] += after - before;
@@ -1003,8 +1230,9 @@ impl World {
         }
     }
 
-    /// Property 3: the contract accepts exactly the fills the mandate rules accept, and rejected
-    /// fills move nothing.
+    /// Property 3: the contract accepts exactly the fills the mandate and receipt rules accept, and
+    /// rejected fills move nothing. `settle_follow` writes nothing; its callback runs with the
+    /// arena's intents balance as the view answer and panics (writing nothing) when none settles.
     fn settle(&mut self, pre: &Snap, who: usize, agent: usize, specs: &[FillSpec]) {
         let (bal0, trie0) = (self.balance, self.trie.clone());
         let fee_bps = self.cfg.fee_bps as u128;
@@ -1016,64 +1244,116 @@ impl World {
                     .get(s.nonce % (self.posted[agent].len() + 1))
                     .copied()
                     .unwrap_or(1_000)),
-                token: if s.wrap { "wrap.near" } else { "usdc.near" }.into(),
+                token: TOKENS[!s.wrap as usize].into(),
                 amount_in: U128(s.milli as u128 * MILLI),
-                amount_out: U128(1),
+                amount_out: U128(s.out as u128),
                 swap_tx: "tx".into(),
             })
             .collect();
+        let pk = Base64VecU8(self.pks[agent].clone());
+        let follower: AccountId = ACCOUNTS[who].parse().unwrap();
+        let sent = self.call(SOLVER, 0, |c| {
+            drop(c.settle_follow(pk.clone(), follower.clone(), fills.clone()))
+        });
+        if fills.is_empty() {
+            assert_eq!(sent.unwrap_err(), "empty fills");
+            return;
+        }
+        sent.expect("settle_follow refuses only shape errors");
+        assert!(
+            self.trie == trie0,
+            "settle_follow wrote state before the view"
+        );
         // model of `apply_fill`, in the contract's check order
         let mut m = pre.mandate(agent, who).cloned();
         let mut vault = pre.vaults[who];
+        let mut surplus: [u128; 2] = std::array::from_fn(|t| {
+            self.intents_bal[t]
+                .saturating_sub(pre.accounted[t])
+                .saturating_sub(pre.sweeping[t])
+        });
         let mut accepted = HashSet::new();
-        let mut expect: Vec<Result<u128, &str>> = vec![];
+        let mut expect: Vec<Result<(u128, u128), &str>> = vec![];
         for f in &fills {
-            let (n, amt) = (f.intent_nonce.0, f.amount_in.0);
+            let (n, amt, out) = (f.intent_nonce.0, f.amount_in.0, f.amount_out.0);
+            let t = TOKENS.iter().position(|x| *x == f.token).unwrap();
             let fee = amt * fee_bps / 10_000;
+            let debit = amt + fee;
             let r = if !self.posted[agent].contains(&n) {
                 Err("nonce unknown")
             } else if self.settled.contains(&(agent, who, n)) || accepted.contains(&n) {
                 Err("duplicate fill")
             } else if let Some(m) = m.as_mut() {
-                if m.revoked {
+                if m.revoked && self.now >= m.revoked_at.0 + DELAY {
                     Err("mandate revoked")
-                } else if self.now >= m.expires_at.0 {
+                } else if self.now >= m.expires_at.0 + DELAY {
                     Err("mandate expired")
                 } else if !m.allowed_tokens.is_empty() && !m.allowed_tokens.contains(&f.token) {
                     Err("token not allowed")
-                } else if amt > m.per_tx_cap.0 {
+                } else if debit > m.per_tx_cap.0 {
                     Err("over cap")
-                } else if m.spent.0 + amt > m.allowance.0 {
+                } else if m.spent.0 + debit > m.allowance.0 {
                     Err("allowance exhausted")
-                } else if vault < amt + fee {
+                } else if m.min_out_per_near.0 > 0 && out * NEAR < amt * m.min_out_per_near.0 {
+                    Err("below min price")
+                } else if out == 0 || out > surplus[t] {
+                    Err("no receipt")
+                } else if vault < debit {
                     Err("insufficient")
                 } else {
-                    m.spent.0 += amt;
-                    vault -= amt + fee;
+                    m.spent.0 += debit;
+                    vault -= debit;
+                    surplus[t] -= out;
                     accepted.insert(n);
-                    Ok(amt)
+                    Ok((amt, out))
                 }
             } else {
                 Err("no mandate")
             };
             expect.push(r);
         }
-        let pk = Base64VecU8(self.pks[agent].clone());
-        let follower: AccountId = ACCOUNTS[who].parse().unwrap();
-        let report = self
-            .call(SOLVER, 0, |c| c.settle_follow(pk, follower, fills.clone()))
-            .expect("settle_follow never panics for the solver");
+        // the view: this contract's balance on the intents stub, one entry per distinct token
+        let mut asked: Vec<usize> = vec![];
+        for f in &fills {
+            let t = TOKENS.iter().position(|x| *x == f.token).unwrap();
+            if !asked.contains(&t) {
+                asked.push(t);
+            }
+        }
+        let answer: Vec<U128> = asked.iter().map(|t| U128(self.intents_bal[*t])).collect();
+        self.results = vec![Some(near_sdk::serde_json::to_vec(&answer).unwrap())];
+        let seq = pre.outflow_seq;
+        let out = self.call(CONTRACT, 0, |c| {
+            c.on_settle_follow(pk, follower, SOLVER.parse().unwrap(), fills.clone(), seq)
+        });
+        self.results.clear();
         let got: Vec<(u32, String)> = expect
             .iter()
             .enumerate()
             .filter_map(|(i, r)| r.as_ref().err().map(|e| (i as u32, e.to_string())))
             .collect();
+        let report = match out {
+            Ok(r) => r,
+            Err(msg) => {
+                assert!(
+                    expect.iter().all(|r| r.is_err()),
+                    "refused a batch with a valid fill: {msg}"
+                );
+                assert_eq!(msg, got[0].1, "the refusal names the first rejection");
+                assert!(self.trie == trie0, "an all-rejected batch wrote state");
+                return self.check_money(pre, bal0, &trie0, Kind::Neutral);
+            }
+        };
         assert_eq!(
             report.rejected, got,
-            "rejections differ from the mandate rules"
+            "rejections differ from the mandate and receipt rules"
         );
-        let amt_in: u128 = expect.iter().flatten().sum();
-        let fees: u128 = expect.iter().flatten().map(|a| a * fee_bps / 10_000).sum();
+        let amt_in: u128 = expect.iter().flatten().map(|(a, _)| a).sum();
+        let fees: u128 = expect
+            .iter()
+            .flatten()
+            .map(|(a, _)| a * fee_bps / 10_000)
+            .sum();
         assert_eq!(report.debited.0, amt_in + fees, "debited");
         let post = self.snap();
         assert_eq!(
@@ -1087,11 +1367,33 @@ impl World {
             "solver vault"
         );
         assert_eq!(post.fees, pre.fees + fees, "owner fees");
+        for (t, token) in TOKENS.iter().enumerate() {
+            let credited: u128 = fills
+                .iter()
+                .zip(&expect)
+                .filter(|(f, r)| r.is_ok() && f.token == *token)
+                .map(|(f, _)| f.amount_out.0)
+                .sum();
+            assert_eq!(
+                post.accounted[t],
+                pre.accounted[t] + credited,
+                "accounted grows by credited output"
+            );
+            assert_eq!(
+                post.holdings[who][t],
+                pre.holdings[who][t] + credited,
+                "the follower's holding"
+            );
+            assert!(
+                post.accounted[t] + post.sweeping[t] <= self.intents_bal[t],
+                "credited beyond the balance"
+            );
+        }
         if let (Some(a), Some(b)) = (pre.mandate(agent, who), post.mandate(agent, who)) {
             assert_eq!(
                 b.spent.0,
-                a.spent.0 + amt_in,
-                "spent grows by accepted fills only"
+                a.spent.0 + amt_in + fees,
+                "spent grows by accepted debits only"
             );
             assert!(
                 a.allowance.0 == b.allowance.0
@@ -1099,15 +1401,198 @@ impl World {
                     && a.revoked == b.revoked
             );
         }
-        if report.settled == 0 {
-            assert!(self.trie == trie0, "an all-rejected batch wrote state");
-        }
         for f in fills.iter().zip(&expect).filter(|(_, r)| r.is_ok()) {
             self.settled.insert((agent, who, f.0.intent_nonce.0));
         }
         self.vault_out[who] += amt_in + fees;
         self.vault_in[SOLVER_IX] += amt_in;
-        self.check_money(pre, bal0, &trie0, Kind::Neutral, 0);
+        self.check_money(pre, bal0, &trie0, Kind::Neutral);
+    }
+
+    /// `withdraw`'s transfer outcome. A bounced transfer returns the NEAR to the contract, and
+    /// `on_withdraw` must put exactly `paid` back in the vault and restore the request; a landed
+    /// one changes nothing.
+    fn claim_outcome(&mut self, who: usize, paid: u128, amt: u128, ready_at: u64, fail: bool) {
+        let (mid, bal1, trie1) = (self.snap(), self.balance, self.trie.clone());
+        if fail {
+            self.balance += paid; // the runtime refunds a failed transfer to its sender
+        }
+        self.results = vec![if fail { None } else { Some(vec![]) }];
+        let landed = self
+            .call(CONTRACT, 0, |c| {
+                c.on_withdraw(
+                    ACCOUNTS[who].parse().unwrap(),
+                    U128(paid),
+                    U128(amt),
+                    U64(ready_at),
+                )
+            })
+            .expect("on_withdraw never panics");
+        self.results.clear();
+        assert_eq!(landed, !fail);
+        let post = self.snap();
+        if fail {
+            assert_eq!(
+                post.vaults[who],
+                mid.vaults[who] + paid,
+                "a bounced withdraw re-credits exactly"
+            );
+            self.vault_out[who] -= paid;
+            self.requests[who] = Some((amt, ready_at));
+        } else {
+            assert_eq!(
+                post.vaults[who], mid.vaults[who],
+                "a landed withdraw moves nothing more"
+            );
+        }
+        // the refund arrived as balance and went back into the vault: balance - liabilities is fixed
+        self.check_money(&mid, bal1, &trie1, Kind::Neutral);
+    }
+
+    /// `withdraw_token` debits the holding first and forwards the yocto to `mt_transfer`; its
+    /// callback lowers `accounted` on success and re-credits the holding exactly on failure.
+    fn withdraw_token(&mut self, pre: &Snap, who: usize, t: usize, amt: u128, fail: bool) {
+        let (bal0, trie0) = (self.balance, self.trie.clone());
+        let ok = self
+            .call(ACCOUNTS[who], 1, |c| {
+                drop(c.withdraw_token(TOKENS[t].into(), U128(amt)))
+            })
+            .is_ok();
+        assert_eq!(
+            ok,
+            amt <= pre.holdings[who][t],
+            "withdraw_token bounded by the holding"
+        );
+        if ok {
+            self.in_flight[t] += amt;
+        }
+        self.check_money(pre, bal0, &trie0, Kind::Neutral);
+        if !ok {
+            return;
+        }
+        let mid = self.snap();
+        assert_eq!(
+            mid.holdings[who][t],
+            pre.holdings[who][t] - amt,
+            "debited first"
+        );
+        assert_eq!(
+            mid.accounted[t], pre.accounted[t],
+            "accounted waits for the transfer"
+        );
+        let (bal1, trie1) = (self.balance, self.trie.clone());
+        self.results = vec![if fail { None } else { Some(vec![]) }];
+        let landed = self
+            .call(CONTRACT, 0, |c| {
+                c.on_withdraw_token(ACCOUNTS[who].parse().unwrap(), TOKENS[t].into(), U128(amt))
+            })
+            .expect("on_withdraw_token never panics");
+        self.results.clear();
+        assert_eq!(landed, !fail);
+        self.in_flight[t] -= amt;
+        let post = self.snap();
+        if fail {
+            assert_eq!(
+                post.holdings[who][t], pre.holdings[who][t],
+                "a failed transfer re-credits exactly"
+            );
+            assert_eq!(
+                (post.accounted[t], post.outflow_seq),
+                (pre.accounted[t], pre.outflow_seq)
+            );
+        } else {
+            assert_eq!(post.accounted[t], pre.accounted[t] - amt);
+            assert_eq!(
+                post.outflow_seq,
+                pre.outflow_seq + 1,
+                "an outflow moves outflow_seq"
+            );
+            self.intents_bal[t] -= amt;
+        }
+        self.check_money(&mid, bal1, &trie1, Kind::Neutral);
+    }
+
+    /// `sweep_surplus` keeps its yocto; the check forwards one with `mt_transfer` when the surplus
+    /// covers the amount and reserves it in `sweeping`; the transfer's callback releases it. No step
+    /// touches `accounted` or a holding.
+    fn sweep(&mut self, pre: &Snap, t: usize, amt: u128, fail: bool) {
+        let (bal0, trie0) = (self.balance, self.trie.clone());
+        let ok = self
+            .call(OWNER, 1, |c| {
+                drop(c.sweep_surplus(TOKENS[t].into(), OWNER.parse().unwrap(), U128(amt)))
+            })
+            .is_ok();
+        self.check_money(pre, bal0, &trie0, Kind::Exact(ok as i128));
+        if !ok {
+            return;
+        }
+        let free = self.intents_bal[t]
+            .saturating_sub(pre.accounted[t])
+            .saturating_sub(pre.sweeping[t]);
+        let (bal1, trie1, mid) = (self.balance, self.trie.clone(), self.snap());
+        self.results = vec![Some(
+            near_sdk::serde_json::to_vec(&[U128(self.intents_bal[t])]).unwrap(),
+        )];
+        let sent = self
+            .call(CONTRACT, 0, |c| {
+                matches!(
+                    c.on_sweep_check(
+                        TOKENS[t].into(),
+                        OWNER.parse().unwrap(),
+                        U128(amt),
+                        mid.outflow_seq
+                    ),
+                    near_sdk::PromiseOrValue::Promise(_)
+                )
+            })
+            .expect("on_sweep_check never panics");
+        self.results.clear();
+        assert_eq!(
+            sent,
+            amt <= free,
+            "sweep bounded to balance - accounted - sweeping"
+        );
+        self.check_money(&mid, bal1, &trie1, Kind::Exact(-(sent as i128)));
+        let post = self.snap();
+        assert_eq!(
+            post.accounted, pre.accounted,
+            "a sweep never touches accounted"
+        );
+        assert_eq!(
+            post.holdings, pre.holdings,
+            "a sweep never touches a holding"
+        );
+        if !sent {
+            return;
+        }
+        assert_eq!(
+            post.sweeping[t],
+            pre.sweeping[t] + amt,
+            "reserved before the transfer"
+        );
+        let (bal2, trie2) = (self.balance, self.trie.clone());
+        self.results = vec![if fail { None } else { Some(vec![]) }];
+        let done = self
+            .call(CONTRACT, 0, |c| {
+                c.on_sweep_done(TOKENS[t].into(), OWNER.parse().unwrap(), U128(amt))
+            })
+            .expect("on_sweep_done never panics");
+        self.results.clear();
+        assert_eq!(done, !fail);
+        let fin = self.snap();
+        assert_eq!(
+            fin.sweeping[t], pre.sweeping[t],
+            "the reservation is released"
+        );
+        assert_eq!(
+            fin.accounted, pre.accounted,
+            "a sweep never touches accounted"
+        );
+        if !fail {
+            self.intents_bal[t] -= amt;
+            assert_eq!(fin.outflow_seq, pre.outflow_seq + 1);
+        }
+        self.check_money(&post, bal2, &trie2, Kind::Neutral);
     }
 
     /// Property 1 (per operation) and the state-wide properties 2-4.
@@ -1117,7 +1602,6 @@ impl World {
         bal0: u128,
         trie0: &HashMap<Vec<u8>, Vec<u8>>,
         kind: Kind,
-        open_keep: u128,
     ) {
         let post = self.snap();
         let cost = env::storage_byte_cost().as_yoctonear();
@@ -1134,12 +1618,7 @@ impl World {
         match kind {
             Kind::Neutral => assert_eq!(kept, 0, "neutral op changed balance - liabilities"),
             Kind::PaysStorage => assert_eq!(kept, added, "kept {kept} for {added} of new storage"),
-            Kind::Open => {
-                assert!(
-                    kept == open_keep as i128 && kept >= added,
-                    "open_duel kept {kept}, storage {added}"
-                )
-            }
+            Kind::Exact(k) => assert_eq!(kept, k, "kept {kept}, expected {k}"),
         }
 
         // 2. bonds and vaults within what came in minus what went out
@@ -1170,6 +1649,20 @@ impl World {
             assert!(
                 m.spent.0 <= m.allowance.0,
                 "mandate {a}/{w} spent over allowance"
+            );
+        }
+        // 3b. every credited output is someone's holding, and never more than the arena holds
+        for t in 0..2 {
+            let held: u128 = post.holdings.iter().map(|h| h[t]).sum::<u128>() + self.in_flight[t];
+            assert_eq!(
+                held, post.accounted[t],
+                "sum(holdings) + in-flight withdrawals != accounted for {}",
+                TOKENS[t]
+            );
+            assert!(
+                post.accounted[t] + post.sweeping[t] <= self.intents_bal[t],
+                "accounted + sweeping above the intents balance for {}",
+                TOKENS[t]
             );
         }
         // 4. finished duels are frozen; the open counter matches

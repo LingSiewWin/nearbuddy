@@ -12,13 +12,20 @@
 # Logs: /tmp/nearbuddy-night.log (one line per batch), /tmp/nearbuddy-tee-batch<N>.log (runner),
 # /tmp/nearbuddy-spectator-<N>.log, /tmp/nearbuddy-solver.log, /tmp/nearbuddy-resolve-stuck.log.
 # Run it detached: nohup scripts/night-loop.sh --until 0530 > /tmp/nearbuddy-night-driver.log 2>&1 &
+# Stop at the next batch boundary: touch /tmp/nearbuddy-night-loop.stop (the loop leaves it in place; remove it before a
+# restart). SIGINT to a backgrounded bash is ignored, and the next batch starts within a second of the last one.
 set -u
+LAUNCH_CWD=$PWD LAUNCH_ARGS=("$0" "$@") # for the restart line deploy-contract.sh --at-boundary prints
 cd "$(dirname "$0")/.." || exit 1
+. scripts/loop-env.sh
 
-LOG=/tmp/nearbuddy-night.log
-PIDFILE=/tmp/nearbuddy-night-loop.pid
-SOLVER_LOG=/tmp/nearbuddy-solver.log
-STUCK_LOG=/tmp/nearbuddy-resolve-stuck.log
+RUN=${NEARBUDDY_RUN_DIR:-/tmp} # logs, pidfiles and stop files; tests point it at a temp dir
+LOG=$RUN/nearbuddy-night.log
+PIDFILE=$RUN/nearbuddy-night-loop.pid
+CMD_FILE=$RUN/nearbuddy-night-loop.cmd # how to restart this run: pid, cwd, launch env, argv (loop-env.sh)
+STOP_FILE=$RUN/nearbuddy-night-loop.stop # present = finish the running batch, start no other, exit 0
+SOLVER_LOG=$RUN/nearbuddy-solver.log
+STUCK_LOG=$RUN/nearbuddy-resolve-stuck.log
 SOLVER_PORT=${SOLVER_PORT:-4020}
 SPECTATOR_ID=${SPECTATOR_ID:-nearbuddy-solver.testnet}
 SPECTATOR_DELAY_S=100 # the runner registers and opens round 0 first
@@ -85,8 +92,8 @@ if [ "$dry" = 1 ]; then
   echo "+ kill the listener on tcp:$SOLVER_PORT; wait for http://127.0.0.1:$SOLVER_PORT/arena after:"
   show nohup "${solver_cmd[@]}"; echo "  > $SOLVER_LOG"
   echo "+ after ${SPECTATOR_DELAY_S}s, in the background:"
-  show "${spectator_cmd[@]}"; echo "  > /tmp/nearbuddy-spectator-$start_batch.log"
-  show "${runner_cmd[@]}"; echo "  > /tmp/nearbuddy-tee-batch$start_batch.log"
+  show "${spectator_cmd[@]}"; echo "  > $RUN/nearbuddy-spectator-$start_batch.log"
+  show "${runner_cmd[@]}"; echo "  > $RUN/nearbuddy-tee-batch$start_batch.log"
   echo "# then stop the spectator; on a non-zero runner exit also:"
   show "${stuck_cmd[@]}"; echo "  >> $STUCK_LOG"
   echo "+ sleep $BACKOFF_S"
@@ -113,6 +120,12 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'log "night loop stopped by signal"; exit 130' INT TERM
+if [ -e "$STOP_FILE" ]; then # a fresh start with the stop file present runs nothing; say so where the operator looks
+  echo "stop file $STOP_FILE present; remove it to start" >&2
+  log "stop file $STOP_FILE present; remove it to start"
+  exit 0
+fi
+write_loop_cmd "$CMD_FILE" "$LAUNCH_CWD" "${LAUNCH_ARGS[@]}"
 busy=$(other_drivers)
 [ -n "$busy" ] && die "another driver is running (pids $busy); stop it first"
 
@@ -132,6 +145,10 @@ stop_spectator() { [ -n "$spec" ] && kill "$spec" 2>/dev/null; [ -n "$spec" ] &&
 log "night loop pid $$ until $until_hhmm, first #$start_batch: rounds $rounds duel ${duel_s}s variants ${variants:-none} target $target payload $payload_set"
 i=$start_batch
 while [ "$(date +%s)" -lt "$deadline" ]; do
+  if [ -e "$STOP_FILE" ]; then # checked before every batch (and every wait): deploy-contract.sh --at-boundary
+    log "stopping at boundary ($STOP_FILE present), next would be #$i"
+    exit 0
+  fi
   busy=$(other_drivers)
   if [ -n "$busy" ]; then
     log "another driver is running (pids $busy); waiting ${BACKOFF_S}s"
@@ -145,8 +162,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     i=$((i + 1))
     continue
   fi
-  batch_log=/tmp/nearbuddy-tee-batch$i.log
-  (sleep "$SPECTATOR_DELAY_S"; exec "${spectator_cmd[@]}") > "/tmp/nearbuddy-spectator-$i.log" 2>&1 &
+  batch_log=$RUN/nearbuddy-tee-batch$i.log
+  (sleep "$SPECTATOR_DELAY_S"; exec "${spectator_cmd[@]}") > "$RUN/nearbuddy-spectator-$i.log" 2>&1 &
   spec=$!
   "${runner_cmd[@]}" > "$batch_log" 2>&1 &
   runner=$!

@@ -48,13 +48,26 @@ pub(crate) fn price8(p: &OraclePrice) -> u64 {
 /// Signed basis points earned by one intent over the duel. No intent, or one that expired before
 /// `close_at`, scores 0. Integer order matters: multiply before divide, in i128.
 pub(crate) fn pnl_bps(intent: Option<&Intent>, close_at: u64, open: u64, close: u64) -> i64 {
+    require!(open > 0, "bad open price");
     let Some(i) = intent else { return 0 };
     if i.expires_at.0 < close_at {
         return 0;
     }
     let sign: i128 = if i.side == Side::Long { 1 } else { -1 };
     let v = sign * (close as i128 - open as i128) * i.size_bps as i128 / open as i128;
-    v as i64
+    // a 1-unit open price and a u64 close overflow i64: clamp instead of wrapping into a wrong sign
+    v.clamp(i64::MIN as i128, i64::MAX as i128) as i64
+}
+
+impl Contract {
+    /// The intent lock duel `id` was opened under; `intent_lock_ns` for duels opened before
+    /// deploy 15.
+    pub(crate) fn lock_of(&self, id: u64) -> u64 {
+        self.duel_locks
+            .get(&id)
+            .copied()
+            .unwrap_or(self.intent_lock_ns)
+    }
 }
 
 #[near]
@@ -62,9 +75,10 @@ impl Contract {
     /// Pair two registered, idle agents on an oracle asset. Attached deposit must cover the duel's
     /// storage plus `oracle_deposit`; the open price is requested from the oracle in the same call
     /// and lands through `oracle_on_call`. Returns the duel id.
-    /// Caller: owner. Deposit: the duel record's storage plus `oracle_deposit`. Panics:
-    /// "not owner", "consent required", "same agent", "symbol too long", "close_at in the past",
-    /// "duel too short", "duel too long", "agent missing", "in duel", "deposit too small".
+    /// Caller: owner. Deposit: at least the duel record's storage plus `oracle_deposit`; the excess
+    /// is refunded. Panics: "not owner", "consent required", "paused", "set_oracle first",
+    /// "same agent", "symbol too long", "close_at in the past", "duel too short", "duel too long",
+    /// "agent missing", "in duel", "deposit too small".
     #[payable]
     pub fn open_duel(
         &mut self,
@@ -109,6 +123,9 @@ impl Contract {
         symbol: String,
         close_at: U64,
     ) -> U64 {
+        self.not_paused();
+        // a fresh `init` has no duel floor and no lock: a duel then would take intents up to close
+        require!(self.min_duel_ns > 0, "set_oracle first");
         require!(a.0 != b.0, "same agent");
         require!(symbol.len() <= 64, "symbol too long");
         require!(close_at.0 > env::block_timestamp(), "close_at in the past");
@@ -146,16 +163,21 @@ impl Contract {
                 open_price: None,
             },
         );
+        self.duel_locks.insert(id, self.intent_lock_ns);
         self.next_duel += 1;
         self.open_duels += 1;
         self.duels.flush();
         self.agents.flush();
+        self.duel_locks.flush();
         self.agent_duels.flush();
         let cost = storage_cost_since(before) + self.oracle_deposit;
-        require!(
-            env::attached_deposit().as_yoctonear() >= cost,
-            "deposit too small"
-        );
+        let attached = env::attached_deposit().as_yoctonear();
+        require!(attached >= cost, "deposit too small");
+        // the opener pays storage and the oracle deposit, nothing more (red team F3)
+        if attached > cost {
+            let _ = Promise::new(env::predecessor_account_id())
+                .transfer(NearToken::from_yoctonear(attached - cost));
+        }
         let _ = self.ask_oracle(&symbol, format!("open:{id}"));
         U64(id)
     }
@@ -188,17 +210,18 @@ impl Contract {
 
     /// Record an agent-signed intent for an open duel. Anyone may relay it: the signature is what
     /// binds the decision to the agent and the agent's bond pays its storage. Refused inside the
-    /// last `intent_lock_ns` of the duel. A TEE-backed agent must also present the model enclave's
+    /// last `intent_lock_ns` of the duel (the value the duel was opened under). A TEE-backed agent must also present the model enclave's
     /// (kind 2) signature over the completion that produced the decision. The intent must outlive
     /// `close_at` and carry a nonce above the agent's last posted one in this duel, so a relayer
     /// cannot resurface an older decision.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
-    /// "agent_pk length", "proof_hash length", "bad size", "agent missing", "bad tee kind",
+    /// "paused", "agent_pk length", "proof_hash length", "bad size", "agent missing", "bad tee kind",
     /// "tee hash length", "unknown tee signer", "bad tee signature", "proof_hash mismatch",
     /// "proof used", "provider proof required", "tee proof required", "duel missing",
     /// "duel closed", "intent lock", "intent expired", "bad target", "nonce used", "stale nonce",
     /// "bad signature", "bond exhausted"; "commit first" while `commit_reveal` is on.
     pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
+        self.not_paused();
         require!(!self.commit_reveal, "commit first");
         self.accept_intent(&signed, tee, true);
     }
@@ -208,7 +231,7 @@ impl Contract {
     /// signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
     /// should be 32 random bytes: the intent space is small enough to brute-force without it.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
-    /// "agent_pk length", "commitment length", "bad commit signature", "duel missing",
+    /// "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
     /// "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
     /// "bond exhausted".
     pub fn commit_intent(
@@ -218,6 +241,7 @@ impl Contract {
         commitment: Base64VecU8,
         sig: Base64VecU8,
     ) {
+        self.not_paused();
         require!(agent_pk.0.len() == 32, "agent_pk length");
         let hash: [u8; 32] = commitment
             .0
@@ -235,7 +259,10 @@ impl Contract {
         let duel = self.duels.get(&duel_id.0).expect("duel missing");
         let now = env::block_timestamp();
         require!(!duel.resolved && now < duel.close_at.0, "duel closed");
-        require!(now + self.intent_lock_ns < duel.close_at.0, "intent lock");
+        require!(
+            now + self.lock_of(duel_id.0) < duel.close_at.0,
+            "intent lock"
+        );
         require!(
             agent_pk.0 == duel.a.0 || agent_pk.0 == duel.b.0,
             "bad target"
@@ -278,7 +305,10 @@ impl Contract {
     ) {
         let i = &signed.intent;
         let key = commit_key(i.duel_id.0, &i.agent_pk.0);
-        let (hash, _) = *self.commitments.get(&key).expect("no commitment");
+        let (hash, _) = *self
+            .commitments
+            .get(&key)
+            .unwrap_or_else(|| env::panic_str("no commitment"));
         let mut preimage = intent_message(i);
         preimage.extend_from_slice(&salt.0);
         require!(env::sha256_array(&preimage) == hash, "commitment mismatch");
@@ -317,13 +347,14 @@ impl Contract {
                 0
             }
         };
+        let lock_ns = self.lock_of(i.duel_id.0);
         let duel = self.duels.get_mut(&i.duel_id.0).expect("duel missing");
         require!(
             !duel.resolved && env::block_timestamp() < duel.close_at.0,
             "duel closed"
         );
         require!(
-            !lock || env::block_timestamp() + self.intent_lock_ns < duel.close_at.0,
+            !lock || env::block_timestamp() + lock_ns < duel.close_at.0,
             "intent lock"
         );
         require!(i.expires_at.0 >= duel.close_at.0, "intent expired");
@@ -386,9 +417,11 @@ impl Contract {
     }
 
     /// Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver
-    /// delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool.
+    /// delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool;
+    /// when the payer owns either agent it goes to `owner_fees` instead and the injection earns no
+    /// shield, so an owner cannot buy shield or recycle chaos through its own pairing.
     /// Caller: anyone (spectator). Deposit: at least `min_chaos_deposit` and above the record's
-    /// storage. Panics: "chaos deposit too small", "payload_hash length", "kind too long",
+    /// storage. Panics: "paused", "chaos deposit too small", "payload_hash length", "kind too long",
     /// "duel missing", "duel closed", "bad target", "chaos full".
     #[payable]
     pub fn inject_chaos(
@@ -398,11 +431,20 @@ impl Contract {
         kind: String,
         payload_hash: Base64VecU8,
     ) {
+        self.not_paused();
         let before = env::storage_usage();
         let deposit = env::attached_deposit().as_yoctonear();
         require!(deposit >= self.min_chaos_deposit, "chaos deposit too small");
         require!(payload_hash.0.len() == 32, "payload_hash length");
         require!(kind.len() <= 32, "kind too long");
+        // chaos paid by either agent's owner: no shield for it, and its deposit is a fee, not pool
+        let payer = env::predecessor_account_id();
+        let own = {
+            let d = self.duels.get(&duel_id.0).expect("duel missing");
+            [&d.a.0, &d.b.0]
+                .iter()
+                .any(|pk| self.agents.get(*pk).is_some_and(|a| a.owner == payer))
+        };
         let duel = self.duels.get_mut(&duel_id.0).expect("duel missing");
         require!(
             !duel.resolved && env::block_timestamp() < duel.close_at.0,
@@ -410,17 +452,27 @@ impl Contract {
         );
         require!(target.0 == duel.a.0 || target.0 == duel.b.0, "bad target");
         require!(duel.injections.len() < MAX_INJECTIONS, "chaos full");
+        let index = duel.injections.len();
         duel.injections.push(Injection {
             kind,
             payload_hash,
             target,
             block: U64(env::block_height()),
         });
+        if own {
+            let bits = self.self_chaos.get(&duel_id.0).copied().unwrap_or(0);
+            self.self_chaos.insert(duel_id.0, bits | (1 << index));
+        }
         // flush so the storage delta is measurable before charging
         self.duels.flush();
+        self.self_chaos.flush();
         let cost = storage_cost_since(before);
         require!(deposit > cost, "chaos deposit too small");
-        self.duels.get_mut(&duel_id.0).expect("duel missing").pool.0 += deposit - cost;
+        if own {
+            self.owner_fees += deposit - cost;
+        } else {
+            self.duels.get_mut(&duel_id.0).expect("duel missing").pool.0 += deposit - cost;
+        }
     }
 
     /// After `close_at`, anyone asks the oracle for the close price; the answer arrives in
@@ -523,6 +575,7 @@ impl Contract {
         );
         d.resolved = true;
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
+        self.self_chaos.remove(&duel_id.0);
         d.pool = U128(0);
         d.injections = vec![];
         d.outcome = Some(Outcome {
@@ -562,6 +615,7 @@ impl Contract {
         let (pk_a, pk_b) = (duel.a.0.clone(), duel.b.0.clone());
         let mut pool = duel.pool.0;
         let injections = std::mem::take(&mut duel.injections);
+        let self_paid = self.self_chaos.remove(&id).unwrap_or(0);
         duel.resolved = true;
         duel.pool = U128(0);
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
@@ -581,7 +635,9 @@ impl Contract {
         let mut taken = [0u128; 2];
         for (side, (pk, pnl)) in [(&pk_a, pnl_a), (&pk_b, pnl_b)].into_iter().enumerate() {
             let a = self.agents.get_mut(pk).expect("agent missing");
-            a.alpha_bps += if nr[side] { pnl.min(0) } else { pnl };
+            a.alpha_bps = a
+                .alpha_bps
+                .saturating_add(if nr[side] { pnl.min(0) } else { pnl });
             a.in_duel = None;
             if nr[side] {
                 let s = a.bond.0 * self.no_reveal_bps as u128 / 10_000;
@@ -625,7 +681,17 @@ impl Contract {
             pool += slashed;
             outcome.winner = Some(Base64VecU8(winner.clone()));
             outcome.slashed = U128(slashed);
-            let survived = injections.iter().filter(|i| i.target.0 == *winner).count() as u32;
+            // shield counts chaos a third party paid for and the winner outlasted on the price: none
+            // for chaos either owner paid, none when the win is a forfeit (red team F2)
+            let survived = if nr == [false; 2] {
+                injections
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, j)| j.target.0 == *winner && self_paid & (1 << i) == 0)
+                    .count() as u32
+            } else {
+                0
+            };
             let w = self.agents.get_mut(winner).unwrap();
             w.bond.0 += pool;
             w.shield += survived;
