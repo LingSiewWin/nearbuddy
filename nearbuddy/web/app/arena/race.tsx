@@ -4,7 +4,7 @@
 import type { ArenaEvent } from "../api/tape";
 import type { Tick } from "../lib/live";
 import { agentHref, closedAgo, mmss, near, pct, sideWord, stake, tone, usd, who } from "../ui/format";
-import { duelEvents, type Focus, markPct, openOf } from "./model";
+import { type Attack, duelEvents, type Focus, markPct, openOf } from "./model";
 
 const sideTone = (f: Focus) => {
   const a = tone(f.a.model);
@@ -33,11 +33,14 @@ export function Headline({
   price,
   open,
   now,
+  attack = null,
 }: {
   f: Focus;
   price: number | null;
   open: number | null;
   now: number;
+  /** the newest paid attack in this live duel, from the tape */
+  attack?: Attack | null;
 }) {
   const t = sideTone(f);
   const A = <span className={`who ${t.a}`}>{who(f.a.model)}</span>;
@@ -130,6 +133,27 @@ export function Headline({
       </>
     ) : (
       <>Both ended with the same score, so nobody paid. The next duel usually opens within a minute.</>
+    );
+  }
+  // the duel's newest paid lie, said in the hero so a newcomer sees the point of the page while it plays out
+  if (f.live && attack) {
+    const hitA = attack.target === f.a.agent;
+    const target = hitA ? f.a : f.b;
+    const ago = Math.max(0, Math.round((now - attack.at) / 1000));
+    const text = attack.text && attack.text.length > 80 ? `${attack.text.slice(0, 78)}…` : attack.text;
+    sub = (
+      <>
+        {sub}{" "}
+        <span className="hit">
+          {hitA ? A : B} was fed a paid fake headline {ago < 60 ? `${ago} s` : `${Math.round(ago / 60)} min`} ago
+          {text ? <>: “{text}”</> : ""}.{" "}
+          {target.sealed
+            ? "Its answer is sealed until the last minute."
+            : target.side
+              ? `Its call now: ${sideWord(target.side)}.`
+              : "It has not answered yet."}
+        </span>
+      </>
     );
   }
   return (

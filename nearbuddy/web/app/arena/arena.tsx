@@ -11,7 +11,7 @@ import { useEvents, useNow, usePrice } from "../lib/live";
 import { DrawerProvider } from "../ui/drawer";
 import { ARENA_ID, acctUrl, CHAIN, duelHref, ORACLE_ID, TAMPER_TX, txUrl, who, YOU } from "../ui/format";
 import { Machine } from "../ui/machine";
-import { focusOf, latestStory, openOf, withTape } from "./model";
+import { type Attack, focusOf, latestStory, openOf, withTape } from "./model";
 import { Headline, Race } from "./race";
 import { Join, News, Squares, Standings } from "./sections";
 import { Tape, TapeMachine } from "./tape";
@@ -141,7 +141,17 @@ export default function Arena({ initial }: { initial: Initial }) {
           <div className="h">
             {f ? (
               <>
-                <Headline f={f} price={price} open={f ? openOf(f, ticks) : null} now={now} />
+                <Headline
+                  f={f}
+                  price={price}
+                  open={f ? openOf(f, ticks) : null}
+                  now={now}
+                  attack={
+                    f.live
+                      ? (events.find((e): e is Attack => e.kind === "attack" && e.ok && e.duel === f.duel) ?? null)
+                      : null
+                  }
+                />
                 {s.also_live.length ? (
                   <p className="fine also">
                     {f.live ? "Also live, and on the tape:" : "Live now, on the tape:"}{" "}
