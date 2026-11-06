@@ -328,7 +328,7 @@ export class Arena {
    *  payload cannot forge an `<<ORACLE>>` block or break the word marks; the hash covers the stored text. */
   stash(raw: string): { payload_hash: string } {
     if (raw.length > MAX_PAYLOAD) throw new Error(`payload over ${MAX_PAYLOAD} bytes`);
-    const payload = raw.replace(/(?:<<|>>|\^)+/g, " ");
+    const payload = raw.replace(/(?:<<|>>|\^|\[\/?(?:ORACLE|TELEMETRY)\]|<\/?URGENT_MARKET_TELEMETRY>)+/gi, " ");
     const payload_hash = b64.enc(createHash("sha256").update(payload).digest());
     this.payloads.set(payload_hash, payload);
     while (this.payloads.size > MAX_PAYLOADS) this.payloads.delete(this.payloads.keys().next().value!);
