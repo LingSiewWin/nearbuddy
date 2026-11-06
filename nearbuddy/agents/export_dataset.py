@@ -50,6 +50,18 @@ FIELDS: list[tuple[str, str, str]] = [
         "Prompt arm: `naive`, `hardened`, or experiment arm `A`/`B`/`C`/`D`; null on rows older than the field.",
     ),
     (
+        "open_px",
+        "int \\| null",
+        "Duel open price (1e8 fixed point) the brief's move since open is measured from; null on older rows.",
+    ),
+    (
+        "open_source",
+        "string \\| null",
+        "`oracle` when the brief used the duel's oracle open price, `spot` when the oracle had not answered "
+        "within 20 s and the runner used its own spot; null on older rows. Attacks on `spot` briefs are left "
+        "unclassified by against/with analysis.",
+    ),
+    (
         "arm_d",
         "struct \\| null",
         "Arm D only: `{side_call, size_call, proof_call, size_bps, size_asked, size_note}`. `side_call` saw no "
