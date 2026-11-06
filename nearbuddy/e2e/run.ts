@@ -10,8 +10,10 @@
 //     near-sandbox crate downloads into arena/target/debug/build/near-sandbox-*/out/.near/ the first time
 //     `cd arena && cargo test --test test_arena_sandbox -- --ignored` runs.
 //   - the runner venv: E2E_PYTHON, else agents/.venv/bin/python (see README), else python3 with requirements.txt.
-//   - internet for the runner's Coinbase spot price and the solver's dry 1Click quote.
-// Not in CI (sandbox download, ~4 minutes). Everything it writes goes to a temp dir printed at the start; the
+//   - internet for the runner's Coinbase spot price and the solver's dry 1Click quote, unless E2E_OFFLINE=1: then
+//     a local stand-in serves both (NEARBUDDY_COINBASE_URL for the runner, ONECLICK_URL for the solver) and the
+//     follower check requires a quote. CI (.github/workflows/e2e-nightly.yml) runs offline; local runs stay live.
+// Not in the per-push CI (sandbox download, ~4 minutes): nightly and on demand. Everything it writes goes to a temp dir printed at the start; the
 // runner's dataset goes there through NEARBUDDY_DATA.
 //
 // Scenarios:
@@ -27,6 +29,7 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer as httpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,6 +57,61 @@ const MIN_DUEL_S = 20;
 const LOCK_S = 10; // the most set_oracle allows for a 20 s floor; the final reveal must land inside it
 const ORACLE_DEPOSIT = 20n * MILLI;
 const FEE_BPS = 50n;
+const OFFLINE = process.env.E2E_OFFLINE === "1";
+const SPOT_USD = 3.66;
+
+/** E2E_OFFLINE stand-in for the two third parties: Coinbase spot (GET /v2/prices/<BASE>-USD/spot) and the 1Click
+ *  dry quote (POST /v0/quote, answered at SPOT_USD per NEAR whichever way the swap goes). */
+function offlineThirdParties(): Promise<string> {
+  const decimals = (asset: string) => (asset === "nep141:wrap.near" ? 24 : 6);
+  const fmt = (raw: bigint, d: number) => (Number(raw) / 10 ** d).toString();
+  const srv = httpServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const send = (code: number, v: unknown) => {
+        res.writeHead(code, { "content-type": "application/json" });
+        res.end(JSON.stringify(v));
+      };
+      if (req.method === "GET" && /^\/v2\/prices\/[A-Z]+-USD\/spot$/.test(req.url ?? ""))
+        return send(200, { data: { amount: SPOT_USD.toFixed(4), base: "NEAR", currency: "USD" } });
+      if (req.method === "POST" && req.url === "/v0/quote") {
+        const q = JSON.parse(body) as {
+          amount: string;
+          originAsset: string;
+          destinationAsset: string;
+          deadline: string;
+        };
+        const [din, dout] = [decimals(q.originAsset), decimals(q.destinationAsset)];
+        const amountIn = BigInt(q.amount);
+        const usdIn = din === 24 ? (Number(amountIn) / 1e24) * SPOT_USD : Number(amountIn) / 1e6;
+        const out = BigInt(Math.floor((dout === 24 ? usdIn / SPOT_USD : usdIn) * 10 ** dout));
+        const now = new Date().toISOString();
+        return send(200, {
+          timestamp: now,
+          signature: "e2e-offline",
+          quoteRequest: q,
+          quote: {
+            amountIn: q.amount,
+            amountInFormatted: fmt(amountIn, din),
+            amountInUsd: usdIn.toFixed(4),
+            minAmountIn: q.amount,
+            amountOut: out.toString(),
+            amountOutFormatted: fmt(out, dout),
+            amountOutUsd: usdIn.toFixed(4),
+            minAmountOut: ((out * 99n) / 100n).toString(),
+            deadline: q.deadline,
+            timestamp: now,
+          },
+        });
+      }
+      send(404, { error: `offline stand-in has no ${req.method} ${req.url}` });
+    });
+  });
+  return new Promise((ok) =>
+    srv.listen(0, "127.0.0.1", () => ok(`http://127.0.0.1:${(srv.address() as { port: number }).port}`)),
+  );
+}
 
 // biome-ignore lint/suspicious/noExplicitAny: RPC and solver JSON are read untyped; the checks below are the schema
 type J = any;
@@ -376,6 +434,8 @@ async function main() {
   void oracle.run();
 
   // 4. solver
+  const offline = OFFLINE ? await offlineThirdParties() : "";
+  if (offline) log(`E2E_OFFLINE: Coinbase spot and 1Click quotes from ${offline}`);
   const solverPort = await freePort();
   const SOLVER_URL = `http://127.0.0.1:${solverPort}`;
   const SECRET = randomBytes(16).toString("hex");
@@ -396,6 +456,7 @@ async function main() {
     ARENA_PAYLOADS: join(TMP, "arena-payloads.json"),
     ARENA_HISTORY: join(TMP, "arena-history.json"),
     PAIR_EVERY_S: "0",
+    ...(offline ? { ONECLICK_URL: offline } : {}),
   });
   await until("solver", async () => (await fetch(`${SOLVER_URL}/pairing`)).ok, 30_000);
   log(`solver on ${SOLVER_URL}`);
@@ -420,6 +481,7 @@ async function main() {
     AGENT_KEY_B: "",
     NEARBUDDY_DATA: data, // never the real agents/data/decisions.jsonl
     PYTHONUNBUFFERED: "1",
+    ...(offline ? { NEARBUDDY_COINBASE_URL: offline, PYTH_API_KEY: "" } : {}),
   });
   const runnerArgs = (duelS: number) => [
     join(ROOT, "agents/runner.py"),
@@ -671,7 +733,7 @@ async function main() {
     check(
       sc,
       "follower quoted at reveal",
-      !!q,
+      !!q && (!OFFLINE || !!q.quote), // live, a 1Click outage still counts as quoted (the error is the entry)
       q
         ? q.quote
           ? `dry quote out ${q.quote_out}`
