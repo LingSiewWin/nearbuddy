@@ -3,14 +3,27 @@
 // ponytail: scan the tail, add an index in the contract when agents outgrow it). Cached 60 s per agent;
 // pollers share one in-flight scan, and a stale record beats an error while the RPC is throttled.
 // The solver's GET /execution (optional) adds the priced fills of this agent's followers.
+// `agentSummary()` is the v1 shape: human units, the record over those duels, followers' mandates, how the
+// agent met attacks and its latest decisions with reasoning from the published dataset.
 import type { Fill } from "../cells";
-import type { Agent, Duel, Mandate } from "./arena";
+import { type Agent, type Duel, type Mandate, ms, nearOf } from "./arena";
+import { getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
 
 const SCAN = Number(process.env.AGENT_SCAN ?? 40);
 const TTL = 60_000;
 const view = viewOn(ARENA);
 export const PK_RE = /^[A-Za-z0-9+/]{43}=$/; // 32 bytes, standard base64
+
+/** A key from a URL path segment (percent-encoded or not), or null when it is not a 32-byte base64 key. */
+export function parsePk(raw: string): string | null {
+  try {
+    const pk = decodeURIComponent(raw);
+    return PK_RE.test(pk) ? pk : null;
+  } catch {
+    return null;
+  }
+}
 
 const cache = new Map<string, { at: number; rec: AgentRecord }>();
 const inflight = new Map<string, Promise<AgentRecord>>();
@@ -36,15 +49,15 @@ async function build(pk: string) {
   const execution = fills?.filter((f) => mine.has(f.follower)) ?? null;
   const n = Number(config.next_duel);
   // deploy 10 keeps a per-agent duel index (newest first); agents whose index is empty (duels before the
-  // index existed) fall back to scanning the tail of all duels.
+  // index existed) fall back to scanning the tail of all duels. An unregistered key scans nothing.
   let ids: string[] = [];
   try {
-    ids = ((await view("agent_duels", { agent_pk: pk, from: 0, limit: SCAN })) as string[]).map(String);
+    if (agent) ids = ((await view("agent_duels", { agent_pk: pk, from: 0, limit: SCAN })) as string[]).map(String);
   } catch {
     /* view missing before deploy 10 */
   }
   const indexed = ids.length > 0;
-  if (!indexed) ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => String(n - 1 - i));
+  if (agent && !indexed) ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => String(n - 1 - i));
   const all = (await chunked(ids, 8, (id) => view("get_duel", { duel_id: id }))) as (Duel | null)[];
   const duels = all
     .filter((d): d is Duel => !!d && (d.a === pk || d.b === pk))
@@ -118,3 +131,53 @@ export async function agentRecord(pk: string): Promise<AgentRecord> {
     throw e;
   }
 }
+
+// ---------- v1: human units ----------
+export async function agentSummary(pk: string) {
+  const [r, rows] = await Promise.all([agentRecord(pk), getDecisions()]);
+  const a = r.agent;
+  if (!a) return null;
+  const mine = rows.filter((d) => d.agent === pk);
+  const attacked = mine.filter((d) => d.attack);
+  const done = r.duels.filter((d) => d.result !== "open");
+  const count = (x: string) => done.filter((d) => d.result === x).length;
+  return {
+    at: r.at,
+    network: "testnet",
+    contract: r.contract,
+    agent: a.pk,
+    model: a.model_id,
+    owner: a.owner,
+    prompt: mine.at(-1)?.arm ?? null,
+    verified: a.tee,
+    return_pct: a.alpha_bps / 100,
+    bond_near: nearOf(a.bond),
+    in_duel: a.in_duel == null ? null : Number(a.in_duel),
+    record: { won: count("win"), lost: count("loss"), tied: count("tie"), window: done.length },
+    attacks: {
+      faced: attacked.length,
+      fell: attacked.filter((d) => d.verdict === "fell").length,
+      spotted: attacked.filter((d) => d.verdict === "spotted").length,
+    },
+    followers: r.followers.map(([account, m]) => ({
+      account,
+      cap_near: nearOf(m.per_tx_cap),
+      spent_near: nearOf(m.spent),
+      allowance_near: nearOf(m.allowance),
+      revoked: m.revoked,
+      expires_at: ms(m.expires_at),
+    })),
+    duels: r.duels.map((d) => ({
+      duel: Number(d.id),
+      closed_at: ms(d.close_at), // scheduled close while the result is still open
+      opponent: d.opponent,
+      side: d.side,
+      size_pct: d.size_bps == null ? null : d.size_bps / 100,
+      return_pct: d.pnl == null ? null : d.pnl / 100,
+      result: d.result,
+      attacks: d.attacks,
+    })),
+    decisions: mine.slice(-20).reverse(),
+  };
+}
+export type AgentSummary = NonNullable<Awaited<ReturnType<typeof agentSummary>>>;
