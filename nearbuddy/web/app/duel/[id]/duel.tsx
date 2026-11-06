@@ -7,6 +7,7 @@ import {
   type CommitConfig,
   commitCells,
   proven as hasProof,
+  kindCell,
   type Opened,
   pairingCells,
   revealCell,
@@ -366,7 +367,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                 // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
                 <span key={k}>
                   {rowx(k ? "" : "attacks", [
-                    j.kind.padEnd(14),
+                    kindCell(j.kind),
                     " → ",
                     {
                       t: `${tag(j.target)} ${name(j.target)}`.slice(0, 30),

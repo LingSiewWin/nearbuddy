@@ -238,6 +238,56 @@ test("duel: deploy 13 data (no commit fields, no get_no_reveal) renders the side
   await expect(page.locator("body")).toContainText("this contract predates consented pairing");
 });
 
+// The spectator's kinds ("fake_news/against/-57.7", 22-26 chars) in the attack rows of a running duel: the kind
+// column stays fixed, the full kind is on hover, and every line of the box keeps the page width W = 112.
+const attacked = {
+  ...duel,
+  resolved: false,
+  close_at: NS(now + 120_000),
+  outcome: null,
+  last_intent_b: null,
+  injections: [
+    { kind: "fake_news/against/-57.7", payload_hash: PROOF, target: PK_B, block: "245678901" },
+    { kind: "fake_news/flat/no_open", payload_hash: ZERO, target: PK_A, block: "245678911" },
+    { kind: "fake_news", payload_hash: ZERO, target: PK_B, block: "245678921" },
+  ],
+};
+const attackLines = async (page: Page) =>
+  (await page.locator("pre").allTextContents())
+    .join("\n")
+    .split("\n")
+    .filter((l) => l.includes("block 24567"));
+
+for (const [name, path] of [
+  ["arena", "/arena"],
+  ["duel", "/duel/411"],
+] as const)
+  test(`${name}: spectator kinds fit the attack rows`, async ({ page }) => {
+    await stub(page, "arena", { ...arena(false), duels: [attacked] });
+    await stub(page, "events", events({ duel_id: "411", method: "open_duel_consented", tx: OPEN_TX, at_ms: now - 360_000 }));
+    await stub(page, "duel", {
+      at: now,
+      rpc: "https://fixture.rpc",
+      contract: "arena.nearbuddy-solver.testnet",
+      oracle: "price-oracle.testnet",
+      config: { next_duel: "412", ...commitOn },
+      no_reveal: [false, false],
+      duel: attacked,
+      a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+      b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
+    });
+    await page.goto(path);
+    await expect(page.locator('span[title="fake_news/against/-57.7"]')).toHaveText(/^against -57\.7\s*$/);
+    await expect(page.locator('span[title="fake_news/flat/no_open"]')).toHaveText(/^flat no_open\s*$/);
+    const lines = await attackLines(page);
+    expect(lines).toHaveLength(3);
+    ["245678901", "245678911", "245678921"].forEach((block, i) => {
+      expect(lines[i]).toHaveLength(112); // nothing pushed past the right border
+      expect(lines[i]).toContain(`block ${block}`); // the row's tail is still inside it
+    });
+    await shot(page, `kinds-${name}`);
+  });
+
 test("duel: commit and reveal times per side from the contract's events", async ({ page }) => {
   const [cA, rA, cB] = [now - 300_000, now - 240_000, now - 290_000];
   await stub(

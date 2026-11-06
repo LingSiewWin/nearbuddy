@@ -266,3 +266,15 @@ export const pairCells = (p: Pair, model: (pk: string) => string, scanned: numbe
   { t: model(p.b).slice(0, 26), href: agentHref(p.b), title: p.b },
   { t: `  #${p.first}-#${p.last} · ${p.n} of last ${scanned ?? "?"}`, c: "dim" },
 ];
+
+/** Columns for an injection's `kind` in the attack rows. */
+export const KIND_W = 15;
+/** An injection's on-chain `kind` in `width` columns. The spectator writes "fake_news/<against|flat>/<bps|no_open>"
+ *  (packages/demo/src/spectator.ts): shown as "against -57.7" or "flat no_open", the full kind on hover. An older
+ *  plain kind ("fake_news") shows as is. A longer label is cut with "…", so the row keeps its columns. */
+export const kindCell = (kind: string, width = KIND_W): Cell => {
+  const [base, mode, move] = kind.split("/");
+  const label = mode ? `${mode} ${move ?? ""}`.trimEnd() : (base ?? "");
+  const t = label.length > width ? `${label.slice(0, width - 1)}…` : label.padEnd(width);
+  return mode ? { t, title: kind } : t;
+};

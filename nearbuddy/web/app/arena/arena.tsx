@@ -11,6 +11,7 @@ import {
   type FollowerQuote,
   fillCells,
   isStubModel,
+  kindCell,
   lastFills,
   legs,
   type Pair,
@@ -448,7 +449,7 @@ export default function Arena() {
                   // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
                   <span key={k}>
                     {rowx(k ? "" : "attacks", [
-                      j.kind.padEnd(12),
+                      kindCell(j.kind),
                       " → ",
                       {
                         t: `${j.target === d.a ? "A" : "B"} ${(agent(j.target)?.model_id ?? short(j.target, 8)).slice(0, 24)}`,
