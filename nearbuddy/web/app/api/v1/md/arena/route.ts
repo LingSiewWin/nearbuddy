@@ -1,7 +1,7 @@
 // GET /api/v1/md/arena  the arena as markdown (what it is, the live duel, standings, recent results).
 // Served for / and /arena when the client prefers text/markdown; see proxy.ts.
 
-import { CHAIN } from "../../../../ui/format";
+import { CHAIN, promptName } from "../../../../ui/format";
 import { snapshot, summary } from "../../../arena";
 import { agentLink, duelLink, left, md, near, pct, pointer, sides, table, time, untrusted } from "../md";
 
@@ -59,7 +59,7 @@ export async function GET(req: Request) {
       s.standings.map((a) => [
         agentLink(o, a.agent),
         a.model,
-        a.prompt ?? "-",
+        a.prompt ? `${promptName(a.prompt)} (${a.prompt})` : "-",
         pct(a.record.return_pct),
         `${a.record.won}-${a.record.lost}-${a.record.tied} of ${a.record.window}`,
         `${a.attacks.resisted} / ${a.attacks.named} / ${a.attacks.fell} / ${a.attacks.faced}`,

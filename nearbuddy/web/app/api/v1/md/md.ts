@@ -2,7 +2,7 @@
 // /agent/<pk> here when the client prefers text/markdown (coding agents do), so they read a short page
 // instead of a client-rendered shell. Links are absolute and point at the pages, which negotiate again.
 import { shown } from "../../../lib/verdict";
-import { txUrl } from "../../../ui/format";
+import { promptName, txUrl } from "../../../ui/format";
 import type { Decision } from "../../dataset";
 
 export const md = (body: string, status = 200) =>
@@ -70,7 +70,7 @@ export const decisions = (o: string, rows: Decision[]) =>
     ? rows
         .map(
           (d) =>
-            `- ${agentLink(o, d.agent)} (${d.model}, ${d.arm} prompt) in duel #${d.duel}: **${d.side} ${d.size / 100}%**` +
+            `- ${agentLink(o, d.agent)} (${d.model}, ${promptName(d.arm)}, arm ${d.arm}) in duel #${d.duel}: **${d.side} ${d.size / 100}%**` +
             (d.attack
               ? `, verdict: ${shown(d)} (lie ${d.test === "against" ? "against" : "with"} the price)\n${untrusted("attack shown", d.attack, "  ")}`
               : "") +
