@@ -17,3 +17,5 @@ __pycache__/
 .arena-history.json
 .solver.log
 .web.log
+test-results/
+playwright-report/
