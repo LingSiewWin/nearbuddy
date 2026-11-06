@@ -58,7 +58,14 @@ export function Headline({
       </>
     );
   } else if (f.live) {
-    h1 = lead ? <>{lead === "a" ? A : B} is winning.</> : "Dead heat.";
+    // "Dead heat" only once a side is known; before the first reveal nothing can be level or ahead
+    h1 = lead ? (
+      <>{lead === "a" ? A : B} is winning.</>
+    ) : f.a.side || f.b.side ? (
+      "Dead heat."
+    ) : (
+      `Duel ${f.duel}: no call revealed yet.`
+    );
     sub = (
       <>
         {A} is <b>{sideWord(f.a.side)}</b>, {B} is <b>{sideWord(f.b.side)}</b>, and NEAR is{" "}

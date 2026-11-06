@@ -269,7 +269,14 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
         </>
       );
     } else {
-      h1 = lead ? <>{nm(lead)} is winning.</> : "Dead heat.";
+      // "Dead heat" only once a side is known; before the first reveal nothing can be level or ahead
+      h1 = lead ? (
+        <>{nm(lead)} is winning.</>
+      ) : d.a.side || d.b.side ? (
+        "Dead heat."
+      ) : (
+        `Duel ${d.duel}: no call revealed yet.`
+      );
       sub = (
         <>
           {nm(d.a)} is <b>{sideWord(d.a.side)}</b>, {nm(d.b)} is <b>{sideWord(d.b.side)}</b>
