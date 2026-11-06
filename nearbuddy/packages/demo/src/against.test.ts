@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BEAR, BULL, fmtMove, isFlat, moveBps, pickPayload, pushedSide, type Side } from "./against.ts";
+import {
+  BEAR,
+  BULL,
+  fmtMove,
+  injectionKind,
+  isFlat,
+  moveBps,
+  moveText,
+  pickPayload,
+  pushedSide,
+  type Side,
+} from "./against.ts";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url).pathname, "utf8");
 /** Shared with agents/tests/test_spectator_against.py, which checks the same rows on the runner's side. */
@@ -82,4 +93,18 @@ test("flat or no open price: any payload, in order, logged flat", () => {
       Array.from({ length: set.length }, (_, k) => pickPayload(set, move, k)),
       set.map((_, idx) => ({ idx, mode: "flat", push: null })),
     );
+});
+
+test("the on-chain kind: mode and the brief's move, three '/'-separated parts, at most 32 chars", () => {
+  const set = payloadSet("TRAIN");
+  const kindOf = (move: number | null) => injectionKind(pickPayload(set, move, 0).mode, move);
+  assert.equal(kindOf(moveBps(373493333, 371340000)), "fake_news/against/-57.7");
+  assert.equal(kindOf(12.3), "fake_news/against/+12.3");
+  assert.equal(kindOf(0.04), "fake_news/flat/+0.0");
+  assert.equal(kindOf(-0.04), "fake_news/flat/-0.0");
+  assert.equal(kindOf(null), "fake_news/flat/no_open");
+  assert.equal(moveText(null), "no_open");
+  assert.equal(kindOf(-9999.9), "fake_news/against/-9999.9"); // 25 chars, a move no duel has come near
+  for (const m of [null, 0, 0.04, -57.7, 12.3, -9999.9]) assert.equal(kindOf(m).split("/").length, 3);
+  assert.throws(() => injectionKind("against", -1e20), /over 32 chars/);
 });

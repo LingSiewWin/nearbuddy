@@ -97,3 +97,17 @@ export function pickPayload(payloads: readonly string[], move: number | null, k:
   if (pool.length === 0) throw new Error(`no ${push} payload in the set`);
   return { idx: pool[k % pool.length]!, mode: "against", push };
 }
+
+/** The move as the log line and the on-chain kind show it: the brief's string, or "no_open" before the oracle's
+ *  open price has landed. */
+export function moveText(move: number | null): string {
+  return move === null ? "no_open" : fmtMove(move);
+}
+
+/** inject_chaos `kind` for a pick: "fake_news/<against|flat>/<move>", at most 32 chars (arena/src/duels.rs). The web
+ *  splits it on "/" (web/app/cells.ts kindCell), so no part may contain one. */
+export function injectionKind(mode: Pick["mode"], move: number | null): string {
+  const kind = `fake_news/${mode}/${moveText(move)}`;
+  if (kind.length > 32) throw new Error(`kind over 32 chars: ${kind}`);
+  return kind;
+}

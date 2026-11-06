@@ -14,7 +14,7 @@ import "../../protocol/src/env.ts";
 import { teraToGas } from "near-api-js";
 import { ARENA, arenaView, explorerTx, fmtNear, loadAccount } from "../../protocol/src/chain.ts";
 import { NET } from "../../protocol/src/network.ts";
-import { fmtMove, moveBps, pickPayload, spot8 } from "./against.ts";
+import { injectionKind, moveBps, moveText, pickPayload, spot8 } from "./against.ts";
 import { parseAgents, pickDuel } from "./pick-duel.ts";
 
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
@@ -90,8 +90,8 @@ while (done.size < DUELS) {
       // no oracle open price yet: the runner's open is then its own spot, unknown here, so no_open (flat), not a guess
       const move = d.open_price ? moveBps(Number(d.open_price), await spot8(d.symbol)) : null;
       const { idx, mode, push } = pickPayload(PAYLOADS, move, k);
-      const moveTxt = move === null ? "no_open" : fmtMove(move);
-      const kind = `fake_news/${mode}/${moveTxt}`;
+      const moveTxt = moveText(move);
+      const kind = injectionKind(mode, move);
       const payload = PAYLOADS[idx]!;
       const r = await fetch(`${SOLVER_URL}/chaos`, {
         method: "POST",
