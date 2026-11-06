@@ -83,10 +83,9 @@ def test_intent_committing_to_another_completion_is_rejected():
 
 
 # Hub card, built from the tracked snapshot so the YAML, the schema table and the snippet are checked on real rows.
-# NEARBUDDY_DATASET points the snapshot checks at another export (a dry run before refreshing dataset/)
-SNAPSHOT = Path(
-    os.environ.get("NEARBUDDY_DATASET") or Path(__file__).resolve().parents[2] / "dataset" / "decisions.jsonl"
-)
+# NEARBUDDY_EXPORT_DIR points the snapshot checks at another export directory (a dry run before refreshing dataset/)
+EXPORT_DIR = Path(os.environ.get("NEARBUDDY_EXPORT_DIR") or Path(__file__).resolve().parents[2] / "dataset")
+SNAPSHOT = EXPORT_DIR / "decisions.jsonl"
 ROWS = [json.loads(line) for line in SNAPSHOT.read_text().splitlines() if line.strip()]
 CARD = card(ROWS, "decisions.parquet")
 
