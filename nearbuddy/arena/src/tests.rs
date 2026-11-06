@@ -1628,7 +1628,6 @@ fn open_price_at_close_rejected() {
     oracle_answers(&mut c, d, "open", OPEN, CLOSE);
 }
 
-
 #[test]
 fn finish_with_an_uncounted_open_duel_does_not_underflow() {
     // a duel opened before migrate_v12 is not in `open_duels`; resolving it must not panic
