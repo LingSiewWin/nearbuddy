@@ -328,7 +328,7 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
           </>
         ) : sealedIn(d.events, d.duel, s.agent) ? (
           <>
-            has <b>sealed a call</b>
+            has <b>sealed a call</b> that opens in the last minute
           </>
         ) : (
           <>
