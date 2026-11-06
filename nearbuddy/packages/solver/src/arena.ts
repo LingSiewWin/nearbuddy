@@ -121,14 +121,19 @@ const GAS = teraToGas("100");
 const OPEN_DUEL_GAS = teraToGas("250");
 /** Storage margin added on top of the on-chain `oracle_deposit` for open_duel (a duel record is ~1 KB = 0.01 NEAR). */
 const OPEN_DUEL_STORAGE = 15_000_000_000_000_000_000_000n;
-let oracleDepositMemo: { at: number; v: bigint } | null = null;
-/** `oracle_deposit` from get_config, memoised for a minute; the owner can change it with set_oracle. */
-async function oracleDeposit(): Promise<bigint> {
-  if (oracleDepositMemo && Date.now() - oracleDepositMemo.at < 60_000) return oracleDepositMemo.v;
-  const cfg = await arenaView<{ oracle_deposit: string }>("get_config", {});
-  oracleDepositMemo = { at: Date.now(), v: BigInt(cfg.oracle_deposit) };
-  return oracleDepositMemo.v;
+/** The `get_config` fields the solver reads. */
+export interface ArenaConfig {
+  oracle_deposit: string;
+  require_consent?: boolean;
 }
+let configMemo: { at: number; v: ArenaConfig } | null = null;
+/** get_config memoised for a minute; the owner can change it (set_oracle, consent and commit-reveal switches). */
+async function arenaConfig(): Promise<ArenaConfig> {
+  if (configMemo && Date.now() - configMemo.at < 60_000) return configMemo.v;
+  configMemo = { at: Date.now(), v: await arenaView<ArenaConfig>("get_config", {}) };
+  return configMemo.v;
+}
+const oracleDeposit = async () => BigInt((await arenaConfig()).oracle_deposit);
 
 /** Pick the mandate-bounded amount to quote for one follower: min(cap, allowance - spent). */
 export function quoteAmount(m: Mandate): bigint {
@@ -179,6 +184,7 @@ export class Arena {
       } | null>;
       getAgent?: (agent_pk: string) => Promise<AgentView | null>;
       leaderboard?: () => Promise<AgentView[]>;
+      config?: () => Promise<ArenaConfig>;
       quote?: typeof quote;
       now?: () => bigint;
       /** Backoff between RPC retries and `findDuel` polls; tests pass `async () => {}`. */
@@ -191,8 +197,14 @@ export class Arena {
   }
 
   /** One pairing tick: open a DUEL_SECONDS duel for every pair `pairIdle` makes of the leaderboard. A pair whose
-   *  open fails (one side got a duel meanwhile, RPC error) is skipped and retried on the next tick. */
+   *  open fails (one side got a duel meanwhile, RPC error) is skipped and retried on the next tick. With
+   *  `require_consent` on, plain open_duel panics and the loop holds no agent signatures: the tick is skipped.
+   *  ponytail: pairing pauses under consent; collect a signed ready message per agent to resume it. */
   async pairOnce(): Promise<string[]> {
+    if ((await (this.deps.config ?? arenaConfig)()).require_consent) {
+      console.log("[arena] pairing skipped: require_consent is on and the loop holds no agent consent");
+      return [];
+    }
     const agents = await (this.deps.leaderboard ?? (() => arenaView<AgentView[]>("leaderboard", {})))();
     const opened: string[] = [];
     for (const [a, b] of pairIdle(agents, PAIR_MIN_BOND, PAIR_EXCLUDE)) {
@@ -234,7 +246,7 @@ export class Arena {
       return await this.call(methodName, args, (await oracleDeposit()) + extra, OPEN_DUEL_GAS);
     } catch (e) {
       if (!/attach oracle_deposit|deposit too small/.test(String(e))) throw e;
-      oracleDepositMemo = null;
+      configMemo = null;
       return this.call(methodName, args, (await oracleDeposit()) + extra, OPEN_DUEL_GAS);
     }
   }

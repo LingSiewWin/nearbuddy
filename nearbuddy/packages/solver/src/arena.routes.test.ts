@@ -381,6 +381,33 @@ test("POST /duel with sig_a and sig_b checks both consents and calls open_duel_c
   assert.deepEqual(calls[0]!.args, duel);
 });
 
+test("pairOnce skips the tick when require_consent is on, and pairs idle agents with plain open_duel when off", async () => {
+  const idle = (pk: string) => ({ pk, model_id: "m", bond: "1", tee: true, in_duel: null });
+  for (const require_consent of [true, false]) {
+    const { calls, account } = fakeSolver(() => 21);
+    let boards = 0;
+    const arena = new Arena(account, "s.testnet", {
+      config: async () => ({ oracle_deposit: "100", require_consent }),
+      leaderboard: async () => {
+        boards++;
+        return [idle("P1"), idle("P2")];
+      },
+    });
+    const opened = await withRpc({ get_config: () => ({ oracle_deposit: "100" }) }, () => arena.pairOnce());
+    if (require_consent) {
+      assert.deepEqual(opened, []);
+      assert.equal(calls.length, 0, "no open_duel that would panic");
+      assert.equal(boards, 0);
+    } else {
+      assert.deepEqual(opened, ["21"]);
+      assert.deepEqual(
+        calls.map((c) => [c.methodName, c.args.a, c.args.b]),
+        [["open_duel", "P1", "P2"]],
+      );
+    }
+  }
+});
+
 test("POST /duel without sigs still calls plain open_duel", async () => {
   const { calls, account } = fakeSolver(() => 12);
   const arena = new Arena(account, "s.testnet");
