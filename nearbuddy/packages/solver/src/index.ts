@@ -2,11 +2,12 @@
 import "../../protocol/src/env.ts";
 import { createServer as httpServer } from "node:http";
 import { CONTRACT, loadAccount } from "../../protocol/src/chain.ts";
+import { NET } from "../../protocol/src/network.ts";
 import { Arena } from "./arena.ts";
 import { Guarantor } from "./guarantor.ts";
 import { createServer } from "./server.ts";
 
-const SOLVER_ID = process.env.SOLVER_ID ?? "nearbuddy-solver.testnet";
+const SOLVER_ID = process.env.SOLVER_ID ?? NET.solver;
 const PORT = Number(process.env.SOLVER_PORT ?? 4020);
 const LEDGER_FILE = process.env.SOLVER_LEDGER ?? new URL("../../../.solver-ledger.json", import.meta.url).pathname;
 const AUTO_BATCH = Number(process.env.SOLVER_AUTO_BATCH ?? 200); // settle when carrying this many
