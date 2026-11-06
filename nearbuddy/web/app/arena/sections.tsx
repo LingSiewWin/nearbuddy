@@ -145,7 +145,8 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
         ))}
       </div>
       <p className="note">
-        Swapping the two prompts between the models swapped the results: it is the prompt, not the model.
+        Compare the rows for the same model: DeepSeek with the plain prompt takes the lie&apos;s side, DeepSeek with a
+        guarded prompt does not. The prompt decides, not the model.
       </p>
     </div>
   );

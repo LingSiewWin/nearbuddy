@@ -9,7 +9,7 @@ import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { useEvents, useNow, usePrice } from "../lib/live";
 import { DrawerProvider } from "../ui/drawer";
-import { duelHref } from "../ui/format";
+import { duelHref, TAMPER_TX, txUrl } from "../ui/format";
 import { Machine } from "../ui/machine";
 import { focusOf, latestStory, openOf, withTape } from "./model";
 import { Headline, Race } from "./race";
@@ -188,6 +188,24 @@ export default function Arena({ initial }: { initial: Initial }) {
           <TapeMachine events={events} />
         </aside>
         <footer className="foot">
+          <p className="proofs">
+            Proof on chain:{" "}
+            <a href={txUrl("9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB")} target="_blank" rel="noreferrer">
+              a loser slashed 10% by the TEE oracle's prices ↗
+            </a>{" "}
+            ·{" "}
+            <a href={txUrl("8gnGLPvanrjF6R4FUKWvUn7HLJciKHszJAiRVY6ehGtR")} target="_blank" rel="noreferrer">
+              a follower filled inside its mandate ↗
+            </a>{" "}
+            ·{" "}
+            <a href={txUrl("EaefxJxRb6m9pPZ1nXG3GnYXsixqVBG5QL4eNq2LCN7F")} target="_blank" rel="noreferrer">
+              fills outside it refused ↗
+            </a>{" "}
+            ·{" "}
+            <a href={txUrl(TAMPER_TX)} target="_blank" rel="noreferrer">
+              a tampered proof refused ↗
+            </a>
+          </p>
           Contract{" "}
           <a
             href="https://testnet.nearblocks.io/address/arena.nearbuddy-solver.testnet"

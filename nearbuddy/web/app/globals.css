@@ -292,6 +292,9 @@ h2 {
 .foot a {
   color: var(--dim);
 }
+.proofs {
+  margin-bottom: 8px;
+}
 
 /* story: what this is in one line, then the live headline + clock */
 .kicker {
