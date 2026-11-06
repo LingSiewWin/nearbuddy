@@ -63,7 +63,6 @@ const LOCK_S = 10; // the most set_oracle allows for a 20 s floor; the final rev
 const ORACLE_DEPOSIT = 20n * MILLI;
 const FEE_BPS = 50n;
 const OFFLINE = process.env.E2E_OFFLINE === "1";
-const SPOT_USD = 3.66;
 const SPOT_CENTS = 366n;
 const WNEAR = "nep141:wrap.near";
 
@@ -72,7 +71,7 @@ const usdcForYocto = (yocto: bigint, centsPerNear = SPOT_CENTS) => (yocto * cent
 const yoctoForUsdc = (usdc: bigint, centsPerNear = SPOT_CENTS) => (usdc * 100n * 10n ** 18n) / centsPerNear;
 
 /** E2E_OFFLINE stand-in for the two third parties: Coinbase spot (GET /v2/prices/<BASE>-USD/spot) and the 1Click
- *  dry quote (POST /v0/quote at SPOT_USD per NEAR). `amount` is the fixed leg: the origin for EXACT_INPUT (a Short
+ *  dry quote (POST /v0/quote at SPOT_CENTS per NEAR). `amount` is the fixed leg: the origin for EXACT_INPUT (a Short
  *  sells exactly that much wNEAR), the destination for EXACT_OUTPUT (a Long buys exactly that much wNEAR). */
 function offlineThirdParties(): Promise<string> {
   const decimals = (asset: string) => (asset === WNEAR ? 24 : 6);
