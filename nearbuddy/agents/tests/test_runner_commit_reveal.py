@@ -52,7 +52,7 @@ class FakeSolver:
         assert path == "/arena"
         return {"pending": {}}
 
-    def post(self, path, body):
+    def post(self, path, body, deadline_ns=None):
         self.posts.append((path, body, self.clock.ns))
         n = sum(1 for p, _, _ in self.posts if p == path)
         if (path, n) in self.fail:
@@ -258,7 +258,7 @@ def test_sigterm_while_a_reveal_lands_does_not_reveal_it_again(env):
     clock, players = env
 
     class KilledOnFirstReveal(FakeSolver):
-        def post(self, path, body):
+        def post(self, path, body, deadline_ns=None):
             out = super().post(path, body)
             if path == "/reveal" and self.paths().count("/reveal") == 1:
                 os.kill(os.getpid(), signal.SIGTERM)  # the kill arrives after the reveal landed, before it returns
@@ -290,7 +290,7 @@ runner.price = lambda *_a: 366_000_000
 class Solver:
     def get(self, path):
         return {"pending": {}}
-    def post(self, path, body):
+    def post(self, path, body, deadline_ns=None):
         with (out / "posts.log").open("a") as f:
             f.write(path + "\\n")
         return {"tx": "T", "quotes": []}

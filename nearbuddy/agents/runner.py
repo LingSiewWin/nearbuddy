@@ -46,8 +46,10 @@ import re
 import secrets
 import signal
 import sys
+import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +65,7 @@ from chain import ARENA, ASSETS, agent_tier_on_chain, chain_now_ns, view, wait_o
 from config import ATTEST_DIR, DATA, ENV, NET
 from duelist import Duelist, DuelistError
 from intent_client import (
+    DeadlineError,
     Solver,
     TeeProofError,
     commit_message,
@@ -112,12 +115,17 @@ def make_duelist(
 PAIR_TAG = ""  # `--pair-tag`: which agent pair this process drives; "" = the main pair
 
 
+_record_lock = threading.Lock()  # reveal_all records from several threads; a row must never interleave
+
+
 def record(row: dict[str, Any]) -> None:
     """Append one dataset row, tagged with the pair (`pair_tag` null = the main pair) so two loops sharing the file
     can be split."""
-    DATA.parent.mkdir(parents=True, exist_ok=True)
-    with DATA.open("a") as f:
-        f.write(json.dumps({**row, "pair_tag": PAIR_TAG or None}) + "\n")
+    line = json.dumps({**row, "pair_tag": PAIR_TAG or None}) + "\n"
+    with _record_lock:
+        DATA.parent.mkdir(parents=True, exist_ok=True)
+        with DATA.open("a") as f:
+            f.write(line)
 
 
 def save_attestation(model_client: ModelClient) -> str | None:
@@ -414,6 +422,12 @@ class Commitment:
     salt: bytes
     tee: dict[str, Any] | None
     row: dict[str, Any]
+    deadline_ns: int | None = None  # close_at minus REVEAL_MARGIN_S: no solver wait for this reveal runs past it
+
+
+# A reveal must land before close_at; every solver wait for it (restart retries, the follower quotes) ends this long
+# before, leaving time for the transaction itself.
+REVEAL_MARGIN_S = 5
 
 
 def _refused(e: RuntimeError) -> bool:
@@ -454,7 +468,14 @@ def commit_decision(
     pk = intent["agent_pk"]
     salt = secrets.token_bytes(32)
     c = commitment(intent, salt)
-    p = Commitment(label, sign_intent(sk, intent), salt, tee, {**row, "commitment": base64.b64encode(c).decode()})
+    p = Commitment(
+        label,
+        sign_intent(sk, intent),
+        salt,
+        tee,
+        {**row, "commitment": base64.b64encode(c).decode()},
+        close_at_ns - REVEAL_MARGIN_S * 1_000_000_000,
+    )
     p.row["committed_tx"] = None  # unknown until the solver answers
     held[label] = p
     try:
@@ -488,7 +509,11 @@ def reveal(solver: Solver, p: Commitment) -> str:
     """Commit-reveal, step 2: open the commitment (intent, salt, tee). The solver quotes followers here. Records the
     decision's dataset row. Returns "revealed", or "closed" when the chain refused it as late."""
     try:
-        posted = solver.post("/reveal", {"signed": p.signed, "salt": base64.b64encode(p.salt).decode(), "tee": p.tee})
+        posted = solver.post(
+            "/reveal",
+            {"signed": p.signed, "salt": base64.b64encode(p.salt).decode(), "tee": p.tee},
+            deadline_ns=p.deadline_ns,
+        )
     except RuntimeError as e:
         late = _late(e)
         if late is None:
@@ -504,15 +529,31 @@ def reveal(solver: Solver, p: Commitment) -> str:
 
 
 def reveal_all(solver: Solver, held: dict[str, Commitment]) -> None:
-    """Reveal every held commitment (an unrevealed one is slashed). One failure, transport errors included, must
-    not strand the others."""
-    for label in list(held):
-        p = held.pop(label)
+    """Reveal every held commitment (an unrevealed one is slashed), all at once: each /reveal waits for its follower
+    quotes, so in a row the last agent could miss the window while the first one waits out a solver restart. One
+    failure, transport errors included, must not strand the others. A reveal whose deadline (close_at minus
+    REVEAL_MARGIN_S) passes is reported loudly: that commitment forfeits the duel and pays no_reveal_bps."""
+    batch = [(label, held.pop(label)) for label in list(held)]
+
+    def one(label: str, p: Commitment) -> None:
         try:
             reveal(solver, p)
         except Exception as e:  # requests' ConnectionError/Timeout are not RuntimeError
             record({**p.row, "revealed_tx": None, "tx": None, "error": f"reveal failed: {str(e)[:200]}"})
             print(f"  reveal for {label} failed: {type(e).__name__}: {str(e)[:120]}")
+            if isinstance(e, DeadlineError) or (p.deadline_ns is not None and time.time_ns() >= p.deadline_ns):
+                print(
+                    f"!!! REVEAL DEADLINE PASSED for {label} (nonce {p.signed['intent']['nonce']}): the commitment "
+                    "may stay unrevealed; the contract then forfeits the duel and slashes no_reveal_bps of the bond"
+                )
+
+    if len(batch) <= 1:
+        for label, p in batch:
+            one(label, p)
+        return
+    with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+        for f in [pool.submit(one, label, p) for label, p in batch]:
+            f.result()
 
 
 Player = tuple[str, Duelist, SigningKey, Tracked, ModelClient]
