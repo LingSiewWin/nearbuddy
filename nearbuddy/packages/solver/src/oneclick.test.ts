@@ -72,3 +72,72 @@ test("executeSwap sends one wrap.near transaction with storage, wrap and transfe
     globalThis.fetch = real;
   }
 });
+
+/** 1Click fake for `executeSwap`: a non-dry quote with a deposit address, then the given status sequence. */
+function fakeOneClick(dep: string, statuses: string[]) {
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    const u = String(url);
+    if (u.endsWith("/v0/quote")) return new Response(JSON.stringify({ ...fixture, quote: { ...fixture.quote, depositAddress: dep, deadline: "2099-01-01T00:00:00Z" } }));
+    if (u.endsWith("/v0/deposit/submit")) return new Response(JSON.stringify({ status: "KNOWN_DEPOSIT_TX" }));
+    if (u.includes("/v0/status")) return new Response(JSON.stringify({ status: statuses.length > 1 ? statuses.shift() : statuses[0] }));
+    throw new Error(`unexpected fetch ${u}`);
+  }) as typeof fetch;
+  return () => { globalThis.fetch = real; };
+}
+
+test("executeSwap skips the sender's storage_deposit when wrap.near already knows the account", async () => {
+  const { executeSwap } = await import("./oneclick.ts");
+  const dep = "8c66cafe".padEnd(64, "0");
+  const restore = fakeOneClick(dep, ["SUCCESS"]);
+  const sent: { actions: unknown[] }[] = [];
+  const account = {
+    accountId: "someone.near",
+    provider: { callFunction: async () => ({ total: "1250000000000000000000", available: "0" }) }, // registered
+    signAndSendTransaction: async (p: { actions: unknown[] }) => { sent.push(p); return { transaction: { hash: "TX2" } }; },
+  } as unknown as Parameters<typeof executeSwap>[0];
+  try {
+    const r = await executeSwap(account, 10n ** 23n);
+    const methods = sent[0]!.actions.map((a) => (a as { functionCall: { methodName: string } }).functionCall.methodName);
+    assert.deepEqual(methods, ["storage_deposit", "near_deposit", "ft_transfer"]);
+    const storage = (sent[0]!.actions[0] as { functionCall: { args: Uint8Array } }).functionCall.args;
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(storage)), { account_id: dep }, "the one storage_deposit is for the deposit address");
+    assert.equal(r.status, "SUCCESS");
+    assert.equal(r.amountOut, undefined, "no swapDetails in the status reply");
+  } finally {
+    restore();
+  }
+});
+
+test("executeSwap throws on a final non-SUCCESS status and names the deposit tx", async () => {
+  const { executeSwap } = await import("./oneclick.ts");
+  const restore = fakeOneClick("8c66dead".padEnd(64, "0"), ["REFUNDED"]);
+  const account = {
+    accountId: "someone.near",
+    provider: { callFunction: async () => null },
+    signAndSendTransaction: async () => ({ transaction: { hash: "TX3" } }),
+  } as unknown as Parameters<typeof executeSwap>[0];
+  try {
+    await assert.rejects(executeSwap(account, 10n ** 23n), /swap ended REFUNDED \(deposit tx TX3\)/);
+  } finally {
+    restore();
+  }
+});
+
+test("executeSwap refuses a quote without a deposit address before sending anything", async () => {
+  const { executeSwap } = await import("./oneclick.ts");
+  const real = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify(fixture))) as typeof fetch; // dry fixture: no depositAddress
+  let sent = 0;
+  const account = {
+    accountId: "someone.near",
+    provider: { callFunction: async () => null },
+    signAndSendTransaction: async () => { sent++; return { transaction: { hash: "TX4" } }; },
+  } as unknown as Parameters<typeof executeSwap>[0];
+  try {
+    await assert.rejects(executeSwap(account, 1n), /no depositAddress/);
+    assert.equal(sent, 0);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

@@ -11,6 +11,7 @@ import type { Quote } from "./oneclick.ts";
 const scratch = mkdtempSync(join(tmpdir(), "arena-test-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
 process.env.ARENA_HISTORY = join(scratch, "history.json");
+process.env.ARENA_SECRET ??= "route-test-secret"; // shared module cache: arena.routes.test.ts reads it back from the module
 const { Arena, mandateOpen, pairIdle, quoteAmount } = await import("./arena.ts");
 type Mandate = import("./arena.ts").Mandate;
 type AgentView = import("./arena.ts").AgentView;
