@@ -150,7 +150,7 @@ export function Headline({
     sub = (
       <>
         {sub}{" "}
-        <span className="hit">
+        <span className="lie-now">
           {hitA ? A : B} was fed a paid fake headline {ago < 60 ? `${ago} s` : `${Math.round(ago / 60)} min`} ago
           {text ? <>: “{text}”</> : ""}.{" "}
           {answer
