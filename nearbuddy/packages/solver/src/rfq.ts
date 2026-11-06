@@ -187,3 +187,54 @@ export function executionRecords(
     ];
   });
 }
+
+// ---- solver caps (mainnet blocker B17) --------------------------------------------------------------------------
+// The solver fronts every fill, so it bounds its own exposure whatever the mandates allow: per fill, per tick (one
+// intent's followers) and per rolling 24 h, all in yocto of the fill's NEAR leg. Checked before any quote.
+
+export interface Caps {
+  fill: bigint | null;
+  tick: bigint | null;
+  day: bigint | null;
+}
+export const DAY_MS = 86_400_000;
+
+/** CAP_PER_FILL_YOCTO, CAP_PER_TICK_YOCTO, CAP_PER_DAY_YOCTO. Unset or empty = unlimited. Anything but a decimal
+ *  integer throws: a typo must not lift a cap. */
+export function capsFromEnv(env: Record<string, string | undefined> = process.env): Caps {
+  const read = (k: string) => {
+    const v = env[k]?.trim();
+    if (!v) return null;
+    if (!/^\d+$/.test(v)) throw new Error(`${k} must be a yocto integer, got ${v.slice(0, 40)}`);
+    return BigInt(v);
+  };
+  return { fill: read("CAP_PER_FILL_YOCTO"), tick: read("CAP_PER_TICK_YOCTO"), day: read("CAP_PER_DAY_YOCTO") };
+}
+
+/** Admit followers in list order. One over the per-fill cap, or whose amount would take this tick or the day past
+ *  its cap, is rejected with the cap's name; a later, smaller follower can still fit. */
+export function admit<T extends { follower: string; amount: bigint }>(
+  followers: T[],
+  caps: Caps,
+  usedToday: bigint,
+): { admitted: T[]; rejected: { follower: string; amount: string; error: string }[] } {
+  const admitted: T[] = [];
+  const rejected: { follower: string; amount: string; error: string }[] = [];
+  let tick = 0n;
+  for (const f of followers) {
+    const over =
+      caps.fill !== null && f.amount > caps.fill
+        ? `over CAP_PER_FILL_YOCTO: ${f.amount} > ${caps.fill}`
+        : caps.tick !== null && tick + f.amount > caps.tick
+          ? `over CAP_PER_TICK_YOCTO: ${tick} quoted this tick + ${f.amount} > ${caps.tick}`
+          : caps.day !== null && usedToday + tick + f.amount > caps.day
+            ? `over CAP_PER_DAY_YOCTO: ${usedToday + tick} quoted in 24 h + ${f.amount} > ${caps.day}`
+            : null;
+    if (over) rejected.push({ follower: f.follower, amount: f.amount.toString(), error: over });
+    else {
+      admitted.push(f);
+      tick += f.amount;
+    }
+  }
+  return { admitted, rejected };
+}

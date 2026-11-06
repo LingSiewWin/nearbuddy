@@ -180,6 +180,93 @@ test("B14: FILL_RECIPIENT overrides the network default and refuses anything els
   );
 });
 
+const NO_CAPS = { CAP_PER_FILL_YOCTO: undefined, CAP_PER_TICK_YOCTO: undefined, CAP_PER_DAY_YOCTO: undefined };
+/** f1 300 and f3 50 open (followerArena's mandates) with a settable clock and a quote that can fail. */
+function cappedArena(clock: { ns: bigint }, asked: string[], fail = () => false) {
+  const expires_at = (NOW + 10n ** 15n).toString(); // open for 11 days of fake clock
+  return new Arena({} as never, "nearbuddy-solver.testnet", {
+    listFollowers: async () => [
+      ["f1.testnet", m({ expires_at })],
+      ["f3.testnet", m({ spent: "950", expires_at })],
+    ],
+    quote: async (req) => {
+      asked.push(req.amount);
+      if (fail()) throw new Error("1click quote 503");
+      return fixture;
+    },
+    now: () => clock.ns,
+  });
+}
+
+test("B17: caps refuse followers before any quote and record why, like any follower error", async () => {
+  const asked: string[] = [];
+  const out = await withEnv({ ...NO_CAPS, CAP_PER_FILL_YOCTO: "100" }, () =>
+    cappedArena({ ns: NOW }, asked).quotesFor("pk"),
+  );
+  assert.deepEqual(asked, ["50"]); // f1 (300) never reaches 1Click
+  assert.deepEqual(
+    out.map((o) => [o.follower, o.error ?? o.quote_out]),
+    [
+      ["f1.testnet", "over CAP_PER_FILL_YOCTO: 300 > 100"],
+      ["f3.testnet", "3744739"],
+    ],
+  );
+  const tick = await withEnv({ ...NO_CAPS, CAP_PER_TICK_YOCTO: "320" }, () =>
+    cappedArena({ ns: NOW }, []).quotesFor("pk"),
+  );
+  assert.deepEqual(
+    tick.map((o) => o.error?.split(":")[0] ?? "ok"),
+    ["ok", "over CAP_PER_TICK_YOCTO"],
+  );
+  const bad = await withEnv({ ...NO_CAPS, CAP_PER_DAY_YOCTO: "lots" }, () =>
+    cappedArena({ ns: NOW }, asked).quotesFor("pk"),
+  );
+  assert.ok(
+    bad.every((o) => /CAP_PER_DAY_YOCTO must be a yocto integer/.test(o.error ?? "")),
+    "fail closed",
+  );
+  assert.equal(asked.length, 1);
+});
+
+test("B17: the day cap spans ticks over a rolling 24 h, and a failed quote gives its amount back", async () => {
+  const clock = { ns: NOW };
+  const asked: string[] = [];
+  let failing = true;
+  const arena = cappedArena(clock, asked, () => failing);
+  await withEnv({ ...NO_CAPS, CAP_PER_DAY_YOCTO: "400" }, async () => {
+    const failed = await arena.quotesFor("pk"); // 350 admitted, the quote fails: nothing counts
+    assert.ok(failed.every((o) => o.error === "Error: 1click quote 503"));
+    failing = false;
+    assert.ok((await arena.quotesFor("pk")).every((o) => o.quote_out)); // 350 of 400 used
+    clock.ns += 3_600_000_000_000n; // +1 h
+    const full = await arena.quotesFor("pk"); // f1 300 over; f3 50 fits exactly (400)
+    assert.deepEqual(
+      full.map((o) => o.error ?? "ok"),
+      ["over CAP_PER_DAY_YOCTO: 350 quoted in 24 h + 300 > 400", "ok"],
+    );
+    const none = await arena.quotesFor("pk");
+    assert.ok(none.every((o) => o.error?.startsWith("over CAP_PER_DAY_YOCTO: 400 quoted in 24 h")));
+    clock.ns += 23n * 3_600_000_000_000n; // the first 350 is 24 h old now and drops out; the 50 (23 h) stays
+    assert.deepEqual(
+      (await arena.quotesFor("pk")).map((o) => o.error ?? "ok"),
+      ["ok", "ok"], // 50 + 300 + 50 = 400
+    );
+    assert.ok((await arena.quotesFor("pk")).every((o) => o.error?.startsWith("over CAP_PER_DAY_YOCTO: 400")));
+  });
+  assert.deepEqual(asked, ["350", "350", "50", "350"]);
+});
+
+test("B17: two intents landing together cannot both fit under the day cap", async () => {
+  const asked: string[] = [];
+  const arena = cappedArena({ ns: NOW }, asked);
+  const [a, b] = await withEnv({ ...NO_CAPS, CAP_PER_DAY_YOCTO: "350" }, () =>
+    Promise.all([arena.quotesFor("pk"), arena.quotesFor("pk")]),
+  );
+  assert.deepEqual(asked, ["350"]);
+  assert.ok(a!.every((o) => o.quote_out));
+  assert.ok(b!.every((o) => o.error?.startsWith("over CAP_PER_DAY_YOCTO")));
+});
+
 test("route: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {
   const arena = new Arena({} as never, "s.testnet", {
     getDuel: async () => ({
