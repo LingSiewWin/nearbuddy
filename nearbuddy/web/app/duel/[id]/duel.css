@@ -17,6 +17,11 @@
 .duel .band {
   fill: rgba(238, 233, 216, 0.06);
 }
+.closelab,
+.duel .openlab {
+  background: var(--bg);
+  padding: 0 4px;
+}
 .closelab {
   position: absolute;
   right: 6px;
