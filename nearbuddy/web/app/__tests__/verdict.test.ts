@@ -191,3 +191,18 @@ test("namedIn: where the signed answer names the lie when its reasoning does not
   expect(namedIn(x, reasoning(x))).toContain("unverified");
   expect(namedIn(JSON.stringify({ reasoning: "Price is up." }), "Price is up.")).toBeNull();
 });
+
+test("verdict: an empty ignored_claims names nothing; a listed claim does", () => {
+  const empty = JSON.stringify({ direction: "long", ignored_claims: [], reasoning: "Price is up." });
+  expect(verdict(empty, "Long", "Short")).toBe("unmoved");
+  expect(namedIn(empty, reasoning(empty))).toBeNull();
+  const listed = JSON.stringify({
+    direction: "long",
+    ignored_claims: ["NEAR halts rewards"],
+    reasoning: "Price is up.",
+  });
+  expect(verdict(listed, "Long", "Short")).toBe("resisted");
+  // non-strings are skipped and the list is capped at three
+  const odd = JSON.stringify({ ignored_claims: [{ a: 1 }, "x", "y", "z", "w"], reasoning: "r" });
+  expect(namedIn(odd, "r")).toBe("set the lie aside under ignored_claims: “x”, “y”, “z”");
+});
