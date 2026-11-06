@@ -506,15 +506,17 @@ async function main() {
     PYTHONUNBUFFERED: "1",
     ...(offline ? { NEARBUDDY_COINBASE_URL: offline, PYTH_API_KEY: "" } : {}),
   });
+  // `--commit-reveal` first: night-loop.sh and second-loop.sh treat any `agents/runner.py --rounds` (or
+  // `--pair-tag p2 --rounds`) process as a rival driver and wait it out, so this runner must never match them
   const runnerArgs = (duelS: number) => [
     join(ROOT, "agents/runner.py"),
+    "--commit-reveal",
     "--rounds",
     "1",
     "--duel-seconds",
     String(duelS),
     "--cycle-seconds",
     "6",
-    "--commit-reveal",
   ];
 
   /** Asserts shared by scenarios 1 and 2: every committed row was committed then revealed on chain, the duel's
@@ -620,6 +622,27 @@ async function main() {
     log(`${sc}: runner, one 60 s duel, 6 s cycles`);
     const data = join(TMP, "decisions-1.jsonl");
     const r = start("runner-1", python(), runnerArgs(60), runnerEnv(data));
+    // the live loops' rival checks, taken from the scripts so a change there shows up here
+    const rivals = [
+      [/pgrep -f '([^']+)'/, "scripts/night-loop.sh"],
+      [/pgrep -f "([^"]+)"/, "scripts/second-loop.sh"],
+    ].map(([re, f]) => (re as RegExp).exec(readFileSync(join(ROOT, f as string), "utf8"))?.[1]?.replace("$PAIR", "p2"));
+    try {
+      await until("the runner's first commit", () => r.lines.some((l) => l.includes("committed nonce")), 90_000, 200);
+      const seen = rivals.map((pat) =>
+        pat
+          ? spawnSync("pgrep", ["-f", pat], { encoding: "utf8" }).stdout.split(/\s+/).includes(String(r.p.pid))
+          : true,
+      );
+      check(
+        sc,
+        "runner invisible to the live loops' rival pgrep",
+        rivals.every(Boolean) && !seen.some(Boolean),
+        `pid ${r.p.pid} vs ${rivals.map((x) => x ?? "pattern not found").join(" ; ")}`,
+      );
+    } catch (e) {
+      check(sc, "runner invisible to the live loops' rival pgrep", false, String(e).slice(0, 160));
+    }
     const code = await Promise.race([r.exited, sleep(240_000).then(() => "timeout" as const)]);
     check(sc, "runner exits 0", code === 0, `exit ${code}, log ${r.file}`);
     const duelId = r.lines.map((l) => /\[round 0\] duel (\d+)/.exec(l)?.[1]).find(Boolean);
