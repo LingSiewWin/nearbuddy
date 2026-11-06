@@ -30,6 +30,7 @@ import {
   verifyTeeProof,
 } from "../../protocol/src/intent.ts";
 import { type Quote, quote, sellNearForUsdc } from "./oneclick.ts";
+import { batchQuote, quotePrice } from "./rfq.ts";
 
 export interface Mandate {
   allowance: string;
@@ -54,10 +55,14 @@ export interface Injection {
   payload_hash: string;
   block: string;
 }
+/** With BATCH_RFQ (default) `quote` is the one batch quote shared by every follower of the intent (its amountOut is
+ *  the batch total); `quote_out` is this follower's pro rata share and `price` the uniform price. */
 export interface FollowerQuote {
   follower: string;
   amount: string;
   quote?: Quote;
+  quote_out?: string;
+  price?: number;
   error?: string;
 }
 interface IntentRecord {
@@ -361,7 +366,8 @@ export class Arena {
     return { tx: r.tx, quotes };
   }
 
-  /** One dry 1Click quote per open follower mandate, sized by the mandate. Never a real swap. */
+  /** Dry 1Click quotes for the open follower mandates, sized by the mandate. Never a real swap. BATCH_RFQ (default
+   *  on): one quote for the sum, split pro rata at one price (rfq.ts); BATCH_RFQ=0: one quote per follower. */
   async quotesFor(agent_pk: string): Promise<FollowerQuote[]> {
     const list = await (
       this.deps.listFollowers ?? ((pk) => arenaView<[string, Mandate][]>("list_followers", { agent_pk: pk }))
@@ -369,17 +375,25 @@ export class Arena {
     const now = (this.deps.now ?? (() => BigInt(Date.now()) * 1_000_000n))();
     const q = this.deps.quote ?? quote;
     const account = this.solverId.replace(/\.testnet$/, ".near");
+    const open = list.filter(([, m]) => mandateOpen(m, now));
+    if (process.env.BATCH_RFQ !== "0") {
+      if (open.length === 0) return [];
+      const b = await batchQuote(
+        open.map(([follower, m]) => ({ follower, amount: quoteAmount(m) })),
+        (amount) => q(sellNearForUsdc(amount, account)),
+      );
+      return b.fills.map((f) => (b.quote && !f.error ? { ...f, quote: b.quote, price: b.price } : f));
+    }
     return Promise.all(
-      list
-        .filter(([, m]) => mandateOpen(m, now))
-        .map(async ([follower, m]): Promise<FollowerQuote> => {
-          const amount = quoteAmount(m);
-          try {
-            return { follower, amount: amount.toString(), quote: await q(sellNearForUsdc(amount, account)) };
-          } catch (e) {
-            return { follower, amount: amount.toString(), error: String(e).slice(0, 200) };
-          }
-        }),
+      open.map(async ([follower, m]): Promise<FollowerQuote> => {
+        const amount = quoteAmount(m);
+        try {
+          const r = await q(sellNearForUsdc(amount, account));
+          return { follower, amount: amount.toString(), quote: r, quote_out: r.quote.amountOut, price: quotePrice(r) };
+        } catch (e) {
+          return { follower, amount: amount.toString(), error: String(e).slice(0, 200) };
+        }
+      }),
     );
   }
 

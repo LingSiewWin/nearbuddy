@@ -40,9 +40,8 @@ test("mandateOpen skips revoked, expired and exhausted", () => {
   assert.ok(!mandateOpen(m({ spent: "1000" }), NOW));
 });
 
-test("quotesFor quotes each open follower with the mandate amount", async () => {
-  const asked: string[] = [];
-  const arena = new Arena({} as never, "nearbuddy-solver.testnet", {
+const followerArena = (asked: string[]) =>
+  new Arena({} as never, "nearbuddy-solver.testnet", {
     listFollowers: async () => [
       ["f1.testnet", m()],
       ["f2.testnet", m({ revoked: true })],
@@ -54,13 +53,38 @@ test("quotesFor quotes each open follower with the mandate amount", async () => 
     },
     now: () => NOW,
   });
-  const out = await arena.quotesFor("pk");
+
+test("BATCH_RFQ=0: quotesFor quotes each open follower with the mandate amount", async () => {
+  const asked: string[] = [];
+  process.env.BATCH_RFQ = "0";
+  try {
+    const out = await followerArena(asked).quotesFor("pk");
+    assert.deepEqual(
+      out.map((o) => o.follower),
+      ["f1.testnet", "f3.testnet"],
+    );
+    assert.deepEqual(asked, ["300", "50"]);
+    assert.equal(out[0]?.quote?.quote.amountOut, "3744739");
+    assert.equal(out[0]?.quote_out, "3744739");
+  } finally {
+    delete process.env.BATCH_RFQ;
+  }
+});
+
+test("batched quotesFor: one quote for the open mandates' sum, split pro rata at one price", async () => {
+  const asked: string[] = [];
+  const out = await followerArena(asked).quotesFor("pk");
+  assert.deepEqual(asked, ["350"]);
+  // 3744739 * 300/350 = 3209776.28 -> 3209776 + remainder 1; 3744739 * 50/350 = 534962.71 -> 534962
   assert.deepEqual(
-    out.map((o) => o.follower),
-    ["f1.testnet", "f3.testnet"],
+    out.map((o) => [o.follower, o.amount, o.quote_out]),
+    [
+      ["f1.testnet", "300", "3209777"],
+      ["f3.testnet", "50", "534962"],
+    ],
   );
-  assert.deepEqual(asked, ["300", "50"]);
-  assert.equal(out[0]?.quote?.quote.amountOut, "3744739");
+  assert.equal(out[0]?.price, out[1]?.price);
+  assert.equal(out[0]?.quote, out[1]?.quote);
 });
 
 test("route: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {
