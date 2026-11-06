@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   age,
+  type ChainEvent,
   type CommitConfig,
   commitCells,
   commitWord,
@@ -20,6 +21,7 @@ import {
   quoteOut,
   revealCell,
   sbps,
+  timelineCells,
   usdc,
   vsCell,
 } from "../cells";
@@ -103,6 +105,41 @@ describe("pairing", () => {
     expect(text(pairingCells(null, { next_duel: "412" } as CommitConfig))).toBe(
       "this contract predates consented pairing",
     );
+  });
+});
+
+describe("commit timeline", () => {
+  const A = "PK_A";
+  const T0 = Date.UTC(2026, 10, 6, 12, 1, 5);
+  const e = (event: ChainEvent["event"], method: string, dt: number, pk = A): ChainEvent => ({
+    event,
+    duel_id: "411",
+    agent_pk: pk,
+    method,
+    tx: `${method}-${dt}`,
+    at_ms: T0 + dt * 1000,
+  });
+  test("committed then revealed: both times, UTC, linked to their txs", () => {
+    const c = timelineCells([e("intent", "reveal_intent", 155), e("commit", "commit_intent", 0)], A, false);
+    expect(text(c)).toBe("committed 12:01:05 · revealed 12:03:40");
+    expect(c[0]).toMatchObject({ href: "https://testnet.nearblocks.io/txns/commit_intent-0" });
+    expect(c[2]).toMatchObject({ c: "ok", href: "https://testnet.nearblocks.io/txns/reveal_intent-155" });
+  });
+  test("committed, not yet revealed: hidden; once resolved: never revealed", () => {
+    const evs = [e("commit", "commit_intent", 0), e("commit", "commit_intent", 9, "PK_B")];
+    expect(text(timelineCells(evs, A, false))).toBe("committed 12:01:05 · hidden");
+    expect(timelineCells(evs, A, true)[2]).toMatchObject({ t: "never revealed", c: "loss" });
+  });
+  test("a reveal before the last commit belongs to the earlier commitment", () => {
+    const evs = [e("commit", "commit_intent", 0), e("intent", "reveal_intent", 30), e("commit", "commit_intent", 60)];
+    expect(text(timelineCells(evs, A, false))).toBe("committed 12:02:05 · hidden   2 commits, last shown");
+  });
+  test("no commitment: an intent posted in the clear, or nothing seen", () => {
+    expect(text(timelineCells([e("intent", "post_intent", 2)], A, false))).toBe(
+      "posted 12:01:07   in the clear, no commitment",
+    );
+    expect(text(timelineCells([], A, false))).toBe("no commit seen");
+    expect(text(timelineCells(undefined, A, false))).toBe("no commit seen");
   });
 });
 

@@ -1,7 +1,7 @@
 // FastNEAR tx readers behind GET /api/events, on fixture txs shaped like POST /v0/transactions bodies
 // (values from testnet duel 340, opened by open_duel). Run: `cd web && bun test app`.
 import { describe, expect, test } from "bun:test";
-import { opensOf, type Tx } from "../api/events/chain";
+import { eventsOf, opensOf, type Tx } from "../api/events/chain";
 
 const ARENA = "arena.nearbuddy-solver.testnet";
 type R = Tx["receipts"][number];
@@ -42,5 +42,44 @@ describe("opensOf", () => {
     const elsewhere = tx("E", [receipt("other.testnet", "open_duel", "1", [], { SuccessValue: b64('"7"') })]);
     const junk = tx("J", [receipt(ARENA, "open_duel", "1", [], { SuccessValue: b64("null") })]);
     expect([failed, post, elsewhere, junk].flatMap((t) => opensOf(t, ARENA))).toEqual([]);
+  });
+});
+
+const PK = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=";
+const ev = (event: string, data: Record<string, unknown>, standard = "nearbuddy-arena") =>
+  `EVENT_JSON:${JSON.stringify({ standard, version: "1.1.0", event, data })}`;
+
+describe("eventsOf", () => {
+  test("commit and reveal logs, with the emitting receipt's time and method", () => {
+    const commit = tx("C1", [
+      receipt(ARENA, "commit_intent", "1793975601000000000", [
+        ev("commit", { duel_id: 411, agent_pk: PK, commitment: "AA==" }),
+      ]),
+    ]);
+    const reveal = tx("R1", [
+      receipt(ARENA, "reveal_intent", "1793975655500000000", [
+        ev("intent", { duel_id: 411, agent_pk: PK, side: "Long", size_bps: 5000, nonce: 41, tee: 2 }),
+      ]),
+    ]);
+    expect(eventsOf(commit, ARENA)).toEqual([
+      { event: "commit", duel_id: "411", agent_pk: PK, method: "commit_intent", tx: "C1", at_ms: 1793975601000 },
+    ]);
+    expect(eventsOf(reveal, ARENA)[0]).toMatchObject({
+      event: "intent",
+      method: "reveal_intent",
+      at_ms: 1793975655500,
+    });
+  });
+  test("other events, other standards, other receivers and junk logs are skipped", () => {
+    const t = tx("X", [
+      receipt(ARENA, "resolve_duel", "1", [
+        ev("resolve", { duel_id: 411 }),
+        ev("execution_requested", { duel_id: 411, agent_pk: PK }, "near-outlayer"),
+        "EVENT_JSON:{not json",
+        "Resolved project: zavodil2.testnet/price-oracle",
+      ]),
+      receipt("other.testnet", "post_intent", "1", [ev("intent", { duel_id: 411, agent_pk: PK })]),
+    ]);
+    expect(eventsOf(t, ARENA)).toEqual([]);
   });
 });

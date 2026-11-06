@@ -1,15 +1,18 @@
 // Chain events for one duel, read from FastNEAR's tx API (POST /v0/account then /v0/transactions, <= 20
-// hashes a call): the tx that opened it and by which method. One scan of the arena's newest 200 txs (~3 h
+// hashes a call): the tx that opened it and by which method, and its `commit` / `intent` events in chain
+// order. One scan of the arena's newest 200 txs (~3 h
 // of testnet blocks) is shared by every duel id and kept 20 s; txs already parsed are not fetched again.
 // Older duels fall outside the window, which the body says (`oldest_ms`). A stale scan beats a 502.
+
+import type { ChainEvent, Opened } from "../../cells";
 import { ARENA, json } from "../near";
-import { type Opened, opensOf, type Tx } from "./chain";
+import { eventsOf, opensOf, type Tx } from "./chain";
 
 const TX_API = process.env.FASTNEAR_TX_API ?? "https://tx.test.fastnear.com/v0";
 const TTL = 20_000;
 const ID_RE = /^\d{1,12}$/;
 
-type Parsed = { opens: Opened[] };
+type Parsed = { opens: Opened[]; events: ChainEvent[] };
 type Scan = { at: number; oldest_ms: number | null; txs: Map<string, Parsed> };
 
 let last: Scan | null = null;
@@ -44,7 +47,7 @@ async function scan(): Promise<Scan> {
       tx_hashes: fresh.slice(i, i + 20),
     });
     // not-yet-indexed txs are absent here and fetched on the next scan
-    for (const t of transactions) txs.set(t.transaction.hash, { opens: opensOf(t, ARENA) });
+    for (const t of transactions) txs.set(t.transaction.hash, { opens: opensOf(t, ARENA), events: eventsOf(t, ARENA) });
   }
   const times = account_txs.map((t) => Math.floor(Number(t.tx_block_timestamp) / 1e6));
   return { at: Date.now(), oldest_ms: times.length ? Math.min(...times) : null, txs };
@@ -66,5 +69,9 @@ export async function GET(req: Request) {
   }
   const all = [...s.txs.values()];
   const opened = all.flatMap((p) => p.opens).find((o) => o.duel_id === id) ?? null;
-  return json(JSON.stringify({ at: s.at, source: TX_API, window: s.txs.size, oldest_ms: s.oldest_ms, opened }));
+  const events = all
+    .flatMap((p) => p.events)
+    .filter((e) => e.duel_id === id)
+    .sort((x, y) => x.at_ms - y.at_ms);
+  return json(JSON.stringify({ at: s.at, source: TX_API, window: s.txs.size, oldest_ms: s.oldest_ms, opened, events }));
 }

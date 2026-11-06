@@ -118,7 +118,22 @@ const solverIntents = [
 
 const OPEN_TX = "Cns1Xk9pQz7LmV4rT2wYb8NdF6sGa3eU1oKiH5jRcP9M";
 // GET /api/events body; `oldest_ms` far back so the duel sits inside the scanned window
-const events = (opened: unknown) => ({ at: now, window: 200, oldest_ms: now - 3 * 3_600_000, opened });
+const events = (opened: unknown, events: unknown[] = []) => ({
+  at: now,
+  window: 200,
+  oldest_ms: now - 3 * 3_600_000,
+  opened,
+  events,
+});
+const hms = (ms: number) => new Date(ms).toISOString().slice(11, 19);
+const chainEv = (event: string, method: string, pk: string, at_ms: number) => ({
+  event,
+  duel_id: "411",
+  agent_pk: pk,
+  method,
+  tx: `${method}Tx${at_ms}`,
+  at_ms,
+});
 const stub = (page: Page, path: string, body: unknown) =>
   page.route(`**/api/${path}**`, (r) => r.fulfill({ json: body, headers: { "cache-control": "no-store" } }));
 const shot = async (page: Page, name: string, from?: string, lines = 0) => {
@@ -205,6 +220,38 @@ test("duel: deploy 13 data (no commit fields, no get_no_reveal) renders the side
   await expect(page.locator("body")).toContainText("this contract predates consented pairing");
 });
 
+test("duel: commit and reveal times per side from the contract's events", async ({ page }) => {
+  const [cA, rA, cB] = [now - 300_000, now - 240_000, now - 290_000];
+  await stub(
+    page,
+    "events",
+    events({ duel_id: "411", method: "open_duel_consented", tx: OPEN_TX, at_ms: now - 360_000 }, [
+      chainEv("commit", "commit_intent", PK_A, cA),
+      chainEv("commit", "commit_intent", PK_B, cB),
+      chainEv("intent", "reveal_intent", PK_A, rA),
+    ]),
+  );
+  const live = { ...duel, resolved: false, close_at: NS(now + 120_000), outcome: null, last_intent_b: null };
+  await stub(page, "duel", {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    oracle: "price-oracle.testnet",
+    config: { next_duel: "412", ...commitOn },
+    no_reveal: [false, false],
+    duel: live,
+    a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+    b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
+  });
+  await page.goto("/duel/411");
+  const body = page.locator("body");
+  await expect(body).toContainText(`A commit         committed ${hms(cA)} · revealed ${hms(rA)}`);
+  await expect(body).toContainText(`B commit         committed ${hms(cB)} · hidden`);
+  await expect(page.locator(`a[href$="/txns/reveal_intentTx${rA}"]`)).toHaveClass(/ok/);
+  await expect(body).not.toContainText("earlier events not shown");
+  await shot(page, "duel-commits");
+});
+
 test("duel: open tx outside the scanned window falls back to today's require_consent, labelled", async ({ page }) => {
   await stub(page, "events", events(null));
   await stub(page, "duel", {
@@ -222,6 +269,7 @@ test("duel: open tx outside the scanned window falls back to today's require_con
   await expect(page.locator("span.ok", { hasText: "consent required" })).toBeVisible();
   await expect(page.locator("body")).toContainText("from get_config now; the open tx is not in the scanned window");
   await expect(page.locator("body")).not.toContainText("both agents signed");
+  await expect(page.locator("body")).toContainText("A commit         no commit seen");
 });
 
 test("agent: execution summary for this agent's followers", async ({ page }) => {

@@ -1,5 +1,7 @@
 // Pure readers for FastNEAR tx API bodies (POST /v0/transactions): which arena receipt opened which duel,
-// with the method it was opened by. No fetch, so bun test checks them on fixture txs (app/__tests__).
+// with the method it was opened by, and the contract's `commit` / `intent` EVENT_JSON logs with the method
+// that emitted them. No fetch, so bun test checks them on fixture txs (app/__tests__).
+import type { ChainEvent, Opened } from "../../cells";
 
 /** The slice of a FastNEAR tx this file reads. Block timestamps are ns, a string or a (lossy) JSON number. */
 export type Tx = {
@@ -16,9 +18,6 @@ export type Tx = {
   }[];
 };
 
-/** How a duel was paired: `open_duel` (owner) or `open_duel_consented` (both agent keys signed). */
-export type Opened = { duel_id: string; method: string; tx: string; at_ms: number };
-
 const OPEN_METHODS = new Set(["open_duel", "open_duel_consented"]);
 const ms = (ns: string | number) => Math.floor(Number(ns) / 1e6);
 const method = (r: Tx["receipts"][number]) => {
@@ -33,9 +32,42 @@ export function opensOf(t: Tx, arena: string): Opened[] {
     const st = r.execution_outcome.outcome.status;
     const v = typeof st === "object" && st && "SuccessValue" in st ? st.SuccessValue : undefined;
     if (r.receipt.receiver_id !== arena || !m || !OPEN_METHODS.has(m) || typeof v !== "string") return [];
-    const id = String(JSON.parse(atob(v)) ?? "");
+    let id = "";
+    try {
+      id = String(JSON.parse(atob(v)) ?? "");
+    } catch {} // not a JSON duel id: not an open
     return /^\d+$/.test(id)
       ? [{ duel_id: id, method: m, tx: t.transaction.hash, at_ms: ms(r.execution_outcome.block_timestamp) }]
       : [];
   });
+}
+
+/** The arena's `commit` and `intent` events in one tx, each with its emitting receipt's block time and method
+ *  (`reveal_intent` vs `post_intent` tells a reveal from an intent posted in the clear). */
+export function eventsOf(t: Tx, arena: string): ChainEvent[] {
+  return t.receipts.flatMap((r) =>
+    r.receipt.receiver_id !== arena
+      ? []
+      : r.execution_outcome.outcome.logs.flatMap((log): ChainEvent[] => {
+          if (!log.startsWith("EVENT_JSON:")) return [];
+          let e: { standard?: string; event?: string; data?: { duel_id?: number | string; agent_pk?: string } };
+          try {
+            e = JSON.parse(log.slice("EVENT_JSON:".length));
+          } catch {
+            return [];
+          }
+          if (e.standard !== "nearbuddy-arena" || (e.event !== "commit" && e.event !== "intent")) return [];
+          if (e.data?.duel_id == null || !e.data.agent_pk) return [];
+          return [
+            {
+              event: e.event,
+              duel_id: String(e.data.duel_id),
+              agent_pk: e.data.agent_pk,
+              method: method(r) ?? "",
+              tx: t.transaction.hash,
+              at_ms: ms(r.execution_outcome.block_timestamp),
+            },
+          ];
+        }),
+  );
 }

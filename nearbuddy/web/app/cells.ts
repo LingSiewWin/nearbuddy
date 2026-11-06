@@ -16,6 +16,41 @@ export const pairingWord = (c: CommitConfig | null | undefined) =>
 /** The tx that opened a duel, as GET /api/events finds it in FastNEAR's tx window. */
 export type Opened = { duel_id: string; method: string; tx: string; at_ms: number };
 
+/** A `commit` or `intent` EVENT_JSON log of the arena, with the method of the receipt that emitted it. */
+export type ChainEvent = {
+  event: "commit" | "intent";
+  duel_id: string;
+  agent_pk: string;
+  method: string;
+  tx: string;
+  at_ms: number;
+};
+
+const hms = (ms: number) => new Date(ms).toISOString().slice(11, 19);
+
+/** Duel box 1, one side's commit and reveal times from chain events (any order): the last commitment and
+ *  the first reveal after it; "hidden" until that reveal lands, "never revealed" once the duel resolved. */
+export const timelineCells = (events: ChainEvent[] | null | undefined, pk: string, resolved: boolean): Cell[] => {
+  const mine = (events ?? []).filter((e) => e.agent_pk === pk).sort((x, y) => x.at_ms - y.at_ms);
+  const commits = mine.filter((e) => e.event === "commit");
+  const c = commits.at(-1);
+  if (!c) {
+    const posted = mine.filter((e) => e.event === "intent").at(-1);
+    return posted
+      ? [`posted ${hms(posted.at_ms)}`, { t: "   in the clear, no commitment", c: "dim" }]
+      : [{ t: "no commit seen", c: "dim" }];
+  }
+  const r = mine.find((e) => e.event === "intent" && e.method === "reveal_intent" && e.at_ms >= c.at_ms);
+  return [
+    { t: `committed ${hms(c.at_ms)}`, href: txHref(c.tx), title: c.tx },
+    " · ",
+    r
+      ? { t: `revealed ${hms(r.at_ms)}`, c: "ok", href: txHref(r.tx), title: r.tx }
+      : { t: resolved ? "never revealed" : "hidden", c: resolved ? "loss" : "dim" },
+    commits.length > 1 ? { t: `   ${commits.length} commits, last shown`, c: "dim" } : "",
+  ];
+};
+
 /** Duel box 1, `pairing` row: from the open tx's method when it is in the scanned window, else from today's
  *  `require_consent` (labelled as such: the flag may have changed since the duel opened). */
 export const pairingCells = (opened: Opened | null | undefined, c: CommitConfig | null | undefined): Cell[] => {
