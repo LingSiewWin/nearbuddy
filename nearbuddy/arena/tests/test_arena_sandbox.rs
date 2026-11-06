@@ -432,6 +432,15 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     )
     .await?
     .assert_success();
+    // nonce 1 predates the follow, so it never settles for this follower (deploy 16); 13 replaces it
+    call(
+        "post_intent",
+        mk_a(13, Side::Long, [13u8; 32], [0xbb; 32], false),
+        &solver,
+        zero,
+    )
+    .await?
+    .assert_success();
     const TOKEN: &str = "nep141:wrap.near";
     let stub_view = |who: &AccountId| {
         near_api::Contract(intents.account_id().clone())
@@ -442,7 +451,7 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
             .read_only::<U128>()
             .fetch_from(&net)
     };
-    let fills: Vec<Value> = [1u64].iter().chain((3..=11u64).collect::<Vec<_>>().iter()).map(|n| json!({"intent_nonce": n.to_string(), "token": TOKEN, "amount_in": NearToken::from_millinear(100).as_yoctonear().to_string(), "amount_out": "1", "swap_tx": format!("sim-{n}")})).collect();
+    let fills: Vec<Value> = [13u64].iter().chain((3..=11u64).collect::<Vec<_>>().iter()).map(|n| json!({"intent_nonce": n.to_string(), "token": TOKEN, "amount_in": NearToken::from_millinear(100).as_yoctonear().to_string(), "amount_out": "1", "swap_tx": format!("sim-{n}")})).collect();
     // the solver settles before the outputs landed: refused, nothing moves
     call(
         "settle_follow",

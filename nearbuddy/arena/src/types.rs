@@ -162,17 +162,27 @@ pub struct Mandate {
 #[derive(Clone, Debug)]
 pub enum VersionedMandate {
     V2(Mandate),
+    /// From deploy 16: the mandate plus the block time of the (re)follow that stored it. Fills for
+    /// intents accepted before that time are refused ("intent before follow").
+    V3(Mandate, u64),
 }
 
 impl VersionedMandate {
     pub fn current(&self) -> &Mandate {
         match self {
-            VersionedMandate::V2(m) => m,
+            VersionedMandate::V2(m) | VersionedMandate::V3(m, _) => m,
         }
     }
     pub fn current_mut(&mut self) -> &mut Mandate {
         match self {
-            VersionedMandate::V2(m) => m,
+            VersionedMandate::V2(m) | VersionedMandate::V3(m, _) => m,
+        }
+    }
+    /// When the follower (re)followed; `None` for a mandate stored before deploy 16.
+    pub fn followed_at(&self) -> Option<u64> {
+        match self {
+            VersionedMandate::V2(_) => None,
+            VersionedMandate::V3(_, t) => Some(*t),
         }
     }
 }

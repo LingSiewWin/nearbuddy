@@ -4,7 +4,8 @@
 //! `withdraw_token` (debit first, exact re-credit on a failed transfer), the vault delay (never paid
 //! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted);
 //! from deploy 16 `vault_total == sum(vaults)`, no deposit past `max_vault_per_account`, and no fill
-//! settled for an intent accepted at or after its mandate's revoke or expiry.
+//! settled for an intent accepted at or after its mandate's revoke or expiry, or before its
+//! latest (re)follow.
 //!
 //! Every operation runs like a transaction on chain: the contract is read from the mocked trie,
 //! the method runs, and on success the struct is written back and the collections flushed. A
@@ -283,11 +284,41 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                     units: 5_000_000,
                 },
             ];
-            // follower 0 drops agent 0 a second in, between the posts: agent 0's later intents are
-            // accepted after the revoke, so the deploy-16 accept-time rule is reached in every case
-            let (p0, p1) = p.split_at(p.len() / 2);
+            // follower 0 drops agent 0 a second in and follows it again a second later, between the
+            // posts: agent 0's intents fall before, inside and after the unfollowed window, so the
+            // deploy-16 accept-time rules (revoke, re-follow) are reached in every case
+            let third = p.len() / 3;
+            let (p0, rest) = p.split_at(third);
+            let (p1, p2) = rest.split_at(third);
             let revoke = vec![Op::Advance { secs: 1 }, Op::Unfollow { who: 0, agent: 0 }];
-            [r, d, f, o, p0.to_vec(), revoke, p1.to_vec(), v, deliver].concat()
+            let refollow = vec![
+                Op::Advance { secs: 1 },
+                Op::Follow {
+                    who: 0,
+                    agent: 0,
+                    allowance: 2_000,
+                    cap: 1_000,
+                    spent_pct: 0,
+                    only_wrap: false,
+                    ttl_s: 7_200,
+                    revoked: false,
+                    floor: 1,
+                },
+            ];
+            [
+                r,
+                d,
+                f,
+                o,
+                p0.to_vec(),
+                revoke,
+                p1.to_vec(),
+                refollow,
+                p2.to_vec(),
+                v,
+                deliver,
+            ]
+            .concat()
         })
 }
 
@@ -487,6 +518,8 @@ struct World {
     posted: [Vec<u64>; AGENTS],
     /// Block time each (agent, nonce) was accepted at (deploy 16 `nonce_times`).
     accepted_at: HashMap<(usize, u64), u64>,
+    /// Block time of each (agent, follower) mandate's latest (re)follow (deploy 16 `V3`).
+    followed: HashMap<(usize, usize), u64>,
     settled: HashSet<(usize, usize, u64)>,
     proofs: u64,
     /// The arena's balance on the intents stub per token (0 wrap.near, 1 usdc.near).
@@ -519,6 +552,7 @@ impl World {
             next_nonce: [1; AGENTS],
             posted: Default::default(),
             accepted_at: HashMap::new(),
+            followed: HashMap::new(),
             settled: HashSet::new(),
             proofs: 0,
             intents_bal: [0; 2],
@@ -884,6 +918,7 @@ impl World {
                     assert!(r.is_err(), "a follow without a price floor was accepted");
                 }
                 if r.is_ok() {
+                    self.followed.insert((agent, who), self.now);
                     let m = self.snap().mandate(agent, who).cloned().expect("stored");
                     assert_eq!(m.revoked_at.0, 0, "follow resets revoked_at");
                 }
@@ -1320,7 +1355,10 @@ impl World {
             } else if let Some(m) = m.as_mut() {
                 // deploy 16: the grace never covers an intent accepted at or after the revoke / expiry
                 let at = self.accepted_at[&(agent, n)];
-                if m.revoked && (self.now >= m.revoked_at.0 + DELAY || at >= m.revoked_at.0) {
+                if self.followed.get(&(agent, who)).is_some_and(|t| at < *t) {
+                    Err("intent before follow")
+                } else if m.revoked && (self.now >= m.revoked_at.0 + DELAY || at >= m.revoked_at.0)
+                {
                     Err("mandate revoked")
                 } else if self.now >= m.expires_at.0 + DELAY || at >= m.expires_at.0 {
                     Err("mandate expired")
@@ -1445,6 +1483,10 @@ impl World {
             assert!(
                 (!m.revoked || at < m.revoked_at.0) && at < m.expires_at.0,
                 "settled an intent accepted after its mandate closed"
+            );
+            assert!(
+                at >= self.followed[&(agent, who)],
+                "settled an intent accepted before the (re)follow"
             );
             self.settled.insert((agent, who, n));
         }

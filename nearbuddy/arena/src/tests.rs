@@ -1072,12 +1072,75 @@ fn intent_accepted_after_expiry_never_settles_inside_the_grace() {
     assert_eq!(r.rejected, vec![(0, "mandate expired".to_string())]);
 }
 
+/// `mandate(NEAR, VAULT, [])` open for an hour (the default one expires 1 ms after `NOW`).
+fn hour_mandate() -> Mandate {
+    let mut m = mandate(NEAR, VAULT, vec![]);
+    m.expires_at = U64(NOW + 3_600 * SEC);
+    m
+}
+
+#[test]
+fn intent_posted_before_the_follow_never_settles() {
+    let (mut c, ska, _) = setup();
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    post_a_at(&mut c, &ska, &tee, d, 1, NOW);
+    ctx_at(FOLLOWER, VAULT, NOW + SEC);
+    c.deposit();
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(Base64VecU8(key(1).1), hour_mandate());
+    post_a_at(&mut c, &ska, &tee, d, 2, NOW + 2 * SEC);
+    let fills = vec![fill(1, "usdc", 50), fill(2, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 3 * SEC).unwrap();
+    assert_eq!(r.settled, 1);
+    assert_eq!(r.rejected, vec![(0, "intent before follow".to_string())]);
+}
+
+#[test]
+fn refollow_does_not_revive_intents_from_the_unfollowed_window() {
+    // re-follow resets `revoked`; the follow time keeps the gap closed
+    let (mut c, d, _) = setup_follow(hour_mandate());
+    let (ska, tee) = (key(1).0, key(7).0);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.unfollow(Base64VecU8(key(1).1));
+    post_a_at(&mut c, &ska, &tee, d, 2, NOW + 2 * SEC);
+    ctx_at(FOLLOWER, 0, NOW + 3 * SEC);
+    c.follow(Base64VecU8(key(1).1), hour_mandate());
+    post_a_at(&mut c, &ska, &tee, d, 3, NOW + 4 * SEC);
+    let fills = vec![
+        fill(1, "usdc", 50),
+        fill(2, "usdc", 50),
+        fill(3, "usdc", 50),
+    ];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 5 * SEC).unwrap();
+    assert_eq!(r.settled, 1, "only nonce 3, posted after the re-follow");
+    let before = "intent before follow".to_string();
+    assert_eq!(r.rejected, vec![(0, before.clone()), (1, before)]);
+}
+
+#[test]
+fn follow_stores_its_time() {
+    let (c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let k = crate::follow::follow_key(&key(1).1, &FOLLOWER.parse().unwrap());
+    assert_eq!(c.follows.get(&k).unwrap().followed_at(), Some(NOW));
+}
+
+/// Store the follower's mandate for agent `seed` as deploy 15 did: `V2`, no follow time.
+fn as_v15_mandate(c: &mut Contract, seed: u8) {
+    let k = crate::follow::follow_key(&key(seed).1, &FOLLOWER.parse().unwrap());
+    let m = c.follows.get(&k).unwrap().current().clone();
+    c.follows.insert(k, VersionedMandate::V2(m));
+}
+
 #[test]
 fn intent_accepted_before_deploy_16_keeps_the_grace_rule() {
     // only `used_nonces` knows it: no accept time, so the deploy-15 grace applies as before
     let mut m = mandate(NEAR, VAULT, vec![]);
     m.expires_at = U64(NOW + 2 * GRACE);
     let (mut c, ..) = setup_follow(m);
+    as_v15_mandate(&mut c, 1);
     c.used_nonces.insert(nonce_key(&key(1).1, 5));
     ctx_at(FOLLOWER, 0, NOW + SEC);
     c.unfollow(Base64VecU8(key(1).1));
@@ -2322,7 +2385,8 @@ fn v15_state(c: &mut Contract) -> Vec<u8> {
 #[test]
 fn migrate_v16_keeps_deploy_15_state_and_adds_the_account_cap() {
     let (mut c, d, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    // deploy 15 recorded the posted nonce in `used_nonces` only
+    // deploy 15 recorded the posted nonce in `used_nonces` only, and the mandate as V2
+    as_v15_mandate(&mut c, 1);
     let k = nonce_key(&key(1).1, 1);
     c.nonce_times.remove(&k);
     c.used_nonces.insert(k.clone());

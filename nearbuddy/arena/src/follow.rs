@@ -195,7 +195,8 @@ impl Contract {
     /// vault. `min_out_per_near` must be set (clients derive it from the oracle mid less slippage), so
     /// a solver can never settle a fill for a token amount of output. `revoked_at` is reset to 0.
     /// Panics: "paused", "migrating", "agent missing", "agent unverified", "empty mandate",
-    /// "price floor required", "insufficient".
+    /// "price floor required", "insufficient". The mandate records the follow time: only intents
+    /// accepted from then on settle against it (deploy 16).
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
         self.not_paused();
         self.not_migrating();
@@ -212,8 +213,10 @@ impl Contract {
         };
         let before = env::storage_usage();
         let who = env::predecessor_account_id();
-        self.follows
-            .insert(follow_key(&agent_pk.0, &who), VersionedMandate::V2(mandate));
+        self.follows.insert(
+            follow_key(&agent_pk.0, &who),
+            VersionedMandate::V3(mandate, env::block_timestamp()),
+        );
         self.follows.flush();
         let cost = storage_cost_since(before);
         if cost > 0 {
@@ -295,7 +298,7 @@ impl Contract {
     /// `amount_out` to the follower's holding.
     /// Batch-wide rejections: "no receipt" (view failed, too long, malformed), "outflow during
     /// view" (a token withdrawal confirmed meanwhile; retry), "solver removed". Per fill: "nonce
-    /// unknown", "duplicate fill", "no mandate", "mandate revoked", "mandate expired",
+    /// unknown", "duplicate fill", "no mandate", "intent before follow", "mandate revoked", "mandate expired",
     /// "token not allowed", "fee overflow", "over cap", "allowance exhausted", "amount overflow",
     /// "below min price", "no receipt", "insufficient".
     /// When no fill settles the call panics with the first reason, so a batch without a receipt is
@@ -376,11 +379,17 @@ impl Contract {
         // settleable for the same delay a vault withdrawal waits, then the mandate is closed. The grace
         // covers only intents accepted before the revoke or expiry (`at`; 0 = before deploy 16, unknown).
         let grace = self.withdraw_delay_ns;
-        let m = self
+        let v = self
             .follows
             .get_mut(&follow_key(agent_pk, follower))
-            .ok_or("no mandate")?
-            .current_mut();
+            .ok_or("no mandate")?;
+        // a follower copies only intents accepted from its latest (re)follow on: one accepted while
+        // it was not following (before the first follow, or between an unfollow and a re-follow,
+        // which resets `revoked`) never settles. Same block counts as after. Pre-16 mandates: no time.
+        if v.followed_at().is_some_and(|t| at < t) {
+            return Err("intent before follow");
+        }
+        let m = v.current_mut();
         if m.revoked && (now >= m.revoked_at.0.saturating_add(grace) || at >= m.revoked_at.0) {
             return Err("mandate revoked");
         }
