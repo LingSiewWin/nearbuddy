@@ -17,6 +17,8 @@ pub(crate) fn fill_key(agent_pk: &[u8], follower: &AccountId, nonce: u64) -> Vec
 impl Contract {
     /// Follower locks NEAR here. Solvers are repaid from it only inside a mandate. A first deposit
     /// also pays for the vault record.
+    /// Caller: anyone (follower). Deposit: the amount to lock, above a first vault record's
+    /// storage. Panics: "deposit required".
     #[payable]
     pub fn deposit(&mut self) -> U128 {
         let before = env::storage_usage();
@@ -35,6 +37,7 @@ impl Contract {
 
     /// Instant withdrawal. ponytail: the solver carries exposure between its swap and
     /// `settle_follow`; add `request_withdraw` + delay (vault contract pattern) before mainnet.
+    /// Caller: the vault owner. Deposit: none. Panics: "insufficient".
     pub fn withdraw(&mut self, amount: U128) -> Promise {
         let who = env::predecessor_account_id();
         let bal = self.vaults.get(&who).copied().unwrap_or(0);
@@ -45,6 +48,8 @@ impl Contract {
 
     /// Attach (or replace) the caller's mandate for an agent. Only enclave-verified agents (TEE
     /// proof on every intent) can be followed. Storage is paid from the vault.
+    /// Caller: a follower with a funded vault. Deposit: none; storage is debited from the
+    /// vault. Panics: "agent missing", "agent unverified", "empty mandate", "insufficient".
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
         require!(self.agents.contains_key(&agent_pk.0), "agent missing");
         require!(self.tee_agents.contains(&agent_pk.0), "agent unverified");
@@ -68,6 +73,8 @@ impl Contract {
         }
     }
 
+    /// Revoke the caller's mandate for `agent_pk`; a no-op when there is none. Caller: the
+    /// follower. Deposit: none. Panics: none.
     pub fn unfollow(&mut self, agent_pk: Base64VecU8) {
         let who = env::predecessor_account_id();
         if let Some(slot) = self
@@ -83,6 +90,10 @@ impl Contract {
     /// the follower's mandate; accepted fills move `amount_in` from the follower's vault to the
     /// solver's and `amount_in * fee_bps / 10_000` to the owner. Rejections are reported, not
     /// panicked, so one bad fill never blocks the batch.
+    /// Caller: a registered solver. Deposit: none. Panics: "not solver". Per-fill rejections
+    /// ("nonce unknown", "duplicate fill", "no mandate", "mandate revoked", "mandate expired",
+    /// "token not allowed", "over cap", "allowance exhausted", "insufficient") come back in
+    /// `SettleReport.rejected` instead.
     pub fn settle_follow(
         &mut self,
         agent_pk: Base64VecU8,

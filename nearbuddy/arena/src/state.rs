@@ -118,6 +118,7 @@ impl Contract {
     /// Outlayer price oracle; `oracle_deposit` is attached to each price request. `slash_bps` of the
     /// loser's bond moves to the pool. `fee_bps` is charged on top of every settled fill and accrues
     /// to the owner.
+    /// Caller: deployer, once. Deposit: none. Panics: "bps out of range".
     #[init]
     pub fn init(
         owner: AccountId,
@@ -157,6 +158,8 @@ impl Contract {
 
     /// Deploy 10 → 11: add `intent_lock_ns` (60 s; `set_oracle` changes it). Collections keep
     /// their prefixes.
+    /// Caller: the contract itself (private), once after the deploy-11 code lands. Deposit:
+    /// none. Panics: "no state", or the SDK private-method panic for any other caller.
     #[private]
     #[init(ignore_state)]
     pub fn migrate_v11() -> Self {
@@ -186,6 +189,8 @@ impl Contract {
         }
     }
 
+    /// Allow `account_id` to call `settle_follow`. Caller: owner. Deposit: none. Panics:
+    /// "not owner".
     pub fn add_solver(&mut self, account_id: AccountId) {
         self.only_owner();
         self.solvers.insert(account_id);
@@ -193,6 +198,8 @@ impl Contract {
 
     /// Point at another price oracle account, change the deposit it needs, the duel length floor, or
     /// the intent lock (no intent in the last `intent_lock_s` of a duel; at most half the floor).
+    /// Caller: owner. Deposit: none. Panics: "not owner", "intent_lock_s too large",
+    /// "min_duel_s too large".
     pub fn set_oracle(
         &mut self,
         oracle_account: AccountId,
@@ -209,6 +216,7 @@ impl Contract {
     }
 
     /// Contract owner collects accrued settlement fees.
+    /// Caller: owner. Deposit: none. Panics: "not owner", "insufficient" (nothing accrued).
     pub fn withdraw_fees(&mut self) -> Promise {
         self.only_owner();
         let amt = self.owner_fees;

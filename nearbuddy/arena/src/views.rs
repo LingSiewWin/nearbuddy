@@ -22,10 +22,12 @@ impl Contract {
         }
     }
 
+    /// Vault balance in yoctoNEAR, 0 for an unknown account. View: anyone, no deposit, no panics.
     pub fn get_vault(&self, account: AccountId) -> U128 {
         U128(self.vaults.get(&account).copied().unwrap_or(0))
     }
 
+    /// The follower's mandate for an agent, if any. View: anyone, no deposit, no panics.
     pub fn get_follow(&self, agent_pk: Base64VecU8, follower: AccountId) -> Option<Mandate> {
         self.follows
             .get(&agent_pk.0)?
@@ -34,10 +36,12 @@ impl Contract {
             .map(|(_, m)| m.clone())
     }
 
+    /// Every follower and mandate attached to an agent. View: anyone, no deposit, no panics.
     pub fn list_followers(&self, agent_pk: Base64VecU8) -> Vec<(AccountId, Mandate)> {
         self.follows.get(&agent_pk.0).cloned().unwrap_or_default()
     }
 
+    /// Owner, oracle and fee settings plus the next duel id. View: anyone, no deposit, no panics.
     pub fn get_config(&self) -> Config {
         Config {
             owner: self.owner.clone(),
@@ -53,20 +57,26 @@ impl Contract {
         }
     }
 
+    /// Agent record plus whether it is TEE-bound; `None` for an unknown key. View: anyone, no
+    /// deposit, no panics.
     pub fn get_agent(&self, agent_pk: Base64VecU8) -> Option<AgentView> {
         self.agents.get(&agent_pk.0).map(|a| self.view_of(a))
     }
 
+    /// Whether an enclave key is accepted as `TeeProof.signer`. View: anyone, no deposit, no
+    /// panics.
     pub fn is_tee_signer(&self, signer: Base64VecU8) -> bool {
         self.tee_signers.contains(&signer.0)
     }
 
+    /// Full duel record; `None` for an unknown id. View: anyone, no deposit, no panics.
     pub fn get_duel(&self, duel_id: U64) -> Option<Duel> {
         self.duels.get(&duel_id.0).cloned()
     }
 
     /// Duel ids an agent took part in, newest first, `limit` entries from offset `from`. Only duels
     /// opened from deploy 10 on are indexed; unknown agents return an empty list.
+    /// View: anyone, no deposit, no panics.
     pub fn agent_duels(&self, agent_pk: Base64VecU8, from: u64, limit: u64) -> Vec<U64> {
         let Some(list) = self.agent_duels.get(&agent_pk.0) else {
             return vec![];
@@ -80,6 +90,7 @@ impl Contract {
     }
 
     /// Agents sorted by alpha, then shield, descending.
+    /// View: anyone, no deposit, no panics.
     pub fn leaderboard(&self) -> Vec<AgentView> {
         let mut v: Vec<AgentView> = self.agents.values().map(|a| self.view_of(a)).collect();
         v.sort_by(|x, y| (y.alpha_bps, y.shield).cmp(&(x.alpha_bps, x.shield)));
@@ -87,15 +98,19 @@ impl Contract {
     }
 
     /// The exact bytes an agent key signs to be registered by `owner`.
+    /// View: anyone, no deposit, no panics.
     pub fn register_message(&self, owner: AccountId) -> Base64VecU8 {
         Base64VecU8(register_bytes(&owner))
     }
 
+    /// Hex of the exact bytes an agent signs for `intent`, for off-chain parity checks. View:
+    /// anyone, no deposit, no panics.
     pub fn intent_message_hex(&self, intent: Intent) -> String {
         hex(&intent_message(&intent))
     }
 
     /// The exact text a TEE signs for an agent's completion, for off-chain parity checks.
+    /// View: anyone, no deposit, no panics.
     pub fn tee_text_utf8(
         &self,
         kind: u8,

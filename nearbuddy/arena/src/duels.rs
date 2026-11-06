@@ -58,6 +58,9 @@ impl Contract {
     /// Pair two registered, idle agents on an oracle asset. Attached deposit must cover the duel's
     /// storage plus `oracle_deposit`; the open price is requested from the oracle in the same call
     /// and lands through `oracle_on_call`. Returns the duel id.
+    /// Caller: owner. Deposit: the duel record's storage plus `oracle_deposit`. Panics:
+    /// "not owner", "same agent", "symbol too long", "close_at in the past", "duel too short",
+    /// "agent missing", "in duel", "deposit too small".
     #[payable]
     pub fn open_duel(
         &mut self,
@@ -116,6 +119,8 @@ impl Contract {
     /// Ask the oracle again for a duel whose open price never arrived (TEE fetch failed or timed
     /// out). Anyone may call and attaches the oracle deposit (so nobody can spend the contract's
     /// balance on oracle fees); the oracle's refund stays with the contract.
+    /// Caller: anyone. Deposit: `oracle_deposit`, excess refunded. Panics:
+    /// "attach oracle_deposit", "duel missing", "has open price", "duel closed".
     #[payable]
     pub fn request_open_price(&mut self, duel_id: U64) {
         take_oracle_deposit(self.oracle_deposit);
@@ -141,6 +146,11 @@ impl Contract {
     /// binds the decision to the agent and the agent's bond pays its storage. Refused inside the
     /// last `intent_lock_ns` of the duel. A TEE-backed agent must also present the enclave signature
     /// over the completion that produced the decision.
+    /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
+    /// "agent_pk length", "proof_hash length", "bad size", "agent missing", "bad tee kind",
+    /// "tee hash length", "unknown tee signer", "bad tee signature", "proof_hash mismatch",
+    /// "proof used", "tee proof required", "duel missing", "duel closed", "intent lock",
+    /// "bad target", "nonce used", "bad signature", "bond exhausted".
     pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
         let before = env::storage_usage();
         let i = &signed.intent;
@@ -234,6 +244,9 @@ impl Contract {
 
     /// Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver
     /// delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool.
+    /// Caller: anyone (spectator). Deposit: at least `min_chaos_deposit` and above the record's
+    /// storage. Panics: "chaos deposit too small", "payload_hash length", "kind too long",
+    /// "duel missing", "duel closed", "bad target", "chaos full".
     #[payable]
     pub fn inject_chaos(
         &mut self,
@@ -271,6 +284,8 @@ impl Contract {
     /// `oracle_on_call` and finishes the duel. The caller attaches the oracle deposit. The oracle
     /// request is detached: this call succeeds once the request is sent, and may be repeated if the
     /// oracle never answers.
+    /// Caller: anyone. Deposit: `oracle_deposit`, excess refunded. Panics:
+    /// "attach oracle_deposit", "duel missing", "resolved", "duel open", "no open price".
     #[payable]
     pub fn resolve_duel(&mut self, duel_id: U64) {
         take_oracle_deposit(self.oracle_deposit);
@@ -283,6 +298,9 @@ impl Contract {
 
     /// Outlayer delivers the price here. `msg` is `open:<id>` or `close:<id>` as sent by
     /// `ask_oracle`; `sender_id` is who called `oracle_call` and must be this contract.
+    /// Caller: `oracle_account` only. Deposit: none. Panics: "not oracle", "not our request",
+    /// "bad msg", "duel missing", "no price", "price overflow", "bad price", "resolved",
+    /// "duel open", "price before close", "no open price".
     pub fn oracle_on_call(&mut self, sender_id: AccountId, data: PriceData, msg: String) {
         require!(
             env::predecessor_account_id() == self.oracle_account,
@@ -330,6 +348,8 @@ impl Contract {
 
     /// Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both
     /// agents, split the pool between them, no slashing, no score. Recorded as a tie with no prices.
+    /// Caller: anyone. Deposit: none. Panics: "duel missing", "resolved", "too early",
+    /// "agent missing".
     pub fn void_duel(&mut self, duel_id: U64) {
         let d = self.duels.get_mut(&duel_id.0).expect("duel missing");
         require!(!d.resolved, "resolved");
