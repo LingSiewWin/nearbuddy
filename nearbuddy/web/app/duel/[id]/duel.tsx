@@ -369,10 +369,10 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
           {answer
             ? `Its answer: ${sideWord(answer.side)}.`
             : closed
-              ? sealedIn(d.events, d.duel, target.agent)
+              ? sealedIn(d.events, d.duel, target.agent, hit.at)
                 ? "Its answer was sealed and never revealed."
                 : "It made no call after it."
-              : sealedIn(d.events, d.duel, target.agent)
+              : sealedIn(d.events, d.duel, target.agent, hit.at)
                 ? "Its next call is sealed until the last minute."
                 : "It has not answered yet."}{" "}
           The headline and the model&apos;s own words are below.

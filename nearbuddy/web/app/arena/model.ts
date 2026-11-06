@@ -21,8 +21,9 @@ export const fixedAt = (c: Intent, events: ArenaEvent[]): number | null => {
   return commits.length ? Math.max(...commits) : null;
 };
 /** Commit-reveal: the agent's newest commit in this duel is newer than its newest call, so a call is on chain that
- *  nobody can read yet. Order-agnostic: works on the tape (newest first) and a duel's events (oldest first). */
-export const sealedIn = (events: ArenaEvent[], duel: number, agent: string) => {
+ *  nobody can read yet. With `since`, that commit must also be newer than it (an attack: a call sealed before the lie
+ *  never read it). Order-agnostic: works on the tape (newest first) and a duel's events (oldest first). */
+export const sealedIn = (events: ArenaEvent[], duel: number, agent: string, since = 0) => {
   const last = (k: (e: ArenaEvent) => boolean) =>
     Math.max(
       0,
@@ -31,7 +32,7 @@ export const sealedIn = (events: ArenaEvent[], duel: number, agent: string) => {
         .map((e) => e.at),
     );
   const c = last((e) => e.kind === "commit");
-  return c > 0 && c > last(isCall);
+  return c > since && c > last(isCall);
 };
 /** The target's first call fixed after an attack: the call that could have read the lie. */
 export const replyTo = (a: Attack, events: ArenaEvent[]): Intent | null =>

@@ -437,4 +437,8 @@ test("sealedIn: a commit newer than the newest call, in either event order", () 
   expect(sealedIn([commit(10), reveal(20)], 9, "a")).toBe(false);
   expect(sealedIn([commit(10)], 8, "a")).toBe(false); // another duel
   expect(sealedIn([{ ...commit(30), ok: false }, reveal(20)], 9, "a")).toBe(false); // a refused commit seals nothing
+  // since an attack at 20: a call sealed before the lie never read it, so it is no pending answer
+  expect(sealedIn([commit(10)], 9, "a", 20)).toBe(false);
+  expect(sealedIn([commit(10), commit(30)], 9, "a", 20)).toBe(true);
+  expect(sealedIn([commit(30), reveal(40)], 9, "a", 20)).toBe(false); // sealed after it, and already revealed
 });

@@ -36,6 +36,7 @@ export function Headline({
   now,
   attack = null,
   answer = null,
+  pending = false,
 }: {
   f: Focus;
   price: number | null;
@@ -45,6 +46,8 @@ export function Headline({
   attack?: Attack | null;
   /** the target's first call sealed (or made) after that attack: its answer to the lie, if any yet */
   answer?: Intent | null;
+  /** the target sealed a call after that attack and has not revealed it */
+  pending?: boolean;
 }) {
   const t = sideTone(f);
   const A = <span className={`who ${t.a}`}>{who(f.a.model)}</span>;
@@ -143,7 +146,6 @@ export function Headline({
   // (skipped before the clock starts: `now` is 0 on the first render)
   if (f.live && attack && now) {
     const hitA = attack.target === f.a.agent;
-    const target = hitA ? f.a : f.b;
     const closed = now > f.closes; // no reveal can land after the close
     const ago = Math.max(0, Math.round((now - attack.at) / 1000));
     const chars = Array.from(attack.text ?? ""); // by code point, so an emoji is never cut in half
@@ -157,10 +159,10 @@ export function Headline({
           {answer
             ? `Its answer: ${sideWord(answer.side)}.`
             : closed
-              ? target.sealed
+              ? pending
                 ? "Its answer was sealed and never revealed."
                 : "It made no call after it."
-              : target.sealed
+              : pending
                 ? "Its next call is sealed until the last minute."
                 : "It has not answered yet."}
         </span>

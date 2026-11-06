@@ -11,7 +11,7 @@ import { useEvents, useNow, usePrice } from "../lib/live";
 import { DrawerProvider } from "../ui/drawer";
 import { ARENA_ID, acctUrl, CHAIN, duelHref, ORACLE_ID, TAMPER_TX, txUrl, who, YOU } from "../ui/format";
 import { Machine } from "../ui/machine";
-import { type Attack, focusOf, latestStory, openOf, replyTo, withTape } from "./model";
+import { type Attack, focusOf, latestStory, openOf, replyTo, sealedIn, withTape } from "./model";
 import { Headline, Race } from "./race";
 import { Join, News, Squares, Standings } from "./sections";
 import { Tape, TapeMachine } from "./tape";
@@ -153,6 +153,7 @@ export default function Arena({ initial }: { initial: Initial }) {
                   now={now}
                   attack={liveHit}
                   answer={liveHit ? replyTo(liveHit, events) : null}
+                  pending={liveHit ? sealedIn(events, liveHit.duel, liveHit.target, liveHit.at) : false}
                 />
                 {s.also_live.length ? (
                   <p className="fine also">
