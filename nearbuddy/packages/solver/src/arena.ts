@@ -2,8 +2,11 @@
 // registered solver: it opens duels for the runner, posts agent-signed intents (with their TEE
 // proofs), relays chaos, asks the oracle to resolve and settles follower fills.
 //   POST /register {agent_pk, model_id, bond, tee, register_sig} -> {tx, agent}
-//   POST /duel     {a, b, symbol, close_at}                  -> {duel_id, tx}   (symbol = oracle asset id, e.g. wrap.near)
+//   POST /duel     {a, b, symbol, close_at, sig_a?, sig_b?}  -> {duel_id, tx}   (symbol = oracle asset id, e.g. wrap.near;
+//                  with both sigs: open_duel_consented, each agent's ed25519 over consentMessage)
 //   POST /intent   {signed: SignedIntent, tee?: TeeProof}    -> {tx, quotes:[{follower, amount, quote}]}
+//   POST /commit   {duel_id, agent_pk, commitment, sig}      -> {tx}  (commit_intent; no quotes, the call is still hidden)
+//   POST /reveal   {signed, salt, tee?}                      -> {tx, quotes}  (reveal_intent; followers are quoted here)
 //   POST /chaos    {payload}  (open)                         -> {payload_hash}; spectator then calls inject_chaos on chain
 //   POST /resolve  {duel_id}                                 -> {tx, sent}  (permissionless on chain; the oracle callback finishes the duel)
 //   POST /open_price {duel_id}                               -> {tx}  (re-ask the oracle for a missing open price)
@@ -17,7 +20,15 @@ import { dirname } from "node:path";
 import { type Account, teraToGas } from "near-api-js";
 import { ARENA, arenaView } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
-import { type SignedIntent, type TeeProof, verifyIntent, verifyTeeProof } from "../../protocol/src/intent.ts";
+import {
+  commitMessage,
+  consentMessage,
+  type SignedIntent,
+  type TeeProof,
+  verify,
+  verifyIntent,
+  verifyTeeProof,
+} from "../../protocol/src/intent.ts";
 import { type Quote, quote, sellNearForUsdc } from "./oneclick.ts";
 
 export interface Mandate {
@@ -252,10 +263,21 @@ export class Arena {
 
   /** `symbol` is the oracle asset id (`wrap.near` = NEAR/USD on Outlayer). The open price arrives a few
    *  seconds later through the oracle callback. */
-  async openDuel(a: string, b: string, symbol: string, close_at: string) {
+  async openDuel(a: string, b: string, symbol: string, close_at: string, consent?: { sig_a: string; sig_b: string }) {
+    if (consent) {
+      // same check the contract runs, so a bad signature fails here without spending gas
+      const msg = consentMessage(ARENA, a, b, symbol, close_at);
+      if (!verify(a, msg, consent.sig_a) || !verify(b, msg, consent.sig_b)) throw new Error("bad consent signature");
+    }
     let r: { tx: string; value: unknown };
     try {
-      r = await this.callWithOracleDeposit("open_duel", { a, b, symbol, close_at }, OPEN_DUEL_STORAGE);
+      r = consent
+        ? await this.callWithOracleDeposit(
+            "open_duel_consented",
+            { a, b, symbol, close_at, ...consent },
+            OPEN_DUEL_STORAGE,
+          )
+        : await this.callWithOracleDeposit("open_duel", { a, b, symbol, close_at }, OPEN_DUEL_STORAGE);
     } catch (e) {
       // the oracle yield inside open_duel makes the tx take several seconds; public RPCs sometimes drop the wait
       // with "Internal server error" after the tx landed. Never resend (the agents would be "in duel"): look it up.
@@ -285,6 +307,23 @@ export class Arena {
   }
 
   async postIntent(signed: SignedIntent, tee?: TeeProof) {
+    return this.landIntent("post_intent", signed, tee);
+  }
+
+  /** Commit-reveal, step 1: relay the agent's signed commitment. Nothing about the call is public yet: no quotes. */
+  async commitIntent(duel_id: string, agent_pk: string, commitment: string, sig: string) {
+    if (!verify(agent_pk, commitMessage(ARENA, duel_id, b64.dec(commitment)), sig))
+      throw new Error("bad commit signature");
+    return { tx: (await this.call("commit_intent", { duel_id, agent_pk, commitment, sig })).tx };
+  }
+
+  /** Commit-reveal, step 2: the contract checks sha256(intent bytes || salt) against the stored commitment, then
+   *  runs post_intent's checks. The call is public from here on, so followers are quoted now. */
+  async revealIntent(signed: SignedIntent, salt: string, tee?: TeeProof) {
+    return this.landIntent("reveal_intent", signed, tee, { salt });
+  }
+
+  private async landIntent(method: string, signed: SignedIntent, tee?: TeeProof, extra: { salt?: string } = {}) {
     if (!verifyIntent(signed)) throw new Error("bad intent signature");
     if (tee) {
       // same check the contract runs, so a bad record fails here without spending gas
@@ -292,7 +331,7 @@ export class Arena {
       if (!agent) throw new Error("agent missing");
       if (!verifyTeeProof(tee, agent.model_id, signed.intent.proof_hash)) throw new Error("bad tee proof");
     }
-    const r = await this.call("post_intent", { signed, tee: tee ?? null });
+    const r = await this.call(method, { signed, ...extra, tee: tee ?? null });
     const quotes = await this.quotesFor(signed.intent.agent_pk);
     const rec: IntentRecord = { signed, tx: r.tx, quotes, at: Date.now() };
     this.intents.push(rec);
@@ -498,15 +537,32 @@ export class Arena {
     }
     if (method === "POST" && url === "/chaos")
       return { code: 200, body: this.stash((JSON.parse(body) as { payload: string }).payload) };
-    const mine = ["/duel", "/register", "/intent", "/resolve", "/open_price", "/settle_follow", "/consume"].includes(
-      url ?? "",
-    );
+    const mine = [
+      "/duel",
+      "/register",
+      "/intent",
+      "/commit",
+      "/reveal",
+      "/resolve",
+      "/open_price",
+      "/settle_follow",
+      "/consume",
+    ].includes(url ?? "");
     if (!mine) return null;
     if (method !== "POST") return { code: 405, body: { error: "POST only" } };
     if (!keyOk(headers["x-arena-key"])) return { code: 401, body: { error: "x-arena-key required" } };
     if (url === "/duel") {
-      const q = JSON.parse(body) as { a: string; b: string; symbol: string; close_at: string };
-      return { code: 200, body: await this.openDuel(q.a, q.b, q.symbol, q.close_at) };
+      const q = JSON.parse(body) as {
+        a: string;
+        b: string;
+        symbol: string;
+        close_at: string;
+        sig_a?: string;
+        sig_b?: string;
+      };
+      if (!q.sig_a !== !q.sig_b) return { code: 400, body: { error: "sig_a and sig_b go together" } };
+      const consent = q.sig_a && q.sig_b ? { sig_a: q.sig_a, sig_b: q.sig_b } : undefined;
+      return { code: 200, body: await this.openDuel(q.a, q.b, q.symbol, q.close_at, consent) };
     }
     if (method === "POST" && url === "/register") {
       const q = JSON.parse(body) as {
@@ -523,6 +579,14 @@ export class Arena {
       // accept both {signed, tee} and a bare SignedIntent (older demo)
       const signed = q.signed ?? ({ intent: q.intent, signature: q.signature } as SignedIntent);
       return { code: 200, body: await this.postIntent(signed, q.tee ?? undefined) };
+    }
+    if (url === "/commit") {
+      const q = JSON.parse(body) as { duel_id: string; agent_pk: string; commitment: string; sig: string };
+      return { code: 200, body: await this.commitIntent(String(q.duel_id), q.agent_pk, q.commitment, q.sig) };
+    }
+    if (url === "/reveal") {
+      const q = JSON.parse(body) as { signed: SignedIntent; salt: string; tee?: TeeProof | null };
+      return { code: 200, body: await this.revealIntent(q.signed, q.salt, q.tee ?? undefined) };
     }
     if (method === "POST" && url === "/resolve") {
       const q = JSON.parse(body) as { duel_id: string };

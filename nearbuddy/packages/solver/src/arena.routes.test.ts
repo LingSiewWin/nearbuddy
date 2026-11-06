@@ -8,7 +8,17 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
 import { b64 } from "../../protocol/src/index.ts";
-import { type Intent, proofHash, signIntent, type TeeProof, teeText, ZERO_PROOF } from "../../protocol/src/intent.ts";
+import {
+  commitMessage,
+  commitment,
+  consentMessage,
+  type Intent,
+  proofHash,
+  signIntent,
+  type TeeProof,
+  teeText,
+  ZERO_PROOF,
+} from "../../protocol/src/intent.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "arena-routes-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
@@ -267,4 +277,118 @@ test("a 429 from the RPC is retried with exponential backoff through deps.sleep"
   assert.deepEqual(r.body, { tx: "TX3", agent: { ok: true } });
   assert.equal(calls.length, 3);
   assert.deepEqual(slept, [1500, 3000]);
+});
+
+const ARENA_ID = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
+
+test("POST /commit verifies the agent's commit signature and relays commit_intent without quoting", async () => {
+  const kp = KeyPair.fromRandom("ed25519");
+  const s = signed(kp);
+  const c = commitment(s.intent, new Uint8Array(32).fill(7));
+  const body = {
+    duel_id: "3",
+    agent_pk: s.intent.agent_pk,
+    commitment: b64.enc(c),
+    sig: b64.enc(kp.sign(commitMessage(ARENA_ID, "3", c)).signature),
+  };
+  const { calls, account } = fakeSolver();
+  let quoted = 0;
+  const arena = new Arena(account, "s.testnet", {
+    listFollowers: async () => {
+      quoted++;
+      return [];
+    },
+  });
+  const r = (await arena.route("POST", "/commit", JSON.stringify(body), KEY))!;
+  assert.deepEqual(r.body, { tx: "TX1" });
+  assert.equal(calls[0]!.methodName, "commit_intent");
+  assert.deepEqual(calls[0]!.args, body);
+  assert.equal(quoted, 0, "a commitment hides the call: nothing to quote");
+  assert.equal(arena.intents.length, 0);
+  // signed for another duel: refused before any gas is spent
+  await assert.rejects(
+    arena.route("POST", "/commit", JSON.stringify({ ...body, duel_id: "4" }), KEY),
+    /bad commit signature/,
+  );
+  assert.equal(calls.length, 1);
+});
+
+test("POST /reveal relays reveal_intent with the salt and quotes followers then, not at commit", async () => {
+  const kp = KeyPair.fromRandom("ed25519");
+  const s = signed(kp);
+  const salt = b64.enc(new Uint8Array(32).fill(7));
+  const { calls, account } = fakeSolver();
+  const asked: string[] = [];
+  const arena = new Arena(account, "s.testnet", {
+    listFollowers: async (pk) => {
+      asked.push(pk);
+      return [];
+    },
+  });
+  const r = (await arena.route("POST", "/reveal", JSON.stringify({ signed: s, salt, tee: null }), KEY))!;
+  assert.deepEqual(r.body, { tx: "TX1", quotes: [] });
+  assert.equal(calls[0]!.methodName, "reveal_intent");
+  assert.deepEqual(calls[0]!.args, { signed: s, salt, tee: null });
+  assert.deepEqual(asked, [s.intent.agent_pk]);
+  assert.equal(arena.intents.length, 1, "the revealed intent shows on the SOLVER panel like a posted one");
+  const tampered = { signed: { ...s, intent: { ...s.intent, nonce: "2" } }, salt };
+  await assert.rejects(arena.route("POST", "/reveal", JSON.stringify(tampered), KEY), /bad intent signature/);
+  assert.equal(calls.length, 1);
+});
+
+test("POST /commit and /reveal need the arena key", async () => {
+  const { calls, account } = fakeSolver();
+  const arena = new Arena(account, "s.testnet");
+  for (const url of ["/commit", "/reveal"]) assert.equal((await arena.route("POST", url, "{}", {}))!.code, 401);
+  assert.equal(calls.length, 0);
+});
+
+test("POST /duel with sig_a and sig_b checks both consents and calls open_duel_consented", async () => {
+  const ka = KeyPair.fromRandom("ed25519"),
+    kb = KeyPair.fromRandom("ed25519");
+  const a = b64.enc(ka.getPublicKey().data),
+    b = b64.enc(kb.getPublicKey().data);
+  const close_at = "1700000000000000000";
+  const msg = consentMessage(ARENA_ID, a, b, "wrap.near", close_at);
+  const duel = {
+    a,
+    b,
+    symbol: "wrap.near",
+    close_at,
+    sig_a: b64.enc(ka.sign(msg).signature),
+    sig_b: b64.enc(kb.sign(msg).signature),
+  };
+  const { calls, account } = fakeSolver(() => 11);
+  const arena = new Arena(account, "s.testnet");
+  await withRpc({ get_config: () => ({ oracle_deposit: "100" }) }, async () => {
+    const r = (await arena.route("POST", "/duel", JSON.stringify(duel), KEY))!;
+    assert.deepEqual(r.body, { duel_id: "11", tx: "TX1" });
+    // swapped signatures: each one was made over the same bytes but by the other agent
+    await assert.rejects(
+      arena.route("POST", "/duel", JSON.stringify({ ...duel, sig_a: duel.sig_b, sig_b: duel.sig_a }), KEY),
+      /bad consent signature/,
+    );
+    // a's consent to a duel closing at another time
+    await assert.rejects(
+      arena.route("POST", "/duel", JSON.stringify({ ...duel, close_at: "1700000000000000001" }), KEY),
+      /bad consent signature/,
+    );
+    const half = (await arena.route("POST", "/duel", JSON.stringify({ ...duel, sig_b: undefined }), KEY))!;
+    assert.equal(half.code, 400);
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.methodName, "open_duel_consented");
+  assert.deepEqual(calls[0]!.args, duel);
+});
+
+test("POST /duel without sigs still calls plain open_duel", async () => {
+  const { calls, account } = fakeSolver(() => 12);
+  const arena = new Arena(account, "s.testnet");
+  const duel = { a: "A", b: "B", symbol: "wrap.near", close_at: "1" };
+  await withRpc({ get_config: () => ({ oracle_deposit: "100" }) }, async () => {
+    const r = (await arena.route("POST", "/duel", JSON.stringify(duel), KEY))!;
+    assert.deepEqual(r.body, { duel_id: "12", tx: "TX1" });
+  });
+  assert.equal(calls[0]!.methodName, "open_duel");
+  assert.deepEqual(calls[0]!.args, duel);
 });
