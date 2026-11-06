@@ -9,6 +9,7 @@
 #
 #   scripts/deploy15-testnet.sh --dry-run    # read-only: chain state, every command, the checks against today
 #   scripts/deploy15-testnet.sh              # sends the transactions
+#   scripts/deploy15-testnet.sh --at-boundary # step b stops the duel loops first (deploy-contract.sh --at-boundary)
 #
 # Env: ARENA_CONTRACT (arena.nearbuddy-solver.testnet), INTENTS_STUB (intents-stub.nearbuddy-solver.testnet),
 # ARENA_OWNER (nearbuddy-solver.testnet, signs migrate_follows), MAX_VAULT_TOTAL (27 NEAR in yocto).
@@ -21,11 +22,12 @@ STUB="${INTENTS_STUB:-intents-stub.nearbuddy-solver.testnet}"
 OWNER="${ARENA_OWNER:-nearbuddy-solver.testnet}"
 CAP="${MAX_VAULT_TOTAL:-27000000000000000000000000}"
 STUB_WASM=intents-stub/target/near/nearbuddy_intents_stub.wasm
-dry=0
+dry=0 pass=() # flags step b hands to deploy-contract.sh
 die() { echo "deploy15: $*" >&2; exit 1; }
 for a in "$@"; do
   case "$a" in
-    --dry-run) dry=1 ;;
+    --dry-run) dry=1; pass+=(--dry-run) ;;
+    --at-boundary) pass+=(--at-boundary) ;;
     -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
     *) die "unknown argument '$a' (see --help)" ;;
   esac
@@ -114,8 +116,8 @@ margs="{\"intents_account\":\"$STUB\",\"max_vault_total\":\"$CAP\"}"
 if [ "$deployed15" = 1 ]; then
   echo "get_config already has intents_account: deploy 15 is live, skipping"
 else
-  dflag=(); [ "$dry" = 1 ] && dflag=(--dry-run)
-  scripts/deploy-contract.sh --migrate migrate_v15 --migrate-args "$margs" ${dflag[@]+"${dflag[@]}"}
+  # ${a[@]+...}: bash 3.2 (macOS) with set -u calls an empty "${a[@]}" unbound
+  scripts/deploy-contract.sh --migrate migrate_v15 --migrate-args "$margs" ${pass[@]+"${pass[@]}"}
   rc=$?
   [ "$dry" = 1 ] || [ "$rc" = 0 ] || die "deploy-contract.sh failed (exit $rc)"
 fi
