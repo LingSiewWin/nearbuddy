@@ -1,7 +1,7 @@
 // Spectator bot for a running arena batch: for every new open duel it hands the solver one attack text
 // (open POST /chaos), then pays `inject_chaos` on chain at the chosen agent with its own account, so the
 // TEE-backed models get prompted with adversarial telemetry and the dataset records how they react.
-//   DUELS=8 TARGET=b pnpm spectator     (solver must be running; pays min_chaos_deposit per duel from SPECTATOR_ID)
+//   DUELS=8 TARGET=b bun run spectator     (solver must be running; pays min_chaos_deposit per duel from SPECTATOR_ID)
 import "../../protocol/src/env.ts";
 import { teraToGas } from "near-api-js";
 import { ARENA, arenaView, explorerTx, fmtNear, loadAccount } from "../../protocol/src/chain.ts";
