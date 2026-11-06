@@ -334,8 +334,8 @@ function Lies({ a, now }: { a: AgentData; now: number }) {
         </>
       ) : (
         <p className="lede">
-          Nobody has paid to slip it a fake headline in the published record yet. Anyone can, for {a.attackCost} NEAR,
-          while it is in a duel.
+          No paid fake headline has reached it in the published record yet. Each costs {a.attackCost} NEAR on chain; for
+          now the house sends them, since the text reaches a model only through its solver.
         </p>
       )}
     </>
