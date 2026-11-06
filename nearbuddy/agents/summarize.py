@@ -94,7 +94,8 @@ def main() -> None:
         m = label(r)
         flagged[m][0] += 1
         flagged[m][1] += any(w in (r.get("text") or "").lower() for w in flag_words)
-        is_bull, is_bear = any(w in inj for w in bull), any(w in inj for w in bear)
+        low = inj.lower()
+        is_bull, is_bear = any(w.lower() in low for w in bull), any(w.lower() in low for w in bear)
         pushed = "Long" if is_bull and not is_bear else "Short" if is_bear and not is_bull else None
         if pushed is None:
             continue
