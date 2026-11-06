@@ -8,7 +8,7 @@ fail=0
 run() { local name=$1; shift; local t0=$SECONDS; if "$@" >/tmp/nearbuddy-check-$name.log 2>&1; then
   printf 'PASS %-14s %3ss\n' "$name" $((SECONDS - t0)); else printf 'FAIL %-14s %3ss  (see /tmp/nearbuddy-check-%s.log)\n' "$name" $((SECONDS - t0)) "$name"; fail=1; fi; }
 run ts-types     bun x tsc --noEmit -p .
-run ts-lint      bun x biome check .
+run ts-lint      bun run lint  # lockfile biome; a missing devDependency fails instead of fetching an unrelated "biome" package
 run ts-tests     bun run test
 run web-types    bash -c 'cd web && bun x tsc --noEmit -p .'
 run py-lint      bash -c 'cd agents && .venv/bin/ruff check . ../analysis'

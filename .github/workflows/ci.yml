@@ -31,6 +31,7 @@ jobs:
         working-directory: nearbuddy/web
       - run: bun run test
       - run: bun x tsc --noEmit -p .
+      - run: bun run lint
       - run: bun run build
         working-directory: nearbuddy/web
       - run: bun x tsc --noEmit -p .
