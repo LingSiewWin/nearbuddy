@@ -13,7 +13,9 @@ import { type Focus, type Intent, isCall, markPct, openOf, priceAt } from "./mod
 
 type Filter = "all" | "calls" | "attacks" | "duels";
 
-function Quote({ ticks, f }: { ticks: Tick[]; f: Focus | null }) {
+type Feed = "connecting" | "live" | "offline";
+
+function Quote({ ticks, f, feed }: { ticks: Tick[]; f: Focus | null; feed: Feed }) {
   const last = ticks.at(-1);
   const prev = useRef<number | null>(null);
   const dir = last && prev.current != null && last.p !== prev.current ? (last.p > prev.current ? "up" : "dn") : "";
@@ -38,7 +40,7 @@ function Quote({ ticks, f }: { ticks: Tick[]; f: Focus | null }) {
         <polyline points={pts} fill="none" stroke="var(--dim)" strokeWidth="1.2" vectorEffect="non-scaling-stroke" />
       </svg>
       <div className="qmeta">
-        <span>NEAR/USD on Coinbase, live</span>
+        <span>NEAR/USD on Coinbase, {feed === "live" ? "live" : feed === "connecting" ? "connecting…" : "reconnecting…"}</span>
         {open && last ? (
           <span>
             <b>{pct(((last.p - open) / open) * 100)}</b> since the bell
@@ -100,6 +102,7 @@ export function Tape({
   now,
   modelOf,
   byTx,
+  feed,
 }: {
   events: ArenaEvent[];
   fresh: Set<string>;
@@ -108,6 +111,7 @@ export function Tape({
   now: number;
   modelOf: (pk: string) => string;
   byTx: Map<string, Decision>;
+  feed: Feed;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const open = useDrawer();
@@ -277,7 +281,7 @@ export function Tape({
           <h2>Tape</h2>
           <span className="rate">every arena transaction, your local time</span>
         </div>
-        <Quote ticks={ticks} f={f} />
+        <Quote ticks={ticks} f={f} feed={feed} />
         {f ? <Positions f={f} events={events} ticks={ticks} now={now} /> : null}
       </div>
       <fieldset className="h filters">

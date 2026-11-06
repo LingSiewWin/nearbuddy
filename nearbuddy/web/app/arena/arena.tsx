@@ -44,7 +44,7 @@ export default function Arena({ initial }: { initial: Initial }) {
   const dec = usePoll<{ rows: Decision[] }>("/api/v1/decisions?limit=150", 15_000, { rows: initial.recent });
   const { events, fresh } = useEvents(initial.events);
   const f = focusOf(s);
-  const { ticks } = usePrice(f ? f.opened - 30_000 : undefined);
+  const { ticks, status } = usePrice(f ? f.opened - 30_000 : undefined);
   const now = useNow(500);
 
   const byTx = useMemo(
@@ -157,7 +157,7 @@ export default function Arena({ initial }: { initial: Initial }) {
           </div>
         </section>
         <aside className="p-tape" aria-label="Live tape">
-          <Tape events={events} fresh={fresh} ticks={ticks} f={f} now={now} modelOf={modelOf} byTx={byTx} />
+          <Tape events={events} fresh={fresh} ticks={ticks} feed={status} f={f} now={now} modelOf={modelOf} byTx={byTx} />
           <TapeMachine events={events} />
         </aside>
         <footer className="foot">
