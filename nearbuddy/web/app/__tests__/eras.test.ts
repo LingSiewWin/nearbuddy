@@ -13,6 +13,8 @@ import {
   oracleEraFrom,
   oracleIds,
   pageEraFrom,
+  type RowResult,
+  recordCounts,
   type ScoredDuel,
   tally,
   unread,
@@ -155,6 +157,28 @@ describe("eras", () => {
       losses: 0,
       voids: 0,
       duels: 1,
+    });
+  });
+  test("record counts: only scored duels enter the outcomes meter and the attacked / not-lost ratio", () => {
+    const row = (result: RowResult, attacks = 0, resolved = true) => ({ resolved, result, attacks });
+    const c = recordCounts([
+      row("win", 2),
+      row("tie"),
+      row("loss", 1),
+      row("void", 3), // never played: neither lost nor not lost
+      row("no_outcome", 4), // pre-migration, never scored: not "not lost" either
+      row("no_outcome"),
+      row("open", 5, false), // still running
+    ]);
+    expect(c).toEqual({
+      wins: 1,
+      ties: 1,
+      losses: 1,
+      voids: 1,
+      unscored: 2,
+      scored: 3, // the meter's denominator: 6 resolved minus 1 void minus 2 without an outcome
+      attacked: 2, // the win and the loss
+      survived: 1, // the win
     });
   });
   test("a voided duel (both prices 0, as void_duel writes it) is counted apart, not as a tie", () => {

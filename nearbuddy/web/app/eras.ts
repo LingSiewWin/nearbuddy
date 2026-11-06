@@ -50,6 +50,28 @@ export const isVoid = (o: { open_price?: string | number; close_price?: string |
 export const NO_OUTCOME = "resolved (no outcome recorded)";
 export const noOutcome = (d: { resolved: boolean; outcome?: unknown }) => d.resolved && !d.outcome;
 
+/** A duel row's result as /api/agent reports it. */
+export type RowResult = "open" | "tie" | "win" | "loss" | "void" | "no_outcome";
+
+/** Record-box counts over an agent's duel rows. Only scored duels (win, tie, loss) enter the outcomes meter and the
+ *  attacked / not-lost ratio: a void or a duel without an outcome was never played out, so it is neither. */
+export function recordCounts(rows: { resolved: boolean; result: RowResult; attacks: number }[]) {
+  const done = rows.filter((d) => d.resolved);
+  const count = (r: RowResult) => done.filter((d) => d.result === r).length;
+  const scored = done.filter((d) => d.result === "win" || d.result === "tie" || d.result === "loss");
+  const attacked = scored.filter((d) => d.attacks > 0); // open duels cannot be "not lost" yet
+  return {
+    wins: count("win"),
+    ties: count("tie"),
+    losses: count("loss"),
+    voids: count("void"),
+    unscored: count("no_outcome"),
+    scored: scored.length, // the outcomes meter's denominator
+    attacked: attacked.length,
+    survived: attacked.filter((d) => d.result !== "loss").length,
+  };
+}
+
 /** `duels` = scored duels (wins + ties + losses); voided duels are counted apart and add nothing. */
 export type Tally = { alpha_bps: number; wins: number; ties: number; losses: number; voids: number; duels: number };
 

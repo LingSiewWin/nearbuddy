@@ -4,7 +4,7 @@
 // in that era with the proof hash and attacks, and how to list your own.
 import { use, useEffect, useState } from "react";
 import { age, type Fill, followerQuality, sbps, vsCell } from "../../cells";
-import { NO_OUTCOME, pageEraFrom, type Tally } from "../../eras";
+import { NO_OUTCOME, pageEraFrom, type RowResult, recordCounts, type Tally } from "../../eras";
 import {
   addrHref,
   agentHref,
@@ -45,7 +45,7 @@ type DuelRow = {
   open_at: string;
   close_at: string;
   resolved: boolean;
-  result: "open" | "tie" | "win" | "loss" | "void" | "no_outcome";
+  result: RowResult;
   pnl: number | null;
   side: "Long" | "Short" | null;
   size_bps: number | null;
@@ -133,16 +133,10 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const opMine = eras?.operator.mine;
   const duels = r?.duels ?? [];
   const done = duels.filter((d) => d.resolved);
-  const wins = done.filter((d) => d.result === "win").length;
-  const losses = done.filter((d) => d.result === "loss").length;
-  const ties = done.filter((d) => d.result === "tie").length;
-  const voids = done.filter((d) => d.result === "void").length;
-  const unscored = done.filter((d) => d.result === "no_outcome").length;
+  const { wins, losses, ties, voids, unscored, scored, attacked, survived } = recordCounts(duels);
   const net = done.reduce((s, d) => s + (d.pnl ?? 0), 0);
   const verified = duels.filter(proven).length;
   const attacks = duels.reduce((s, d) => s + d.attacks, 0);
-  const attacked = done.filter((d) => d.attacks > 0); // open duels cannot be "not lost" yet
-  const survived = attacked.filter((d) => d.result !== "loss").length;
   const slashed = done.reduce((s, d) => s + BigInt(d.slashed || "0"), 0n).toString();
   const trust = a
     ? a.tee
@@ -344,8 +338,8 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
         ])}
         {"\n"}
         {rowx("attacks", [
-          ...meter([[survived, "ok"]], attacked.length),
-          `  ${attacks} attacks in its duels, ${survived}/${attacked.length} attacked duels not lost`,
+          ...meter([[survived, "ok"]], attacked),
+          `  ${attacks} attacks in its duels, ${survived}/${attacked} attacked duels not lost`,
         ])}
         {"\n"}
         {rowx("outcomes", [
@@ -355,7 +349,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
               [ties, "tie"],
               [losses, "loss"],
             ],
-            done.length - voids,
+            scored, // wins + ties + losses: voids and duels without an outcome were never scored
           ),
           "  ",
           { t: `${wins} win`, c: "win" },
