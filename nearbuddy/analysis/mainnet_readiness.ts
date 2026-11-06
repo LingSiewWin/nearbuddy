@@ -1,0 +1,225 @@
+// Read-only check of the mainnet facts the week-4 dry run depends on. Sends no transaction and spends nothing:
+// RPC views, the 1Click token list, one dry quote, the NEAR AI model list and one non-billable attestation report per
+// model (NEAR_AI_API_KEY sent when set). Prints a PASS/FAIL/SKIP/INFO table; exits 1 on any FAIL. Signer pins are read from
+// ARENA_CONTRACT on NEAR_RPC (testnet by default; point both at the mainnet arena once it exists).
+//   bun analysis/mainnet_readiness.ts
+//   MAINNET_RPC=https://rpc.mainnet.fastnear.com OWNER_ID_MAINNET=nearbuddy.near SOLVER_ID_MAINNET=solver.nearbuddy.near
+import "../packages/protocol/src/env.ts";
+import { randomBytes } from "node:crypto";
+import { quote, sellNearForUsdc, USDC_NEAR, WNEAR } from "../packages/solver/src/oneclick.ts";
+
+const RPC = process.env.MAINNET_RPC ?? "https://rpc.mainnet.fastnear.com";
+const ORACLE = process.env.MAINNET_ORACLE ?? "price-oracle.near";
+const OWNER = process.env.OWNER_ID_MAINNET ?? "nearbuddy.near";
+const SOLVER = process.env.SOLVER_ID_MAINNET ?? "solver.nearbuddy.near";
+const NEAR_AI = process.env.NEAR_AI_BASE ?? "https://cloud-api.near.ai/v1";
+const NEAR_AI_KEY = process.env.NEAR_AI_API_KEY?.trim();
+const MODELS = (process.env.MAINNET_MODELS ?? "deepseek-ai/DeepSeek-V4.1-Flash-1017,Qwen/Qwen3.8-27B").split(",");
+// The arena's lock must cover the oracle's cache. Testnet runs 300 s; the roadmap plans lock 330 / floor 660.
+const PLANNED_LOCK_S = Number(process.env.PLANNED_LOCK_S ?? 330);
+// One follower fill: 5 USDC is about this much wNEAR at the 2026-11 price; override with FILL_YOCTO.
+const FILL_YOCTO = BigInt(process.env.FILL_YOCTO ?? "1350000000000000000000000");
+const USDC_ACCOUNT = USDC_NEAR.slice("nep141:".length);
+
+type Row = { check: string; result: "PASS" | "FAIL" | "SKIP" | "INFO"; detail: string };
+const rows: Row[] = [];
+const add = (check: string, result: Row["result"], detail: string) => rows.push({ check, result, detail });
+
+async function rpc<T>(method: string, params: unknown): Promise<T> {
+  const r = await fetch(RPC, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  const j = (await r.json()) as { result?: T; error?: { cause?: { name?: string }; message?: string } };
+  if (j.error) throw new Error(j.error.cause?.name ?? j.error.message ?? JSON.stringify(j.error));
+  return j.result as T;
+}
+const account = (id: string) =>
+  rpc<{ amount: string; code_hash: string; storage_usage: number }>("query", {
+    request_type: "view_account",
+    finality: "final",
+    account_id: id,
+  });
+async function view<T>(contract: string, method: string, args: unknown = {}): Promise<T> {
+  const res = await rpc<{ result?: number[]; error?: string }>("query", {
+    request_type: "call_function",
+    finality: "final",
+    account_id: contract,
+    method_name: method,
+    args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
+  });
+  if (!res.result) throw new Error(res.error ?? "no result");
+  return JSON.parse(Buffer.from(res.result).toString()) as T;
+}
+/** Run one check; a thrown error is a FAIL with its message, never a crash of the whole table. */
+async function check(name: string, fn: () => Promise<[Row["result"], string]>) {
+  try {
+    const [res, detail] = await fn();
+    add(name, res, detail);
+  } catch (e) {
+    add(name, "FAIL", String((e as Error).message ?? e).slice(0, 160));
+  }
+}
+const isContract = (h: string) => h !== "11111111111111111111111111111111";
+const near = (yocto: bigint) => `${(Number(yocto / 10n ** 18n) / 1e6).toFixed(4)} NEAR`;
+
+// ---- chain: the contracts we call --------------------------------------------------------------------------
+await check(`${ORACLE} deployed`, async () => {
+  const a = await account(ORACLE);
+  return [
+    isContract(a.code_hash) ? "PASS" : "FAIL",
+    `code ${a.code_hash.slice(0, 8)}…, version ${await view<string>(ORACLE, "get_version")}`,
+  ];
+});
+await check(`${ORACLE} serves wrap.near (get_price_data)`, async () => {
+  const d = await view<{ recency_duration_sec: number; prices: { asset_id: string; price: unknown }[] }>(
+    ORACLE,
+    "get_price_data",
+    { asset_ids: ["wrap.near"] },
+  );
+  const p = d.prices.find((x) => x.asset_id === "wrap.near");
+  if (!p) return ["FAIL", "wrap.near not in the oracle's asset list"];
+  return ["PASS", `listed; cached price ${p.price ? JSON.stringify(p.price) : "null (stale: oracle_call fetches)"}`];
+});
+await check(`${ORACLE} recency window vs planned lock ${PLANNED_LOCK_S} s`, async () => {
+  const d = await view<{ recency_duration_sec: number }>(ORACLE, "get_price_data", { asset_ids: ["wrap.near"] });
+  const r = d.recency_duration_sec;
+  // The lock must outlast the window in which the oracle can hand back an already-known price.
+  return [r < PLANNED_LOCK_S ? "PASS" : "FAIL", `recency_duration_sec ${r}; lock must exceed it (testnet is 300)`];
+});
+await check(`${ORACLE} subsidises oracle_call`, async () => {
+  const s = await view<boolean>(ORACLE, "can_subsidize_outlayer_calls");
+  return ["INFO", s ? "yes: oracle_call is free" : "no: attach 0.01+ NEAR per uncached call (docs: 1 yocto if cached)"];
+});
+await check("intents.near deployed and answers mt_balance_of", async () => {
+  const a = await account("intents.near");
+  const bal = await view<string>("intents.near", "mt_balance_of", { account_id: SOLVER, token_id: WNEAR });
+  const fee = await view<number>("intents.near", "fee");
+  return [
+    isContract(a.code_hash) ? "PASS" : "FAIL",
+    `code ${a.code_hash.slice(0, 8)}…, fee ${fee} pips, ${SOLVER} wNEAR ${bal}`,
+  ];
+});
+await check(`intents.near USDC balance of ${SOLVER}`, async () => {
+  const bal = await view<string>("intents.near", "mt_balance_of", { account_id: SOLVER, token_id: USDC_NEAR });
+  return ["INFO", `${bal} (base units, 6 dp); pre-fund before the first fill`];
+});
+await check("wrap.near is wNEAR, 24 dp", async () => {
+  const m = await view<{ symbol: string; decimals: number }>("wrap.near", "ft_metadata");
+  return [m.symbol === "wNEAR" && m.decimals === 24 ? "PASS" : "FAIL", `${m.symbol}, ${m.decimals} dp`];
+});
+await check(`${USDC_ACCOUNT.slice(0, 10)}… is USDC, 6 dp`, async () => {
+  const m = await view<{ symbol: string; decimals: number }>(USDC_ACCOUNT, "ft_metadata");
+  return [m.symbol === "USDC" && m.decimals === 6 ? "PASS" : "FAIL", `${m.symbol}, ${m.decimals} dp`];
+});
+await check(`USDC storage bound (${USDC_ACCOUNT.slice(0, 10)}…)`, async () => {
+  const b = await view<{ min: string }>(USDC_ACCOUNT, "storage_balance_bounds");
+  return ["INFO", `storage_deposit min ${near(BigInt(b.min))}`];
+});
+await check(`mainnet ids free: ${OWNER}, ${SOLVER}`, async () => {
+  const taken: string[] = [];
+  for (const id of [OWNER, SOLVER]) {
+    try {
+      await account(id);
+      taken.push(id);
+    } catch (e) {
+      if (!String((e as Error).message).includes("UNKNOWN_ACCOUNT")) throw e;
+    }
+  }
+  return ["INFO", taken.length ? `exists already: ${taken.join(", ")}` : "both unclaimed"];
+});
+await check("protocol storage and gas price", async () => {
+  const cfg = await rpc<{ runtime_config: { storage_amount_per_byte: string } }>("EXPERIMENTAL_protocol_config", {
+    finality: "final",
+  });
+  const gp = await rpc<{ gas_price: string }>("gas_price", [null]);
+  const perByte = BigInt(cfg.runtime_config.storage_amount_per_byte);
+  // 100 Tgas at the current price, the ceiling of any one arena call (sandbox max is ~5 Tgas).
+  return [
+    "INFO",
+    `${near(perByte * 100_000n)} per 100 KB; gas ${gp.gas_price} yocto/gas = ${near(BigInt(gp.gas_price) * 10n ** 14n)} per 100 Tgas`,
+  ];
+});
+
+// ---- 1Click: the rail ---------------------------------------------------------------------------------------
+await check("1Click /v0/tokens lists wNEAR and USDC on near", async () => {
+  const r = await fetch(`${process.env.ONECLICK_URL ?? "https://1click.chaindefuser.com"}/v0/tokens`);
+  if (!r.ok) throw new Error(`tokens ${r.status}`);
+  const t = (await r.json()) as { assetId: string; symbol: string; blockchain: string; decimals: number }[];
+  const w = t.find((x) => x.assetId === WNEAR);
+  const u = t.find((x) => x.assetId === USDC_NEAR);
+  return [
+    w && u ? "PASS" : "FAIL",
+    `${w ? `${w.symbol}/${w.blockchain}` : "wNEAR missing"}, ${u ? `${u.symbol}/${u.blockchain}/${u.decimals}dp` : "USDC missing"}`,
+  ];
+});
+await check("1Click dry quote, depositType INTENTS", async () => {
+  const q = await quote(sellNearForUsdc(FILL_YOCTO, SOLVER, true));
+  const k = q.quote;
+  const jwt = process.env.ONECLICK_JWT ? "partner key" : "no key (+25 bps)";
+  return [
+    k.amountOut ? "PASS" : "FAIL",
+    `${k.amountInFormatted} wNEAR -> ${k.amountOutFormatted} USDC, min ${k.minAmountOut}, timeEstimate ${k.timeEstimate} s, ${jwt}`,
+  ];
+});
+
+// ---- NEAR AI Cloud: the enclave tier ------------------------------------------------------------------------
+// Both endpoints answered without a key on 2026-11-06; the key is sent when present in case that changes.
+const auth: Record<string, string> = NEAR_AI_KEY ? { Authorization: `Bearer ${NEAR_AI_KEY}` } : {};
+await check("NEAR AI models owned_by nearai", async () => {
+  const r = await fetch(`${NEAR_AI}/models`, { headers: auth });
+  if (r.status === 401 || r.status === 403) return ["SKIP", `models ${r.status}: set NEAR_AI_API_KEY`];
+  if (!r.ok) throw new Error(`models ${r.status}`);
+  const list = ((await r.json()) as { data: { id: string; owned_by: string }[] }).data;
+  const got = MODELS.map((m) => `${m}=${list.find((x) => x.id === m)?.owned_by ?? "absent"}`);
+  return [got.every((g) => g.endsWith("=nearai")) ? "PASS" : "FAIL", got.join(", ")];
+});
+for (const m of MODELS) {
+  await check(`NEAR AI attestation ${m.split("/")[1] ?? m} (ed25519, fresh nonce)`, async () => {
+    const nonce = randomBytes(32).toString("hex");
+    const u = `${NEAR_AI}/attestation/report?model=${encodeURIComponent(m)}&signing_algo=ed25519&nonce=${nonce}`;
+    const r = await fetch(u, { headers: auth });
+    if (r.status === 401 || r.status === 403) return ["SKIP", `attestation ${r.status}: set NEAR_AI_API_KEY`];
+    if (!r.ok) throw new Error(`attestation ${r.status}`);
+    const rep = (await r.json()) as { model_attestations?: { signing_address?: string; request_nonce?: string }[] };
+    const atts = rep.model_attestations ?? [];
+    const bound = atts.length > 0 && atts.every((a) => a.request_nonce === nonce);
+    // Already trusted on ARENA_CONTRACT? A new address means the enclave rotated: re-verify before pinning.
+    const pinned = await Promise.all(
+      atts.map(async (a) => {
+        const b64 = Buffer.from(a.signing_address ?? "", "hex").toString("base64");
+        const res = await fetch(process.env.NEAR_RPC ?? "https://near-testnet.drpc.org", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "query",
+            params: {
+              request_type: "call_function",
+              finality: "final",
+              account_id: process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet",
+              method_name: "is_tee_signer",
+              args_base64: Buffer.from(JSON.stringify({ signer: b64 })).toString("base64"),
+            },
+          }),
+        });
+        const j = (await res.json()) as { result?: { result?: number[] } };
+        const v = j.result?.result ? Buffer.from(j.result.result).toString() : "?";
+        return `${a.signing_address?.slice(0, 12)}… pinned=${v}`;
+      }),
+    );
+    return [bound ? "PASS" : "FAIL", `${atts.length} signer(s), nonce echoed ${bound}; ${pinned.join(", ")}`];
+  });
+}
+
+// ---- table --------------------------------------------------------------------------------------------------
+const w = Math.max(...rows.map((r) => r.check.length));
+console.log(`mainnet readiness ${new Date().toISOString()} rpc ${RPC}`);
+for (const r of rows) console.log(`${r.result.padEnd(4)}  ${r.check.padEnd(w)}  ${r.detail}`);
+const fails = rows.filter((r) => r.result === "FAIL").length;
+console.log(
+  `${rows.filter((r) => r.result === "PASS").length} pass, ${fails} fail, ${rows.filter((r) => r.result === "SKIP").length} skip`,
+);
+process.exit(fails ? 1 : 0);
