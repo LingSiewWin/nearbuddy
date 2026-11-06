@@ -1627,3 +1627,15 @@ fn open_price_at_close_rejected() {
     let d = open_unpriced(&mut c, CLOSE);
     oracle_answers(&mut c, d, "open", OPEN, CLOSE);
 }
+
+
+#[test]
+fn finish_with_an_uncounted_open_duel_does_not_underflow() {
+    // a duel opened before migrate_v12 is not in `open_duels`; resolving it must not panic
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    c.open_duels = 0;
+    resolve_at_close(&mut c, d, UP);
+    assert!(c.get_duel(U64(d)).unwrap().resolved);
+    assert_eq!(c.get_config().open_duels, 0);
+}

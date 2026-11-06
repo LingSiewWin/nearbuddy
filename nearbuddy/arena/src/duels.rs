@@ -393,7 +393,7 @@ impl Contract {
             d.injections.len() as u32,
         );
         d.resolved = true;
-        self.open_duels -= 1;
+        self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
         d.pool = U128(0);
         d.injections = vec![];
         d.outcome = Some(Outcome {
@@ -429,7 +429,7 @@ impl Contract {
         let injections = std::mem::take(&mut duel.injections);
         duel.resolved = true;
         duel.pool = U128(0);
-        self.open_duels -= 1;
+        self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
 
         let slash_bps = self.slash_bps as u128;
         let mut outcome = Outcome {
