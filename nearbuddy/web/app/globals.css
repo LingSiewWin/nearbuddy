@@ -855,6 +855,9 @@ th small {
   color: var(--dim);
   font-stretch: 80%;
 }
+.thead .rate.stale {
+  color: var(--faint);
+}
 .quote {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

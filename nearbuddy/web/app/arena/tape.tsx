@@ -8,7 +8,7 @@ import type { ArenaEvent } from "../api/tape";
 import type { Tick } from "../lib/live";
 import { VERDICT_WORD } from "../lib/verdict";
 import { Seal, useDrawer } from "../ui/drawer";
-import { clock, duelHref, mmss, near, pct, tone, who } from "../ui/format";
+import { ago, clock, duelHref, mmss, near, pct, tone, who } from "../ui/format";
 import { type Focus, type Intent, isCall, markPct, openOf, priceAt } from "./model";
 
 type Filter = "all" | "calls" | "attacks" | "duels";
@@ -152,6 +152,10 @@ export function Tape({
       ? `Paid attack on ${who(modelOf(loud.target))}${loud.text ? `: ${loud.text}` : ""}`
       : `Duel ${loud.duel ?? ""} ${loud.kind === "open" ? "opened" : "resolved"}`;
 
+  // the newest chain event's age: past 3 min the arena (or the stream) has gone quiet, so the header greys out
+  const lastAt = events[0]?.at;
+  const stale = !!lastAt && now - lastAt > 180_000;
+
   const reply = (pk: string, duel: number, after: number) =>
     events
       .filter((e): e is Intent => isCall(e) && e.ok && e.duel === duel && e.agent === pk && e.at > after)
@@ -291,7 +295,9 @@ export function Tape({
       <div className="h thead">
         <div className="t1">
           <h2>Tape</h2>
-          <span className="rate">every arena transaction, your local time</span>
+          <span className={`rate${stale ? " stale" : ""}`} title="Every arena transaction; times are your local time">
+            {!lastAt ? "no arena transactions yet" : now ? `last arena transaction ${ago(lastAt, now)}` : "every arena transaction"}
+          </span>
         </div>
         <Quote ticks={ticks} f={f} feed={feed} />
         {f ? <Positions f={f} events={events} ticks={ticks} now={now} /> : null}
