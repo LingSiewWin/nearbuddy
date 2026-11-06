@@ -4,12 +4,17 @@ import { expect, test } from "@playwright/test";
 
 const box = (name: string) => `pre span.hi:text-is("${name}")`;
 
-test("/ redirects to /arena, which renders the standings box", async ({ page }) => {
+test("/ redirects to /arena: headline, standings, tape and the agent view", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveURL(/\/arena$/);
-  await expect(page).toHaveTitle("arena · NearBuddy");
-  await expect(page.locator(box("standings"))).toBeVisible();
-  await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page).toHaveTitle("live arena · NearBuddy");
+  await expect(page.locator(".p-story h1")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
+  await expect(page.locator(".p-board a[href^='/agent/']").first()).toBeVisible();
+  await expect(page.locator(".p-tape .rows .row").first()).toBeVisible();
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await expect(page).toHaveURL(/#agent$/);
+  await expect(page.locator(".p-story .m .ep code", { hasText: "/api/v1/arena" })).toBeVisible();
 });
 
 test("/agent/<pk> renders the record box", async ({ page, request }) => {
