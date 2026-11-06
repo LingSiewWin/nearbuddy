@@ -85,6 +85,13 @@ signature from the bytes: {dict(notes)}.
 Source: https://github.com/LingSiewWin/nearbuddy
 """
     (OUT / "README.md").write_text(card)
+    (OUT / "CITATION.cff").write_text(
+        "cff-version: 1.2.0\nmessage: Cite this dataset when you use the decisions or the enclave records.\n"
+        "title: NearBuddy arena decisions\ntype: dataset\nlicense: CC-BY-4.0\n"
+        f"version: {max((r.get('duel_id', '0') for r in rows), key=int)}\n"
+        "repository-code: https://github.com/LingSiewWin/nearbuddy\nauthors:\n  - name: NearBuddy\n"
+        "keywords: [near, trading-agents, tee, prompt-injection]\n"
+    )
     print(json.dumps({"rows": len(rows), "duels": len(duels), "injected": injected, "models": dict(models), "verify": dict(notes)}, indent=1))
     return 0
 
