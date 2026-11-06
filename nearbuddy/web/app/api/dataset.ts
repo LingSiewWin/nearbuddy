@@ -2,13 +2,28 @@
 // from ../dataset/decisions.jsonl). Optionally, when DECISIONS_LIVE points at the runner's decisions.jsonl
 // (a local demo next to a running runner), the newest rows of that file too, re-read at most every 3 s, so
 // a live duel shows each model's reasoning as it decides. On a host without the runner it is unset.
+// app/data/*.json is gitignored and written by scripts/snapshot.ts, so it is read at runtime, not imported:
+// a fresh clone typechecks without it, and a missing file is an empty dataset. next.config.ts traces
+// app/data into the API functions so a deployed function finds it next to process.cwd().
+import { readFileSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
-import data from "../data/decisions.json";
-import { type Decision, type Raw, slim } from "../lib/rows";
+import { join } from "node:path";
+import { type Bytes, type Decision, type Raw, slim } from "../lib/rows";
 
 export type { Decision };
 
-const snap = data as unknown as { rows: Decision[]; attacks: Record<string, string>; built: number };
+const read = <T>(name: string, empty: T): T => {
+  try {
+    return JSON.parse(readFileSync(join(process.cwd(), "app/data", name), "utf8")) as T;
+  } catch {
+    return empty;
+  }
+};
+const snap = read<{ rows: Decision[]; attacks: Record<string, string>; built: number }>("decisions.json", {
+  rows: [],
+  attacks: {},
+  built: 0,
+});
 const known = new Set(snap.rows.map((r) => r.tx));
 export const datasetBuilt = snap.built;
 
@@ -51,4 +66,11 @@ export async function getDecisions(): Promise<Decision[]> {
 /** The attack text behind an on-chain payload hash, when any source knows it. */
 export async function attackText(hash: string): Promise<string | null> {
   return snap.attacks[hash] ?? (await tail()).attacks[hash] ?? null;
+}
+
+let bodies: Record<string, Bytes> | null = null;
+/** The exact request/response bytes behind one decision tx, only where their sha256 matched the chain. */
+export function decisionBytes(tx: string): Bytes | null {
+  bodies ??= read<Record<string, Bytes>>("bodies.json", {});
+  return Object.hasOwn(bodies, tx) ? (bodies[tx] ?? null) : null;
 }
