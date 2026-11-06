@@ -5,7 +5,7 @@ import { type APIRequestContext, expect, type Page, test } from "@playwright/tes
 
 test.use({ viewport: { width: 390, height: 844 } });
 
-type Side = { verified: boolean };
+type Side = { agent: string; verified: boolean };
 type Recent = { duel: number; a: Side; b: Side };
 
 async function ids(request: APIRequestContext) {
@@ -17,6 +17,7 @@ async function ids(request: APIRequestContext) {
     live: (arena.live_duels?.[0] as number | undefined) ?? resolved,
     resolved: resolved as number,
     agent: arena.standings[0]?.agent as string,
+    recent,
   };
 }
 
@@ -42,9 +43,8 @@ test("duel pages fit a phone: live, resolved and one from the published record",
 });
 
 test("agent pages fit a phone: the top agent and a test bot", async ({ page, request }) => {
-  const { agent } = await ids(request);
-  const board = (await (await request.get("/api/arena")).json()).leaderboard as { pk: string; tee: boolean }[];
-  const bot = board.find((a) => !a.tee)?.pk;
+  const { agent, recent } = await ids(request);
+  const bot = recent.flatMap((d) => [d.a, d.b]).find((s) => !s.verified)?.agent; // none when no bot dueled lately
   for (const pk of [agent, bot].filter(Boolean) as string[]) await check(page, `/agent/${encodeURIComponent(pk)}`);
 });
 

@@ -18,8 +18,8 @@ test("/ redirects to /arena: headline, standings, tape and the agent view", asyn
 });
 
 test("/agent/<pk>: identity, the two numbers, its record, its calls and the agent view", async ({ page, request }) => {
-  const snap = await (await request.get("/api/arena")).json();
-  const pk = snap.leaderboard[0]?.pk as string;
+  // ids come from the v1 summary: the raw /api/arena reads every oracle-era duel on a cold start
+  const pk = (await (await request.get("/api/v1/arena")).json()).standings[0]?.agent as string;
   expect(pk).toBeTruthy();
   await page.goto(`/agent/${encodeURIComponent(pk)}`);
   await expect(page).toHaveTitle(`agent ${pk.slice(0, 8)}… · NearBuddy`);
@@ -36,8 +36,7 @@ test("/agent/<pk>: identity, the two numbers, its record, its calls and the agen
 });
 
 test("/duel/<newest> renders the result and links both agents", async ({ page, request }) => {
-  const snap = await (await request.get("/api/arena")).json();
-  const id = Number(snap.config.next_duel) - 1;
+  const id = Number((await (await request.get("/api/v1/arena")).json()).duels_total) - 1;
   expect(id).toBeGreaterThanOrEqual(0);
   await page.goto(`/duel/${id}`);
   await expect(page).toHaveTitle(`duel #${id} · NearBuddy`);
