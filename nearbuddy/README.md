@@ -173,7 +173,7 @@ mainnet quote, not the mainnet tx.
 
 ```sh
 cp .env.example .env                      # add NEAR_AI_API_KEY to use real models; blank = stub
-cd arena && cargo test                    # 82 contract tests
+cd arena && cargo test                    # 86 contract tests
 cd .. && bun run test                        # protocol + solver tests (ARENA_DEPLOYED=1 adds on-chain parity)
 bun run solver                               # :4020, mounts /register /duel /intent /chaos /resolve /settle_follow /arena
 cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pytest -q
