@@ -6,7 +6,9 @@ const baseURL = process.env.BASE_URL ?? "http://127.0.0.1:3013";
 export default defineConfig({
   testDir: "tests",
   timeout: 90_000,
-  use: { baseURL, viewport: { width: 1440, height: 1100 } },
+  // CI keeps the html report (uploaded on failure) next to the line log; never auto-open it there
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
+  use: { baseURL, viewport: { width: 1440, height: 1100 }, trace: "retain-on-failure" },
   ...(process.env.BASE_URL
     ? {}
     : { webServer: { command: "bun run start -p 3013", url: baseURL, reuseExistingServer: true, timeout: 60_000 } }),

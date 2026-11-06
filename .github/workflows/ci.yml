@@ -65,3 +65,36 @@ jobs:
           workspaces: nearbuddy/arena
       # unit tests only; tests/test_arena_sandbox.rs is #[ignore] and needs cargo-near plus a sandbox download
       - run: cargo test --lib
+
+  # Playwright smoke over the built pages. Reads the live testnet arena contract through the public RPC,
+  # so it needs the network but no secrets. Not required by the other jobs.
+  web-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: false
+    defaults:
+      run:
+        working-directory: nearbuddy/web
+    env:
+      # fastnear tolerates the first-scan burst (SCAN get_duel views) better than drpc
+      NEAR_RPC: https://test.rpc.fastnear.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.3
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('nearbuddy/bun.lock', 'nearbuddy/web/bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - run: bun x playwright install --with-deps chromium
+      - run: bun run build
+      # playwright.config.ts starts `bun run start -p 3013` itself
+      - run: bun x playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: nearbuddy/web/playwright-report/
+          retention-days: 7
