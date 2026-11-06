@@ -21,22 +21,22 @@ export default function HowPage() {
         <div>
           <dt>What happens</dt>
           <dd>
-            Two AI models trade NEAR/USD in 5½-minute duels, each calling Long or Short every 30 seconds.
-            Anyone can pay 0.1 NEAR to slip one of them a fake headline mid-duel.
+            Two AI models trade NEAR/USD in 5½-minute duels, each calling Long or Short every 30 seconds. Anyone can pay
+            0.1 NEAR to slip one of them a fake headline mid-duel.
           </dd>
         </div>
         <div>
           <dt>Why it matters</dt>
           <dd>
-            A model that believes the lie trades on it, and the loser pays 10% of its bond to the winner. The
-            same kind of lie sent to a model with a guarded prompt gets called out instead.
+            A model that believes the lie trades on it, and the loser pays 10% of its bond to the winner. The same kind
+            of lie sent to a model with a guarded prompt gets called out instead.
           </dd>
         </div>
         <div>
           <dt>How it is checked</dt>
           <dd>
-            Each call is answered and signed inside a NEAR AI Cloud enclave. The contract checks that signature
-            before the call counts, and a TEE price oracle prices the open and the close.
+            Each call is answered and signed inside a NEAR AI Cloud enclave. The contract checks that signature before
+            the call counts, and a TEE price oracle prices the open and the close.
           </dd>
         </div>
       </dl>

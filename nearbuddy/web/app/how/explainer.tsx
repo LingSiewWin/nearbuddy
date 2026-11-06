@@ -35,8 +35,26 @@ type S = {
   leaving: boolean;
 };
 
-const initial: S = { attack: false, reply: false, words: 0, short: false, verdict: false, verified: false, settle: false, leaving: false };
-const poster: S = { attack: true, reply: true, words: WORDS, short: true, verdict: true, verified: true, settle: true, leaving: false };
+const initial: S = {
+  attack: false,
+  reply: false,
+  words: 0,
+  short: false,
+  verdict: false,
+  verified: false,
+  settle: false,
+  leaving: false,
+};
+const poster: S = {
+  attack: true,
+  reply: true,
+  words: WORDS,
+  short: true,
+  verdict: true,
+  verified: true,
+  settle: true,
+  leaving: false,
+};
 
 async function script(a: Act<S>) {
   await a.wait(600);
@@ -78,7 +96,12 @@ async function script(a: Act<S>) {
 // The stage measures its container and picks wide or compact on the client; rendered on the server
 // it would paint the 1040px design into a phone column first. The placeholder holds its space.
 const noop = () => () => {};
-const useMounted = () => useSyncExternalStore(noop, () => true, () => false);
+const useMounted = () =>
+  useSyncExternalStore(
+    noop,
+    () => true,
+    () => false,
+  );
 
 export function Explainer() {
   const mounted = useMounted();
@@ -132,12 +155,12 @@ export function Explainer() {
                           </div>
                           <Stream className="nbx-reply__text" text={REPLY} count={s.words} />
                           <Collapse open={s.verified}>
-                          <div className="nbx-verified">
-                            <Icon name="check" filled size={14} />
-                            <span>Verified on chain</span>
-                            <span className="nbx-tx">tx {TX}</span>
-                          </div>
-                        </Collapse>
+                            <div className="nbx-verified">
+                              <Icon name="check" filled size={14} />
+                              <span>Verified on chain</span>
+                              <span className="nbx-tx">tx {TX}</span>
+                            </div>
+                          </Collapse>
                         </div>
                       </Collapse>
                     </div>
@@ -179,7 +202,19 @@ export function Explainer() {
 
 // One model's lane: its color, its prompt, and its current call as a block that is filled for
 // Long and outlined for Short. The word changes on the same block.
-function Lane({ model, name, prompt, short, hit }: { model: "qwen" | "deep"; name: string; prompt: string; short: boolean; hit?: boolean }) {
+function Lane({
+  model,
+  name,
+  prompt,
+  short,
+  hit,
+}: {
+  model: "qwen" | "deep";
+  name: string;
+  prompt: string;
+  short: boolean;
+  hit?: boolean;
+}) {
   return (
     <div className={`nbx-lane nbx-lane--${model}`} data-hit={hit || undefined}>
       <span className="nbx-swatch" />
@@ -221,6 +256,7 @@ function Tape() {
         [190, 135],
         [150, 105],
       ].map((w, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: fixed placeholder rows; position is the identity
         <div key={i} className="nbx-tape__row">
           <span className="nbx-tape__mark" />
           <span className="nbx-tape__lines">
