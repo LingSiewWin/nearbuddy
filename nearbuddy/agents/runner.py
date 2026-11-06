@@ -6,12 +6,12 @@ agents/data/decisions.jsonl.
     .venv/bin/python -m runner --rounds 2 --duel-seconds 330 --cycle-seconds 30
 
 Prompt-defense experiment (docs/research/prompt-defense.md, section 4): `--variants A,B,C` puts agent A on
-`pick_variant(duel_id)` among the listed arms each duel while agent B stays naive as the within-duel control;
-every row carries `prompt_variant`. A variant-C decision whose `evidence_used` lacks "oracle" is recorded as
-`error: "evidence not oracle"` and not posted. Arm D makes two enclave calls: the side call never sees the
-telemetry, and when there is telemetry a sizer call may only lower `size_bps`. The intent carries the proof of the
-last call (the sizer when it ran; its signed request quotes the side and sha256 of the side call's output); both
-calls are kept in the row's `arm_d`, and an unproven side call means no post.
+`pick_variant(duel_id)` (sha256 of the id) among the listed arms each duel while agent B stays naive as the
+within-duel control; every row carries `prompt_variant`. A variant-C decision whose `evidence_used` lacks
+"oracle" is recorded as `error: "evidence not oracle"` and not posted. Arm D makes two enclave calls: the side
+call never sees the telemetry, and when there is telemetry a sizer call may only lower `size_bps`. The intent
+carries the proof of the last call (the sizer when it ran; its signed request quotes the side and sha256 of the
+side call's output); both calls are kept in the row's `arm_d`, and an unproven side call means no post.
 
 Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this process finds it via GET /agent_duel):
 

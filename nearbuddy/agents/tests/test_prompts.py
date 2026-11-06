@@ -1,4 +1,5 @@
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -102,12 +103,25 @@ def test_variant_user_prompts_datamark_a_and_block_b_c():
     assert datamark("  a  b\nc ") == "a^b^c"
 
 
-def test_pick_variant_is_balanced_and_restricted_to_the_listed_arms():
-    assert [pick_variant(i) for i in (300, 301, 302, 303)] == ["A", "B", "C", "A"]
-    assert pick_variant("311") == "C"
-    assert [pick_variant(i, "AC") for i in range(6)] == ["A", "C", "A", "C", "A", "C"]
+def test_pick_variant_is_deterministic_and_restricted_to_the_listed_arms():
+    assert [pick_variant(i) for i in (300, 301, 302, 303)] == ["A", "C", "C", "A"]
+    assert pick_variant("311") == pick_variant(311) == "B"  # the row's string id and the int agree
     assert {pick_variant(i, "B") for i in range(10)} == {"B"}
     assert all(pick_variant(i, "BC") in "BC" for i in range(100))
+
+
+@pytest.mark.parametrize("arms", ["BC", "AC", "ABCD", "ABC"])
+@pytest.mark.parametrize("ids", [range(301, 701, 2), range(300, 700, 2)], ids=["odd", "even"])
+def test_pick_variant_balances_arms_when_a_loop_sees_only_odd_or_even_duel_ids(arms, ids):
+    """Two loops on one contract interleave duel ids, so pair 1 got only odd ids on 2026-11-06. With the old
+    `duel_id % len(arms)`, `--variants B,C` put every duel on C and `A,B,C,D` never picked A or C."""
+    counts = Counter(pick_variant(i, arms) for i in ids)
+    fair = len(ids) / len(arms)
+    assert set(counts) == set(arms)  # every arm gets duels
+    assert all(abs(n - fair) <= 0.3 * fair for n in counts.values()), counts  # within 30% of an even split
+    # a night-sized run (about 40 duels): still every arm, none starved below a quarter of its share
+    night = Counter(pick_variant(i, arms) for i in list(ids)[:40])
+    assert all(night[a] >= 40 / len(arms) / 4 for a in arms), night
 
 
 def test_duelist_with_a_variant_feeds_the_variant_prompts_and_labels_the_row():

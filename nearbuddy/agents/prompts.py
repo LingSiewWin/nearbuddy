@@ -10,6 +10,7 @@ trades on telemetry. D is structural, not a wording: the side is decided by a ca
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 BASE_SYSTEM = (
@@ -92,17 +93,19 @@ MARK = "^"
 
 
 def pick_variant(duel_id: str | int, arms: str = "ABC") -> str:
-    """Arm for a duel: deterministic, balanced, needs no state. Same duel id always lands in the same arm.
-    `arms` restricts the draw to the listed variants (`--variants A,C` -> "AC").
+    """Arm for a duel: deterministic, needs no state, balanced in expectation. Same duel id always lands in the same
+    arm. `arms` restricts the draw to the listed variants (`--variants A,C` -> "AC").
+
+    The draw is sha256 of the decimal duel id, not `duel_id % len(arms)`: two loops opening duels on one contract
+    interleave their ids, so one loop sees only odd ids, and a modulus over 2 or 4 arms then never picks some arms.
 
     >>> [pick_variant(i) for i in (300, 301, 302, 303)]
-    ['A', 'B', 'C', 'A']
+    ['A', 'C', 'C', 'A']
     >>> pick_variant("311")
-    'C'
-    >>> [pick_variant(i, "AC") for i in (300, 301, 302)]
-    ['A', 'C', 'A']
+    'B'
     """
-    return arms[int(duel_id) % len(arms)]
+    digest = hashlib.sha256(str(int(duel_id)).encode()).digest()
+    return arms[int.from_bytes(digest[:8], "big") % len(arms)]
 
 
 def datamark(text: str, mark: str = MARK) -> str:
