@@ -46,9 +46,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
               (x) =>
                 `- on ${agentLink(o, x.agent)} (from the published record):\n${untrusted("headline", x.attack ?? "", "  ")}`,
             )
+            .concat(
+              d.attack_count > d.decisions.filter((x) => x.attack).length
+                ? [
+                    `- ${d.attack_count - d.decisions.filter((x) => x.attack).length} more not in the published record yet (open ${o}/duel/${d.duel} in a browser to read them from the chain)`,
+                  ]
+                : [],
+            )
             .join("\n")
         : d.attack_count
-          ? `The contract keeps only the count after a duel resolves, and none of these attacks is in the published record yet; ${o}/duel/${d.duel} reads them from the chain.`
+          ? `The contract keeps only the count after a duel resolves, and none of these attacks is in the published record yet; open ${o}/duel/${d.duel} in a browser to read them from the chain.`
           : "None.",
     "",
     "## Decisions, with the model's own reasoning",
