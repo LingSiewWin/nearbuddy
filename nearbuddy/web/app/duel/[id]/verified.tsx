@@ -88,7 +88,7 @@ export function Verified({ duel }: { duel: number }) {
         </ul>
       ) : null}
       <details>
-        <summary>Every check ({b.lines.length})</summary>
+        <summary>Every line, notes included ({b.lines.length})</summary>
         <ul className="vlines">
           {b.lines.map((l) => (
             <li key={`${l.result}${l.check}`} className={l.result.toLowerCase()}>
