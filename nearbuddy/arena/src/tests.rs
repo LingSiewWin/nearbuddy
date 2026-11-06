@@ -1246,6 +1246,69 @@ fn follow_time_and_accept_time_views() {
 }
 
 #[test]
+fn follow_keeps_the_stored_spent() {
+    let (mut c, ..) = setup_follow(hour_mandate());
+    settle(&mut c, vec![fill(1, "usdc", 50)]);
+    let spent = |c: &Contract| {
+        c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
+            .unwrap()
+            .spent
+            .0
+    };
+    assert_eq!(spent(&c), 50);
+    // an update can neither reopen the allowance nor exhaust it
+    for claim in [0, VAULT] {
+        let mut m = hour_mandate();
+        m.spent = U128(claim);
+        ctx_at(FOLLOWER, 0, NOW + SEC);
+        c.follow(Base64VecU8(key(1).1), m);
+        assert_eq!(spent(&c), 50);
+    }
+    // a new mandate starts at 0 whatever it claims
+    ctx(OPERATOR, VAULT);
+    c.deposit();
+    let mut m = hour_mandate();
+    m.spent = U128(VAULT);
+    ctx(OPERATOR, 0);
+    c.follow(Base64VecU8(key(1).1), m);
+    let got = c.get_follow(Base64VecU8(key(1).1), OPERATOR.parse().unwrap());
+    assert_eq!(got.unwrap().spent.0, 0);
+}
+
+#[test]
+fn follow_with_revoked_is_an_unfollow_now() {
+    let (mut c, ..) = setup_follow(hour_mandate());
+    let mut m = mandate(1, 1, vec!["wbtc"]);
+    m.revoked = true;
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(Base64VecU8(key(1).1), m);
+    let got = c
+        .get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
+        .unwrap();
+    assert_eq!((got.revoked, got.revoked_at.0), (true, NOW + SEC));
+    assert_eq!(got.per_tx_cap.0, NEAR, "no other term changes");
+    let logs = near_sdk::test_utils::get_logs();
+    assert!(
+        logs.last().unwrap().contains(r#""event":"unfollow""#),
+        "{logs:?}"
+    );
+    // the fill fronted before it keeps its grace
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC + GRACE - 1);
+    assert_eq!(r.unwrap().settled, 1);
+    // without a mandate it stores nothing, like unfollow
+    let mut m = hour_mandate();
+    m.revoked = true;
+    ctx(OPERATOR, 0);
+    c.follow(Base64VecU8(key(1).1), m);
+    assert!(
+        c.get_follow(Base64VecU8(key(1).1), OPERATOR.parse().unwrap())
+            .is_none()
+    );
+}
+
+#[test]
 fn stored_mandate_versions_keep_their_borsh_tags() {
     // V4 is appended: records written by deploy 15 (V2) and 16 (V3) decode unchanged, no migration
     let m = hour_mandate();
@@ -1400,9 +1463,10 @@ fn allowance_exhausted_rejected() {
 
 #[test]
 fn absurd_follower_spent_is_rejected_not_panicked() {
-    let mut m = mandate(NEAR, u128::MAX, vec![]);
-    m.spent = U128(u128::MAX);
-    let (mut c, _, v) = setup_follow(m);
+    // `follow` ignores the follower's `spent` now; the checked add still guards the stored one
+    let (mut c, _, v) = setup_follow(mandate(NEAR, u128::MAX, vec![]));
+    let k = crate::follow::follow_key(&key(1).1, &FOLLOWER.parse().unwrap());
+    c.follows.get_mut(&k).unwrap().current_mut().spent = U128(u128::MAX);
     assert_eq!(
         settle_rejects(&mut c, vec![fill(1, "usdc", 50)]),
         "allowance exhausted"
