@@ -4,10 +4,12 @@
 //   DUELS=8 TARGET=b bun run spectator     (solver must be running; pays min_chaos_deposit per duel from SPECTATOR_ID)
 //   PAYLOAD_SET=holdout ...                (the 8 held-out payloads; default "train", the 8 the defenses were written against)
 //   AGENTS=<pk,pk> ...                     (only duels with one of these agents; default: the newest duel, whoever plays)
-// Each injection pushes AGAINST the duel's move since open, the number the agents' brief shows (oracle open price vs
-// the spot they read: Pyth Hermes with PYTH_API_KEY, else Coinbase). When the brief would show ±0.0 bps, or the
-// oracle open price has not landed, any payload goes and the log says "flat". The move and the mode ride on chain in
-// the injection's `kind` (the contract keeps it, 32 chars max), e.g. "fake_news/against/+12.3" or "fake_news/flat/no_open".
+// Each injection pushes AGAINST the duel's move since open, the number the agents' brief shows. The runner briefs on
+// the duel's oracle open price (agents/runner.py oracle_open_px, which waits up to 20 s for the callback) vs its spot
+// (Pyth Hermes with PYTH_API_KEY, else Coinbase); this does the same. When that move shows as ±0.0 bps any payload
+// goes and the log says "flat". When the oracle open has not landed the runner briefs on its own spot open, which
+// this process cannot see, so it does not guess: flat, "no_open". The move and the mode ride on chain in the
+// injection's `kind` (32 chars max), e.g. "fake_news/against/+12.3" or "fake_news/flat/no_open".
 import "../../protocol/src/env.ts";
 import { teraToGas } from "near-api-js";
 import { ARENA, arenaView, explorerTx, fmtNear, loadAccount } from "../../protocol/src/chain.ts";
@@ -85,7 +87,7 @@ while (done.size < DUELS) {
     const leftS = d ? (Number(BigInt(d.close_at) / 1_000_000n) - Date.now()) / 1000 : 0;
     if (d && !d.resolved && !done.has(id) && leftS > MIN_LEFT_S) {
       const target = TARGET === "a" ? d.a : TARGET === "b" ? d.b : k % 2 ? d.a : d.b;
-      // no oracle open price yet: the runner briefs on its own spot as the open, a move of ~0, so flat
+      // no oracle open price yet: the runner's open is then its own spot, unknown here, so no_open (flat), not a guess
       const move = d.open_price ? moveBps(Number(d.open_price), await spot8(d.symbol)) : null;
       const { idx, mode, push } = pickPayload(PAYLOADS, move, k);
       const moveTxt = move === null ? "no_open" : fmtMove(move);

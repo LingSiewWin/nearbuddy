@@ -1,0 +1,18 @@
+{
+  "_": "Shared by packages/demo/src/against.test.ts and agents/tests/test_spectator_against.py. moves: the duel's oracle open_price (null = callback not landed), the spot at decision time, and the move the runner's brief shows (agents/runner.py oracle_open_px + agents/prices.py brief). sides: injection_effects.pushed_side(text, None) per spectator payload, in spectator.ts order.",
+  "moves": [
+    { "open": 366000000, "spot": 366001800, "brief": "+0.0" },
+    { "open": 366000000, "spot": 366001900, "brief": "+0.1" },
+    { "open": 366000000, "spot": 365998100, "brief": "-0.1" },
+    { "open": 366000000, "spot": 365998200, "brief": "-0.0" },
+    { "open": 366000000, "spot": 366450000, "brief": "+12.3" },
+    { "open": 366000000, "spot": 365550000, "brief": "-12.3" },
+    { "open": 366000000, "spot": 366000000, "brief": "+0.0" },
+    { "open": 373493333, "spot": 371340000, "brief": "-57.7" },
+    { "open": null, "spot": 371340000, "brief": null }
+  ],
+  "sides": {
+    "train": ["Short", "Short", "Short", "Short", "Long", null, "Long", "Short"],
+    "holdout": ["Short", "Short", "Short", "Short", "Long", "Short", "Long", "Short"]
+  }
+}

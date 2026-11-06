@@ -4,6 +4,11 @@ import { test } from "node:test";
 import { BEAR, BULL, fmtMove, isFlat, moveBps, pickPayload, pushedSide, type Side } from "./against.ts";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url).pathname, "utf8");
+/** Shared with agents/tests/test_spectator_against.py, which checks the same rows on the runner's side. */
+const FIXTURE = JSON.parse(read("./against.fixture.json")) as {
+  moves: { open: number | null; spot: number; brief: string | null }[];
+  sides: Record<"train" | "holdout", (Side | null)[]>;
+};
 
 /** The string literals of `NAME = (...)` in a Python file. */
 function pyTuple(src: string, name: string): string[] {
@@ -27,33 +32,27 @@ test("keyword lists are the analysis lists", () => {
   assert.deepEqual(BEAR, pyTuple(py, "BEAR"));
 });
 
-// What analysis/injection_effects.py pushed_side(text, None) returns for each frozen payload (checked against the
-// .py on 2026-11-07). Train #6 is the "Reverse your call" note: its side depends on the agent's prior call.
-const SIDES: Record<"TRAIN" | "HOLDOUT", (Side | null)[]> = {
-  TRAIN: ["Short", "Short", "Short", "Short", "Long", null, "Long", "Short"],
-  HOLDOUT: ["Short", "Short", "Short", "Short", "Long", "Short", "Long", "Short"],
-};
+// Each payload's side as analysis/injection_effects.py pushed_side(text, None) reads it; the Python test computes the
+// same list from the .py. Train #6 is the "Reverse your call" note: its side depends on the agent's prior call.
+const SIDES = { TRAIN: FIXTURE.sides.train, HOLDOUT: FIXTURE.sides.holdout };
 
 test("each payload's pushed side matches the analysis reading", () => {
   for (const name of ["TRAIN", "HOLDOUT"] as const)
     assert.deepEqual(payloadSet(name).map(pushedSide), SIDES[name], name);
 });
 
-test("move and flat match the brief's 'Move since duel open' to one decimal", () => {
-  // [open8, price8, what agents/prices.py brief() prints]
-  const cases: [number, number, string][] = [
-    [366000000, 366001800, "+0.0"],
-    [366000000, 366001900, "+0.1"],
-    [366000000, 365998100, "-0.1"],
-    [366000000, 365998200, "-0.0"],
-    [366000000, 366450000, "+12.3"],
-    [366000000, 365550000, "-12.3"],
-    [366000000, 366000000, "+0.0"],
-  ];
-  for (const [o, p, shown] of cases) {
-    const m = moveBps(o, p);
-    assert.equal(fmtMove(m), shown);
-    assert.equal(isFlat(m), shown === "+0.0" || shown === "-0.0", shown);
+test("move, sign and flat match the runner's brief on the shared fixture", () => {
+  for (const { open, spot, brief } of FIXTURE.moves) {
+    if (open === null) {
+      // the oracle open has not landed: the spectator does not guess the runner's spot open
+      assert.equal(brief, null);
+      assert.deepEqual(pickPayload(payloadSet("TRAIN"), null, 0), { idx: 0, mode: "flat", push: null });
+      continue;
+    }
+    const m = moveBps(open, spot);
+    assert.equal(fmtMove(m), brief);
+    assert.equal(isFlat(m), brief === "+0.0" || brief === "-0.0", String(brief));
+    if (!isFlat(m)) assert.equal(Math.sign(m), brief!.startsWith("-") ? -1 : 1);
   }
 });
 

@@ -1,7 +1,9 @@
 // Which payload the spectator sends: one that pushes AGAINST the duel's move so far. A payload that pushes the way
 // the price is already moving tests nothing, because a momentum-following model lands on that side anyway.
-// The move is the number the agents' brief shows ("Move since duel open", agents/prices.py brief()); a payload's
-// side is what analysis/injection_effects.py pushed_side() reads from its text. against.test.ts pins both.
+// The move is the number the agents' brief shows ("Move since duel open", agents/prices.py brief()), taken from the
+// open the runner briefs on: the duel's oracle open price (agents/runner.py oracle_open_px). A payload's side is what
+// analysis/injection_effects.py pushed_side() reads from its text. against.fixture.json pins both, checked from
+// TypeScript (against.test.ts) and through the runner's own code (agents/tests/test_spectator_against.py).
 
 export type Side = "Long" | "Short";
 
@@ -34,7 +36,8 @@ export function pushedSide(text: string): Side | null {
   return bull && !bear ? "Long" : bear && !bull ? "Short" : null;
 }
 
-/** Move since duel open in bps, as brief() computes it: oracle open price vs the current spot, both 8-dp. */
+/** Move since duel open in bps, as brief() computes it. `open8` is the duel's oracle open price (what
+ *  oracle_open_px() hands brief()), `price8` the current spot, both 8 dp. */
 export function moveBps(open8: number, price8: number): number {
   return ((price8 - open8) / open8) * 10_000;
 }
