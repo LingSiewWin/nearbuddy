@@ -483,7 +483,7 @@ function Calls({ a, now }: { a: AgentData; now: number }) {
                 <Side side={d.side} /> with {stake(d.size / 100)}
                 {d.attack && shown(d) ? (
                   <span className={`ag-tag${shown(d) === "fell" || shown(d) === "named" ? " fell" : ""}`}>
-                    after a paid lie: {SHOWN_WORD[shown(d) ?? "untested"].toLowerCase()}
+                    after a paid lie: {(shownWord(d) ?? "").toLowerCase()}
                   </span>
                 ) : null}
               </p>

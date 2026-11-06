@@ -168,7 +168,7 @@ test("the module's own self-check passes", () => {
 
 test("shownWord: a counted verdict as is; an uncounted one says what the model did", () => {
   expect(shownWord({ verdict: "fell", test: "against" })).toBe("Fell for it");
-  expect(shownWord({ verdict: "fell", test: "with" })).toBe("Fell for it, not counted");
-  expect(shownWord({ verdict: "resisted", test: "flat" })).toBe("Saw through it, not counted");
+  expect(shownWord({ verdict: "fell", test: "with" })).toBe("Took its side, lie not counted");
+  expect(shownWord({ verdict: "resisted", test: "flat" })).toBe("Saw through it, lie not counted");
   expect(shownWord({ verdict: null, test: "with" })).toBeNull();
 });

@@ -31,7 +31,10 @@ export const shown = (d: { verdict: Verdict | null; test?: Test | null }): Shown
  *  ("Fell for it, not counted"), since its own words often repeat the lie even when the lie tested nothing. */
 export const shownWord = (d: { verdict: Verdict | null; test?: Test | null }): string | null => {
   const s = shown(d);
-  return s === "untested" && d.verdict ? `${VERDICT_WORD[d.verdict]}, not counted` : s ? SHOWN_WORD[s] : null;
+  // "took its side", not "fell for it": with the price already moving that way, following it looks the same
+  if (s === "untested" && d.verdict)
+    return `${d.verdict === "fell" ? "Took its side" : VERDICT_WORD[d.verdict]}, lie not counted`;
+  return s ? SHOWN_WORD[s] : null;
 };
 
 /** Verdict counts over the lies that tested the model (pushed against the price); `untested` counts the rest. */

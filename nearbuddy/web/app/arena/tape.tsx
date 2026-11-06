@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import type { Tick } from "../lib/live";
-import { SHOWN_WORD, shown } from "../lib/verdict";
+import { shown, shownWord } from "../lib/verdict";
 import { Seal, useDrawer } from "../ui/drawer";
 import { ago, clock, duelHref, mmss, near, pct, tone, who } from "../ui/format";
 import { type Focus, type Intent, isCall, markPct, openOf, priceAt } from "./model";
@@ -237,7 +237,7 @@ export function Tape({
           <span className="who">{who(m)}</span>
           <span className="wt">
             {e.ok ? `${e.side} ${e.size / 100}%` : `${e.side} refused`}
-            {d && shown(d) ? `, ${SHOWN_WORD[shown(d) ?? "untested"].toLowerCase()}` : ""}
+            {d && shown(d) ? `, ${(shownWord(d) ?? "").toLowerCase()}` : ""}
           </span>
           <span className="sb">{e.ok && e.tee === 2 ? <Seal /> : null}</span>
           <span className="px">{px?.toFixed(4) ?? ""}</span>
