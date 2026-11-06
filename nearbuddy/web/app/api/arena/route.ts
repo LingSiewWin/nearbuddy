@@ -1,29 +1,71 @@
-// Read-only arena snapshot from the public RPC: config, leaderboard, last duels, followers per
-// agent. The solver's /arena route is optional enrichment (injection payloads, quotes, fills);
-// the page renders without it.
+// Read-only arena snapshot from the public RPC: config, leaderboard, the last 3 duels in full, followers
+// per agent, and counts over the last SCAN duels (verified decisions, attacks). The solver's /arena route
+// is optional enrichment (intent txs, injection payloads, quotes, fills); the page renders without it.
+// Cached 20 s and built once at a time however many tabs poll; a stale body beats a 500 while the RPC
+// is throttled. Resolved duels never change, so they are kept in memory and not re-read.
 import { JsonRpcProvider } from "near-api-js";
 
 const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org"; // rpc.testnet.near.org is deprecated (429); fastnear rate-limits bursts
 const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
+const SCAN = Number(process.env.ARENA_SCAN ?? 40);
+const SHOW = 3;
+const TTL = 20_000;
 const provider = new JsonRpcProvider({ url: RPC });
 const view = (method: string, args: Record<string, unknown>) => provider.callFunction({ contractId: ARENA, method, args });
 
+type Intent = { proof_hash: string };
+type Duel = { id: string; resolved: boolean; injections: unknown[]; last_intent_a: Intent | null; last_intent_b: Intent | null; outcome?: { injections?: number } | null };
+const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+let cache: { at: number; body: string } | null = null;
+let inflight: Promise<string> | null = null;
+const resolved = new Map<string, Duel>(); // ponytail: unbounded, SCAN entries live at a time plus history; fine for one process
+const json = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+
+async function duel(id: string): Promise<Duel | null> {
+  const hit = resolved.get(id);
+  if (hit) return hit;
+  const d = (await view("get_duel", { duel_id: id })) as Duel | null;
+  if (d?.resolved) { resolved.set(id, d); if (resolved.size > 500) resolved.delete(resolved.keys().next().value as string); }
+  return d;
+}
+
 export async function GET() {
+  if (cache && Date.now() - cache.at < TTL) return json(cache.body);
+  if (!inflight) inflight = build().finally(() => { inflight = null; });
+  try {
+    return json(await inflight);
+  } catch (e) {
+    if (cache) return json(cache.body);
+    return json(JSON.stringify({ error: String(e).slice(0, 200) }), 502);
+  }
+}
+
+async function build(): Promise<string> {
   const config = (await view("get_config", {})) as { next_duel: string };
   const n = Number(config.next_duel);
-  const ids = Array.from({ length: Math.min(5, n) }, (_, i) => n - 1 - i);
-  const [leaderboard, duels, solver] = await Promise.all([
+  const ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => String(n - 1 - i));
+  const [leaderboard, solver] = await Promise.all([
     view("leaderboard", {}) as Promise<{ pk: string }[]>,
-    Promise.all(ids.map((id) => view("get_duel", { duel_id: String(id) }))),
     fetch(`${SOLVER_URL}/arena`, { cache: "no-store" }).then((r) => r.json()).catch(() => null),
   ]);
+  const scanned: (Duel | null)[] = [];
+  for (let i = 0; i < ids.length; i += 8) scanned.push(...(await Promise.all(ids.slice(i, i + 8).map(duel)))); // trickle, not a burst
   const followers = Object.fromEntries(
     await Promise.all(leaderboard.map(async (a) => [a.pk, await view("list_followers", { agent_pk: a.pk })])),
   );
+  const seen = scanned.filter((d): d is Duel => !!d);
+  const proven = (i: Intent | null) => !!i && i.proof_hash !== ZERO;
+  const stats = {
+    scanned: seen.length,
+    verified_decisions: seen.reduce((s, d) => s + Number(proven(d.last_intent_a)) + Number(proven(d.last_intent_b)), 0),
+    attacks: seen.reduce((s, d) => s + (d.resolved ? d.outcome?.injections ?? 0 : d.injections.length), 0),
+  };
   const body = JSON.stringify(
-    { at: Date.now(), rpc: RPC, contract: ARENA, config, leaderboard, duels, followers, solver },
+    { at: Date.now(), rpc: RPC, contract: ARENA, config, leaderboard, duels: scanned.slice(0, SHOW), stats, followers, solver },
     (_, v) => (typeof v === "bigint" ? v.toString() : v),
   );
-  return new Response(body, { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  cache = { at: Date.now(), body };
+  return body;
 }
