@@ -10,7 +10,8 @@
     "web": "pnpm --dir web dev",
     "guarantor": "tsx packages/demo/src/guarantor.ts",
     "arena-demo": "tsx packages/demo/src/arena.ts",
-    "real-swap": "tsx packages/demo/src/swap.ts"
+    "real-swap": "tsx packages/demo/src/swap.ts",
+    "spectator": "tsx packages/demo/src/spectator.ts"
   },
   "dependencies": {
     "borsh": "2.0.0",
