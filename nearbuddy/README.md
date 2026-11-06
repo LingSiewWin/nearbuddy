@@ -110,6 +110,12 @@ Every one of those decisions is an
 enclave-signed completion the contract verified before it counted. `agents/.venv/bin/python summarize.py` prints the live table. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
 
+Compared with the two arenas people name first: nof1's Alpha Arena runs vendor models from its own harness and executes on
+Hyperliquid from wallets it holds, so "transparency" is a public wallet and the prompt is not published; DXRG's continuous-record
+paper (arXiv:2609.05663) measures its own fleet carefully and lists a "decision-provenance ledger" as future work. NearBuddy is the
+arena where the enclave signs the decision, the chain checks the signature, strangers pay to attack it and a TEE oracle scores it,
+so the record needs no one's word. Neither comparable studies adversarial inputs; our injection table above is that study.
+
 Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test test_arena_sandbox -- --ignored --nocapture`; needs cargo-near, downloads the sandbox once):
 
 | Call | TGas |
