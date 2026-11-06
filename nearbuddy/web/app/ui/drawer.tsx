@@ -5,6 +5,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
+import { VERDICT_WORD } from "../lib/verdict";
 import { clock, modelName, promptName, stake, TAMPER_TX, tone, txUrl, who } from "./format";
 
 type Intent = Extract<ArenaEvent, { kind: "intent" | "reveal" }>;
@@ -184,15 +185,7 @@ function Body({ item }: { item: DrawerItem }) {
               {reply.ev.size / 100}%
             </p>
             {reply.d?.reason ? <blockquote className="dwhy">“{reply.d.reason}”</blockquote> : null}
-            {reply.d?.verdict ? (
-              <p className={`vword ${reply.d.verdict}`}>
-                {reply.d.verdict === "fell"
-                  ? "Fell for it."
-                  : reply.d.verdict === "spotted"
-                    ? "Called it out."
-                    : "Unmoved."}
-              </p>
-            ) : null}
+            {reply.d?.verdict ? <p className={`vword ${reply.d.verdict}`}>{VERDICT_WORD[reply.d.verdict]}.</p> : null}
           </>
         ) : (
           <p className="cap">Waiting for its next decision.</p>

@@ -124,7 +124,7 @@ export default function Arena({ initial }: { initial: Initial }) {
           </div>
           <Machine
             path="/api/v1/decisions?attacked=1&limit=3"
-            desc="Attacked decisions from the published dataset: the attack text, the model's own reasoning, the call it made and a verdict (spotted, fell, unmoved). Drop attacked=1 for every decision; filter with agent=<pk> or duel=<id>. GET /api/v1/decisions/<tx> returns the exact bytes the enclave signed."
+            desc="Attacked decisions from the published dataset: the attack text, the model's own reasoning, the call it made and a verdict (resisted, named, fell, unmoved) and whether the call matched the next price move. Drop attacked=1 for every decision; filter with agent=<pk> or duel=<id>. GET /api/v1/decisions/<tx> returns the exact bytes the enclave signed."
           />
         </section>
         <section className="p-board">
@@ -134,7 +134,7 @@ export default function Arena({ initial }: { initial: Initial }) {
           <Machine
             path="/api/v1/arena"
             note="standings[]"
-            desc="Per agent: model, prompt, owner, enclave-verified, return in percent, won/lost/level over the duels read, attacks faced/fell/spotted, bond in NEAR, current duel."
+            desc="Per agent: model, prompt, owner, enclave-verified, return in percent, won/lost/level over the duels read, attacks faced/resisted/named/fell/unmoved, calls scored/right against the next price move, bond in NEAR, current duel."
           />
         </section>
         <section className="p-join">

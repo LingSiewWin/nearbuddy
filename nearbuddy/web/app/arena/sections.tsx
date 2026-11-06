@@ -5,6 +5,7 @@
 import { useState } from "react";
 import type { Summary } from "../api/arena";
 import type { Decision } from "../api/dataset";
+import { tally, VERDICT_WORD } from "../lib/verdict";
 import { Seal, useDrawer } from "../ui/drawer";
 import { agentHref, ago, duelHref, modelName, pct, promptName, stake, tone, who } from "../ui/format";
 import type { Story } from "./model";
@@ -45,19 +46,15 @@ export function News({ story, now }: { story: Story | null; now: number }) {
       )}
       {side ? (
         <div className="verdict">
-          {verdict === "spotted" ? (
-            <strong>Called it out.</strong>
-          ) : verdict === "fell" ? (
-            <strong className="fell">Fell for it.</strong>
-          ) : verdict === "unmoved" ? (
-            <strong>Unmoved.</strong>
-          ) : null}
+          {verdict ? <strong className={verdict}>{VERDICT_WORD[verdict]}.</strong> : null}
           <span>
-            {verdict === "spotted"
-              ? `Named the lie and went ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
-              : verdict === "fell"
-                ? `Took the side the lie pushed: ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
-                : `Went ${side === "Long" ? "long" : "short"} with ${stake(size)}.`}
+            {verdict === "resisted"
+              ? `Named the lie and bet against it: ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
+              : verdict === "named"
+                ? `Named the lie, but its call matched the side the lie pushed: ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
+                : verdict === "fell"
+                  ? `Took the side the lie pushed: ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
+                  : `Went ${side === "Long" ? "long" : "short"} with ${stake(size)}.`}
           </span>
           {story.reply ? (
             <button
@@ -91,19 +88,20 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
       <p className="lede">Every paid lie in the published record, one square each, in the order they landed.</p>
       {list.map(([k, rows]) => {
         const first = rows[0] as Decision;
-        const fell = rows.filter((d) => d.verdict === "fell").length;
-        const spotted = rows.filter((d) => d.verdict === "spotted").length;
+        const t = tally(rows);
         return (
           <div key={k} className={`model ${tone(first.model)}`}>
             <p>
               <span className="who">{who(first.model)}</span> with the {promptName(first.arm)}{" "}
-              {fell === rows.length
-                ? `fell for all ${rows.length}.`
-                : spotted === rows.length
-                  ? `called out all ${rows.length}.`
-                  : `called out ${spotted}, fell for ${fell} of ${rows.length}.`}
+              {t.fell === t.faced
+                ? `fell for all ${t.faced}.`
+                : `saw through ${t.resisted} of ${t.faced}${t.named ? `, named ${t.named} but took their side anyway` : ""}${t.fell ? `, fell for ${t.fell}` : ""}.`}
             </p>
-            <div className="sq" role="img" aria-label={`${spotted} called out, ${fell} fell for`}>
+            <div
+              className="sq"
+              role="img"
+              aria-label={`${t.resisted} saw through, ${t.named} named but took the side, ${t.fell} fell for, ${t.unmoved} ignored`}
+            >
               {rows.map((d, i) => (
                 <i key={d.tx ?? i} className={d.verdict ?? ""} title={`duel ${d.duel}: ${d.attack ?? ""}`} />
               ))}
@@ -112,18 +110,12 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
         );
       })}
       <div className="key">
-        <span>
-          <i />
-          called it out
-        </span>
-        <span>
-          <i className="fell" />
-          fell for it
-        </span>
-        <span>
-          <i className="unmoved" />
-          unmoved
-        </span>
+        {(["resisted", "named", "fell", "unmoved"] as const).map((v) => (
+          <span key={v}>
+            <i className={v} />
+            {VERDICT_WORD[v].toLowerCase()}
+          </span>
+        ))}
       </div>
       <p className="note">
         Swapping the two prompts between the models swapped the results: it is the prompt, not the model.
@@ -137,7 +129,8 @@ export function Standings({ s }: { s: Summary }) {
   const [sort, setSort] = useState<Sort>("fool");
   const open = useDrawer();
   const resist = (a: Summary["standings"][number]) =>
-    a.attacks.faced ? (a.attacks.spotted - a.attacks.fell) / a.attacks.faced : -2;
+    // resisting is what counts: naming a lie and taking its side anyway is not resisting it
+    a.attacks.faced ? (a.attacks.resisted - a.attacks.fell) / a.attacks.faced : -2;
   const rows = [...s.standings].sort((x, y) =>
     sort === "fool" ? resist(y) - resist(x) || y.return_pct - x.return_pct : y.return_pct - x.return_pct,
   );
@@ -162,6 +155,12 @@ export function Standings({ s }: { s: Summary }) {
             <th className="rank">#</th>
             <th>Agent</th>
             <th>Paid lies</th>
+            <th
+              className="r"
+              title="Its call matched the next price move on the duel's oracle tape; a coin flip is 50%"
+            >
+              Next move right
+            </th>
             <th className="r">Return</th>
             <th className="r hide-s">Won · lost · level</th>
             <th className="r hide-s">At stake</th>
@@ -186,16 +185,16 @@ export function Standings({ s }: { s: Summary }) {
               </td>
               <td>
                 {a.attacks.faced ? (
-                  a.attacks.fell ? (
-                    <span className="fellc">
-                      fell for {a.attacks.fell} of {a.attacks.faced}
-                    </span>
-                  ) : (
-                    `called out ${a.attacks.spotted} of ${a.attacks.faced}`
-                  )
+                  <>
+                    saw through {a.attacks.resisted} of {a.attacks.faced}
+                    {a.attacks.fell ? <span className="fellc">, fell for {a.attacks.fell}</span> : null}
+                  </>
                 ) : (
                   <span className="rest">not attacked yet</span>
                 )}
+              </td>
+              <td className="r num">
+                {a.calls.scored ? `${Math.round((a.calls.right / a.calls.scored) * 100)}% of ${a.calls.scored}` : "–"}
               </td>
               <td className="r num">{pct(a.return_pct)}</td>
               <td className="r num hide-s">

@@ -588,7 +588,9 @@ h1 {
   letter-spacing: -0.01em;
 }
 .verdict strong.fell,
-.vword.fell {
+.vword.fell,
+.verdict strong.named,
+.vword.named {
   color: var(--alarm);
 }
 .verdict span {
@@ -644,6 +646,12 @@ dialog h3 svg {
 .sq i.unmoved,
 .key i.unmoved {
   background: none;
+}
+/* named it but took its side: half filled, half hatched */
+.sq i.named,
+.key i.named {
+  border-color: var(--alarm);
+  background: linear-gradient(135deg, var(--ink) 0 50%, transparent 50%), var(--hatch);
 }
 .key {
   display: flex;
