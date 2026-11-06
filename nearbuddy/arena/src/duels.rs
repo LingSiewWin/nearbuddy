@@ -48,13 +48,15 @@ pub(crate) fn price8(p: &OraclePrice) -> u64 {
 /// Signed basis points earned by one intent over the duel. No intent, or one that expired before
 /// `close_at`, scores 0. Integer order matters: multiply before divide, in i128.
 pub(crate) fn pnl_bps(intent: Option<&Intent>, close_at: u64, open: u64, close: u64) -> i64 {
+    require!(open > 0, "bad open price");
     let Some(i) = intent else { return 0 };
     if i.expires_at.0 < close_at {
         return 0;
     }
     let sign: i128 = if i.side == Side::Long { 1 } else { -1 };
     let v = sign * (close as i128 - open as i128) * i.size_bps as i128 / open as i128;
-    v as i64
+    // a 1-unit open price and a u64 close overflow i64: clamp instead of wrapping into a wrong sign
+    v.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
 impl Contract {
@@ -635,7 +637,9 @@ impl Contract {
         let mut taken = [0u128; 2];
         for (side, (pk, pnl)) in [(&pk_a, pnl_a), (&pk_b, pnl_b)].into_iter().enumerate() {
             let a = self.agents.get_mut(pk).expect("agent missing");
-            a.alpha_bps += if nr[side] { pnl.min(0) } else { pnl };
+            a.alpha_bps = a
+                .alpha_bps
+                .saturating_add(if nr[side] { pnl.min(0) } else { pnl });
             a.in_duel = None;
             if nr[side] {
                 let s = a.bond.0 * self.no_reveal_bps as u128 / 10_000;

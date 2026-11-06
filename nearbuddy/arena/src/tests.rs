@@ -1,5 +1,5 @@
 use super::*;
-use crate::duels::price8;
+use crate::duels::{pnl_bps, price8};
 use ed25519_dalek::{Signer, SigningKey};
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::test_utils::VMContextBuilder;
@@ -3011,4 +3011,60 @@ fn chaos_an_agent_owner_pays_earns_no_shield_and_goes_to_owner_fees() {
         c.self_chaos.get(&d).is_none(),
         "the marker goes with the duel"
     );
+}
+
+// ---------------------------------------------------------------- MAX_DUEL_NS follow-ups
+
+#[test]
+#[should_panic(expected = "min_duel_s too large")]
+fn set_oracle_refuses_a_floor_above_the_longest_duel() {
+    // a floor over MAX_DUEL_NS would make every open_duel "duel too short" or "duel too long"
+    let mut c = fresh(0);
+    ctx(OWNER, 1);
+    c.set_oracle(
+        ORACLE.parse().unwrap(),
+        U128(ORACLE_DEPOSIT),
+        MAX_DUEL_NS / 1_000_000_000 + 1,
+        60,
+    );
+}
+
+#[test]
+fn a_floor_of_exactly_the_longest_duel_still_opens_one() {
+    let (mut c, ..) = setup();
+    let day = MAX_DUEL_NS / 1_000_000_000;
+    ctx(OWNER, 1);
+    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), day, 60);
+    ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
+    let d = c
+        .open_duel(
+            Base64VecU8(key(1).1),
+            Base64VecU8(key(2).1),
+            "wrap.near".into(),
+            U64(NOW + MAX_DUEL_NS),
+        )
+        .0;
+    assert_eq!(c.get_duel(U64(d)).unwrap().close_at.0, NOW + MAX_DUEL_NS);
+}
+
+#[test]
+fn pnl_clamps_instead_of_wrapping() {
+    // open 1 unit, close u64::MAX, full size: the i128 result does not fit i64
+    ctx(OWNER, 0);
+    let long = intent(&key(1).1, 0, Side::Long, 10_000, 1);
+    let short = intent(&key(1).1, 0, Side::Short, 10_000, 1);
+    assert_eq!(pnl_bps(Some(&long), CLOSE, 1, u64::MAX), i64::MAX);
+    assert_eq!(pnl_bps(Some(&short), CLOSE, 1, u64::MAX), i64::MIN);
+    assert_eq!(
+        pnl_bps(Some(&long), CLOSE, OPEN, UP),
+        50,
+        "ordinary moves unchanged"
+    );
+}
+
+#[test]
+#[should_panic(expected = "bad open price")]
+fn pnl_with_a_zero_open_price_panics() {
+    ctx(OWNER, 0);
+    pnl_bps(None, CLOSE, 0, UP);
 }

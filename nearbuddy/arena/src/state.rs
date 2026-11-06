@@ -6,7 +6,7 @@ use near_sdk::{
     require,
 };
 
-use crate::{Agent, Duel, MandateV1, VersionedMandate, follow::follow_key};
+use crate::{Agent, Duel, MAX_DUEL_NS, MandateV1, VersionedMandate, follow::follow_key};
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -176,9 +176,13 @@ pub struct ContractV14 {
     used_commitments: LookupSet<Vec<u8>>,
 }
 
-/// Seconds to ns with a sanity bound (a week), so a unit mix-up cannot set an absurd floor.
+/// Seconds to ns, at most `MAX_DUEL_NS`: a floor above the longest duel `open_duel` accepts would
+/// refuse every duel.
 pub(crate) fn duel_floor_ns(min_duel_s: u64) -> u64 {
-    require!(min_duel_s <= 7 * 24 * 3600, "min_duel_s too large");
+    require!(
+        min_duel_s <= MAX_DUEL_NS / 1_000_000_000,
+        "min_duel_s too large"
+    );
     min_duel_s * 1_000_000_000
 }
 
