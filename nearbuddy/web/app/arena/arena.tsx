@@ -262,7 +262,7 @@ export default function Arena() {
         ])}
         {"\n"}
         {legend(
-          "alpha = oracle-scored pnl, 1 bps = 0.01 % · shield = attacks survived in won duels · bond = NEAR at stake",
+          "alpha = lifetime pnl, 1 bps = 0.01 % (duels 0-256 scored by the operator key, 257+ by the TEE oracle) · shield = attacks survived in won duels · bond = NEAR at stake",
         )}
         {"\n"}
         {bottom()}
