@@ -23,6 +23,10 @@ commitment is revealed before close_at, and on Ctrl-C too, since an unrevealed c
 so the solver opens it with open_duel_consented; a self-hosted `--only` runner holds one key, so it gets
 commit-reveal but never consent.
 
+Second pair (`--pair-tag p2`, scripts/second-loop.sh): the same seeds derive a distinct key set per tag
+(keys.key_tag), so two loops with other NEAR_AI_MODEL_A/B never share an agent; every row carries `pair_tag`
+(null for the main pair) and `--resolve-stuck` / `--check-agents` act on that pair only.
+
 Agents are ed25519 keys derived from AGENT_SEED_A / AGENT_SEED_B (hex, 32 bytes) in the env file,
 or fresh random keys when unset (then they are registered on every run). With NEAR_AI_API_KEY set the
 agents are registered as TEE-backed and the contract refuses any intent without a verified proof.
@@ -61,7 +65,7 @@ from intent_client import (
     sign_intent,
     tee_proof,
 )
-from keys import agent_key, pk_b64, register_sig
+from keys import agent_key, key_tag, pk_b64, register_sig
 from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
 from prompts import VARIANTS, pick_variant
@@ -94,10 +98,15 @@ def make_duelist(
     return d, sk, complete
 
 
+PAIR_TAG = ""  # `--pair-tag`: which agent pair this process drives; "" = the main pair
+
+
 def record(row: dict[str, Any]) -> None:
+    """Append one dataset row, tagged with the pair (`pair_tag` null = the main pair) so two loops sharing the file
+    can be split."""
     DATA.parent.mkdir(parents=True, exist_ok=True)
     with DATA.open("a") as f:
-        f.write(json.dumps(row) + "\n")
+        f.write(json.dumps({**row, "pair_tag": PAIR_TAG or None}) + "\n")
 
 
 def save_attestation(model_client: ModelClient) -> str | None:
@@ -604,18 +613,19 @@ def free_agents(solver: Solver, pks: list[str]) -> None:
         resolve_duel(solver, duel_id)
 
 
-def arena_pks() -> list[str]:
-    """Every key `run` can register: A and B, plain or TEE, with or without the `--swap-prompts` tag. A name with
-    no AGENT_KEY_*/AGENT_SEED_* gets a random key per run, so there is nothing on chain to free for it."""
+def arena_pks(pair_tag: str = "") -> list[str]:
+    """Every key `run` can register for this pair: A and B, plain or TEE, with or without the `--swap-prompts` tag. A
+    name with no AGENT_KEY_*/AGENT_SEED_* gets a random key per run, so there is nothing on chain to free for it."""
     names = [n for n in ("A", "B") if ENV.get(f"AGENT_KEY_{n}") or ENV.get(f"AGENT_SEED_{n}")]
-    keys = (pk_b64(agent_key(n, tee, tag)) for n in names for tee in (True, False) for tag in ("", "swap"))
+    tags = [key_tag(pair_tag, swap) for swap in (False, True)]
+    keys = (pk_b64(agent_key(n, tee, tag)) for n in names for tee in (True, False) for tag in tags)
     return list(dict.fromkeys(keys))  # AGENT_KEY_* ignores tee/tag: one key, not four
 
 
-def resolve_stuck(solver: Solver) -> list[str]:
+def resolve_stuck(solver: Solver, pair_tag: str = "") -> list[str]:
     """Free this runner's agents after a crash (wait for each stuck duel to close, resolve it); returns the keys
     still `in_duel` afterwards, e.g. when the oracle callback has not landed yet."""
-    pks = arena_pks()
+    pks = arena_pks(pair_tag)
     free_agents(solver, pks)
     return [pk for pk in pks if (view("get_agent", {"agent_pk": pk}) or {}).get("in_duel") is not None]
 
@@ -631,6 +641,7 @@ def run(
     variants: str = "",
     commit_reveal: bool = False,
     consent: bool = False,
+    pair_tag: str = "",
 ) -> list[dict[str, Any]]:
     if not ENV.get("ARENA_SECRET"):
         raise SystemExit("ARENA_SECRET missing in the env file: the solver refuses every POST without it")
@@ -647,9 +658,10 @@ def run(
     model_a, model_b = client_from_env(ENV, "A"), client_from_env(ENV, "B")
     if swap:  # control: the hardened prompt goes to model B and the naive prompt to model A, under separate keys
         model_a, model_b = model_b, model_a
-    tag = "swap" if swap else ""
+    tag = key_tag(pair_tag, swap)
     a, ska, ca = make_duelist("A", model_a, hardened=True, tag=tag)
     b, skb, cb = make_duelist("B", model_b, hardened=False, tag=tag)
+    print(f"pair {pair_tag or 'main'}: A {pk_b64(ska)[:8]} {model_a.model_id}, B {pk_b64(skb)[:8]} {model_b.model_id}")
     solver_id = ENV.get(
         "SOLVER_ID", "nearbuddy-solver.testnet"
     )  # the account that signs register_agent = on-chain owner
@@ -758,6 +770,17 @@ if __name__ == "__main__":
     p.add_argument("--hardened", action="store_true", help="with --only: use the hardened prompt (default naive)")
     p.add_argument("--poll-seconds", type=int, default=10)
     p.add_argument(
+        "--pair-tag",
+        default="",
+        metavar="TAG",
+        help="drive a second pair: keys derived from the same seeds under TAG, every row carries pair_tag",
+    )
+    p.add_argument(
+        "--check-agents",
+        action="store_true",
+        help="print this pair's agent keys comma-separated and exit; exit 1 if any is still in a duel",
+    )
+    p.add_argument(
         "--commit-reveal",
         action="store_true",
         help="commit each call as sha256(intent || salt), reveal it next cycle (on anyway when get_config says so)",
@@ -771,6 +794,18 @@ if __name__ == "__main__":
     arms = "".join(args.variants.upper().split(","))
     if arms and (len(set(arms)) != len(arms) or not set(arms) <= set(VARIANTS)):
         p.error(f"--variants takes distinct arms from {','.join(VARIANTS)}; got {args.variants!r}")
+    if args.pair_tag and not re.fullmatch(r"[a-z0-9]{1,16}", args.pair_tag):
+        p.error(f"--pair-tag takes 1-16 lowercase letters or digits; got {args.pair_tag!r}")
+    if args.pair_tag and (args.only or any(ENV.get(f"AGENT_KEY_{n}") for n in "AB")):
+        p.error("--pair-tag derives keys from AGENT_SEED_A/B; an AGENT_KEY_* or --only agent is one fixed key")
+    PAIR_TAG = args.pair_tag
+    if args.check_agents:
+        pks = arena_pks(PAIR_TAG)
+        busy = {pk: a["in_duel"] for pk in pks if (a := view("get_agent", {"agent_pk": pk})) and a.get("in_duel")}
+        for pk, duel in busy.items():
+            print(f"{pk} in duel {duel}", file=sys.stderr)
+        print(",".join(pks))
+        raise SystemExit(1 if busy else 0)
     if args.resolve:
         print(
             json.dumps(
@@ -781,7 +816,9 @@ if __name__ == "__main__":
         )
         raise SystemExit(0)
     if args.resolve_stuck:
-        stuck = resolve_stuck(Solver(ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), ENV.get("ARENA_SECRET", "")))
+        stuck = resolve_stuck(
+            Solver(ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), ENV.get("ARENA_SECRET", "")), PAIR_TAG
+        )
         print(json.dumps({"still_in_duel": stuck}))
         raise SystemExit(1 if stuck else 0)
     if args.only:
@@ -811,5 +848,6 @@ if __name__ == "__main__":
         arms,
         args.commit_reveal,
         args.consent,
+        PAIR_TAG,
     )
     print(json.dumps(out, indent=2))

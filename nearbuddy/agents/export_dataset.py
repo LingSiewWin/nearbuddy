@@ -43,6 +43,12 @@ FIELDS: list[tuple[str, str, str]] = [
         "string \\| null",
         "Prompt arm: `naive`, `hardened`, or experiment arm `A`/`B`/`C`; null on rows older than the field.",
     ),
+    (
+        "pair_tag",
+        "string \\| null",
+        "Which agent pair played (`runner.py --pair-tag`): null for the main pair, e.g. `p2` for the second loop's "
+        "models; pairs never share an agent key.",
+    ),
     ("brief", "string \\| null", "The market brief the model saw (price and move since duel open)."),
     (
         "injection",
