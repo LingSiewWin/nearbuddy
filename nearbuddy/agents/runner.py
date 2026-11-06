@@ -576,7 +576,9 @@ def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> None:
     waits for its follower quotes, so in a row the last agent could miss the window while the first one waits out a
     solver restart. Per agent the candidates go newest first; one the contract does not hold ("commitment mismatch",
     "no commitment": a commit that never landed, or one a later commit replaced) is recorded as not on chain and the
-    next older one is tried. One failure, transport errors included, must not strand another agent. A reveal whose
+    next older one is tried, and so is one whose reveal failed in transport: trying an older candidate is always
+    safe (the contract refuses it unless it is the stored one), while stopping could forfeit the duel when the newest
+    commit never landed. One failure, transport errors included, must not strand another agent. A reveal whose
     deadline (close_at minus REVEAL_MARGIN_S) passes is reported loudly: that commitment forfeits the duel and pays
     no_reveal_bps."""
     batch = [(label, held.pop(label)) for label in list(held)]
@@ -597,7 +599,8 @@ def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> None:
                         "commitment may stay unrevealed; the contract then forfeits the duel and slashes "
                         "no_reveal_bps of the bond"
                     )
-            # revealed, refused as late, or failed: an older candidate was replaced by this one if it landed
+                continue  # the older candidate may be the one on chain (this commit's answer may have been lost)
+            # revealed, or refused as late: an older candidate was replaced by this one if it landed
             for older in list(reversed(cands))[i + 1 :]:
                 record({**older.row, "revealed_tx": None, "tx": None, "replaced_by": p.row.get("committed_tx")})
             return

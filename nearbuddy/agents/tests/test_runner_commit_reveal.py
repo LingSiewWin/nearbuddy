@@ -249,6 +249,23 @@ def test_a_commit_that_times_out_is_revealed_first_since_it_may_have_landed(env)
     assert older["replaced_by"] is None and older["revealed_tx"] is None, "the older one, replaced since that landed"
 
 
+def test_a_transport_failure_on_the_newest_candidate_still_tries_the_older_one(env):
+    # the second commit's answer was lost, and its reveal fails in transport too: the first commitment may be the one
+    # on chain, so it is revealed as well (the contract refuses whichever it does not hold)
+    clock, _ = env
+    solver = FakeSolver(
+        clock,
+        fail={("/commit", 2): requests.Timeout("read timed out"), ("/reveal", 1): requests.ConnectionError("reset")},
+    )
+    with pytest.raises(requests.Timeout):
+        play(solver, scripted(["Long", "Short"]))
+    assert solver.paths() == ["/commit", "/commit", "/reveal", "/reveal"]
+    assert opened(solver, 0) == commits(solver)[1] and opened(solver, 1) == commits(solver)[0]
+    rs = {r["commitment"]: r for r in rows()}
+    assert rs[commits(solver)[1]]["error"].startswith("reveal failed") and "reset" in rs[commits(solver)[1]]["error"]
+    assert rs[commits(solver)[0]]["revealed_tx"] == "R2"
+
+
 def test_a_timed_out_commit_that_never_landed_falls_back_to_the_held_one(env):
     clock, _ = env
     solver = FakeSolver(
