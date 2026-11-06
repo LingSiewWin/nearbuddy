@@ -301,6 +301,12 @@ async function main() {
   const home = join(TMP, "sandbox");
   const init = spawnSync(bin, ["--home", home, "init"], { encoding: "utf8" });
   if (init.status !== 0) throw new Error(`sandbox init failed: ${init.stderr.slice(-400)}`);
+  // the genesis validator is test.near; every id ending in .near names mainnet to the network guard (config.py,
+  // network.ts), so it becomes sandbox.testnet and every account below a subaccount of it
+  for (const f of ["genesis.json", "validator_key.json"]) {
+    const path = join(home, f);
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll('"test.near"', '"sandbox.testnet"'));
+  }
   const [rpcPort, netPort] = [await freePort(), await freePort()];
   RPC = `http://127.0.0.1:${rpcPort}`;
   start("sandbox", bin, [
