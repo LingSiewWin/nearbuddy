@@ -12,6 +12,7 @@ import {
   followerQuality,
   lastFills,
   legs,
+  NO_REVEAL_RULE,
   proven,
   quoteOut,
   revealCell,
@@ -45,17 +46,26 @@ describe("commit-reveal", () => {
   test("on: calls hidden, no-reveal cost in percent", () => {
     const c = { commit_reveal: true, no_reveal_bps: 500, require_consent: true };
     expect(commitWord(c)).toBe("on");
-    expect(text(commitCells(c))).toBe("on   calls hidden until reveal · no reveal costs 5 % of bond");
+    expect(text(commitCells(c))).toBe(
+      "on   calls hidden until reveal · no reveal = forfeit + 5 % of bond to the opponent",
+    );
+    expect(text(commitCells(c)).length).toBeLessThanOrEqual(VW);
+    expect(commitCells(c)[2]).toMatchObject({ title: NO_REVEAL_RULE });
+    expect(NO_REVEAL_RULE).toContain("forfeits the duel");
+    expect(NO_REVEAL_RULE).toContain("both unrevealed is a tie");
   });
   test("explicitly off: posted in the clear", () => {
     expect(text(commitCells({ commit_reveal: false }))).toContain("in the clear");
   });
-  test("reveal marker per side", () => {
-    expect(revealCell(true, false, true)).toMatchObject({ t: "no-reveal slashed", c: "loss" });
-    expect(revealCell(true, true, true)).toMatchObject({ t: "no-reveal slashed" }); // the slash wins
-    expect(revealCell(false, true, false)).toMatchObject({ t: "revealed", c: "ok" });
-    expect(revealCell(undefined, false, false)).toMatchObject({ t: "hidden until reveal" });
-    expect(revealCell(undefined, false, true)).toMatchObject({ t: "no intent" });
+  test("reveal marker per side: one unrevealed side forfeits, both unrevealed is a tie", () => {
+    expect(revealCell([true, false], 0, false, true)).toMatchObject({ t: "no reveal: forfeit", c: "loss" });
+    expect(revealCell([false, true], 0, true, true)).toMatchObject({ t: "revealed", c: "ok" });
+    expect(revealCell([false, true], 1, true, true)).toMatchObject({ t: "no reveal: forfeit" }); // an older intent stays
+    expect(revealCell([true, true], 1, false, true)).toMatchObject({ t: "no reveal: tie", c: "loss" });
+    expect(String((revealCell([true, false], 0, false, true) as { title: string }).title)).toContain("to the opponent");
+    expect(revealCell(null, 0, true, false)).toMatchObject({ t: "revealed", c: "ok" });
+    expect(revealCell(undefined, 1, false, false)).toMatchObject({ t: "hidden until reveal" });
+    expect(revealCell(undefined, 0, false, true)).toMatchObject({ t: "no intent" });
   });
   test("proven: zero or missing proof hash is not verified (deploy 13 and committed-but-hidden intents)", () => {
     expect(proven({ proof_hash: "q83vEjRWeJA=" }, ZERO)).toBe(true);

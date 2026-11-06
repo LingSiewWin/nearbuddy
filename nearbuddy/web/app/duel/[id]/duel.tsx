@@ -204,9 +204,9 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
               <>
                 {rowx("reveal", [
                   "A ",
-                  revealCell(r.no_reveal?.[0], !!d.last_intent_a, d.resolved),
+                  revealCell(r.no_reveal, 0, !!d.last_intent_a, d.resolved),
                   "   B ",
-                  revealCell(r.no_reveal?.[1], !!d.last_intent_b, d.resolved),
+                  revealCell(r.no_reveal, 1, !!d.last_intent_b, d.resolved),
                 ])}
                 {"\n"}
               </>
@@ -219,7 +219,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
           </>
         )}
         {legend(
-          `ENCLAVE-VERIFIED = intents signed inside a NEAR AI TEE · size = % of bond risked · proof = sha256 of the model call${r?.config?.commit_reveal ? " · no-reveal slashed = committed a hidden call, never revealed it" : ""}`,
+          `ENCLAVE-VERIFIED = intents signed inside a NEAR AI TEE · size = % of bond risked · proof = sha256 of the model call${r?.config?.commit_reveal ? " · no reveal = forfeit + no_reveal_bps of bond to the opponent (both: tie, to the protocol)" : ""}`,
         )}
         {"\n"}
         {bottom()}

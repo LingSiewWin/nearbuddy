@@ -9,6 +9,10 @@ export type CommitConfig = { commit_reveal?: boolean; no_reveal_bps?: number; re
 /** One word for the arena stats strip; a contract without the field has no commit-reveal. */
 export const commitWord = (c: CommitConfig | null | undefined) => (c?.commit_reveal ? "on" : "off");
 
+/** The contract's rule for a commitment left unrevealed at scoring (deploy 14). */
+export const NO_REVEAL_RULE =
+  "an unrevealed side forfeits the duel and pays no_reveal_bps of its bond to the opponent; both unrevealed is a tie and both slashes go to the protocol";
+
 /** Duel box 1, `commit-reveal` row. */
 export const commitCells = (c: CommitConfig | null | undefined): Cell[] =>
   c?.commit_reveal == null
@@ -20,7 +24,13 @@ export const commitCells = (c: CommitConfig | null | undefined): Cell[] =>
       ? [
           { t: "on", c: "ok" },
           "   calls hidden until reveal",
-          c.no_reveal_bps != null ? { t: ` · no reveal costs ${c.no_reveal_bps / 100} % of bond`, c: "dim" } : "",
+          c.no_reveal_bps != null
+            ? {
+                t: ` · no reveal = forfeit + ${c.no_reveal_bps / 100} % of bond to the opponent`,
+                c: "dim",
+                title: NO_REVEAL_RULE,
+              }
+            : "",
         ]
       : [
           { t: "off", c: "dim" },
@@ -28,9 +38,25 @@ export const commitCells = (c: CommitConfig | null | undefined): Cell[] =>
         ];
 
 /** Duel box 1, per-side marker from `get_no_reveal(duel_id)` ([a, b]; null before commit-reveal). */
-export const revealCell = (slashed: boolean | undefined, revealed: boolean, resolved: boolean): Cell =>
-  slashed
-    ? { t: "no-reveal slashed", c: "loss", title: "committed a call, never revealed it: bond slashed (get_no_reveal)" }
+export const revealCell = (
+  nr: readonly [boolean, boolean] | null | undefined,
+  side: 0 | 1,
+  revealed: boolean,
+  resolved: boolean,
+): Cell =>
+  nr?.[side]
+    ? nr[1 - side]
+      ? {
+          t: "no reveal: tie",
+          c: "loss",
+          title: "neither side revealed: a tie, both no-reveal slashes go to the protocol (get_no_reveal)",
+        }
+      : {
+          t: "no reveal: forfeit",
+          c: "loss",
+          title:
+            "committed a call, never revealed it: forfeits the duel, pays no_reveal_bps of its bond to the opponent",
+        }
     : revealed
       ? { t: "revealed", c: "ok" }
       : resolved

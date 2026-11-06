@@ -156,7 +156,7 @@ test("arena: deploy 13 data still renders standings, commit-reveal off, solver o
   await expect(page.locator("body")).toContainText("solver offline: no execution data");
 });
 
-test("duel: commit-reveal row and the no-reveal slashed marker", async ({ page }) => {
+test("duel: commit-reveal row and the no-reveal forfeit marker", async ({ page }) => {
   await stub(page, "duel", {
     at: now,
     rpc: "https://fixture.rpc",
@@ -170,9 +170,10 @@ test("duel: commit-reveal row and the no-reveal slashed marker", async ({ page }
   });
   await page.goto("/duel/411");
   const body = page.locator("body");
-  await expect(body).toContainText("calls hidden until reveal · no reveal costs 5 % of bond");
+  await expect(body).toContainText("calls hidden until reveal · no reveal = forfeit + 5 % of bond to the opponent");
   await expect(page.locator("span.ok", { hasText: "revealed" })).toBeVisible();
-  await expect(page.locator("span.loss", { hasText: "no-reveal slashed" })).toBeVisible();
+  await expect(page.locator("span.loss", { hasText: "no reveal: forfeit" })).toBeVisible();
+  await expect(body).toContainText("no reveal = forfeit + no_reveal_bps of bond to the opponent (both: tie, to the protocol)");
   await shot(page, "duel");
 });
 
@@ -191,7 +192,7 @@ test("duel: deploy 13 data (no commit fields, no get_no_reveal) renders the side
   await page.goto("/duel/411");
   await expect(page.locator(box("sides"))).toBeVisible();
   await expect(page.locator("body")).toContainText("this contract predates commit-reveal");
-  await expect(page.locator("body")).not.toContainText("no-reveal slashed");
+  await expect(page.locator("body")).not.toContainText("no reveal:");
   await expect(page.locator("body")).toContainText("no proof");
 });
 
