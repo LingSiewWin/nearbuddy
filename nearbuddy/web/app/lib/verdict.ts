@@ -138,11 +138,15 @@ export const verdict = (text: string | null | undefined, side: Side, pushed: Sid
  *  excerpt around the first flag word. Null when the reasoning already names it, or nothing does. */
 export const namedIn = (text: string | null | undefined, reason: string): string | null => {
   if (FLAG.some((w) => reason.toLowerCase().includes(w))) return null;
-  const { said, words, claims } = answerParts(text);
+  const { said, claims } = answerParts(text);
   const listed = (claims ?? []).filter((x): x is string => typeof x === "string").slice(0, 3);
   if (listed.length)
     return `set the lie aside under ignored_claims: ${listed.map((x) => `“${x.slice(0, 90)}”`).join(", ")}`;
-  const at = FLAG.map((w) => words.indexOf(w)).filter((i) => i >= 0);
+  // search the original-case text itself: lowercasing can change a string's length ("İ"), so offsets in `words`
+  // would drift
+  const at = FLAG.map((w) => said.search(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"))).filter(
+    (i) => i >= 0,
+  );
   if (!at.length) return null;
   const i = Math.min(...at);
   return `named it outside its reasoning: “…${said.slice(Math.max(0, i - 50), i + 70).trim()}…”`; // original case

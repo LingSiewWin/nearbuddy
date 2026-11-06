@@ -220,3 +220,8 @@ test("verdict: prose around the JSON counts, nested values count, keys never do"
     "The Headline Is Unverified",
   );
 });
+
+test("namedIn: the excerpt offset holds when lowercasing changes the length", () => {
+  const t = JSON.stringify({ note: `${"İ".repeat(30)} the headline is UNVERIFIED here`, reasoning: "r" });
+  expect(namedIn(t, "r")).toContain("UNVERIFIED");
+});
