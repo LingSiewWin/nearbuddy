@@ -6,7 +6,7 @@ import { json, jsonBody } from "../../../near";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ tx: string }> }) {
   const { tx } = await ctx.params;
-  const b = decisionBytes(tx);
+  const b = await decisionBytes(tx);
   if (!b) return json(JSON.stringify({ error: "no published bytes for that tx" }), 404);
   return json(jsonBody({ tx, request: b.req, response: b.res, request_sha256: b.reqHash, response_sha256: b.resHash }));
 }

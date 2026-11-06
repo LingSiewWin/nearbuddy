@@ -29,7 +29,8 @@ export const datasetBuilt = snap.built;
 
 const LIVE = process.env.DECISIONS_LIVE;
 const TAIL = 4 * 1024 * 1024; // last 4 MB of the file: hundreds of rows
-let live: { at: number; rows: Decision[]; attacks: Record<string, string> } = { at: 0, rows: [], attacks: {} };
+type Live = { at: number; rows: Decision[]; attacks: Record<string, string>; bodies: Record<string, Bytes> };
+let live: Live = { at: 0, rows: [], attacks: {}, bodies: {} };
 
 async function tail() {
   if (!LIVE || Date.now() - live.at < 3_000) return live;
@@ -51,7 +52,7 @@ async function tail() {
       }
     });
     const s = slim(raws);
-    live = { at: Date.now(), rows: s.rows.filter((r) => !known.has(r.tx)), attacks: s.attacks };
+    live = { at: Date.now(), rows: s.rows.filter((r) => !known.has(r.tx)), attacks: s.attacks, bodies: s.bodies };
   } catch {
     live = { ...live, at: Date.now() };
   }
@@ -70,7 +71,9 @@ export async function attackText(hash: string): Promise<string | null> {
 
 let bodies: Record<string, Bytes> | null = null;
 /** The exact request/response bytes behind one decision tx, only where their sha256 matched the chain. */
-export function decisionBytes(tx: string): Bytes | null {
+export async function decisionBytes(tx: string): Promise<Bytes | null> {
   bodies ??= read<Record<string, Bytes>>("bodies.json", {});
-  return Object.hasOwn(bodies, tx) ? (bodies[tx] ?? null) : null;
+  if (Object.hasOwn(bodies, tx)) return bodies[tx] ?? null;
+  const t = await tail(); // a live row's bytes, already checked against its hashes by slim()
+  return Object.hasOwn(t.bodies, tx) ? (t.bodies[tx] ?? null) : null;
 }
