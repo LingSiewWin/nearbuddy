@@ -60,6 +60,7 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Spectator injects `fake_news` at A (0.1 NEAR to the pool) | [`DMpAMwDs…vokW`](https://testnet.nearblocks.io/txns/DMpAMwDsUFVahDqs7LF7d8Erxo93FdoCuyDuYmgNvokW) |
 | A posts an intent; solver quotes the follower via 1Click: 0.2 wNEAR → 0.741065 USDC | [`BWVFuYsm…X4xX`](https://testnet.nearblocks.io/txns/BWVFuYsmiopzxwxmMyYvPUruVEqfywSTcxyHxPQsX4xX) |
 | `settle_follow`: one fill at the cap settled, 0.2 NEAR moved inside the mandate | [`8gnGLPva…hGtR`](https://testnet.nearblocks.io/txns/8gnGLPvanrjF6R4FUKWvUn7HLJciKHszJAiRVY6ehGtR) |
+| **Mainnet**: the same 1Click path for real, `bun run real-swap` from `2f872c49…dd6a`: 0.5 wNEAR → 1.864135 USDC, status `SUCCESS`, USDC on the account (`ft_balance_of` = 1864135) | wrap [`BE2JDozp…jWpN`](https://nearblocks.io/txns/BE2JDozpSVKp2gDBUuweJeZMC87i4QTbYCd3KKYMjWpN) · deposit [`7Zf4qbBL…Vuoz`](https://nearblocks.io/txns/7Zf4qbBLqyX1eJU3EwXStw6pD8PCgD8pcd2ej6k3Vuoz) |
 | `settle_follow` rejections on chain: over cap, token not allowed, duplicate fill | [`EaefxJxR…CN7F`](https://testnet.nearblocks.io/txns/EaefxJxRb6m9pPZ1nXG3GnYXsixqVBG5QL4eNq2LCN7F) |
 | Duel 3 resolved | [`CZWSgmeN…Z1Kx`](https://testnet.nearblocks.io/txns/CZWSgmeNfSU17gKXvLwGo3AAxiTPj4KXasGtUdu8Z1Kx) |
 | Duel 10, live chaos at both agents: `fake_news` at A, `prompt_injection` at B | [`D3iUyfw6…rGNi`](https://testnet.nearblocks.io/txns/D3iUyfw6epwkRZ84zTi2YWez6JyyykNhE2NKgWRnrGNi) · [`J3YuKUJ6…n25b`](https://testnet.nearblocks.io/txns/J3YuKUJ6RUoVxHnuwuPQvtcvu1sT7wwgiYCuJTwbn25b) |
@@ -126,8 +127,9 @@ enclave produced the response whose hash is in the intent, while the link "that 
 dataset row (request and response bytes are published there, so anyone can recompute both hashes); the open price may be up to
 300 s old because the oracle serves its cache with a fresh timestamp, which is why duels are at least 310 s.
 
-Not yet proven: one real 1Click swap reported through `settle_follow` (needs a funded mainnet account). The seam is
-built and tested offline; the README will carry its hash when it runs.
+The real 1Click swap ran on mainnet (table above: 0.5 wNEAR → 1.864135 USDC). Not yet proven: that swap reported back
+through `settle_follow` on a mainnet arena; the contract and solver are testnet-only, so the fill on testnet carries the
+mainnet quote, not the mainnet tx.
 
 ### Run the arena
 
