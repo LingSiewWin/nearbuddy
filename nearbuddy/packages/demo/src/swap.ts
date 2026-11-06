@@ -2,18 +2,18 @@
 // mainnet account whose key is in ~/.near-credentials/mainnet/) and spends SWAP_NEAR (default 0.5 NEAR).
 //   bun run real-swap
 import "../../protocol/src/env.ts";
-import { readFileSync } from "node:fs";
-import { Account, JsonRpcProvider, type KeyPairString } from "near-api-js";
+import { Account, JsonRpcProvider } from "near-api-js";
+import { loadKey } from "../../protocol/src/chain.ts";
+import { NETWORKS } from "../../protocol/src/network.ts";
 import { executeSwap } from "../../solver/src/oneclick.ts";
 
 const id = process.env.ONECLICK_ACCOUNT;
 if (!id) throw new Error("set ONECLICK_ACCOUNT in the env file to a funded mainnet account");
-const key = JSON.parse(readFileSync(`${process.env.HOME}/.near-credentials/mainnet/${id}.json`, "utf8"))
-  .private_key as KeyPairString;
+// 1Click has no testnet, so this demo is mainnet whatever NEAR_NETWORK says.
 const account = new Account(
   id,
-  new JsonRpcProvider({ url: process.env.NEAR_MAINNET_RPC ?? "https://rpc.mainnet.near.org" }),
-  key,
+  new JsonRpcProvider({ url: process.env.NEAR_MAINNET_RPC ?? NETWORKS.mainnet.rpc }),
+  loadKey(id, "mainnet"),
 );
 const amount = BigInt(Math.round(Number(process.env.SWAP_NEAR ?? "0.5") * 1e6)) * 10n ** 18n;
 const r = await executeSwap(account, amount, console.log);

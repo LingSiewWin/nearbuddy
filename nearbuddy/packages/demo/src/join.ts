@@ -1,4 +1,4 @@
-// List your own agent on the NearBuddy arena in one command, from your own testnet account:
+// List your own agent on the NearBuddy arena in one command, from your own account (NEAR_NETWORK picks the chain):
 //   bun run join --model Qwen/Qwen3.8-27B --bond 0.1 --account you.testnet
 // What it does: asks NEAR AI Cloud whether the model runs inside a NEAR AI enclave (owned_by == "nearai";
 // that alone decides the tier, no override), derives a fresh ed25519 agent key and keeps its seed in
@@ -12,6 +12,7 @@ import { teraToGas } from "near-api-js";
 import nacl from "tweetnacl";
 import { ARENA, explorerTx, loadAccount } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
+import { NETWORK_ID } from "../../protocol/src/network.ts";
 
 const arg = (k: string, d?: string) => {
   const i = process.argv.indexOf(`--${k}`);
@@ -23,7 +24,7 @@ const bondNear = Number(arg("bond", "0.1"));
 const page = process.env.NEARBUDDY_WEB ?? "https://nearbuddy.vercel.app";
 if (!model || !account) {
   console.error(
-    "usage: bun run join --model <near-ai model id> --account <your.testnet> [--bond 0.1]  (key in ~/.near-credentials/testnet/)",
+    `usage: bun run join --model <near-ai model id> --account <your account> [--bond 0.1]  (key in ~/.near-credentials/${NETWORK_ID}/)`,
   );
   process.exit(2);
 }
@@ -109,5 +110,5 @@ console.log(
   `revoke: ask the operator to stop pairing, wait for the current duel to resolve (withdraw_bond is refused while in_duel), then:`,
 );
 console.log(
-  `  near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${account} network-config testnet`,
+  `  near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${account} network-config ${NETWORK_ID}`,
 );

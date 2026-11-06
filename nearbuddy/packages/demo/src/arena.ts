@@ -1,4 +1,4 @@
-// Arena demo: a follower deposits testnet NEAR and follows the live enclave agent A (the runner's
+// Arena demo: a follower deposits NEAR and follows the live enclave agent A (the runner's
 // TEE-proved key derived from AGENT_SEED_A; only enclave-verified agents can be followed) under a mandate
 // (cap 0.2 NEAR). Two plain demo agents open a duel and a spectator pays on chain to inject chaos at the
 // plain A. The enclave agent's latest intents are read from chain and its newest nonce is quoted through
@@ -20,11 +20,12 @@ import {
   teeSeed,
   ZERO_PROOF,
 } from "../../protocol/src/intent.ts";
+import { NET } from "../../protocol/src/network.ts";
 import { quote, sellNearForUsdc } from "../../solver/src/oneclick.ts";
 
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
-const FOLLOWER_ID = process.env.FOLLOWER_ID ?? "nearbuddy-owner.testnet";
-const SOLVER_ID = process.env.SOLVER_ID ?? "nearbuddy-solver.testnet";
+const FOLLOWER_ID = process.env.FOLLOWER_ID ?? NET.owner;
+const SOLVER_ID = process.env.SOLVER_ID ?? NET.solver;
 const CAP = NEAR / 5n; // 0.2 NEAR per fill
 const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330); // the Outlayer oracle caches a price for 300 s; a shorter duel would close on its own open price (the contract enforces min_duel_s)
 
@@ -207,7 +208,7 @@ const resolved = await post("/resolve", { duel_id: duel.duel_id });
 line(
   "resolve duel",
   resolved.tx,
-  `open price ${before.open_price ? (Number(before.open_price) / 1e8).toFixed(4) : "pending"} USD, oracle price-oracle.testnet`,
+  `open price ${before.open_price ? (Number(before.open_price) / 1e8).toFixed(4) : "pending"} USD, oracle ${NET.oracle}`,
 );
 type Outcome = {
   open_price: string;

@@ -7,10 +7,11 @@
 import "../../protocol/src/env.ts";
 import { teraToGas } from "near-api-js";
 import { ARENA, arenaView, explorerTx, fmtNear, loadAccount } from "../../protocol/src/chain.ts";
+import { NET } from "../../protocol/src/network.ts";
 import { parseAgents, pickDuel } from "./pick-duel.ts";
 
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
-const SPECTATOR_ID = process.env.SPECTATOR_ID ?? process.env.FOLLOWER_ID ?? "nearbuddy-owner.testnet";
+const SPECTATOR_ID = process.env.SPECTATOR_ID ?? process.env.FOLLOWER_ID ?? NET.owner;
 const DUELS = Number(process.env.DUELS ?? 8);
 const TARGET = (process.env.TARGET ?? "b").toLowerCase(); // "a" (hardened), "b" (naive) or "alt"
 const MIN_LEFT_S = Number(process.env.MIN_LEFT_S ?? 150); // skip duels closing sooner than this
