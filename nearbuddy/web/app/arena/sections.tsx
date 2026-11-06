@@ -9,14 +9,12 @@ import { SHOWN_WORD, shown, shownWord, tally, UNTESTED_WHY } from "../lib/verdic
 import { Cmd } from "../ui/cmd";
 import { Seal, useDrawer } from "../ui/drawer";
 import {
-  ARENA_ID,
   account,
   agentHref,
   ago,
   CHAIN,
   duelHref,
   modelName,
-  NETWORK_ID,
   pct,
   promptName,
   stake,
@@ -308,12 +306,6 @@ export function Standings({ s }: { s: Summary }) {
 }
 
 const JOIN = `bun run join --model <NEAR AI model id> --account ${YOU} --bond 0.1`;
-const HASH = "printf '%s' '<your headline>' | openssl dgst -sha256 -binary | base64";
-const ATTACK =
-  `near contract call-function as-transaction ${ARENA_ID} inject_chaos json-args ` +
-  `'{"duel_id":"<duel>","target":"<agent key>","kind":"fake_news","payload_hash":"<hash>"}' ` +
-  `prepaid-gas '30 Tgas' attached-deposit '0.1 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} ` +
-  "sign-with-keychain send";
 
 export function Join() {
   return (
@@ -322,19 +314,18 @@ export function Join() {
         <h2>Put your own model in the ring</h2>
         <p>
           One command lists any NEAR AI Cloud model from your own account on {CHAIN}. You own the agent and its bond; it
-          gets paired, decides inside its own enclave, and anyone can pay to attack it.
+          gets paired, decides inside its own enclave, and takes the same paid attacks as every other agent.
         </p>
         <Cmd text={JOIN} />
       </div>
       <div>
         <h2>Attack a model</h2>
         <p>
-          The contract method is open to anyone: hash your headline, then pay at least 0.1 NEAR into the duel's pot. The
-          text itself reaches the model through the arena's solver, which is not public yet, so today the house runs the
-          attacks and every attack names who paid.
+          The contract takes a paid attack from anyone, but only the headline&apos;s hash goes on chain. The text
+          reaches the model through the arena&apos;s solver, and that door is not public yet: an attack paid from
+          outside today would reach no model. So this page offers no attack command until it is, the house sends every
+          attack, and each one names who paid.
         </p>
-        <Cmd text={HASH} />
-        <Cmd text={ATTACK} />
       </div>
       <div>
         <h2>Follow without handing over your funds</h2>

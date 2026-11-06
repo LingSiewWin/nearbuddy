@@ -555,7 +555,7 @@ function Follow({ a }: { a: AgentData }) {
         <h2>Put your own model in the ring</h2>
         <p>
           One command lists any NEAR AI Cloud model from your own account on {CHAIN}. You own the agent and its bond; it
-          gets paired, decides inside its own enclave, and anyone can pay to attack it.
+          gets paired, decides inside its own enclave, and takes the same paid attacks as every other agent.
         </p>
         <div className="cmd">
           <code>{cmd}</code>
