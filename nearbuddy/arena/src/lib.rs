@@ -18,8 +18,8 @@
 //!
 //! With `commit_reveal` on, an agent first commits `sha256(intent_message || salt)` before the
 //! intent lock and reveals the intent and salt later (up to `close_at`), so nothing readable is on
-//! chain until the reveal. An unrevealed commitment is slashed `no_reveal_bps` of the bond at
-//! scoring. `open_duel_consented` pairs two agents only with both agent keys' signatures.
+//! chain until the reveal. An unrevealed commitment forfeits the duel and pays `no_reveal_bps` of
+//! the bond to the opponent at scoring. `open_duel_consented` pairs two agents only with both agent keys' signatures.
 //!
 //! Every state-growing call pays its own storage (`storage_byte_cost` x bytes added) out of the
 //! value it brings: bond, chaos deposit, vault deposit, or the attached deposit.
@@ -46,8 +46,6 @@ pub const REGISTER_DOMAIN: &[u8] = b"nearbuddy-register-v1";
 pub const COMMIT_DOMAIN: &[u8] = b"nearbuddy-commit-v1";
 /// Prefix of the bytes an agent key signs to consent to one pairing (see `consent_bytes`).
 pub const DUEL_DOMAIN: &[u8] = b"nearbuddy-duel-v1";
-/// `no_reveal_bps` until the owner sets it through `set_commit_reveal`.
-pub const DEFAULT_NO_REVEAL_BPS: u16 = 500;
 /// `intent_lock_ns` until the owner sets it through `set_oracle`.
 pub const DEFAULT_INTENT_LOCK_NS: u64 = 60 * 1_000_000_000;
 /// Cap on `Duel.injections` so a duel record cannot grow without bound.

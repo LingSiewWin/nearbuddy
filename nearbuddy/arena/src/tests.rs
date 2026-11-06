@@ -1478,11 +1478,11 @@ fn migrate_v14_keeps_state_and_starts_commit_reveal_off() {
     c.agent_duels.flush();
     let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
     let tail = raw.split_off(raw.len() - 19);
-    // commit_reveal false, no_reveal_bps 500, require_consent false, three 1-byte prefixes
+    // commit_reveal false, no_reveal_bps 1000, require_consent false, three 1-byte prefixes
     assert_eq!(
         tail,
         [
-            0, 0xf4, 0x01, 0, 1, 0, 0, 0, 11, 1, 0, 0, 0, 12, 1, 0, 0, 0, 13
+            0, 0xe8, 0x03, 0, 1, 0, 0, 0, 11, 1, 0, 0, 0, 12, 1, 0, 0, 0, 13
         ]
     );
     assert_eq!(
@@ -1506,7 +1506,8 @@ fn migrate_v14_keeps_state_and_starts_commit_reveal_off() {
     );
     assert_eq!(
         (cfg.commit_reveal, cfg.no_reveal_bps, cfg.require_consent),
-        (false, 500, false)
+        (false, 1_000, false),
+        "no_reveal_bps starts at slash_bps"
     );
     assert!(m.get_duel(U64(d0)).unwrap().resolved);
     assert_eq!(
@@ -1688,7 +1689,8 @@ fn reveal_at(c: &mut Contract, sk: &SigningKey, i: &Intent, salt: &[u8], ts: u64
 
 fn commit_reveal_on(c: &mut Contract) {
     ctx(OWNER, 0);
-    c.set_commit_reveal(true, 500);
+    let bps = c.get_config().no_reveal_bps;
+    c.set_commit_reveal(true, bps);
 }
 
 #[test]
@@ -1811,7 +1813,7 @@ fn post_intent_refused_when_commit_reveal_on() {
 }
 
 #[test]
-fn unrevealed_commitment_is_slashed_into_the_pool_and_flagged() {
+fn unrevealed_commitment_pays_the_opponent_and_is_flagged() {
     // commit_reveal is off: commit still works, and leaving it unrevealed still costs
     let (mut c, ska, skb) = setup();
     let tee = tee_signer(&mut c);
@@ -1821,7 +1823,7 @@ fn unrevealed_commitment_is_slashed_into_the_pool_and_flagged() {
     commit_at(&mut c, &skb, &i, &SALT, NOW);
     let (bond_a, bond_b) = (bond(&c, 1), bond(&c, 2));
     resolve_at_close(&mut c, d, UP);
-    let no_reveal = bond_b * 500 / 10_000;
+    let no_reveal = bond_b * 1_000 / 10_000;
     let lost = (bond_b - no_reveal) * 1_000 / 10_000;
     assert_eq!(bond(&c, 2), bond_b - no_reveal - lost);
     assert_eq!(bond(&c, 1), bond_a + no_reveal + lost);
@@ -1829,6 +1831,80 @@ fn unrevealed_commitment_is_slashed_into_the_pool_and_flagged() {
     assert_eq!((o.pnl_a, o.pnl_b, o.slashed.0), (25, 0, lost));
     assert_eq!(c.get_no_reveal(U64(d)), (false, true));
     assert!(c.commitments.get(&commit_key(d, &key(2).1)).is_none());
+}
+
+#[test]
+fn withholding_a_losing_reveal_forfeits_a_winning_duel() {
+    // B reveals a winning call 1, commits call 2 before the lock and withholds it: B must lose,
+    // pay the no-reveal slash to A and the loss slash through the pool, and gain no alpha
+    let (mut c, _, skb) = setup();
+    commit_reveal_on(&mut c);
+    let d = open(&mut c);
+    let call1 = intent(&key(2).1, d, Side::Long, 5_000, 1);
+    commit_at(&mut c, &skb, &call1, &SALT, NOW);
+    reveal_at(&mut c, &skb, &call1, &SALT, NOW);
+    let call2 = intent(&key(2).1, d, Side::Short, 5_000, 2);
+    commit_at(&mut c, &skb, &call2, &[7u8; 32], CLOSE - LOCK - 1);
+    inject(&mut c, d, &key(1).1, MIN_CHAOS);
+    let pool = c.get_duel(U64(d)).unwrap().pool.0;
+    let (bond_a, bond_b) = (bond(&c, 1), bond(&c, 2));
+    resolve_at_close(&mut c, d, UP);
+    let no_reveal = bond_b * 1_000 / 10_000;
+    let lost = (bond_b - no_reveal) * 1_000 / 10_000;
+    assert_eq!(bond(&c, 2), bond_b - no_reveal - lost);
+    assert_eq!(bond(&c, 1), bond_a + no_reveal + lost + pool);
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!(
+        (o.pnl_a, o.pnl_b),
+        (0, 25),
+        "the revealed call still scored"
+    );
+    assert_eq!(o.winner.unwrap().0, key(1).1, "but the withholder forfeits");
+    assert_eq!(o.slashed.0, lost);
+    let (a, b) = (
+        c.get_agent(Base64VecU8(key(1).1)).unwrap(),
+        c.get_agent(Base64VecU8(key(2).1)).unwrap(),
+    );
+    assert_eq!(
+        (a.alpha_bps, b.alpha_bps),
+        (0, 0),
+        "no alpha from a forfeit"
+    );
+    assert_eq!(a.shield, 1);
+    assert_eq!(c.get_no_reveal(U64(d)), (false, true));
+}
+
+#[test]
+fn double_no_reveal_is_a_tie_and_both_slashes_go_to_owner_fees() {
+    let (mut c, ska, skb) = setup();
+    let d = open(&mut c);
+    commit_at(
+        &mut c,
+        &ska,
+        &intent(&key(1).1, d, Side::Long, 5_000, 1),
+        &SALT,
+        NOW,
+    );
+    commit_at(
+        &mut c,
+        &skb,
+        &intent(&key(2).1, d, Side::Short, 5_000, 1),
+        &SALT,
+        NOW,
+    );
+    inject(&mut c, d, &key(1).1, MIN_CHAOS);
+    let pool = c.get_duel(U64(d)).unwrap().pool.0;
+    let (bond_a, bond_b) = (bond(&c, 1), bond(&c, 2));
+    let fees = c.get_config().owner_fees.0;
+    resolve_at_close(&mut c, d, UP);
+    let (sa, sb) = (bond_a * 1_000 / 10_000, bond_b * 1_000 / 10_000);
+    assert_eq!(c.get_config().owner_fees.0, fees + sa + sb);
+    assert_eq!(bond(&c, 1), bond_a - sa + pool / 2 + pool % 2);
+    assert_eq!(bond(&c, 2), bond_b - sb + pool / 2);
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert!(o.winner.is_none());
+    assert_eq!(o.slashed.0, 0);
+    assert_eq!(c.get_no_reveal(U64(d)), (true, true));
 }
 
 #[test]

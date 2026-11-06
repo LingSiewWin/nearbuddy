@@ -544,9 +544,13 @@ impl Contract {
         ));
     }
 
-    /// Scores both agents, slashes `no_reveal_bps` of the bond of each side that left a commitment
-    /// unrevealed, slashes the loser into the pool, pays the pool to the winner, counts the
+    /// Scores both agents, slashes the loser into the pool, pays the pool to the winner, counts the
     /// injections the winner survived, frees both agents, prunes the injection list.
+    ///
+    /// A side that left a commitment unrevealed forfeits: it loses whatever its pnl, its alpha takes
+    /// no gain, and on top of the loss slash it pays `no_reveal_bps` of its bond straight to the
+    /// opponent's bond (to `owner_fees` when both withheld, which is a tie). The no-reveal slash never
+    /// enters the pool, so withholding a losing reveal is never cheaper than losing.
     fn finish(&mut self, id: u64, open: u64, close: u64) {
         let duel = self.duels.get_mut(&id).expect("duel missing");
         let close_at = duel.close_at.0;
@@ -569,18 +573,17 @@ impl Contract {
             slashed: U128(0),
             injections: injections.len() as u32,
         };
-        let mut flags = [false; 2];
+        // the freed commitment records outweigh the flag record written below
+        let nr = [&pk_a, &pk_b].map(|pk| self.commitments.remove(&commit_key(id, pk)).is_some());
+        let mut taken = [0u128; 2];
         for (side, (pk, pnl)) in [(&pk_a, pnl_a), (&pk_b, pnl_b)].into_iter().enumerate() {
-            // the freed commitment record outweighs the flag record written below
-            let unrevealed = self.commitments.remove(&commit_key(id, pk)).is_some();
             let a = self.agents.get_mut(pk).expect("agent missing");
-            a.alpha_bps += pnl;
+            a.alpha_bps += if nr[side] { pnl.min(0) } else { pnl };
             a.in_duel = None;
-            if unrevealed {
+            if nr[side] {
                 let s = a.bond.0 * self.no_reveal_bps as u128 / 10_000;
                 a.bond.0 -= s;
-                pool += s;
-                flags[side] = true;
+                taken[side] = s;
                 env::log_str(&format!(
                     r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"no_reveal","data":{{"duel_id":{id},"agent_pk":"{}","slashed":"{s}"}}}}"#,
                     near_sdk::base64::Engine::encode(
@@ -590,15 +593,25 @@ impl Contract {
                 ));
             }
         }
-        if flags != [false; 2] {
-            self.no_reveal.insert(id, (flags[0], flags[1]));
+        match nr {
+            [true, true] => self.owner_fees += taken[0] + taken[1],
+            [true, false] => self.agents.get_mut(&pk_b).unwrap().bond.0 += taken[0],
+            [false, true] => self.agents.get_mut(&pk_a).unwrap().bond.0 += taken[1],
+            [false, false] => {}
         }
-        if pnl_a == pnl_b {
-            let half = pool / 2;
-            self.agents.get_mut(&pk_a).unwrap().bond.0 += half + pool % 2;
-            self.agents.get_mut(&pk_b).unwrap().bond.0 += half;
-        } else {
-            let (winner, loser) = if pnl_a > pnl_b {
+        if nr != [false; 2] {
+            self.no_reveal.insert(id, (nr[0], nr[1]));
+        }
+        // Some(true) = a wins
+        let a_wins = match nr {
+            [true, true] => None,
+            [true, false] => Some(false),
+            [false, true] => Some(true),
+            [false, false] if pnl_a == pnl_b => None,
+            [false, false] => Some(pnl_a > pnl_b),
+        };
+        if let Some(a_wins) = a_wins {
+            let (winner, loser) = if a_wins {
                 (&pk_a, &pk_b)
             } else {
                 (&pk_b, &pk_a)
@@ -613,6 +626,10 @@ impl Contract {
             let w = self.agents.get_mut(winner).unwrap();
             w.bond.0 += pool;
             w.shield += survived;
+        } else {
+            let half = pool / 2;
+            self.agents.get_mut(&pk_a).unwrap().bond.0 += half + pool % 2;
+            self.agents.get_mut(&pk_b).unwrap().bond.0 += half;
         }
         self.duels.get_mut(&id).expect("duel missing").outcome = Some(outcome);
         env::log_str(&format!(

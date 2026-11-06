@@ -5,7 +5,7 @@ use near_sdk::{
     AccountId, BorshStorageKey, NearToken, PanicOnDefault, Promise, env, near, require,
 };
 
-use crate::{Agent, DEFAULT_INTENT_LOCK_NS, DEFAULT_NO_REVEAL_BPS, Duel, Mandate};
+use crate::{Agent, DEFAULT_INTENT_LOCK_NS, Duel, Mandate};
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -74,7 +74,8 @@ pub struct Contract {
     /// When true `post_intent` is refused: every intent goes through `commit_intent` before the
     /// lock and `reveal_intent` after it. When false both paths work.
     pub(crate) commit_reveal: bool,
-    /// Share of the bond slashed into the pool at scoring for each unrevealed commitment.
+    /// Share of the bond an agent pays its opponent (or `owner_fees`) at scoring for leaving a
+    /// commitment unrevealed, on top of forfeiting the duel. Starts equal to `slash_bps`.
     pub(crate) no_reveal_bps: u16,
     /// When true the owner's `open_duel` is refused and only `open_duel_consented` pairs agents.
     pub(crate) require_consent: bool,
@@ -180,7 +181,7 @@ impl Contract {
             intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
             open_duels: 0,
             commit_reveal: false,
-            no_reveal_bps: DEFAULT_NO_REVEAL_BPS,
+            no_reveal_bps: slash_bps,
             require_consent: false,
             commitments: LookupMap::new(StorageKey::Commitments),
             no_reveal: LookupMap::new(StorageKey::NoReveal),
@@ -190,8 +191,8 @@ impl Contract {
 
     // ---------------------------------------------------------------- migration
 
-    /// Deploy 12/13 → 14: add commit-reveal (off, `no_reveal_bps` 500), consent (off) and the two
-    /// new maps. Every existing field and collection prefix is carried over unchanged.
+    /// Deploy 12/13 → 14: add commit-reveal (off, `no_reveal_bps` = `slash_bps`), consent (off)
+    /// and the new maps. Every existing field and collection prefix is carried over unchanged.
     /// Caller: the contract itself (private), once after the deploy-14 code lands. Deposit:
     /// none. Panics: "no state", or the SDK private-method panic for any other caller.
     #[private]
@@ -222,7 +223,7 @@ impl Contract {
             intent_lock_ns: old.intent_lock_ns,
             open_duels: old.open_duels,
             commit_reveal: false,
-            no_reveal_bps: DEFAULT_NO_REVEAL_BPS,
+            no_reveal_bps: old.slash_bps,
             require_consent: false,
             commitments: LookupMap::new(StorageKey::Commitments),
             no_reveal: LookupMap::new(StorageKey::NoReveal),
