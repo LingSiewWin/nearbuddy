@@ -172,6 +172,8 @@ pub struct Config {
     pub oracle_account: AccountId,
     /// Attached to every `oracle_call`; the oracle refunds what the TEE fetch did not cost.
     pub oracle_deposit: U128,
+    /// Floor on `close_at - now`; 330 on testnet (oracle cache 300 s).
+    pub min_duel_s: u64,
     pub slash_bps: u16,
     pub fee_bps: u16,
     pub min_chaos_deposit: U128,

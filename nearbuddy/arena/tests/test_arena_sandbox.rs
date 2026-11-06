@@ -115,6 +115,8 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     println!("GAS post_intent (TEE verified) {:.2} TGas", gas_of(&r) as f64 / 1e12);
     call("post_intent", mk_a(2, Side::Long, [0xaa; 32], [0xcc; 32], true), &solver, zero).await?.assert_failure();
     println!("post_intent with a tampered enclave signature: refused");
+    call("post_intent", mk_a(2, Side::Short, [0xaa; 32], [0xbb; 32], false), &solver, zero).await?.assert_failure();
+    println!("post_intent reusing an already-used enclave proof: refused");
     let r = call("post_intent", mk_b(1, Side::Short), &solver, zero).await?.assert_success();
     println!("GAS post_intent (plain) {:.2} TGas", gas_of(&r) as f64 / 1e12);
     let bond_a1: u128 = contract.call_function("get_agent", json!({"agent_pk": b64(&pka)})).read_only::<Value>().fetch_from(&net).await?.data["bond"].as_str().unwrap().parse()?;
@@ -145,7 +147,7 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     // past close_at: resolve_duel asks the oracle; the oracle delivers the close price and the duel
     // finishes. A (Long) wins on a 0.5% rise and survives 32 injections.
     sandbox.fast_forward(60).await?;
-    let r = call("resolve_duel", json!({"duel_id": duel_id.to_string()}), &spectator, zero).await?.assert_success();
+    let r = call("resolve_duel", json!({"duel_id": duel_id.to_string()}), &spectator, NearToken::from_millinear(20)).await?.assert_success();
     println!("GAS resolve_duel (permissionless, oracle_call) {:.2} TGas", gas_of(&r) as f64 / 1e12);
     let block = near_api::Chain::block().at(near_api::types::Reference::Final).fetch_from(&net).await?;
     let r = call("oracle_on_call", json!({"sender_id": contract.account_id(), "data": price_data(367_830_000, block.header.timestamp), "msg": format!("close:{duel_id}")}), &oracle, zero).await?.assert_success();

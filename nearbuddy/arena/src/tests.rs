@@ -144,6 +144,21 @@ fn tee_intent_verified_on_chain() {
 }
 
 #[test]
+#[should_panic(expected = "proof used")]
+fn tee_proof_cannot_back_two_intents() {
+    let (mut c, ska, _) = setup();
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    let (req, res) = ([0xaa; 32], [0xbb; 32]);
+    ctx(SOLVER, 0);
+    c.post_intent(tee_intent(&ska, d, 1, req, res), Some(tee_proof(&tee, 2, MODEL_A, req, res)));
+    // same enclave completion, new nonce, opposite side
+    let mut i = intent(&key(1).1, d, Side::Short, 5_000, 2);
+    i.proof_hash = Base64VecU8(proof_hash(&req, &res));
+    c.post_intent(sign(&ska, &i), Some(tee_proof(&tee, 2, MODEL_A, req, res)));
+}
+
+#[test]
 #[should_panic(expected = "bad tee signature")]
 fn tee_tampered_response_rejected() {
     let (mut c, ska, _) = setup();
@@ -321,10 +336,10 @@ fn request_open_price_retries_until_answered() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
     let d = c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE)).0;
-    ctx(OPERATOR, 0);
+    ctx(OPERATOR, ORACLE_DEPOSIT);
     c.request_open_price(U64(d));
     oracle_answers(&mut c, d, "open", OPEN, NOW);
-    ctx(OPERATOR, 0);
+    ctx(OPERATOR, ORACLE_DEPOSIT);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.request_open_price(U64(d))));
     assert!(r.is_err(), "retry after the price landed must be refused");
 }
@@ -567,8 +582,8 @@ fn inject(c: &mut Contract, d: u64, target: &[u8], deposit: u128) {
 }
 
 fn resolve_at_close(c: &mut Contract, d: u64, close: u64) {
-    ctx_at(OPERATOR, 0, CLOSE);
-    let _ = c.resolve_duel(U64(d));
+    ctx_at(OPERATOR, ORACLE_DEPOSIT, CLOSE);
+    c.resolve_duel(U64(d));
     oracle_answers(c, d, "close", close, CLOSE);
 }
 
@@ -692,8 +707,8 @@ fn resolve_twice_panics() {
     let (mut c, ..) = setup();
     let d = open(&mut c);
     resolve_at_close(&mut c, d, UP);
-    ctx_at(OPERATOR, 0, CLOSE);
-    let _ = c.resolve_duel(U64(d));
+    ctx_at(OPERATOR, ORACLE_DEPOSIT, CLOSE);
+    c.resolve_duel(U64(d));
 }
 
 #[test]
@@ -710,8 +725,28 @@ fn late_oracle_answer_after_finish_rejected() {
 fn resolve_before_close_panics() {
     let (mut c, ..) = setup();
     let d = open(&mut c);
-    ctx(OPERATOR, 0);
-    let _ = c.resolve_duel(U64(d));
+    ctx(OPERATOR, ORACLE_DEPOSIT);
+    c.resolve_duel(U64(d));
+}
+
+#[test]
+#[should_panic(expected = "attach oracle_deposit")]
+fn resolve_without_deposit_panics() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    ctx_at(OPERATOR, ORACLE_DEPOSIT - 1, CLOSE);
+    c.resolve_duel(U64(d));
+}
+
+#[test]
+#[should_panic(expected = "duel too short")]
+fn open_duel_respects_min_length() {
+    let (mut c, ..) = setup();
+    ctx(OWNER, 0);
+    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 330);
+    assert_eq!(c.get_config().min_duel_s, 330);
+    ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
+    c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(NOW + 329_000_000_000));
 }
 
 #[test]
@@ -737,8 +772,8 @@ fn resolve_without_open_price_panics() {
     let (mut c, ..) = setup();
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
     let d = c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(CLOSE)).0;
-    ctx_at(OPERATOR, 0, CLOSE);
-    let _ = c.resolve_duel(U64(d));
+    ctx_at(OPERATOR, ORACLE_DEPOSIT, CLOSE);
+    c.resolve_duel(U64(d));
 }
 
 #[test]

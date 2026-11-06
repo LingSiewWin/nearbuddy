@@ -47,6 +47,7 @@ enum StorageKey {
     SettledFills,
     TeeSigners,
     TeeAgents,
+    UsedProofs,
 }
 
 #[ext_contract(ext_oracle)]
@@ -82,6 +83,11 @@ pub struct Contract {
     tee_signers: LookupSet<Vec<u8>>,
     /// Agents that committed to TEE-proved decisions at registration.
     tee_agents: LookupSet<Vec<u8>>,
+    /// `proof_hash` of every accepted TEE-proved intent: one enclave completion backs one intent.
+    used_proofs: LookupSet<Vec<u8>>,
+    /// `close_at - now` floor for `open_duel`. Outlayer serves a cached price for `recency_duration_sec`
+    /// (300 s on testnet) with a fresh timestamp, so a shorter duel would close on its own open price.
+    min_duel_ns: u64,
 }
 
 /// State layout of deploys 1-6 (single oracle key). Read once by `migrate`.
@@ -103,6 +109,30 @@ pub struct ContractV1 {
     follows: LookupMap<Vec<u8>, Vec<(AccountId, Mandate)>>,
     settled_fills: LookupSet<Vec<u8>>,
     owner_fees: u128,
+}
+
+/// State layout of deploy 7 (before `used_proofs` and `min_duel_ns`). Read once by `migrate_v8`.
+#[allow(dead_code)]
+#[derive(near_sdk::borsh::BorshDeserialize)]
+#[borsh(crate = "near_sdk::borsh")]
+pub struct ContractV7 {
+    owner: AccountId,
+    oracle_account: AccountId,
+    oracle_deposit: u128,
+    slash_bps: u16,
+    fee_bps: u16,
+    min_chaos_deposit: u128,
+    agents: IterableMap<Vec<u8>, Agent>,
+    duels: LookupMap<u64, Duel>,
+    next_duel: u64,
+    used_nonces: LookupSet<Vec<u8>>,
+    solvers: LookupSet<AccountId>,
+    vaults: LookupMap<AccountId, u128>,
+    follows: LookupMap<Vec<u8>, Vec<(AccountId, Mandate)>>,
+    settled_fills: LookupSet<Vec<u8>>,
+    owner_fees: u128,
+    tee_signers: LookupSet<Vec<u8>>,
+    tee_agents: LookupSet<Vec<u8>>,
 }
 
 pub fn intent_message(i: &Intent) -> Vec<u8> {
@@ -158,6 +188,14 @@ fn storage_cost_since(before: u64) -> u128 {
     (after - before) as u128 * env::storage_byte_cost().as_yoctonear()
 }
 
+/// Bytes a `store::LookupSet<Vec<u8>>` entry occupies once flushed at the end of the call: 1-byte
+/// prefix, 4-byte borsh length, the key, and the protocol's 40-byte per-record overhead. `LookupSet`
+/// writes lazily, so these bytes are not visible to `storage_usage()` inside the call and are charged
+/// by size instead.
+fn set_entry_cost(key_len: usize) -> u128 {
+    (1 + 4 + key_len + 40) as u128 * env::storage_byte_cost().as_yoctonear()
+}
+
 /// Oracle price (multiplier / 10^decimals USD) as u64 with 8 decimals.
 fn price8(p: &OraclePrice) -> u64 {
     let v = if p.decimals <= 8 { p.multiplier.0 * 10u128.pow(8 - p.decimals as u32) } else { p.multiplier.0 / 10u128.pow(p.decimals as u32 - 8) };
@@ -191,10 +229,40 @@ impl Contract {
             owner_fees: 0,
             tee_signers: LookupSet::new(StorageKey::TeeSigners),
             tee_agents: LookupSet::new(StorageKey::TeeAgents),
+            used_proofs: LookupSet::new(StorageKey::UsedProofs),
+            min_duel_ns: 0,
         }
     }
 
     // ---------------------------------------------------------------- migration
+
+    /// Deploy 7 → 8: add `used_proofs` and `min_duel_ns`.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate_v8(min_duel_s: u64) -> Self {
+        let old: ContractV7 = env::state_read().expect("no state");
+        Self {
+            owner: old.owner,
+            oracle_account: old.oracle_account,
+            oracle_deposit: old.oracle_deposit,
+            slash_bps: old.slash_bps,
+            fee_bps: old.fee_bps,
+            min_chaos_deposit: old.min_chaos_deposit,
+            agents: old.agents,
+            duels: old.duels,
+            next_duel: old.next_duel,
+            used_nonces: old.used_nonces,
+            solvers: old.solvers,
+            vaults: old.vaults,
+            follows: old.follows,
+            settled_fills: old.settled_fills,
+            owner_fees: old.owner_fees,
+            tee_signers: old.tee_signers,
+            tee_agents: old.tee_agents,
+            used_proofs: LookupSet::new(StorageKey::UsedProofs),
+            min_duel_ns: min_duel_s * 1_000_000_000,
+        }
+    }
 
     /// Deploy 6 → 7: drop `oracle_pk`, add the oracle account and the TEE sets. Collections keep
     /// their prefixes, so no element moves. Owner-only; the owner is read from the old state.
@@ -220,6 +288,8 @@ impl Contract {
             owner_fees: old.owner_fees,
             tee_signers: LookupSet::new(StorageKey::TeeSigners),
             tee_agents: LookupSet::new(StorageKey::TeeAgents),
+            used_proofs: LookupSet::new(StorageKey::UsedProofs),
+            min_duel_ns: 0,
         }
     }
 
@@ -276,6 +346,14 @@ impl Contract {
         self.solvers.insert(account_id);
     }
 
+    /// Point at another price oracle account, change the deposit it needs, or the duel length floor.
+    pub fn set_oracle(&mut self, oracle_account: AccountId, oracle_deposit: U128, min_duel_s: u64) {
+        self.only_owner();
+        self.oracle_account = oracle_account;
+        self.oracle_deposit = oracle_deposit.0;
+        self.min_duel_ns = min_duel_s * 1_000_000_000;
+    }
+
     /// Accept intents signed by this NEAR AI Cloud enclave key. The owner takes it from
     /// `GET /v1/attestation/report` after verifying the Intel and NVIDIA quotes off chain; the
     /// report bytes are published in the dataset so anyone can redo that check.
@@ -328,7 +406,7 @@ impl Contract {
             self.tee_agents.insert(agent_pk.0.clone());
         }
         self.agents.flush();
-        let cost = storage_cost_since(before);
+        let cost = storage_cost_since(before) + if tee { set_entry_cost(32) } else { 0 };
         require!(deposit > cost, "bond required");
         self.agents.get_mut(&agent_pk.0).expect("agent missing").bond = U128(deposit - cost);
         let a = self.agents.get(&agent_pk.0).cloned().expect("agent missing");
@@ -355,6 +433,7 @@ impl Contract {
         self.only_owner();
         require!(a.0 != b.0, "same agent");
         require!(close_at.0 > env::block_timestamp(), "close_at in the past");
+        require!(close_at.0 - env::block_timestamp() >= self.min_duel_ns, "duel too short");
         let before = env::storage_usage();
         let id = self.next_duel;
         for pk in [&a.0, &b.0] {
@@ -390,8 +469,11 @@ impl Contract {
     }
 
     /// Ask the oracle again for a duel whose open price never arrived (TEE fetch failed or timed
-    /// out). Anyone may call; the contract pays the oracle deposit.
+    /// out). Anyone may call and attaches the oracle deposit (so nobody can spend the contract's
+    /// balance on oracle fees); the oracle's refund stays with the contract.
+    #[payable]
     pub fn request_open_price(&mut self, duel_id: U64) {
+        require!(env::attached_deposit().as_yoctonear() >= self.oracle_deposit, "attach oracle_deposit");
         let d = self.duels.get(&duel_id.0).expect("duel missing");
         require!(!d.resolved && d.open_price.is_none(), "has open price");
         require!(env::block_timestamp() < d.close_at.0, "duel closed");
@@ -420,6 +502,7 @@ impl Contract {
         let tee_kind = match &tee {
             Some(p) => {
                 self.verify_tee(p, &model_id, &i.proof_hash.0);
+                require!(!self.used_proofs.contains(&i.proof_hash.0), "proof used");
                 p.kind
             }
             None => {
@@ -441,8 +524,13 @@ impl Contract {
         require!(verify(&i.agent_pk.0, &intent_message(i), &signed.signature.0), "bad signature");
         *slot = Some(i.clone());
         self.used_nonces.insert(key);
+        let mut cost = set_entry_cost(32 + 8);
+        if tee_kind != 0 {
+            self.used_proofs.insert(i.proof_hash.0.clone());
+            cost += set_entry_cost(32);
+        }
         self.duels.flush();
-        let cost = storage_cost_since(before);
+        cost += storage_cost_since(before);
         let agent = self.agents.get_mut(&i.agent_pk.0).expect("agent missing");
         require!(agent.bond.0 > cost, "bond exhausted");
         agent.bond = U128(agent.bond.0 - cost);
@@ -488,10 +576,12 @@ impl Contract {
     }
 
     /// After `close_at`, anyone asks the oracle for the close price; the answer arrives in
-    /// `oracle_on_call` and finishes the duel. The contract pays the oracle deposit. The oracle
+    /// `oracle_on_call` and finishes the duel. The caller attaches the oracle deposit. The oracle
     /// request is detached: this call succeeds once the request is sent, and may be repeated if the
     /// oracle never answers.
+    #[payable]
     pub fn resolve_duel(&mut self, duel_id: U64) {
+        require!(env::attached_deposit().as_yoctonear() >= self.oracle_deposit, "attach oracle_deposit");
         let d = self.duels.get(&duel_id.0).expect("duel missing");
         require!(!d.resolved, "resolved");
         require!(env::block_timestamp() >= d.close_at.0, "duel open");
@@ -752,6 +842,7 @@ impl Contract {
             owner: self.owner.clone(),
             oracle_account: self.oracle_account.clone(),
             oracle_deposit: U128(self.oracle_deposit),
+            min_duel_s: self.min_duel_ns / 1_000_000_000,
             slash_bps: self.slash_bps,
             fee_bps: self.fee_bps,
             min_chaos_deposit: U128(self.min_chaos_deposit),
