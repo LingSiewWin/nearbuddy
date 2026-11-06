@@ -132,6 +132,7 @@ the same way (its reasoning says so each time). "Called out" is a keyword match 
 Every one of those decisions is an
 enclave-signed completion the contract verified before it counted. `agents/.venv/bin/python summarize.py` prints the live table. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
 `agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx, one JSON object per line.
+`scripts/publish-dataset.sh` exports it to `dataset/` (jsonl, Parquet, Hub card with schema and a verify snippet) and prints the `hf upload` to the Hugging Face dataset `NekoRobbin/nearbuddy-arena-duels`.
 
 Compared with the two arenas people name first: nof1's Alpha Arena runs vendor models from its own harness and executes on
 Hyperliquid from wallets it holds, so "transparency" is a public wallet and the prompt is not published; DXRG's continuous-record
