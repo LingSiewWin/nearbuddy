@@ -70,130 +70,132 @@ export default function Page() {
   const s = snap;
   const exposure = s?.ledger?.exposure.reduce((a, e) => a + BigInt(e.yocto), 0n) ?? 0n;
   return (
-    <pre>
-      <span className="hi">NEARBUDDY</span>{" "}
-      <span className="dim">· zero-balance credit clearinghouse for AI agents · NEAR testnet · live</span>
-      {"\n"}
-      <span className="dim">
-        {s ? `snapshot ${new Date(s.at).toISOString()}  rpc ${new URL(s.rpc).host}` : "connecting"}
-      </span>
-      <span className="cursor" />
-      {"\n\n"}
-      {boxTitle(1, "contract")}
-      {"\n"}
-      {row("account", s?.contract ?? "-")}
-      {"\n"}
-      {row("fee", s?.config ? `${s.config.fee_bps} bps of settled volume -> solver` : "-")}
-      {"\n"}
-      {row(
-        "withdraw delay",
-        s?.config
-          ? `${Number(s.config.withdraw_delay_ns) / 1e9} s (solvers decline new IOUs while a withdrawal is pending)`
-          : "-",
-      )}
-      {"\n"}
-      {row("max batch", s?.config ? `${s.config.max_batch} IOUs per settle_batch` : "-")}
-      {"\n"}
-      {bottom()}
-      {"\n\n"}
-      {boxTitle(2, "owner vault")}
-      {"\n"}
-      {row("owner", s?.owner ?? "-")}
-      {"\n"}
-      {row("locked", `${near5(s?.vault?.balance)} NEAR`)}
-      {"\n"}
-      {row(
-        "withdraw",
-        s?.vault?.pending_withdraw ? `PENDING ${near5(s.vault.pending_withdraw[0])} NEAR` : "none pending",
-      )}
-      {"\n"}
-      {bottom()}
-      {"\n\n"}
-      {boxTitle(3, "solver")}
-      {"\n"}
-      {row("solver", s?.solverId ?? "-")}
-      {"\n"}
-      {row("stake", `${near5(s?.solver?.stake)} NEAR`)}
-      {"\n"}
-      {row("fees earned", `${near5(s?.solver?.fees_earned)} NEAR`)}
-      {"\n"}
-      {row("IOUs settled", `${s?.solver?.ious_settled ?? "-"} lifetime`)}
-      {"\n"}
-      {row(
-        "carrying now",
-        s?.ledger
-          ? `${s.ledger.carrying} unsettled IOUs, exposure ${near5(exposure.toString())} NEAR  ${"▮".repeat(Math.min(60, s.ledger.carrying))}`
-          : "solver offline (start: pnpm solver)",
-      )}
-      {"\n"}
-      {bottom()}
-      {"\n\n"}
-      {boxTitle(4, "payee", "paid API")}
-      {"\n"}
-      {row("account", s?.api ?? "-")}
-      {"\n"}
-      {row("balance", `${near5(s?.apiBalance)} NEAR`)}
-      {"\n"}
-      {bottom()}
-      {"\n\n"}
-      {boxTitle(5, "mandate")}
-      {"\n"}
-      <span>│ agent key </span>
-      <input
-        value={agentPk}
-        onChange={(e) => setAgentPk(e.target.value.trim())}
-        placeholder="paste base64 agent_pk from the demo (step 3)"
-        style={{
-          width: "60ch",
-          background: "transparent",
-          color: "inherit",
-          border: "1px dashed var(--dim)",
-          font: "inherit",
-          padding: "0 4px",
-        }}
-      />
-      {"\n"}
-      {row(
-        "allowance",
-        s?.mandate
-          ? `${near5(s.mandate.spent)} spent / ${near5(s.mandate.allowance)} NEAR`
-          : agentPk
-            ? "no mandate for that key"
+    <div className="tui">
+      <pre>
+        <span className="hi">NEARBUDDY</span>{" "}
+        <span className="dim">· zero-balance credit clearinghouse for AI agents · NEAR testnet · live</span>
+        {"\n"}
+        <span className="dim">
+          {s ? `snapshot ${new Date(s.at).toISOString()}  rpc ${new URL(s.rpc).host}` : "connecting"}
+        </span>
+        <span className="cursor" />
+        {"\n\n"}
+        {boxTitle(1, "contract")}
+        {"\n"}
+        {row("account", s?.contract ?? "-")}
+        {"\n"}
+        {row("fee", s?.config ? `${s.config.fee_bps} bps of settled volume -> solver` : "-")}
+        {"\n"}
+        {row(
+          "withdraw delay",
+          s?.config
+            ? `${Number(s.config.withdraw_delay_ns) / 1e9} s (solvers decline new IOUs while a withdrawal is pending)`
             : "-",
-      )}
-      {"\n"}
-      {row("per-IOU cap", s?.mandate ? `${near5(s.mandate.per_tx_cap)} NEAR` : "-")}
-      {"\n"}
-      {row("payees", s?.mandate ? s.mandate.allowed_payees.join(", ") || "any" : "-")}
-      {"\n"}
-      {row(
-        "status",
-        s?.mandate
-          ? s.mandate.revoked
-            ? "REVOKED"
-            : `active until ${new Date(Number(BigInt(s.mandate.expires_at) / 1_000_000n)).toISOString()}`
-          : "-",
-      )}
-      {"\n"}
-      {bottom()}
-      {"\n\n"}
-      {boxTitle(6, "events", "observed by this page")}
-      {"\n"}
-      {log.length
-        ? log.map((l) => `│ ${l.padEnd(W - 4)} │`).join("\n")
-        : row("", "run `CALLS=100 pnpm demo` in nearbuddy/ and watch this fill")}
-      {"\n"}
-      {bottom()}
-      {"\n\n"}
-      <span className="dim">
-        how it works: agent (keypair, 0 NEAR) → GET → 402 → signs IOU → solver underwrites in ms → 200 … ×N → solver
-        settle_batch = 1 tx
-      </span>
-      {"\n"}
-      <span className="dim">arena (models duel, get attacked, get followed under mandates): </span>
-      <a href="/arena" className="hi">
-        /arena
-      </a>
-    </pre>
+        )}
+        {"\n"}
+        {row("max batch", s?.config ? `${s.config.max_batch} IOUs per settle_batch` : "-")}
+        {"\n"}
+        {bottom()}
+        {"\n\n"}
+        {boxTitle(2, "owner vault")}
+        {"\n"}
+        {row("owner", s?.owner ?? "-")}
+        {"\n"}
+        {row("locked", `${near5(s?.vault?.balance)} NEAR`)}
+        {"\n"}
+        {row(
+          "withdraw",
+          s?.vault?.pending_withdraw ? `PENDING ${near5(s.vault.pending_withdraw[0])} NEAR` : "none pending",
+        )}
+        {"\n"}
+        {bottom()}
+        {"\n\n"}
+        {boxTitle(3, "solver")}
+        {"\n"}
+        {row("solver", s?.solverId ?? "-")}
+        {"\n"}
+        {row("stake", `${near5(s?.solver?.stake)} NEAR`)}
+        {"\n"}
+        {row("fees earned", `${near5(s?.solver?.fees_earned)} NEAR`)}
+        {"\n"}
+        {row("IOUs settled", `${s?.solver?.ious_settled ?? "-"} lifetime`)}
+        {"\n"}
+        {row(
+          "carrying now",
+          s?.ledger
+            ? `${s.ledger.carrying} unsettled IOUs, exposure ${near5(exposure.toString())} NEAR  ${"▮".repeat(Math.min(60, s.ledger.carrying))}`
+            : "solver offline (start: pnpm solver)",
+        )}
+        {"\n"}
+        {bottom()}
+        {"\n\n"}
+        {boxTitle(4, "payee", "paid API")}
+        {"\n"}
+        {row("account", s?.api ?? "-")}
+        {"\n"}
+        {row("balance", `${near5(s?.apiBalance)} NEAR`)}
+        {"\n"}
+        {bottom()}
+        {"\n\n"}
+        {boxTitle(5, "mandate")}
+        {"\n"}
+        <span>│ agent key </span>
+        <input
+          value={agentPk}
+          onChange={(e) => setAgentPk(e.target.value.trim())}
+          placeholder="paste base64 agent_pk from the demo (step 3)"
+          style={{
+            width: "60ch",
+            background: "transparent",
+            color: "inherit",
+            border: "1px dashed var(--dim)",
+            font: "inherit",
+            padding: "0 4px",
+          }}
+        />
+        {"\n"}
+        {row(
+          "allowance",
+          s?.mandate
+            ? `${near5(s.mandate.spent)} spent / ${near5(s.mandate.allowance)} NEAR`
+            : agentPk
+              ? "no mandate for that key"
+              : "-",
+        )}
+        {"\n"}
+        {row("per-IOU cap", s?.mandate ? `${near5(s.mandate.per_tx_cap)} NEAR` : "-")}
+        {"\n"}
+        {row("payees", s?.mandate ? s.mandate.allowed_payees.join(", ") || "any" : "-")}
+        {"\n"}
+        {row(
+          "status",
+          s?.mandate
+            ? s.mandate.revoked
+              ? "REVOKED"
+              : `active until ${new Date(Number(BigInt(s.mandate.expires_at) / 1_000_000n)).toISOString()}`
+            : "-",
+        )}
+        {"\n"}
+        {bottom()}
+        {"\n\n"}
+        {boxTitle(6, "events", "observed by this page")}
+        {"\n"}
+        {log.length
+          ? log.map((l) => `│ ${l.padEnd(W - 4)} │`).join("\n")
+          : row("", "run `CALLS=100 pnpm demo` in nearbuddy/ and watch this fill")}
+        {"\n"}
+        {bottom()}
+        {"\n\n"}
+        <span className="dim">
+          how it works: agent (keypair, 0 NEAR) → GET → 402 → signs IOU → solver underwrites in ms → 200 … ×N → solver
+          settle_batch = 1 tx
+        </span>
+        {"\n"}
+        <span className="dim">arena (models duel, get attacked, get followed under mandates): </span>
+        <a href="/arena" className="hi">
+          /arena
+        </a>
+      </pre>
+    </div>
   );
 }

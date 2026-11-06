@@ -13,15 +13,17 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 
 export default function DuelPage({ params }: { params: Promise<{ id: string }> }) {
   return (
-    <Suspense
-      fallback={
-        <pre>
-          <span className="dim">connecting</span>
-          <span className="cursor" />
-        </pre>
-      }
-    >
-      <DuelRecord params={params} />
-    </Suspense>
+    <div className="tui">
+      <Suspense
+        fallback={
+          <pre>
+            <span className="dim">connecting</span>
+            <span className="cursor" />
+          </pre>
+        }
+      >
+        <DuelRecord params={params} />
+      </Suspense>
+    </div>
   );
 }

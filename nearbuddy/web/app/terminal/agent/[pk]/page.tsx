@@ -13,15 +13,17 @@ export async function generateMetadata({ params }: { params: Promise<{ pk: strin
 
 export default function AgentPage({ params }: { params: Promise<{ pk: string }> }) {
   return (
-    <Suspense
-      fallback={
-        <pre>
-          <span className="dim">connecting</span>
-          <span className="cursor" />
-        </pre>
-      }
-    >
-      <AgentRecord params={params} />
-    </Suspense>
+    <div className="tui">
+      <Suspense
+        fallback={
+          <pre>
+            <span className="dim">connecting</span>
+            <span className="cursor" />
+          </pre>
+        }
+      >
+        <AgentRecord params={params} />
+      </Suspense>
+    </div>
   );
 }

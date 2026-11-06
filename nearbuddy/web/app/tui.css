@@ -1,5 +1,6 @@
-/* The terminal look of the older /agent and /duel pages; loaded only through tui.tsx. */
-:root {
+/* The terminal look, scoped under .tui: production merges CSS chunks, so an unscoped rule here would
+   restyle every page. Pages that use tui.tsx render inside <div className="tui">. */
+.tui {
   --bg: #0b0f0c;
   --fg: #c8f5c8;
   --dim: #5f8a5f;
@@ -14,16 +15,15 @@
   --ok: #7ee787;
   --unv: #f5d76e; /* enclave-verified / unverified tier */
 }
-* {
+.tui * {
   box-sizing: border-box;
 }
-html,
-body {
+.tui {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
 }
-body {
+.tui {
   font:
     13px / 1.45 ui-monospace,
     SFMono-Regular,
@@ -32,70 +32,70 @@ body {
     monospace;
   padding: 16px;
 }
-pre {
+.tui pre {
   margin: 0;
   white-space: pre;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
-pre.wrap {
+.tui pre.wrap {
   white-space: pre-wrap;
   word-break: break-word;
   overflow: visible;
   margin-bottom: 1.45em;
 }
-pre + pre.wrap {
+.tui pre + pre.wrap {
   margin: 1.45em 0 0;
 }
-.hi {
+.tui .hi {
   color: var(--hi);
 }
-.dim {
+.tui .dim {
   color: var(--dim);
 }
-.warn {
+.tui .warn {
   color: var(--warn);
 }
-.bad {
+.tui .bad {
   color: var(--bad);
 }
-.num {
+.tui .num {
   color: var(--num);
   font-weight: bold;
 }
-.win {
+.tui .win {
   color: var(--win);
 }
-.loss {
+.tui .loss {
   color: var(--loss);
 }
-.tie {
+.tui .tie {
   color: var(--tie);
 }
-.open {
+.tui .open {
   color: var(--open);
 }
-.ok {
+.tui .ok {
   color: var(--ok);
 }
-.unv {
+.tui .unv {
   color: var(--unv);
 }
-a {
+.tui a {
   color: var(--fg);
 }
-a.hi,
-a.ok,
-a.win {
+.tui a.hi,
+.tui a.ok,
+.tui a.win {
   text-decoration-color: var(--dim);
 }
-a:focus-visible,
-button.lnk:focus-visible {
+.tui a:focus-visible,
+.tui button.lnk:focus-visible {
   outline: 2px solid var(--num);
   outline-offset: 1px;
   border-radius: 2px;
 }
-button.lnk {
+.tui button.lnk {
   font: inherit;
   color: inherit;
   background: none;
@@ -105,7 +105,7 @@ button.lnk {
   text-decoration: underline;
   text-decoration-color: var(--dim);
 }
-.cursor::after {
+.tui .cursor::after {
   content: "█";
   animation: blink 1s steps(1) infinite;
 }
@@ -115,27 +115,27 @@ button.lnk {
   }
 }
 @media (max-width: 600px) {
-  body {
+  .tui {
     font-size: 11.5px;
     padding: 10px;
   }
   /* rows wrap instead of scrolling: the right padding and border go, box rules clip at the viewport */
-  pre {
+  .tui pre {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     overflow-x: hidden;
   }
-  .pad {
+  .tui .pad {
     display: none;
   }
-  .rule {
+  .tui .rule {
     display: block;
     white-space: pre;
     overflow: hidden;
   }
 }
 @media (prefers-color-scheme: light) {
-  :root {
+  .tui {
     --bg: #f4fbf4;
     --fg: #163816;
     --dim: #4a6e4a;

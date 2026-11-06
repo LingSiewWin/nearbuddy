@@ -11,5 +11,9 @@ export const metadata: Metadata = {
 };
 
 export default function TerminalPage() {
-  return <Arena />;
+  return (
+    <div className="tui">
+      <Arena />
+    </div>
+  );
 }
