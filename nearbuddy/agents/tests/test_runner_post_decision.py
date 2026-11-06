@@ -218,3 +218,63 @@ def test_variant_c_decision_without_oracle_evidence_is_recorded_as_skipped_and_n
     assert [p for p, _ in solver.posts] == ["/intent", "/consume"]
     assert solver.posts[0][1]["signed"]["intent"]["side"] == "Long"
     assert rows()[1]["prompt_variant"] == "C" and rows()[1]["tx"] == "TX1"
+
+
+def _http_error(status: int):
+    import requests
+
+    resp = requests.Response()
+    resp.status_code = status
+    return requests.HTTPError(f"{status} Server Error: Internal Server Error for url: x", response=resp)
+
+
+@pytest.mark.parametrize("status", [500, 502, 429])
+def test_model_5xx_or_429_skips_the_cycle_instead_of_ending_the_batch(duelist, status):
+    _, _, _, model = duelist
+    model.complete = lambda system, user: (_ for _ in ()).throw(_http_error(status))
+    nonce, status_ = decide(FakeSolver(), duelist)
+    assert status_ == "skipped"
+    (r,) = rows()
+    assert r["error"].startswith("transient: model") and str(status) in r["error"]
+
+
+def test_model_connection_drop_skips_the_cycle(duelist):
+    import requests
+
+    _, _, _, model = duelist
+    model.complete = lambda system, user: (_ for _ in ()).throw(requests.ConnectionError("reset by peer"))
+    assert decide(FakeSolver(), duelist)[1] == "skipped"
+
+
+def test_model_4xx_is_our_bug_and_still_raises(duelist):
+    import requests
+
+    _, _, _, model = duelist
+    model.complete = lambda system, user: (_ for _ in ()).throw(_http_error(400))
+    with pytest.raises(requests.HTTPError):
+        decide(FakeSolver(), duelist)
+
+
+def test_signature_fetch_dropping_skips_the_cycle_for_an_enclave_agent(duelist):  # fixture: temp DATA
+    import requests
+
+    class TeeModel(StubClient):
+        model_id = "test/enclave"
+        tee = True
+
+        def complete(self, system, user):
+            return Completion('{"direction":"long","reasoning":"x"}', "chatcmpl-9", self.model_id, b"req", b"res")
+
+        def signature(self, chat_id):
+            raise requests.ConnectionError("Remote end closed connection without response")
+
+    model = TeeModel()
+    d, sk, comp = runner.make_duelist("Z", model, hardened=True)
+    solver = FakeSolver()
+    assert runner.post_decision(solver, "5", "NEAR/USD", 1, 1, CLOSE_NS, {}, 10, "Z", d, sk, comp, model, {}) == (
+        10,
+        "skipped",
+    )
+    assert solver.posts == []
+    (r,) = rows()
+    assert r["error"].startswith("transient: signature") and r["chat_id"] == "chatcmpl-9"

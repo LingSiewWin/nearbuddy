@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["packages/**", "analysis/**", "web/app/**", "web/scripts/**", "!web/app/data", "!web/app/how/_kit"]
+    "includes": [
+      "packages/**",
+      "analysis/**",
+      "web/app/**",
+      "web/scripts/**",
+      "e2e/**",
+      "!web/app/data",
+      "!web/app/how/_kit"
+    ]
   },
   "formatter": {
     "enabled": true,

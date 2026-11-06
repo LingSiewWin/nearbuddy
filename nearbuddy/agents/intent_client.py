@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import struct
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -138,14 +139,53 @@ def tee_proof(record: dict[str, Any], model_id: str, request_hash: bytes, respon
     }
 
 
+def _refused(e: requests.ConnectionError) -> bool:
+    return "Connection refused" in str(e)
+
+
+class DeadlineError(RuntimeError):
+    """A solver call was not sent, or not waited for, because its deadline (close_at minus a margin) passed."""
+
+
 @dataclass
 class Solver:
+    """`restart_wait_s`: night-loop.sh restarts the solver between its batches, and a second pair's duel can straddle
+    that restart. A refused connection never reached the solver, so it is retried until the solver is back; any
+    other transport error may have landed (an intent, an open_duel) and is raised as before."""
+
     url: str
     secret: str = ""
+    restart_wait_s: float = 120
 
-    def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        r = requests.post(
+    def _send(self, method: str, url: str, cap: float | None = None, **kw: Any) -> requests.Response:
+        """Retry a refused connection for `restart_wait_s`. `cap` (monotonic) bounds the retries and each attempt's
+        timeout, so nothing waits past it."""
+        retry_until = time.monotonic() + self.restart_wait_s
+        if cap is not None:
+            retry_until = min(retry_until, cap)
+        while True:
+            if cap is not None:
+                kw["timeout"] = max(0.5, min(kw.get("timeout", 300.0), cap - time.monotonic()))
+            try:
+                return requests.request(method, url, **kw)
+            except requests.ConnectionError as e:
+                if not _refused(e) or time.monotonic() >= retry_until:
+                    raise
+                time.sleep(max(0.0, min(3.0, retry_until - time.monotonic())))
+
+    def post(self, path: str, body: dict[str, Any], deadline_ns: int | None = None) -> dict[str, Any]:
+        """`deadline_ns` (wall clock): neither the restart retry nor the wait for the answer runs past it, and a call
+        whose deadline already passed is not sent (`DeadlineError`). A reveal passes close_at minus a margin."""
+        cap = None
+        if deadline_ns is not None:
+            left = (deadline_ns - time.time_ns()) / 1e9
+            if left <= 0:
+                raise DeadlineError(f"solver {path}: deadline passed {-left:.1f} s ago, not sent")
+            cap = time.monotonic() + left
+        r = self._send(
+            "POST",
             f"{self.url}{path}",
+            cap,
             data=json.dumps(body),
             headers={"content-type": "application/json", "x-arena-key": self.secret},
             timeout=300,
@@ -155,6 +195,6 @@ class Solver:
         return r.json()
 
     def get(self, path: str) -> dict[str, Any]:
-        r = requests.get(f"{self.url}{path}", timeout=30)
+        r = self._send("GET", f"{self.url}{path}", timeout=30)
         r.raise_for_status()
         return r.json()

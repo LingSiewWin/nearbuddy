@@ -14,7 +14,8 @@ import resolveDuel from "./fixtures/resolve_duel.json";
 import tamper from "./fixtures/tamper.json";
 
 type Fx = { meta: Parameters<typeof decode>[0]; tx: Parameters<typeof decode>[1] };
-const run = (f: unknown) => decode((f as Fx).meta, (f as Fx).tx);
+// the arena is passed, not read from near.ts: another test file's mock.module("../api/near") lives process-wide
+const run = (f: unknown) => decode((f as Fx).meta, (f as Fx).tx, "arena.nearbuddy-solver.testnet");
 const copy = (f: unknown) => structuredClone(f) as Fx;
 const SOLVER = "nearbuddy-solver.testnet";
 const AGENT_A = "Ul+W6UJKfQlZ9dqSeXa/9wvuXf9CzdhSP59CnqDlf8E=";

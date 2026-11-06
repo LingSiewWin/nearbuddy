@@ -26,6 +26,7 @@
 mod agents;
 mod duels;
 mod follow;
+mod invariants;
 mod state;
 mod types;
 mod views;
@@ -52,6 +53,9 @@ pub const DEFAULT_INTENT_LOCK_NS: u64 = 60 * 1_000_000_000;
 pub const MAX_INJECTIONS: usize = 32;
 /// After this long past `close_at` with no oracle answer anyone may void the duel.
 pub const VOID_AFTER_NS: u64 = 24 * 3600 * 1_000_000_000;
+/// Longest duel anyone can open. Without a cap, a consented duel with close_at near u64::MAX never
+/// resolves or voids, keeps `open_duels` above zero forever and freezes every "duels open" admin setter.
+pub const MAX_DUEL_NS: u64 = 24 * 3600 * 1_000_000_000;
 
 pub fn intent_message(i: &Intent) -> Vec<u8> {
     let mut out = INTENT_DOMAIN.to_vec();
@@ -140,10 +144,10 @@ pub(crate) fn storage_cost_since(before: u64) -> u128 {
     (after - before) as u128 * env::storage_byte_cost().as_yoctonear()
 }
 
-/// Bytes a `store::LookupSet<Vec<u8>>` entry occupies once flushed at the end of the call: 1-byte
-/// prefix, 4-byte borsh length, the key, and the protocol's 40-byte per-record overhead. `LookupSet`
-/// writes lazily, so these bytes are not visible to `storage_usage()` inside the call and are charged
-/// by size instead.
+/// yoctoNEAR for one `store::LookupSet<Vec<u8>>` entry: 1-byte prefix, 4-byte borsh length, the key
+/// and the protocol's 40-byte per-record overhead. `LookupSet::insert` writes to storage at once, so
+/// once the entry is inserted `storage_cost_since` already counts it; use this only to price an
+/// entry before inserting it (`commit_intent`), never on top of a measurement taken after.
 pub(crate) fn set_entry_cost(key_len: usize) -> u128 {
     (1 + 4 + key_len + 40) as u128 * env::storage_byte_cost().as_yoctonear()
 }

@@ -11,16 +11,20 @@ import {
   type Fill,
   fillCells,
   followerQuality,
+  isStubModel,
   lastFills,
   legs,
   NO_REVEAL_RULE,
   type Opened,
+  pairCells,
   pairingCells,
   pairingWord,
+  pairsOf,
   proven,
   quoteOut,
   revealCell,
   sbps,
+  shownPairs,
   timelineCells,
   usdc,
   vsCell,
@@ -140,6 +144,71 @@ describe("commit timeline", () => {
     );
     expect(text(timelineCells([], A, false))).toBe("no commit seen");
     expect(text(timelineCells(undefined, A, false))).toBe("no commit seen");
+  });
+});
+
+describe("pairs", () => {
+  test("duels group by agent pair whichever side each took, most recent pair first", () => {
+    const d = (id: number, a: string, b: string) => ({ id: String(id), a, b });
+    // pair 1 (P, Q) runs throughout; pair 2 (G, W) joins at #350
+    const duels = [d(352, "G", "W"), d(351, "Q", "P"), d(350, "W", "G"), d(349, "P", "Q"), d(330, "P", "Q")];
+    expect(pairsOf(duels)).toEqual([
+      { a: "G", b: "W", first: 350, last: 352, n: 2 },
+      { a: "P", b: "Q", first: 330, last: 351, n: 3 },
+    ]);
+    expect(pairsOf([])).toEqual([]);
+  });
+  test("the widest pair row the arena builds fits the value column", () => {
+    const p = { a: "A", b: "B", first: 10_000, last: 10_039, n: 40 };
+    const long = (pk: string) => `${pk}-${"m".repeat(60)}`; // longer than any model name: pairCells cuts it
+    const cells = pairCells(p, long, 100);
+    expect(text(cells).length).toBeLessThanOrEqual(VW);
+    expect(text(cells)).toEndWith("  #10000-#10039 · 40 of last 100");
+    expect(cells[0]).toMatchObject({ href: "/agent/A", title: "A" });
+    expect(text(pairCells(p, long, undefined))).toEndWith("of last ?"); // an API without `scanned`
+  });
+  test("box 2 keeps the newest running pairs, then lists them oldest first", () => {
+    const pair = (a: string, first: number, last: number, n = 5) => ({ a, b: `${a}2`, first, last, n });
+    const four = [pair("old", 300, 330), pair("p1", 320, 365), pair("p2", 350, 364), pair("p3", 360, 366)];
+    // the pair last active at #330 drops, not the newest one
+    expect(shownPairs(four).map((p) => p.a)).toEqual(["p1", "p2", "p3"]);
+    expect(shownPairs([...four, pair("probe", 363, 363, 1)]).map((p) => p.a)).toEqual(["p1", "p2", "p3"]);
+    expect(shownPairs([pair("p1", 320, 365), pair("probe", 363, 363, 1)])).toEqual([]); // one running pair: no rows
+    expect(shownPairs(undefined)).toEqual([]);
+  });
+  test("stub agents: one rule for standings and pairs; a pair with a stub in it gets no row", () => {
+    expect(isStubModel("stub/deterministic")).toBe(true);
+    expect(isStubModel("redteam/stub")).toBe(true); // the red-team probe pair
+    expect(isStubModel("z-ai/glm-5.3-flash")).toBe(false);
+    expect(isStubModel(undefined)).toBe(false); // unknown agent: shown
+    // a whole path segment only (same cases as agents/tests/test_nearai_client.py)
+    expect(isStubModel("stub")).toBe(true);
+    expect(isStubModel("stub/x")).toBe(true);
+    expect(isStubModel("org/stub/v2")).toBe(true);
+    expect(isStubModel("stubborn-model")).toBe(false);
+    expect(isStubModel("acme/stubborn-model")).toBe(false);
+    expect(isStubModel("acme/model-stub")).toBe(false);
+    expect(isStubModel("")).toBe(false);
+    const pair = (a: string, b: string, first: number, last: number) => ({ a, b, first, last, n: 5 });
+    const models: Record<string, string> = {
+      q: "Qwen/Qwen3.8-27B",
+      d: "deepseek-ai/DeepSeek-V4.1",
+      g: "z-ai/glm-5.3-flash",
+      w: "Qwen/Qwen3.6-35B",
+      s: "redteam/stub",
+      t: "redteam/stub",
+    };
+    const hide = (pk: string) => isStubModel(models[pk]);
+    const live = [
+      pair("q", "d", 335, 373),
+      pair("g", "w", 350, 374),
+      pair("s", "t", 363, 375),
+      pair("s", "q", 370, 371),
+    ];
+    expect(shownPairs(live, hide).map((p) => `${p.a}${p.b}`)).toEqual(["qd", "gw"]); // newest stub pair dropped first
+    // no rule: the three last active (st #375, gw #374, qd #373; sq #371 drops), listed by first duel
+    expect(shownPairs(live).map((p) => `${p.a}${p.b}`)).toEqual(["qd", "gw", "st"]);
+    expect(shownPairs([pair("q", "d", 1, 9), pair("s", "t", 2, 8)], hide)).toEqual([]); // one real pair left: no rows
   });
 });
 

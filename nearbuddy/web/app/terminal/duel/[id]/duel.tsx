@@ -7,11 +7,13 @@ import {
   type CommitConfig,
   commitCells,
   proven as hasProof,
+  kindCell,
   type Opened,
   pairingCells,
   revealCell,
   timelineCells,
 } from "../../../cells";
+import { NO_OUTCOME, noOutcome } from "../../../eras";
 import {
   addrHref,
   agentHref,
@@ -22,6 +24,7 @@ import {
   getJson,
   legend,
   meter,
+  NET,
   near,
   price8,
   row,
@@ -65,7 +68,7 @@ type Duel = {
   a: string;
   b: string;
   symbol: string;
-  open_at: string;
+  open_at?: string | null; // absent in some older record shapes
   close_at: string;
   pool: string;
   injections: Injection[];
@@ -96,6 +99,9 @@ type Rec = {
 };
 
 const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
+/** open_at in ms, or null when the record lacks it or holds no ns integer (BigInt would throw). */
+const openMs = (d: { open_at?: string | null }) =>
+  d.open_at && /^\d+$/.test(d.open_at) ? Number(BigInt(d.open_at) / 1_000_000n) : null;
 const when = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(0, 19).replace("T", " ");
 const proven = (i: Intent | null) => hasProof(i, ZERO);
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
@@ -132,13 +138,16 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
 
   const d = r?.duel ?? null;
   const o = d?.outcome ?? null;
-  const contract = r?.contract ?? "arena.nearbuddy-solver.testnet";
-  const oracle = r?.oracle ?? "price-oracle.testnet";
+  const contract = r?.contract ?? NET.arena;
+  const oracle = r?.oracle ?? NET.oracle;
   const nowNs = BigInt(Date.now()) * 1_000_000n;
+  const unscored = !!d && noOutcome(d); // a pre-migration duel closed without an outcome
   const state = !d
     ? null
     : d.resolved
-      ? { t: "resolved", c: "tie" }
+      ? unscored
+        ? { t: NO_OUTCOME, c: "dim" }
+        : { t: "resolved", c: "tie" }
       : BigInt(d.close_at) < nowNs
         ? { t: "CLOSED, awaiting oracle", c: "open" }
         : { t: "LIVE", c: "open" };
@@ -197,7 +206,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
             {" "}
             <span className="dim">· {symbol(d.symbol)} ·</span> <span className={state!.c}>{state!.t}</span>{" "}
             <span className="dim">
-              · {when(d.open_at)} → {ts(d.close_at)} UTC · pool {near(d.pool)} NEAR
+              · {openMs(d) != null ? when(d.open_at!) : "-"} → {ts(d.close_at)} UTC · pool {near(d.pool)} NEAR
             </span>
           </>
         ) : null}
@@ -241,7 +250,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                       </span>
                     ))
                   : null}
-                {ev?.oldest_ms != null && Number(BigInt(d.open_at) / 1_000_000n) < ev.oldest_ms ? (
+                {ev?.oldest_ms != null && openMs(d) != null && openMs(d)! < ev.oldest_ms ? (
                   <>
                     {rowx("", [
                       {
@@ -277,7 +286,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                 `${price8(o?.open_price ?? d?.open_price)} USD`,
                 { t: "   snapshotted by the Outlayer TEE oracle right after open", c: "dim" },
               ]
-            : [{ t: "pending oracle callback", c: "dim" }],
+            : [{ t: unscored ? "none recorded" : "pending oracle callback", c: "dim" }],
         )}
         {"\n"}
         {rowx(
@@ -287,7 +296,9 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                 `${price8(o.close_price)} USD`,
                 { t: `   fetched by the oracle at resolve, after ${d ? ts(d.close_at) : "-"}`, c: "dim" },
               ]
-            : [{ t: d ? `pending: anyone can resolve after ${ts(d.close_at)} UTC` : "-", c: "dim" }],
+            : unscored
+              ? [{ t: `${NO_OUTCOME}: a pre-migration duel, never scored`, c: "dim" }]
+              : [{ t: d ? `pending: anyone can resolve after ${ts(d.close_at)} UTC` : "-", c: "dim" }],
         )}
         {"\n"}
         {rowx(
@@ -307,7 +318,10 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                 { t: `${bps(pb)} bps`, c: pnlc(pb) },
                 { t: "   bar: |pnl A| vs |pnl B|", c: "dim" },
               ]
-            : [...meter([], 0), { t: "  scored at resolve: side × size × price move", c: "dim" }],
+            : [
+                ...meter([], 0),
+                { t: unscored ? "  not scored" : "  scored at resolve: side × size × price move", c: "dim" },
+              ],
         )}
         {"\n"}
         {rowx(
@@ -319,7 +333,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                   { t: "   pool paid to the winner", c: "dim" },
                 ]
               : [{ t: "tie, pool split", c: "tie" }]
-            : [{ t: "undecided", c: "dim" }],
+            : [{ t: unscored ? NO_OUTCOME : "undecided", c: "dim" }],
         )}
         {"\n"}
         {rowx(
@@ -353,7 +367,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                 // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
                 <span key={k}>
                   {rowx(k ? "" : "attacks", [
-                    j.kind.padEnd(14),
+                    kindCell(j.kind),
                     " → ",
                     {
                       t: `${tag(j.target)} ${name(j.target)}`.slice(0, 30),

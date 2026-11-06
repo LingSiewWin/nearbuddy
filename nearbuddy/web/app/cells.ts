@@ -1,7 +1,7 @@
 // Pure data-to-cells helpers for the commit-reveal and execution rows: no React state, no fetch, so
 // bun test checks them directly (app/__tests__). Every field is optional: a deploy-13 contract (no
 // commit-reveal) and a solver without quality data render as "off" or "none", never as an error.
-import { addrHref, type Cell, near, price8, short, txHref } from "./tui";
+import { addrHref, agentHref, type Cell, near, price8, short, txHref } from "./tui";
 
 /** The commit-reveal fields of `get_config`; absent on contracts that predate commit-reveal. */
 export type CommitConfig = { commit_reveal?: boolean; no_reveal_bps?: number; require_consent?: boolean };
@@ -224,3 +224,58 @@ export type FollowerQuote = {
 /** USDC out for one follower: its batch share when present, else the 1Click quote, else "?". */
 export const quoteOut = (q: FollowerQuote) =>
   q.quote_out ? usdc(q.quote_out) : (q.quote?.quote.amountOutFormatted ?? "?");
+
+/** Agent pairs dueling in a window of duels, most recent first: the arena can run more than one pair at once. */
+export type Pair = { a: string; b: string; first: number; last: number; n: number };
+export const pairsOf = (duels: { id: string; a: string; b: string }[]): Pair[] => {
+  const by = new Map<string, Pair>();
+  for (const d of duels) {
+    const [a, b] = [d.a, d.b].sort() as [string, string]; // one pair whichever side each agent took
+    const id = Number(d.id);
+    const p = by.get(`${a}|${b}`);
+    if (!p) by.set(`${a}|${b}`, { a, b, first: id, last: id, n: 1 });
+    else Object.assign(p, { first: Math.min(p.first, id), last: Math.max(p.last, id), n: p.n + 1 });
+  }
+  return [...by.values()].sort((x, y) => y.last - x.last);
+};
+
+/** A stub agent (no model, no proof: "stub/deterministic", "redteam/stub"): "stub" as a whole path segment, so a
+ *  real model named e.g. "stubborn-model" is not one. Same rule as `is_stub_model` in agents/nearai.py. Standings hide
+ *  these behind a toggle, and pair rows skip a pair with one in it. An unknown model id is not a stub. */
+export const isStubModel = (modelId: string | null | undefined) => !!modelId && /(^|\/)stub(\/|$)/.test(modelId);
+
+/** The pairs box 2 lists: running pairs only (a one-off duel is a probe, not a pair), without pairs where `hide`
+ *  is true for either agent (stubs), the `max` most recently active kept, then shown oldest first so "pair 1" is
+ *  the one that started first. Empty unless 2+ are left. */
+export const shownPairs = (
+  pairs: Pair[] | null | undefined,
+  hide: (pk: string) => boolean = () => false,
+  max = 3,
+): Pair[] => {
+  const running = (pairs ?? []).filter((p) => p.n > 1 && !hide(p.a) && !hide(p.b));
+  if (running.length < 2) return [];
+  return running
+    .sort((x, y) => y.last - x.last)
+    .slice(0, max)
+    .sort((x, y) => x.first - y.first);
+};
+
+/** One pair row: both models (cut to 26, linked to their agent pages), the duel span and the count in the window. */
+export const pairCells = (p: Pair, model: (pk: string) => string, scanned: number | undefined): Cell[] => [
+  { t: model(p.a).slice(0, 26), href: agentHref(p.a), title: p.a },
+  " vs ",
+  { t: model(p.b).slice(0, 26), href: agentHref(p.b), title: p.b },
+  { t: `  #${p.first}-#${p.last} · ${p.n} of last ${scanned ?? "?"}`, c: "dim" },
+];
+
+/** Columns for an injection's `kind` in the attack rows. */
+export const KIND_W = 15;
+/** An injection's on-chain `kind` in `width` columns. The spectator writes "fake_news/<against|flat>/<bps|no_open>"
+ *  (packages/demo/src/spectator.ts): shown as "against -57.7" or "flat no_open", the full kind on hover. An older
+ *  plain kind ("fake_news") shows as is. A longer label is cut with "…", so the row keeps its columns. */
+export const kindCell = (kind: string, width = KIND_W): Cell => {
+  const [base, mode, move] = kind.split("/");
+  const label = mode ? `${mode} ${move ?? ""}`.trimEnd() : (base ?? "");
+  const t = label.length > width ? `${label.slice(0, width - 1)}…` : label.padEnd(width);
+  return mode ? { t, title: kind } : t;
+};

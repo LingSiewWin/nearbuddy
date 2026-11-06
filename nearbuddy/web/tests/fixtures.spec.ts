@@ -78,6 +78,23 @@ const quality = [
   quoted_at: now - Number(ago),
   bps_vs_oracle: bps,
 }));
+// the oracle era reverses the lifetime order: B leads from duel 257 on, A's lead came from the operator era
+const tallyOf = (alpha_bps: number, wins: number, ties: number, losses: number) => ({
+  alpha_bps,
+  wins,
+  ties,
+  losses,
+  duels: wins + ties + losses,
+});
+const eras = {
+  from: 257,
+  operator_duels: 257,
+  oracle_duels: 155,
+  by_agent: {
+    [PK_A]: { oracle: tallyOf(-20, 3, 1, 5), operator_alpha_bps: 160 },
+    [PK_B]: { oracle: tallyOf(35, 5, 1, 3), operator_alpha_bps: -95 },
+  },
+};
 const commitOn = { commit_reveal: true, no_reveal_bps: 500, require_consent: true };
 const arena = (deploy13: boolean) => ({
   at: now,
@@ -87,6 +104,7 @@ const arena = (deploy13: boolean) => ({
   leaderboard: [agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140), agent(PK_B, "Qwen/Qwen3-30B-A3B", -60)],
   duels: [duel],
   stats: { scanned: 40, verified_decisions: 71, attacks: 9 },
+  ...(deploy13 ? {} : { eras }),
   followers: { [PK_A]: [["alice.testnet", mandate], ["bob.testnet", mandate]] },
   solver: deploy13 ? null : { intents: solverIntents, pending: {}, fills: [], quality },
 });
@@ -220,6 +238,56 @@ test("terminal duel: deploy 13 data (no commit fields, no get_no_reveal) renders
   await expect(page.locator("body")).toContainText("this contract predates consented pairing");
 });
 
+// The spectator's kinds ("fake_news/against/-57.7", 22-26 chars) in the attack rows of a running duel: the kind
+// column stays fixed, the full kind is on hover, and every line of the box keeps the page width W = 112.
+const attacked = {
+  ...duel,
+  resolved: false,
+  close_at: NS(now + 120_000),
+  outcome: null,
+  last_intent_b: null,
+  injections: [
+    { kind: "fake_news/against/-57.7", payload_hash: PROOF, target: PK_B, block: "245678901" },
+    { kind: "fake_news/flat/no_open", payload_hash: ZERO, target: PK_A, block: "245678911" },
+    { kind: "fake_news", payload_hash: ZERO, target: PK_B, block: "245678921" },
+  ],
+};
+const attackLines = async (page: Page) =>
+  (await page.locator("pre").allTextContents())
+    .join("\n")
+    .split("\n")
+    .filter((l) => l.includes("block 24567"));
+
+for (const [name, path] of [
+  ["terminal", "/terminal"],
+  ["terminal duel", "/terminal/duel/411"],
+] as const)
+  test(`${name}: spectator kinds fit the attack rows`, async ({ page }) => {
+    await stub(page, "arena", { ...arena(false), duels: [attacked] });
+    await stub(page, "events", events({ duel_id: "411", method: "open_duel_consented", tx: OPEN_TX, at_ms: now - 360_000 }));
+    await stub(page, "duel", {
+      at: now,
+      rpc: "https://fixture.rpc",
+      contract: "arena.nearbuddy-solver.testnet",
+      oracle: "price-oracle.testnet",
+      config: { next_duel: "412", ...commitOn },
+      no_reveal: [false, false],
+      duel: attacked,
+      a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+      b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
+    });
+    await page.goto(path);
+    await expect(page.locator('span[title="fake_news/against/-57.7"]')).toHaveText(/^against -57\.7\s*$/);
+    await expect(page.locator('span[title="fake_news/flat/no_open"]')).toHaveText(/^flat no_open\s*$/);
+    const lines = await attackLines(page);
+    expect(lines).toHaveLength(3);
+    ["245678901", "245678911", "245678921"].forEach((block, i) => {
+      expect(lines[i]).toHaveLength(112); // nothing pushed past the right border
+      expect(lines[i]).toContain(`block ${block}`); // the row's tail is still inside it
+    });
+    await shot(page, `kinds-${name}`);
+  });
+
 test("terminal duel: commit and reveal times per side from the contract's events", async ({ page }) => {
   const [cA, rA, cB] = [now - 300_000, now - 240_000, now - 290_000];
   await stub(
@@ -250,6 +318,27 @@ test("terminal duel: commit and reveal times per side from the contract's events
   await expect(page.locator(`a[href$="/txns/reveal_intentTx${rA}"]`)).toHaveClass(/ok/);
   await expect(body).not.toContainText("earlier events not shown");
   await shot(page, "duel-commits");
+});
+
+test("terminal duel: a record without open_at still renders, with no window note", async ({ page }) => {
+  await stub(page, "events", events(null));
+  const { open_at: _, ...noOpen } = duel;
+  await stub(page, "duel", {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    oracle: "price-oracle.testnet",
+    config: { next_duel: "412", ...commitOn },
+    no_reveal: [false, false],
+    duel: noOpen,
+    a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+    b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
+  });
+  await page.goto("/terminal/duel/411");
+  await expect(page.locator(box("sides"))).toBeVisible();
+  await expect(page.locator("pre.wrap").first()).toContainText("· - →");
+  await expect(page.locator("body")).toContainText("A commit         no commit seen");
+  await expect(page.locator("body")).not.toContainText("earlier events not shown");
 });
 
 test("terminal duel: open tx outside the scanned window falls back to today's require_consent, labelled", async ({ page }) => {
@@ -296,4 +385,301 @@ test("terminal agent: execution summary for this agent's followers", async ({ pa
   await expect(body).toContainText("bob.testnet  2 fills  avg +0.3 bps vs oracle mid  best +1.4  worst -0.8");
   await expect(body).not.toContainText("carol.testnet");
   await shot(page, "agent");
+});
+
+test("terminal: standings rank by alpha from duel 257 on, lifetime one click away", async ({ page }) => {
+  await stub(page, "arena", arena(false));
+  await page.goto("/terminal");
+  const body = page.locator("body");
+  await expect(body).toContainText("ranked by alpha from duel 257 on, then shield");
+  await expect(body).toContainText("alpha from duel 257 on (TEE oracle), 257 operator-scored duels excluded · show lifetime");
+  const rows = page.locator("pre a[href^='/agent/']");
+  await expect(rows.first()).toHaveAttribute("href", `/agent/${encodeURIComponent(PK_B)}`); // +35 beats -20
+  await expect(page.locator("span.win", { hasText: "+35 bps" })).toHaveAttribute(
+    "title",
+    "duels 257+ +35 bps · operator era -95 bps · lifetime -60 bps",
+  );
+  await page.getByRole("button", { name: "show lifetime" }).click();
+  await expect(body).toContainText("ranked by lifetime alpha, then shield");
+  await expect(body).toContainText("lifetime alpha, incl. 257 operator-scored duels (#0-256)");
+  await expect(rows.first()).toHaveAttribute("href", `/agent/${encodeURIComponent(PK_A)}`); // +140 lifetime
+  await expect(page.locator("span.win", { hasText: "+140 bps" })).toBeVisible();
+  await shot(page, "arena-eras");
+});
+
+test("terminal: an incomplete era split ranks by lifetime and says so in the note row", async ({ page }) => {
+  await stub(page, "arena", { ...arena(false), eras: { ...eras, complete: false, unread: 3 } });
+  await page.goto("/terminal");
+  const body = page.locator("body");
+  await expect(body).toContainText("ranked by lifetime alpha, then shield");
+  await expect(body).toContainText("era split incomplete (3 oracle-era duels unread, retrying): lifetime alpha");
+  await expect(page.locator("pre a[href^='/agent/']").first()).toHaveAttribute(
+    "href",
+    `/agent/${encodeURIComponent(PK_A)}`,
+  ); // +140 lifetime leads; the split (B first) is held back
+  await expect(page.getByRole("button", { name: "show lifetime" })).toHaveCount(0);
+});
+
+test("terminal: a mainnet arena (oracle era from duel 0) shows no operator era", async ({ page }) => {
+  await stub(page, "arena", { ...arena(false), eras: { ...eras, from: 0, operator_duels: 0 } });
+  await page.goto("/terminal");
+  await expect(page.locator("body")).toContainText("every duel on this arena was scored by the TEE oracle");
+  await expect(page.locator("body")).toContainText("ranked by lifetime alpha, then shield");
+  await expect(page.getByRole("button", { name: "show lifetime" })).toHaveCount(0);
+});
+
+test("terminal agent: record from duel 257 on, operator era behind a toggle", async ({ page }) => {
+  const row = (id: string, result: string, pnl: number) => ({
+    id,
+    opponent: PK_B,
+    symbol: "wrap.near",
+    open_at: NS(now - 600_000),
+    close_at: NS(now - 300_000),
+    resolved: true,
+    result,
+    pnl,
+    side: "Long",
+    size_bps: 5000,
+    proof_hash: PROOF,
+    open_price: "256100000",
+    close_price: "257400000",
+    slashed: "0",
+    attacks: 0,
+    attacks_on_me: null,
+  });
+  const base = {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    indexed: true,
+    next_duel: 412,
+    slash_bps: 1000,
+    min_chaos_deposit: "10000000000000000000000",
+    agent: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+    followers: [],
+    execution: null,
+    eras: { from: 257, oracle: tallyOf(-20, 1, 0, 1), operator: { alpha_bps: 160, duels: 257, mine: null } },
+  };
+  await page.route("**/api/agent**", (r) =>
+    r.fulfill({
+      json: r.request().url().includes("era=operator")
+        ? {
+            ...base,
+            eras: { ...base.eras, operator: { alpha_bps: 160, duels: 257, mine: 2 } },
+            era: "operator",
+            scanned: 257,
+            duels: [row("201", "win", 90), row("200", "win", 70)],
+          }
+        : { ...base, era: "oracle", scanned: 155, duels: [row("300", "loss", -45), row("299", "win", 25)] },
+      headers: { "cache-control": "no-store" },
+    }),
+  );
+  await page.goto(`/terminal/agent/${encodeURIComponent(PK_A)}`);
+  const body = page.locator("body");
+  await expect(body).toContainText(
+    "alpha from duel 257 on (TEE oracle) -20 bps · operator era (#0-256, 257 duels) excluded: +160 bps of the lifetime alpha · lifetime +140 bps",
+  );
+  await expect(body).toContainText("oracle-scored, duels 257+ · 2 duels");
+  await expect(body).toContainText("1 win  0 tie  1 loss   net -20 bps");
+  await expect(page.getByRole("link", { name: "#300" })).toBeVisible();
+  await page.getByRole("button", { name: "show operator era (#0-256, excluded above)" }).click();
+  await expect(body).toContainText("operator era (#0-256, 257 duels, 2 of them this agent's) excluded: +160 bps of the lifetime alpha");
+  await expect(body).toContainText("operator-scored, duels 0-256 · 2 duels");
+  await expect(body).toContainText("2 win  0 tie  0 loss   net +160 bps");
+  await expect(page.getByRole("link", { name: "#201" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "#300" })).toHaveCount(0);
+  await page.getByRole("button", { name: "back to the oracle era" }).click();
+  await expect(page.getByRole("link", { name: "#300" })).toBeVisible();
+  await shot(page, "agent-eras");
+});
+
+test("terminal agent: a voided duel is counted as void, not a tie; the pre-API frame uses the build's network", async ({
+  page,
+}) => {
+  const row = (id: string, result: string, pnl: number, prices: [string, string]) => ({
+    id,
+    opponent: PK_B,
+    symbol: "wrap.near",
+    open_at: NS(now - 600_000),
+    close_at: NS(now - 300_000),
+    resolved: true,
+    result,
+    pnl,
+    side: "Long",
+    size_bps: 5000,
+    proof_hash: PROOF,
+    open_price: prices[0],
+    close_price: prices[1],
+    slashed: "0",
+    attacks: 0,
+    attacks_on_me: null,
+  });
+  let release = () => {};
+  const answered = new Promise<void>((r) => {
+    release = r;
+  });
+  await page.route("**/api/agent**", async (r) => {
+    await answered; // hold the API so the first frame is visible
+    await r.fulfill({
+      json: {
+        at: now,
+        rpc: "https://fixture.rpc",
+        contract: "arena.nearbuddy-solver.testnet",
+        next_duel: 412,
+        slash_bps: 1000,
+        min_chaos_deposit: "10000000000000000000000",
+        agent: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+        followers: [],
+        execution: null,
+        era: "oracle",
+        scanned: 155,
+        eras: {
+          from: 257,
+          complete: true,
+          unread: 0,
+          oracle: { ...tallyOf(-20, 1, 0, 1), voids: 1 },
+          operator: { alpha_bps: 160, duels: 257, mine: null },
+        },
+        duels: [
+          row("301", "void", 0, ["0", "0"]),
+          row("300", "loss", -45, ["256100000", "255000000"]),
+          row("299", "win", 25, ["256100000", "257400000"]),
+        ],
+      },
+      headers: { "cache-control": "no-store" },
+    });
+  });
+  await page.goto(`/terminal/agent/${encodeURIComponent(PK_A)}`);
+  const body = page.locator("body");
+  // this Playwright build has no NEXT_PUBLIC_NEAR_NETWORK: testnet, so 257 (a mainnet build reads 0, unit-tested)
+  await expect(body).toContainText("oracle-scored, duels 257+ · 0 duels");
+  release();
+  await expect(body).toContainText("1 win  0 tie  1 loss  1 void   net -20 bps");
+  await expect(page.locator('span[title="duel #301 void"]')).toHaveText("·");
+  await expect(page.locator('span[title="duel #301 void"]')).toHaveClass("dim");
+});
+
+// testnet duels #0-21: resolved, but closed without an outcome (pre-migration layout)
+const legacyDuel = { ...duel, id: "7", symbol: "BTC/USD", resolved: true, outcome: null, open_price: null };
+
+test("terminal agent: a resolved duel without an outcome is labelled, not open, and stays out of W/T/L", async ({ page }) => {
+  const row = (id: string, result: string, pnl: number | null) => ({
+    id,
+    opponent: PK_B,
+    symbol: "BTC/USD",
+    open_at: NS(now - 600_000),
+    close_at: NS(now - 300_000),
+    resolved: true,
+    result,
+    pnl,
+    side: "Long",
+    size_bps: 5000,
+    proof_hash: ZERO,
+    open_price: null,
+    close_price: null,
+    slashed: "0",
+    attacks: 0,
+    attacks_on_me: null,
+  });
+  const body = (era: string) => ({
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    next_duel: 412,
+    slash_bps: 1000,
+    min_chaos_deposit: "10000000000000000000000",
+    agent: agent(PK_A, "stub/deterministic", -10),
+    followers: [],
+    execution: null,
+    era,
+    scanned: era === "operator" ? 257 : 155,
+    eras: {
+      from: 257,
+      complete: true,
+      unread: 0,
+      oracle: tallyOf(0, 0, 0, 0),
+      operator: { alpha_bps: -10, duels: 257, mine: era === "operator" ? 2 : null },
+    },
+    duels: era === "operator" ? [row("22", "tie", 0), row("7", "no_outcome", null)] : [],
+  });
+  await page.route("**/api/agent**", (r) =>
+    r.fulfill({
+      json: body(r.request().url().includes("era=operator") ? "operator" : "oracle"),
+      headers: { "cache-control": "no-store" },
+    }),
+  );
+  await page.goto(`/terminal/agent/${encodeURIComponent(PK_A)}`);
+  await page.getByRole("button", { name: /show operator era/ }).click();
+  const page_ = page.locator("body");
+  await expect(page_).toContainText("0 win  1 tie  0 loss   net +0 bps");
+  await expect(page_).toContainText("1 resolved (no outcome recorded): pre-migration duels, not scored");
+  await expect(
+    page.locator('span[title="resolved (no outcome recorded): a pre-migration duel, never scored"]'),
+  ).toHaveText("n/a   ");
+  await expect(page.locator('span[title="duel #7 resolved (no outcome recorded)"]')).toHaveText("?");
+  await expect(page.locator("span.open", { hasText: /^open\s+$/ })).toHaveCount(0); // no row reads "open"
+});
+
+test("terminal: a second duel pair gets one row per pair in the duels box; a single pair gets none", async ({ page }) => {
+  const PK_G = "Z2xtLTUuMy1mbGFzaC1hZ2VudC1rZXktZml4dHVyZTA=";
+  const PK_W = "cXdlbjMuNi0zNWItYWdlbnQta2V5LWZpeHR1cmUwMDA=";
+  const two = arena(false);
+  const PK_R = "cmVkdGVhbS1zdHViLWFnZW50LWtleS1maXh0dXJlMDA=";
+  const PK_S = "cmVkdGVhbS1zdHViLWFnZW50LWtleS1maXh0dXJlMDE=";
+  two.leaderboard.push(
+    agent(PK_G, "z-ai/glm-5.3-flash", 37),
+    agent(PK_W, "Qwen/Qwen3.6-35B-A3B-FP8", 37),
+    agent(PK_R, "redteam/stub", 0),
+    agent(PK_S, "redteam/stub", 0),
+  );
+  Object.assign(two.stats, {
+    pairs: [
+      { a: PK_R, b: PK_S, first: 355, last: 359, n: 2 }, // the red-team stub pair: no row, it is not an arena pair
+      { a: PK_G, b: PK_W, first: 350, last: 358, n: 9 },
+      { a: PK_A, b: PK_B, first: 319, last: 357, n: 31 },
+      { a: PK_A, b: PK_G, first: 356, last: 356, n: 1 }, // a one-off probe: no row
+    ],
+  });
+  await stub(page, "arena", two);
+  await page.goto("/terminal");
+  const body = page.locator("body");
+  await expect(body).toContainText("pair 1           DeepSeek-V3.1 vs Qwen3-30B-A3B  #319-#357 · 31 of last 40");
+  await expect(body).toContainText("pair 2           glm-5.3-flash vs Qwen3.6-35B-A3B-FP8  #350-#358 · 9 of last 40");
+  await expect(body).not.toContainText("pair 3");
+  await expect(page.locator(`a[title="${PK_G}"]`, { hasText: "glm-5.3-flash" })).toHaveAttribute(
+    "href",
+    `/agent/${encodeURIComponent(PK_G)}`,
+  );
+  // one stub rule for standings and pairs: "redteam/stub" agents are hidden too, and "show all" brings both back
+  await expect(body).toContainText("2 stub agents hidden (no model, no proof) · show all");
+  await page.getByRole("button", { name: /show all/ }).click();
+  await expect(body).toContainText("pair 3           stub vs stub  #355-#359 · 2 of last 40");
+  const one = arena(false);
+  Object.assign(one.stats, { pairs: [{ a: PK_A, b: PK_B, first: 319, last: 357, n: 40 }] });
+  await stub(page, "arena", one);
+  await page.reload();
+  await expect(page.locator(box("duels"))).toBeVisible();
+  await expect(body).not.toContainText("pair 1");
+});
+
+test("terminal duel: a resolved duel without an outcome says so instead of pending", async ({ page }) => {
+  await stub(page, "events", events(null));
+  await stub(page, "duel", {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    oracle: "price-oracle.testnet",
+    config: { next_duel: "412" },
+    no_reveal: null,
+    duel: legacyDuel,
+    a: agent(PK_A, "stub/deterministic", -10),
+    b: agent(PK_B, "stub/deterministic", -1),
+  });
+  await page.goto("/terminal/duel/7");
+  const body = page.locator("body");
+  await expect(page.locator("pre.wrap").first()).toContainText("resolved (no outcome recorded)");
+  await expect(body).toContainText("resolved (no outcome recorded): a pre-migration duel, never scored");
+  await expect(body).toContainText("none recorded");
+  await expect(body).not.toContainText("pending: anyone can resolve");
+  await expect(body).not.toContainText("undecided");
 });

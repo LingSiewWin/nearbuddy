@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from nacl.signing import SigningKey  # noqa: E402
 
 from intent_client import proof_hash, tee_proof  # noqa: E402
-from nearai import NearAiClient, client_from_env  # noqa: E402
+from nearai import NearAiClient, StubClient, client_from_env, is_stub_model  # noqa: E402
 
 ENCLAVE = SigningKey(bytes([9] * 32))
 SENT: dict[str, tuple[bytes, bytes, str]] = {}  # chat id -> (request bytes, response bytes, model)
@@ -92,7 +92,52 @@ def test_near_ai_client_round_trip_and_tee_proof():
     srv.shutdown()
 
 
+SNAPSHOT = Path(__file__).resolve().parents[2] / "dataset" / "decisions.jsonl"
+
+
+def test_pair_1_requests_stay_byte_identical_to_the_signed_dataset_rows():
+    """Re-send the system/user text of real enclave-signed pair-1 rows; the client must emit the exact bytes the
+    enclave signed then (max_tokens 600), while the pair-2 reasoning models get their measured budgets."""
+    rows = [json.loads(line) for line in SNAPSHOT.read_text().splitlines() if line.strip()]
+    srv = HTTPServer(("127.0.0.1", 0), Fake)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}/v1"
+    for model in ("deepseek-ai/DeepSeek-V4.1-Flash-1017", "Qwen/Qwen3.8-27B"):
+        stored = [r["request_body"] for r in rows if r.get("model") == model and r.get("request_body")][-3:]
+        assert stored, model
+        c = client_from_env({"NEAR_AI_API_KEY": "k", "NEAR_AI_MODEL_A": model, "NEAR_AI_BASE": base}, "A")
+        for body in stored:
+            system, user = (m["content"] for m in json.loads(body)["messages"])
+            c.complete(system, user)
+            assert SENT["chatcmpl-test1"][0] == body.encode(), model
+    for model, budget in (("Qwen/Qwen3.6-35B-A3B-FP8", 1800), ("z-ai/glm-5.3-flash", 1600)):
+        client_from_env({"NEAR_AI_API_KEY": "k", "NEAR_AI_MODEL_A": model, "NEAR_AI_BASE": base}, "A").complete(
+            "s", "u"
+        )
+        assert json.loads(SENT["chatcmpl-test1"][0])["max_tokens"] == budget
+    assert NearAiClient("k", "Qwen/Qwen3.6-35B-A3B-FP8", base, max_tokens=50)._max_tokens == 50  # explicit wins
+    srv.shutdown()
+
+
+def test_is_stub_model_matches_a_whole_segment():
+    # same cases as web/app/__tests__/cells.test.ts isStubModel
+    assert is_stub_model(StubClient.model_id)
+    for m in ("stub", "stub/x", "redteam/stub", "org/stub/v2"):
+        assert is_stub_model(m), m
+    for m in ("stubborn-model", "acme/stubborn-model", "acme/model-stub", "Qwen/Qwen3.8-27B", "", None):
+        assert not is_stub_model(m), m
+
+
 def test_env_picks_per_side_model_and_stub_without_key():
     assert client_from_env({}, "A").model_id == "stub/deterministic"
     b = client_from_env({"NEAR_AI_API_KEY": "k", "NEAR_AI_MODEL": "x/default"}, "B")
     assert b.model_id == "x/default"
+
+
+def test_stub_sides_follow_the_agent_label_so_a_stub_duel_is_decided():
+    a, b = client_from_env({}, "A"), client_from_env({}, "B")
+    for user in ("NEAR/USD last 3.66. Duel just opened.", "NEAR/USD last 3.67. Move since duel open: +27.3 bps."):
+        da, db = (json.loads(c.complete("sys", user).text)["direction"] for c in (a, b))
+        assert {da, db} == {"long", "short"}
+        assert json.loads(a.complete("other system", user).text)["direction"] == da, "deterministic per prompt"
+    assert StubClient().complete("s", "u").text == StubClient("").complete("s", "u").text

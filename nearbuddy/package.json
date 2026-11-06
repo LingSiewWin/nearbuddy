@@ -9,7 +9,7 @@
     "api": "bun packages/resource-server/src/index.ts",
     "solver": "bun packages/solver/src/index.ts",
     "demo": "bun packages/demo/src/index.ts",
-    "test": "bun test packages/protocol/src packages/solver/src",
+    "test": "bun test packages/protocol/src packages/solver/src packages/demo/src analysis",
     "lint": "biome check .",
     "format": "biome format --write .",
     "web": "bun --cwd web dev",
@@ -18,7 +18,10 @@
     "real-swap": "bun packages/demo/src/swap.ts",
     "spectator": "bun packages/demo/src/spectator.ts",
     "join": "bun packages/demo/src/join.ts",
-    "status": "scripts/arena-status.sh"
+    "status": "scripts/arena-status.sh",
+    "e2e": "bun e2e/run.ts",
+    "verify-duel": "bun analysis/verify_duel.ts",
+    "readout": "agents/.venv/bin/python analysis/night_readout.py"
   },
   "dependencies": {
     "borsh": "2.0.0",

@@ -11,7 +11,8 @@ run ts-types     bun x tsc --noEmit -p .
 run ts-lint      bun run lint  # lockfile biome; a missing devDependency fails instead of fetching an unrelated "biome" package
 run ts-tests     bun run test
 run web-types    bash -c 'cd web && bun x tsc --noEmit -p .'
-run py-lint      bash -c 'cd agents && .venv/bin/ruff check . ../analysis'
+run web-tests    bash -c 'cd web && bun test app'
+run py-lint      bash -c 'cd agents && .venv/bin/ruff check . ../analysis && .venv/bin/ruff format --check . ../analysis'
 run py-tests     bash -c 'NEAR_AI_API_KEY= agents/.venv/bin/python -m pytest -q agents/tests'
 run rs-fmt       bash -c 'cd arena && cargo fmt --check'
 run rs-clippy    bash -c 'cd arena && cargo clippy --all-targets -- -D warnings'

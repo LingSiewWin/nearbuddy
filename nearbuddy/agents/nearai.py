@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -36,15 +37,36 @@ class Completion:
         return hashlib.sha256(self.response_bytes).digest()
 
 
+def message_text(response: dict[str, Any]) -> str:
+    """The text the duelist parses from a chat completion response. Reasoning models may spend the budget thinking
+    and leave `content` empty; the JSON decision is then usually at the end of the reasoning text."""
+    msg = response["choices"][0]["message"]
+    return msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
+
+
+STUB_MODEL = re.compile(r"(^|/)stub(/|$)")
+
+
+def is_stub_model(model_id: str | None) -> bool:
+    """A stub agent, not a model: `stub` as a whole path segment (`stub/deterministic`, `redteam/stub`), so a real
+    model named e.g. `stubborn-model` is not one. Same rule as `isStubModel` in web/app/cells.ts."""
+    return bool(model_id) and STUB_MODEL.search(model_id) is not None
+
+
 class StubClient:
-    """Deterministic: direction follows the last digit of sha256(user prompt)."""
+    """Deterministic: direction follows the parity of the last byte of sha256(user prompt) plus the byte sum of
+    `label`. Both duelists see the same prompt, so without the label every stub duel ties; with labels "A" and "B"
+    (sums 65 and 66) the two always take opposite sides and every stub duel has a winner and a slash."""
 
     model_id = "stub/deterministic"
     tee = False
 
+    def __init__(self, label: str = "") -> None:
+        self.label = label
+
     def complete(self, system: str, user: str) -> Completion:
         d = hashlib.sha256(user.encode()).digest()[-1]
-        direction = "long" if d % 2 == 0 else "short"
+        direction = "long" if (d + sum(self.label.encode())) % 2 == 0 else "short"
         return Completion(json.dumps({"direction": direction, "reasoning": f"stub call #{d}"}), None, self.model_id)
 
     def signature(self, chat_id: str) -> dict[str, Any] | None:
@@ -54,10 +76,32 @@ class StubClient:
         return None
 
 
+DEFAULT_MAX_TOKENS = 600  # pair 1 (DeepSeek-V4.1-Flash, Qwen3.8-27B): keep it, their request bytes must not change
+# Reasoning models that spend 600 tokens thinking before the JSON. Measured on the arena prompt 2026-11-06: Qwen3.6
+# ran to the cap on 9/14 live calls and used up to 899 tokens uncapped; GLM-5.3-flash used up to 810 under attack.
+# About twice the largest observed completion; tokens are billed as used, so the cap costs only on the long tail.
+MAX_TOKENS = {"Qwen/Qwen3.6-35B-A3B-FP8": 1800, "z-ai/glm-5.3-flash": 1600}
+
+
+def request_body(model_id: str, system: str, user: str, max_tokens: int | None = None) -> bytes:
+    """The exact chat-completion request bytes the enclave signs. One builder for the client, the dataset verifier
+    and the tests, so a body with any other field (temperature, logit_bias, another max_tokens) never verifies."""
+    payload = {
+        "model": model_id,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "max_tokens": max_tokens or MAX_TOKENS.get(model_id, DEFAULT_MAX_TOKENS),
+        # streaming responses are re-chunked by the gateway; the model enclave signs only the exact bytes
+        "stream": False,
+    }
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
 class NearAiClient:
     tee = True
 
-    def __init__(self, api_key: str, model_id: str, base_url: str = NEAR_AI_BASE, max_tokens: int = 600) -> None:
+    def __init__(
+        self, api_key: str, model_id: str, base_url: str = NEAR_AI_BASE, max_tokens: int | None = None
+    ) -> None:
         self.model_id = model_id
         self._base = base_url.rstrip("/")
         self._headers = {
@@ -65,25 +109,14 @@ class NearAiClient:
             "Content-Type": "application/json",
             "accept": "application/json",
         }
-        self._max_tokens = max_tokens
+        self._max_tokens = max_tokens or MAX_TOKENS.get(model_id, DEFAULT_MAX_TOKENS)
 
     def complete(self, system: str, user: str) -> Completion:
-        payload = {
-            "model": self.model_id,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "max_tokens": self._max_tokens,
-            # streaming responses are re-chunked by the gateway; the model enclave signs only the exact bytes
-            "stream": False,
-        }
-        body = json.dumps(payload, separators=(",", ":")).encode()
+        body = request_body(self.model_id, system, user, self._max_tokens)
         r = requests.post(f"{self._base}/chat/completions", headers=self._headers, data=body, timeout=180)
         r.raise_for_status()
         j = r.json()
-        msg = j["choices"][0]["message"]
-        # reasoning models may spend the budget thinking and leave `content` empty; the JSON decision is
-        # then usually at the end of the reasoning text, which parse_decision scans for
-        text = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
-        return Completion(text, j.get("id"), j.get("model", self.model_id), body, r.content)
+        return Completion(message_text(j), j.get("id"), j.get("model", self.model_id), body, r.content)
 
     def signature(self, chat_id: str, attempts: int = 6) -> dict[str, Any] | None:
         """The enclave signature record. A model runs on several TEE nodes and the record lives on the one
@@ -125,7 +158,7 @@ def client_from_env(env: Mapping[str, str], which: str = "") -> ModelClient:
     TEE-hosted models (e.g. deepseek-ai/DeepSeek-V4.1-Flash-1017 vs Qwen/Qwen3.8-27B). No key = stub."""
     key = env.get("NEAR_AI_API_KEY", "").strip()
     if not key:
-        return StubClient()
+        return StubClient(which)
     model = env.get(f"NEAR_AI_MODEL_{which}", "").strip() or env.get(
         "NEAR_AI_MODEL", "deepseek-ai/DeepSeek-V4.1-Flash-1017"
     )

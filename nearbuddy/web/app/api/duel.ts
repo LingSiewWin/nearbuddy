@@ -4,12 +4,13 @@
 // is throttled. `duelSummary()` is the v1 shape: human units, both sides, the attacks, the decisions with
 // reasoning from the published dataset, and the duel's events when they are still on the live tape.
 import { proven } from "../cells";
+import { NET } from "../network";
 import { type Agent, type Duel, type Intent, ms, nearOf, snapshot, symbolOf, usd, ZERO } from "./arena";
 import { attackText, getDecisions } from "./dataset";
 import { ARENA, RPC, viewOn } from "./near";
 import { tape } from "./tape";
 
-const ORACLE = process.env.ORACLE_ACCOUNT ?? "price-oracle.testnet";
+const ORACLE = process.env.ORACLE_ACCOUNT ?? NET.oracle;
 const TTL = 20_000;
 const view = viewOn(ARENA);
 export const ID_RE = /^\d{1,12}$/;

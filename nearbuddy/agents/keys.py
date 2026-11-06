@@ -34,6 +34,12 @@ def agent_key(name: str, tee: bool, tag: str = "") -> SigningKey:
     return SigningKey(hashlib.sha256(raw + (b"tee" if tee else b"") + tag.encode()).digest())
 
 
+def key_tag(pair_tag: str, swap: bool) -> str:
+    """The `agent_key` tag of a pair: "" or "swap" for the main pair (its keys never change), "pair:<tag>:" plus the
+    same suffix for a tagged pair. The prefix keeps every tagged pair apart from the main pair and from each other."""
+    return (f"pair:{pair_tag}:" if pair_tag else "") + ("swap" if swap else "")
+
+
 def register_sig(sk: SigningKey, owner: str) -> str:
     """Proof of key possession for `register_agent`: ed25519 over `"nearbuddy-register-v1" || owner`."""
     return base64.b64encode(sk.sign(REGISTER_DOMAIN + owner.encode()).signature).decode()

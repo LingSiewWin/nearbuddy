@@ -2023,3 +2023,58 @@ fn commit_and_consent_views_return_the_signed_bytes() {
     assert!(m.ends_with(&CLOSE.to_le_bytes()));
     assert_eq!(m.len(), 17 + 13 + 32 + 32 + 9 + 8);
 }
+
+fn open_consented_until(
+    c: &mut Contract,
+    ska: &SigningKey,
+    skb: &SigningKey,
+    close_at: u64,
+) -> u64 {
+    let msg = |close| {
+        consent_bytes(
+            &CONTRACT.parse().unwrap(),
+            &key(1).1,
+            &key(2).1,
+            "wrap.near",
+            close,
+        )
+    };
+    let (sa, sb) = (ska.sign(&msg(close_at)), skb.sign(&msg(close_at)));
+    ctx(OPERATOR, ORACLE_DEPOSIT + NEAR / 10);
+    c.open_duel_consented(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "wrap.near".into(),
+        U64(close_at),
+        Base64VecU8(sa.to_bytes().to_vec()),
+        Base64VecU8(sb.to_bytes().to_vec()),
+    )
+    .0
+}
+
+#[test]
+#[should_panic(expected = "duel too long")]
+fn consented_duel_that_never_closes_is_refused() {
+    // A duel closing near u64::MAX would never resolve or void and would freeze every admin
+    // setter guarded by "duels open".
+    let (mut c, ska, skb) = setup();
+    open_consented_until(&mut c, &ska, &skb, u64::MAX - 1);
+}
+
+#[test]
+fn consented_duel_of_exactly_the_cap_opens() {
+    let (mut c, ska, skb) = setup();
+    ctx(OPERATOR, 0);
+    let now = env::block_timestamp();
+    let d = open_consented_until(&mut c, &ska, &skb, now + MAX_DUEL_NS);
+    assert_eq!(c.get_duel(U64(d)).unwrap().close_at.0, now + MAX_DUEL_NS);
+}
+
+#[test]
+#[should_panic(expected = "duel too long")]
+fn consented_duel_one_ns_past_the_cap_is_refused() {
+    let (mut c, ska, skb) = setup();
+    ctx(OPERATOR, 0);
+    let now = env::block_timestamp();
+    open_consented_until(&mut c, &ska, &skb, now + MAX_DUEL_NS + 1);
+}

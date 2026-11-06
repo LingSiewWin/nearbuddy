@@ -74,9 +74,9 @@ const post = async <T>(path: string, body: unknown): Promise<T> => {
 };
 
 /** The contract's NEP-297 events in a transaction's receipt tree. */
-const events = (t: TxDetail) =>
+const events = (t: TxDetail, arena: string) =>
   t.receipts
-    .filter((r) => r.receipt.receiver_id === ARENA)
+    .filter((r) => r.receipt.receiver_id === arena)
     .flatMap((r) => r.execution_outcome.outcome.logs)
     .filter((l) => l.startsWith("EVENT_JSON:"))
     .map((l) => {
@@ -90,7 +90,8 @@ const events = (t: TxDetail) =>
 
 const num = (v: unknown) => (v == null ? null : Number(v));
 
-export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
+/** `arena` is the contract whose receipts count (any contract can log an EVENT_JSON with our standard). */
+export function decode(meta: AccountTx, t: TxDetail, arena = ARENA): ArenaEvent {
   const base: Base = {
     tx: meta.transaction_hash,
     at: Math.floor(Number(meta.tx_block_timestamp) / 1e6),
@@ -104,7 +105,7 @@ export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
   try {
     args = JSON.parse(Buffer.from(fc.args, "base64").toString("utf8"));
   } catch {}
-  const ev = events(t);
+  const ev = events(t, arena);
   const find = (name: string) => ev.find((e) => e.event === name)?.data;
   switch (fc.method_name) {
     case "post_intent":
@@ -150,7 +151,7 @@ export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
       const o = find("open_price");
       // open_duel returns the new id; it is the only source when the oracle's open_price log has not landed
       const ret = t.receipts.find(
-        (r) => r.receipt.receiver_id === ARENA && "SuccessValue" in (r.execution_outcome.outcome.status ?? {}),
+        (r) => r.receipt.receiver_id === arena && "SuccessValue" in (r.execution_outcome.outcome.status ?? {}),
       )?.execution_outcome.outcome.status?.SuccessValue;
       let returned: number | null = null;
       try {

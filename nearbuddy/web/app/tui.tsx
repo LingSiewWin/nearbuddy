@@ -4,13 +4,17 @@
 // (tui.css), so the text stays readable on a phone at the cost of the right border.
 import type { ReactNode } from "react";
 import "./tui.css";
+import { NETWORK_ID, NETWORKS, type NetworkId } from "./network";
+
+// Client components read NEXT_PUBLIC_NEAR_NETWORK, derived from NEAR_NETWORK in next.config.ts; see network.ts.
+export { NET, NETWORK_ID } from "./network";
 
 export const W = 112;
 const KEY = 16; // label column
 const VW = W - KEY - 5; // value column: W minus "│ ", label, " ", " │"
 export const NEAR = 10n ** 24n;
 export const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-export const TAMPER_TX = "4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt"; // flipped-byte proof refused on chain (README)
+export const TAMPER_TX = "4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt"; // flipped-byte proof refused on testnet (README); linked to testnet on every network
 
 export const near = (y: string | null | undefined, d = 3) => {
   if (!y) return "-";
@@ -170,23 +174,17 @@ export const meter = (parts: [number, string][], total: number, width = 30): Cel
   return segs;
 };
 
-const explorer = (net: "testnet" | "mainnet" = "testnet") =>
-  net === "testnet" ? "https://testnet.nearblocks.io" : "https://nearblocks.io";
-export const txHref = (tx: string, net?: "testnet" | "mainnet") => `${explorer(net)}/txns/${tx}`;
-export const addrHref = (acct: string, net?: "testnet" | "mainnet") => `${explorer(net)}/address/${acct}`;
+const explorer = (net: NetworkId = NETWORK_ID) => NETWORKS[net].explorer;
+export const txHref = (tx: string, net?: NetworkId) => `${explorer(net)}/txns/${tx}`;
+export const addrHref = (acct: string, net?: NetworkId) => `${explorer(net)}/address/${acct}`;
 export const agentHref = (pk: string) => `/agent/${encodeURIComponent(pk)}`;
 export const duelHref = (id: string | number) => `/duel/${id}`;
-export const blockHref = (height: string, net?: "testnet" | "mainnet") => `${explorer(net)}/blocks/${height}`;
+export const blockHref = (height: string, net?: NetworkId) => `${explorer(net)}/blocks/${height}`;
 export const REPO = "https://github.com/LingSiewWin/nearbuddy";
 
 /** `row()` with a tx hash rendered as a nearblocks link; padding and border stay intact. */
-export const linkRow = (
-  k: string,
-  before: string,
-  tx: string,
-  after: string,
-  net: "testnet" | "mainnet" = "testnet",
-): ReactNode => rowx(k, [before, { t: short(tx, 10), href: txHref(tx, net), title: tx }, after]);
+export const linkRow = (k: string, before: string, tx: string, after: string, net: NetworkId = NETWORK_ID): ReactNode =>
+  rowx(k, [before, { t: short(tx, 10), href: txHref(tx, net), title: tx }, after]);
 
 /** JSON from one of our api routes; a non-JSON body (a framework 500 page) or an `error` field becomes a short Error. */
 export async function getJson<T>(url: string): Promise<T> {

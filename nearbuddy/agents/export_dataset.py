@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import sys
 from collections import Counter
@@ -23,11 +24,16 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import ATTEST_DIR, DATA, network_file  # noqa: E402
+from duelist import FULL_SIZE_BPS, DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
+from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, message_text, request_body  # noqa: E402
+from prompts import SIZER, VARIANT_D, sizer_user, user_bc  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-SRC = HERE / "data" / "decisions.jsonl"
-OUT = HERE.parent / "dataset"  # tracked snapshot: judges and researchers read it from the repo
+SRC = DATA
+# tracked snapshot (dataset-mainnet/ on mainnet): judges and researchers read it from the repo
+OUT = network_file(HERE.parent / "dataset")
 HUB_REPO = "NekoRobbin/nearbuddy-arena-duels"
 SOURCE = "https://github.com/LingSiewWin/nearbuddy"
 FIRST_ORACLE_DUEL = 257  # duels 0-256 were resolved with the operator's oracle key (before deploy 7)
@@ -41,7 +47,34 @@ FIELDS: list[tuple[str, str, str]] = [
     (
         "prompt_variant",
         "string \\| null",
-        "Prompt arm: `naive`, `hardened`, or experiment arm `A`/`B`/`C`; null on rows older than the field.",
+        "Prompt arm: `naive`, `hardened`, or experiment arm `A`/`B`/`C`/`D`; null on rows older than the field.",
+    ),
+    (
+        "open_px",
+        "int \\| null",
+        "Duel open price (1e8 fixed point) the brief's move since open is measured from; null on older rows.",
+    ),
+    (
+        "open_source",
+        "string \\| null",
+        "`oracle` when the brief used the duel's oracle open price, `spot` when the oracle had not answered "
+        "within 20 s and the runner used its own spot; null on older rows. Attacks on `spot` briefs are left "
+        "unclassified by against/with analysis.",
+    ),
+    (
+        "arm_d",
+        "struct \\| null",
+        "Arm D only: `{side_call, size_call, proof_call, size_bps, size_asked, size_note}`. `side_call` saw no "
+        "telemetry and fixed the side; `size_call` (null when unattacked) read the telemetry and could only lower "
+        "`size_bps`. Each call carries `{text, chat_id, request_body, response_body, request_hash, response_hash, "
+        "signature_record, tee}`. `proof_call` names the call the top-level bytes and the intent's proof are; the "
+        "size call's request quotes the side and `sha256(side_call.text)`.",
+    ),
+    (
+        "pair_tag",
+        "string \\| null",
+        "Which agent pair played (`runner.py --pair-tag`): null for the main pair, e.g. `p2` for the second loop's "
+        "models; pairs never share an agent key.",
     ),
     ("brief", "string \\| null", "The market brief the model saw (price and move since duel open)."),
     (
@@ -102,52 +135,235 @@ FIELDS: list[tuple[str, str, str]] = [
 ]
 
 # Runs as-is in tests/test_export_dataset.py against real rows; keep it equivalent to check_row.
-VERIFY_SNIPPET = '''import base64
+_SNIPPET = r'''import base64
 import hashlib
+import json
+import re
 
 from nacl.signing import VerifyKey  # pip install pynacl
 
+# arm D: the side call's system prompt (format with the symbol), and the head of the size call's user message,
+# which quotes the brief, the side it sizes and sha256 of the side call's output before the telemetry
+ARM_D_SYSTEM = __ARM_D_SYSTEM__
+SIZER_SYSTEM = __SIZER_SYSTEM__
+FULL_SIZE_BPS = __FULL_SIZE_BPS__
+# max_tokens the runner's client sends per model; any other request field or value is not the runner's call
+MAX_TOKENS = __MAX_TOKENS__
+DEFAULT_MAX_TOKENS = __DEFAULT_MAX_TOKENS__
+SIZE_HEAD = re.compile(
+    r"\[ORACLE\]\n(.*?)\n\[/ORACLE\]\n\n\[POSITION\]\nside: (LONG|SHORT)\nfull_size_bps: \d+\n"
+    r"side_call_sha256: ([0-9a-f]{64})\n\[/POSITION\]\n\n\[TELEMETRY\]\n",
+    re.DOTALL,
+)
 
-def verify(row: dict) -> str:
-    """'ok' when the bytes, the enclave signature and the on-chain proof_hash agree; else the failed check."""
-    if not row.get("request_body") or not row.get("response_body"):
+
+def verify_call(call: dict, model: str) -> str:
+    """'ok' when one completion's bytes, stored hashes and enclave signature agree; else the failed check."""
+    if not call.get("request_body") or not call.get("response_body"):
         return "no tee bytes"
-    req = hashlib.sha256(row["request_body"].encode()).digest()
-    res = hashlib.sha256(row["response_body"].encode()).digest()
-    if (req.hex(), res.hex()) != (row["request_hash"], row["response_hash"]):
+    req = hashlib.sha256(call["request_body"].encode()).hexdigest()
+    res = hashlib.sha256(call["response_body"].encode()).hexdigest()
+    if (req, res) != (call["request_hash"], call["response_hash"]):
         return "stored hash differs from bytes"
-    rec = row.get("signature_record")
+    rec = call.get("signature_record")
     if not rec:
         return "no signature record"
-    body = f"{req.hex()}:{res.hex()}"
-    text = body if rec["signature_kind"] == "gateway" else f"{row['model']}:{body}"
+    text = f"{req}:{res}" if rec["signature_kind"] == "gateway" else f"{model}:{req}:{res}"
     if rec["text"] != text:
         return "record text differs from bytes"
     signer = bytes.fromhex(rec["signing_address"].removeprefix("0x"))
     VerifyKey(signer).verify(text.encode(), bytes.fromhex(rec["signature"].removeprefix("0x")))  # raises if forged
+    return "ok"
+
+
+def direction(text: str) -> str | None:
+    """'Long' / 'Short' from a decision's JSON, as the runner parsed it; None when there is none."""
+    m = re.search(r"\{.*\}", text or "", re.DOTALL)
+    try:
+        token = str(json.loads(m.group(0)).get("direction", "")).strip().lower() if m else ""
+    except (ValueError, AttributeError):
+        token = ""
+    if token in ("long", "buy", "up", "+1", "1"):
+        return "Long"
+    return "Short" if token in ("short", "sell", "down", "-1") else None
+
+
+def messages(call: dict) -> list:
+    return [(m["role"], m["content"]) for m in json.loads(call["request_body"])["messages"]]
+
+
+def client_body(model: str, system: str, user: str) -> str:
+    """The exact request body the runner's NEAR AI client sends for this prompt."""
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    max_tokens = MAX_TOKENS.get(model, DEFAULT_MAX_TOKENS)
+    payload = {"model": model, "messages": msgs, "max_tokens": max_tokens, "stream": False}
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def verify(row: dict) -> str:
+    """'ok' when the bytes, the enclave signature and the on-chain proof_hash agree (for arm D also the side call
+    and its link to the posted intent); else the failed check."""
+    note = verify_call(row, row["model"])
+    if note != "ok":
+        return note
+    req, res = bytes.fromhex(row["request_hash"]), bytes.fromhex(row["response_hash"])
     if row["intent"]["proof_hash"] != base64.b64encode(hashlib.sha256(req + res).digest()).decode():
         return "proof_hash differs"
+    d = row.get("arm_d")
+    if not d:
+        return "ok"
+    side = d["side_call"]
+    note = verify_call(side, row["model"])
+    if note != "ok":
+        return f"arm_d side call: {note}"
+    if side["signature_record"]["signing_address"] != row["signature_record"]["signing_address"]:
+        return "arm_d signer differs"
+    msg = json.loads(side["response_body"])["choices"][0]["message"]
+    if side["text"] != (msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""):
+        return "arm_d side text differs from bytes"
+    if direction(side["text"]) != row["intent"]["side"]:
+        return "arm_d side call direction differs"
+    oracle_only = [
+        ("system", ARM_D_SYSTEM.format(symbol=row["brief"].split(" ", 1)[0].upper())),
+        ("user", f"[ORACLE]\n{row['brief']}\n[/ORACLE]"),
+    ]
+    if messages(side) != oracle_only:
+        return "arm_d side request is not oracle-only"
+    if side["request_body"] != client_body(row["model"], *(content for _, content in oracle_only)):
+        return "arm_d side request is not the client's body"
+    proof = side if d["proof_call"] == "side" else d["size_call"]
+    if (proof["request_hash"], proof["response_hash"]) != (row["request_hash"], row["response_hash"]):
+        return "arm_d proof call differs"
+    if d["proof_call"] == "size":
+        head = SIZE_HEAD.match(messages(row)[-1][1])
+        if not head:
+            return "arm_d size request malformed"
+        if head.group(1) != row["brief"]:
+            return "arm_d size call brief differs"
+        if head.group(3) != hashlib.sha256(side["text"].encode()).hexdigest():
+            return "arm_d digest differs"
+        if head.group(2) != row["intent"]["side"].upper():
+            return "arm_d side differs"
+        position = f"side: {head.group(2)}\nfull_size_bps: {FULL_SIZE_BPS}\nside_call_sha256: {head.group(3)}"
+        user = (
+            f"[ORACLE]\n{row['brief']}\n[/ORACLE]\n\n[POSITION]\n{position}\n[/POSITION]\n\n"
+            f"[TELEMETRY]\n{row['injection']}\n[/TELEMETRY]"
+        )
+        symbol = row["brief"].split(" ", 1)[0].upper()
+        if row["request_body"] != client_body(row["model"], SIZER_SYSTEM.format(symbol=symbol), user):
+            return "arm_d size request is not the client's body"
     return "ok"
 '''
+VERIFY_SNIPPET = (
+    _SNIPPET.replace("__ARM_D_SYSTEM__", repr(VARIANT_D))
+    .replace("__SIZER_SYSTEM__", repr(SIZER))
+    .replace("__FULL_SIZE_BPS__", repr(FULL_SIZE_BPS))
+    .replace("__MAX_TOKENS__", repr(MAX_TOKENS))
+    .replace("__DEFAULT_MAX_TOKENS__", repr(DEFAULT_MAX_TOKENS))
+)
+
+# Head of arm D's size-call user message (prompts.sizer_user): brief, quoted side and side digest, before the
+# telemetry. Anchored at the start, so a [POSITION] block an attacker writes into the telemetry is never read.
+SIZE_HEAD = re.compile(
+    r"\[ORACLE\]\n(.*?)\n\[/ORACLE\]\n\n\[POSITION\]\nside: (LONG|SHORT)\nfull_size_bps: \d+\n"
+    r"side_call_sha256: ([0-9a-f]{64})\n\[/POSITION\]\n\n\[TELEMETRY\]\n",
+    re.DOTALL,
+)
+
+
+def _check_call(c: dict, model: str) -> str:
+    """'ok' when one completion's bytes, stored hashes and enclave record agree; else the first failed check."""
+    if not c.get("request_body") or not c.get("response_body"):
+        return "no tee bytes"
+    req = hashlib.sha256(c["request_body"].encode()).digest()
+    res = hashlib.sha256(c["response_body"].encode()).digest()
+    if req.hex() != c.get("request_hash") or res.hex() != c.get("response_hash"):
+        return "stored hash differs from bytes"
+    rec = c.get("signature_record")
+    if not rec:
+        return "no signature record"
+    try:
+        tee_proof(rec, model, req, res)  # text, kind, ed25519 signature under signing_address
+    except (TeeProofError, KeyError, ValueError, TypeError) as exc:
+        return f"enclave record: {type(exc).__name__}: {str(exc)[:80]}"
+    return "ok"
+
+
+def _messages(c: dict) -> list[tuple[str, str]]:
+    return [(m["role"], m["content"]) for m in json.loads(c["request_body"])["messages"]]
+
+
+def _check_arm_d(r: dict) -> str:
+    """Arm D. The side call verifies under the same enclave signer; its stored text is what its signed response
+    says; its own decision is the posted side; its signed request is exactly the oracle-only prompt on the row's
+    brief (no telemetry). The proof call is the row's top-level call, and the size call's signed request quotes the
+    same brief, sha256 of the side call's text and the posted side."""
+    d = r["arm_d"]
+    side = d.get("side_call") or {}
+    note = _check_call(side, r["model"])
+    if note != "ok":
+        return f"arm_d side call: {note}"
+    if side["signature_record"].get("signing_address") != r["signature_record"].get("signing_address"):
+        return "arm_d signer differs"
+    try:
+        if side.get("text") != message_text(json.loads(side["response_body"])):
+            return "arm_d side text differs from bytes"
+    except (ValueError, KeyError, IndexError, TypeError):
+        return "arm_d side text differs from bytes"
+    try:
+        chose = "Long" if parse_decision(side["text"]).direction > 0 else "Short"
+    except DuelistError:
+        chose = None
+    if chose != r.get("intent", {}).get("side"):
+        return "arm_d side call direction differs"
+    brief = str(r.get("brief") or "")
+    oracle_only = [
+        ("system", VARIANT_D.format(symbol=brief.split(" ", 1)[0].upper())),
+        ("user", user_bc(brief, None)),
+    ]
+    try:
+        if _messages(side) != oracle_only:
+            return "arm_d side request is not oracle-only"
+    except (ValueError, KeyError, TypeError):
+        return "arm_d side request is not oracle-only"
+    # byte for byte what the runner's client sends: no temperature, logit_bias or other max_tokens can steer it
+    if side["request_body"].encode() != request_body(r["model"], *(content for _, content in oracle_only)):
+        return "arm_d side request is not the client's body"
+    proof = side if d.get("proof_call") == "side" else d.get("size_call") or {}
+    if (proof.get("request_hash"), proof.get("response_hash")) != (r["request_hash"], r["response_hash"]):
+        return "arm_d proof call differs"
+    if d.get("proof_call") == "size":
+        try:
+            head = SIZE_HEAD.match(_messages(r)[-1][1])
+        except (ValueError, KeyError, TypeError, IndexError):
+            head = None
+        if not head:
+            return "arm_d size request malformed"
+        if head.group(1) != brief:
+            return "arm_d size call brief differs"
+        if head.group(3) != hashlib.sha256(side["text"].encode()).hexdigest():
+            return "arm_d digest differs"
+        if head.group(2) != str(r.get("intent", {}).get("side", "")).upper():
+            return "arm_d side differs"
+        system = SIZER.format(symbol=brief.split(" ", 1)[0].upper())
+        user = sizer_user(brief, head.group(2), FULL_SIZE_BPS, head.group(3), str(r.get("injection")))
+        if r["request_body"].encode() != request_body(r["model"], system, user):
+            return "arm_d size request is not the client's body"
+    return "ok"
 
 
 def check_row(r: dict) -> tuple[bool, str]:
     """Recompute every hash the row claims with the same code the runner used. Returns (verifiable, note)."""
-    if not r.get("request_body") or not r.get("response_body"):
-        return False, "no tee bytes"
-    req = hashlib.sha256(r["request_body"].encode()).digest()
-    res = hashlib.sha256(r["response_body"].encode()).digest()
-    if req.hex() != r.get("request_hash") or res.hex() != r.get("response_hash"):
-        return False, "stored hash differs from bytes"
-    rec = r.get("signature_record")
-    if not rec:
-        return False, "no signature record"
-    try:
-        tee_proof(rec, r["model"], req, res)  # text, kind, ed25519 signature under signing_address
-    except (TeeProofError, KeyError, ValueError, TypeError) as exc:
-        return False, f"enclave record: {type(exc).__name__}: {str(exc)[:80]}"
+    note = _check_call(r, r.get("model", ""))
+    if note != "ok":
+        return False, note
+    req, res = bytes.fromhex(r["request_hash"]), bytes.fromhex(r["response_hash"])
     if r.get("intent", {}).get("proof_hash") != proof_hash(req, res):
         return False, "proof_hash differs"
+    if r.get("arm_d"):
+        note = _check_arm_d(r)
+        if note != "ok":
+            return False, note
     return True, "ok"
 
 
@@ -256,7 +472,13 @@ the same rows for the viewer, with absent keys as null.
 
 The enclave signs `"{{model}}:{{sha256(request)}}:{{sha256(response)}}"` (`provider_tee`; a `gateway` record signs
 only `"{{sha256(request)}}:{{sha256(response)}}"`). The contract accepted the intent only if that signature verified
-under a signer it pins and `intent.proof_hash == sha256(request_hash || response_hash)`. Recompute it offline:
+under a signer it pins and `intent.proof_hash == sha256(request_hash || response_hash)`. Arm D rows carry two
+calls: the contract verified the top-level one (the size call when the decision was attacked), and the snippet also
+checks `arm_d.side_call` under the same signer: its `text` is what its signed response says, its own decision is
+the posted side, and its signed request is byte for byte the body the runner's client sends for the oracle-only
+prompt on the row's `brief` (no telemetry, no sampling fields, the model's `max_tokens`). The size call's signed
+request must be the client's body too, quoting the same brief, `sha256(side_call.text)` and the posted side.
+Recompute it offline:
 
 ```python
 {VERIFY_SNIPPET}```
@@ -290,6 +512,9 @@ https://testnet.nearblocks.io and compare the posted intent with `intent`.
 - **Error rows.** Rows with `error` were not posted on chain (`tx` is null or absent). Parse failures keep `text`
   and `response_body` but no signature, so they do not verify; late rows (`duel closed`, `intent lock`) verify but
   have no on-chain intent. Leave error rows out of win-rate counts.
+- **Re-rolls are invisible.** Sampling is not deterministic, so the operator could repeat a call (in any arm, or
+  arm D's side call) until it returns a wanted answer and publish only that one. A signature proves a completion
+  happened, not that it was the only one.
 - **Small and testnet.** Few attacked rows per arm and testnet stakes; treat rates as provisional.
 
 ## Citation
@@ -321,7 +546,7 @@ def main() -> int:
     parquet = write_parquet(out_rows, OUT / "decisions.parquet")
     if not parquet:
         (OUT / "decisions.parquet").unlink(missing_ok=True)  # a stale copy would disagree with the jsonl
-    att_src = HERE / "data" / "attestations"
+    att_src = ATTEST_DIR
     if att_src.exists():
         shutil.copytree(att_src, OUT / "attestations", dirs_exist_ok=True)
     (OUT / "README.md").write_text(card(out_rows, "decisions.parquet" if parquet else "decisions.jsonl"))

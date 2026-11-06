@@ -40,6 +40,4 @@ if __name__ == "__main__":
         raise SystemExit(1)
     for name, text in VARIANTS.items():
         t = tokens(text.format(symbol="NEAR/USD"))
-        print(
-            f"variant {name}: {len(text)} chars ~ {t} tokens {'OK' if t < 350 else 'OVER 350'}"
-        )
+        print(f"variant {name}: {len(text)} chars ~ {t} tokens {'OK' if t < 350 else 'OVER 350'}")

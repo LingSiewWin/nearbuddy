@@ -1,7 +1,15 @@
 // FastNEAR tx readers behind GET /api/events, on fixture txs shaped like POST /v0/transactions bodies
 // (values from testnet duel 340, opened by open_duel). Run: `cd web && bun test app`.
 import { describe, expect, test } from "bun:test";
-import { eventsOf, opensOf, type Tx } from "../api/events/chain";
+import { eventsOf, fastnearTxApi, opensOf, type Tx } from "../api/events/chain";
+
+describe("fastnearTxApi", () => {
+  test("NEAR_NETWORK picks the host: mainnet, else testnet", () => {
+    expect(fastnearTxApi("mainnet")).toBe("https://tx.main.fastnear.com/v0");
+    expect(fastnearTxApi("testnet")).toBe("https://tx.test.fastnear.com/v0");
+    expect(fastnearTxApi(undefined)).toBe("https://tx.test.fastnear.com/v0");
+  });
+});
 
 const ARENA = "arena.nearbuddy-solver.testnet";
 type R = Tx["receipts"][number];
@@ -81,5 +89,40 @@ describe("eventsOf", () => {
       receipt("other.testnet", "post_intent", "1", [ev("intent", { duel_id: 411, agent_pk: PK })]),
     ]);
     expect(eventsOf(t, ARENA)).toEqual([]);
+  });
+});
+
+// Shaped like testnet tx 4rmFo38n: the tx-level status is SuccessReceiptId, yet the arena receipt panicked.
+describe("a failed arena receipt never counts as landed", () => {
+  const PANIC = {
+    Failure: {
+      ActionError: {
+        index: 0,
+        kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: bad tee signature" } },
+      },
+    },
+  };
+  const failed = (method: string, logs: string[], status: R["execution_outcome"]["outcome"]["status"] = PANIC) =>
+    ({
+      ...tx("4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt", [
+        receipt(ARENA, method, "1793975601000000000", logs, status),
+        receipt("nearbuddy-solver.testnet", null, "1793975602000000000"), // gas refund, succeeds
+      ]),
+      execution_outcome: { outcome: { status: { SuccessReceiptId: "7g2yQLcmmWiGVxYYveYq6ubTnpWsv4ckdGbwSYQzxAi6" } } },
+    }) as Tx;
+  const commit = ev("commit", { duel_id: 411, agent_pk: PK, commitment: "AA==" });
+  const intent = ev("intent", { duel_id: 411, agent_pk: PK, side: "Long", size_bps: 5000, nonce: 41, tee: 2 });
+
+  test("commit, reveal and post logs from a panicked receipt are dropped", () => {
+    expect(eventsOf(failed("commit_intent", [commit]), ARENA)).toEqual([]);
+    expect(eventsOf(failed("reveal_intent", [intent]), ARENA)).toEqual([]);
+    expect(eventsOf(failed("post_intent", [intent]), ARENA)).toEqual([]);
+    // the same receipts with a successful outcome of their own do count
+    expect(eventsOf(failed("reveal_intent", [intent], { SuccessValue: "" }), ARENA)).toHaveLength(1);
+    expect(eventsOf(failed("commit_intent", [commit], { SuccessReceiptId: "X" }), ARENA)).toHaveLength(1);
+  });
+  test("a panicked open is not an open, whatever the tx-level status", () => {
+    expect(opensOf(failed("open_duel_consented", []), ARENA)).toEqual([]);
+    expect(opensOf(failed("open_duel_consented", [], { SuccessValue: b64('"412"') }), ARENA)).toHaveLength(1);
   });
 });

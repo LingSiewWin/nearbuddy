@@ -10,12 +10,18 @@ import {
   type Fill,
   type FollowerQuote,
   fillCells,
+  isStubModel,
+  kindCell,
   lastFills,
   legs,
+  type Pair,
+  pairCells,
   pairingWord,
   proven,
   quoteOut,
+  shownPairs,
 } from "../cells";
+import type { EraSplit } from "../eras";
 import {
   addrHref,
   agentHref,
@@ -28,6 +34,8 @@ import {
   getJson,
   legend,
   linkRow,
+  NET,
+  NETWORK_ID,
   near,
   price8,
   REPO,
@@ -99,7 +107,16 @@ type Snap = {
   config: { next_duel: string; slash_bps: number; min_chaos_deposit: string } & CommitConfig;
   leaderboard: Agent[];
   duels: (Duel | null)[];
-  stats: { scanned: number; verified_decisions: number; attacks: number };
+  stats: { scanned: number; verified_decisions: number; attacks: number; pairs?: Pair[] };
+  // absent: lifetime only. `complete` false: some oracle-era duel is unread, so the split is not shown
+  eras?: {
+    from: number;
+    complete?: boolean;
+    unread?: number;
+    operator_duels: number;
+    oracle_duels: number;
+    by_agent: EraSplit;
+  };
   followers: Record<string, [string, Mandate][]>;
   solver: null | {
     intents: (Intent & {
@@ -113,7 +130,7 @@ type Snap = {
 };
 
 const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
-const stub = (a: Agent) => a.model_id.startsWith("stub/");
+const stub = (a: Agent) => isStubModel(a.model_id);
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
 const head = `${"#".padStart(2)}  ${"model".padEnd(32)}  ${"alpha".padStart(9)}  ${"shield".padStart(6)}  ${"bond NEAR".padStart(9)}  ${"verified".padEnd(8)}  status`;
 
@@ -121,6 +138,7 @@ export default function Arena() {
   const [s, setS] = useState<Snap | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [all, setAll] = useState(false);
+  const [lifetime, setLifetime] = useState(false);
   const [now, setNow] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -147,12 +165,29 @@ export default function Arena() {
   }, []);
 
   const lb = s?.leaderboard ?? [];
-  const shown = all ? lb : lb.filter((a) => !stub(a));
+  const eras = s?.eras;
+  // the split ranks only when complete (an unread duel would shift alpha) and when there is an operator era at all
+  const split = !!eras && eras.complete !== false && eras.from > 0;
+  const byEra = split && !lifetime;
+  // default: alpha and rank from the oracle era; the contract's leaderboard order is the lifetime order
+  const alphaOf = (a: Agent) => (byEra ? (eras?.by_agent[a.pk]?.oracle.alpha_bps ?? a.alpha_bps) : a.alpha_bps);
+  const ranked = byEra ? [...lb].sort((x, y) => alphaOf(y) - alphaOf(x) || y.shield - x.shield) : lb;
+  const shown = all ? ranked : ranked.filter((a) => !stub(a));
+  const eraTitle = (a: Agent) => {
+    const e = split ? eras?.by_agent[a.pk] : undefined;
+    return e
+      ? `duels ${eras?.from}+ ${bps(e.oracle.alpha_bps)} bps · operator era ${bps(e.operator_alpha_bps)} bps · lifetime ${bps(a.alpha_bps)} bps`
+      : `lifetime ${bps(a.alpha_bps)} bps`;
+  };
   const hidden = lb.length - shown.length;
   const duels = (s?.duels ?? []).filter((d): d is Duel => !!d);
   const live = duels.find((d) => !d.resolved && countdown(d.close_at, now));
   const txOf = new Map((s?.solver?.intents ?? []).map((i) => [`${i.agent_pk}:${i.nonce}`, i.tx]));
   const agent = (pk: string) => lb.find((x) => x.pk === pk);
+  // the newest running pairs, pair 1 = started first; [] unless 2+. Stub pairs follow the standings toggle
+  const pairs = shownPairs(s?.stats.pairs, all ? undefined : (pk) => isStubModel(agent(pk)?.model_id));
+  /** Model name without its org: "z-ai/glm-5.3-flash" → "glm-5.3-flash". */
+  const model = (pk: string) => agent(pk)?.model_id.split("/").pop() ?? short(pk, 8);
   const who = (pk: string): Cell[] => {
     const m = (agent(pk)?.model_id ?? "unregistered").slice(0, 26);
     return [
@@ -194,7 +229,7 @@ export default function Arena() {
       <pre className="wrap">
         <span className="hi">NEARBUDDY ARENA</span>{" "}
         <span className="dim">
-          · AI models duel on live prices, get attacked, get slashed, get followed · NEAR testnet
+          · AI models duel on live prices, get attacked, get slashed, get followed · NEAR {NETWORK_ID}
         </span>
         {"\n"}
         <span className="dim">
@@ -249,7 +284,11 @@ export default function Arena() {
         <span className="cursor" />
       </pre>
       <pre>
-        {boxTitle(1, "standings", "ranked by alpha, then shield")}
+        {boxTitle(
+          1,
+          "standings",
+          byEra ? `ranked by alpha from duel ${eras.from} on, then shield` : "ranked by lifetime alpha, then shield",
+        )}
         {"\n"}
         {rowx("agent", [{ t: head, c: "dim" }], "dim")}
         {"\n"}
@@ -259,7 +298,11 @@ export default function Arena() {
               { t: short(a.pk, 8), href: agentHref(a.pk), title: a.pk },
               [
                 `${String(i + 1).padStart(2)}  ${a.model_id.slice(0, 32).padEnd(32)}  `,
-                { t: `${bps(a.alpha_bps)} bps`.padStart(9), c: pnlc(a.alpha_bps) },
+                {
+                  t: `${bps(alphaOf(a))} bps`.padStart(9),
+                  c: pnlc(alphaOf(a)),
+                  title: eraTitle(a),
+                },
                 `  ${String(a.shield).padStart(6)}  ${near(a.bond).padStart(9)}  `,
                 a.tee ? { t: "enclave ", c: "ok" } : { t: "no      ", c: "unv" },
                 "  ",
@@ -275,6 +318,33 @@ export default function Arena() {
         {!shown.length ? (
           <>
             {rowx("", [{ t: s ? "no agents registered" : "loading", c: "dim" }])}
+            {"\n"}
+          </>
+        ) : null}
+        {eras ? (
+          <>
+            {rowx(
+              "era",
+              eras.complete === false
+                ? [
+                    {
+                      t: `era split incomplete (${eras.unread ?? "?"} oracle-era duels unread, retrying): lifetime alpha`,
+                      c: "warn",
+                      title: "an unread duel would move alpha into the operator-era remainder, so the ranking waits",
+                    },
+                  ]
+                : eras.from === 0
+                  ? [{ t: "every duel on this arena was scored by the TEE oracle", c: "dim" }]
+                  : [
+                      {
+                        t: byEra
+                          ? `alpha from duel ${eras.from} on (TEE oracle), ${eras.operator_duels} operator-scored duels excluded · `
+                          : `lifetime alpha, incl. ${eras.operator_duels} operator-scored duels (#0-${eras.from - 1}) · `,
+                        c: "dim",
+                      },
+                      { t: byEra ? "show lifetime" : "oracle era only", onClick: () => setLifetime(!lifetime) },
+                    ],
+            )}
             {"\n"}
           </>
         ) : null}
@@ -294,11 +364,11 @@ export default function Arena() {
         ) : null}
         {rowx({ t: "tamper test", c: "dim" }, [
           { t: "a real proof with one flipped byte was refused on chain → ", c: "dim" },
-          { t: short(TAMPER_TX, 8), href: txHref(TAMPER_TX), title: TAMPER_TX },
+          { t: short(TAMPER_TX, 8), href: txHref(TAMPER_TX, "testnet"), title: TAMPER_TX },
         ])}
         {"\n"}
         {legend(
-          "alpha = lifetime pnl, 1 bps = 0.01 % (duels 0-256 scored by the operator key, 257+ by the TEE oracle) · shield = attacks survived in won duels · bond = NEAR at stake",
+          `alpha = pnl summed over scored duels, 1 bps = 0.01 % (duels 0-256 scored by the operator key, 257+ by the TEE oracle; lifetime = both) · shield = attacks survived in won duels · bond = NEAR at stake`,
         )}
         {"\n"}
         {bottom()}
@@ -306,6 +376,12 @@ export default function Arena() {
 
         {boxTitle(2, "duels", "last 3 · newest first")}
         {"\n"}
+        {pairs.map((p, i) => (
+          <span key={`${p.a}|${p.b}`}>
+            {rowx({ t: `pair ${i + 1}`, c: "dim" }, pairCells(p, model, s?.stats.scanned))}
+            {"\n"}
+          </span>
+        ))}
         {duels.map((d) => {
           const o = d.outcome;
           const inj = d.injections;
@@ -373,7 +449,7 @@ export default function Arena() {
                   // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
                   <span key={k}>
                     {rowx(k ? "" : "attacks", [
-                      j.kind.padEnd(12),
+                      kindCell(j.kind),
                       " → ",
                       {
                         t: `${j.target === d.a ? "A" : "B"} ${(agent(j.target)?.model_id ?? short(j.target, 8)).slice(0, 24)}`,
@@ -528,12 +604,12 @@ export default function Arena() {
       <pre className="wrap">
         <span className="dim">
           contract{" "}
-          <a href={addrHref(s?.contract ?? "arena.nearbuddy-solver.testnet")} target="_blank" rel="noreferrer">
-            {s?.contract ?? "arena.nearbuddy-solver.testnet"}
+          <a href={addrHref(s?.contract ?? NET.arena)} target="_blank" rel="noreferrer">
+            {s?.contract ?? NET.arena}
           </a>{" "}
           · oracle{" "}
-          <a href={addrHref("price-oracle.testnet")} target="_blank" rel="noreferrer">
-            price-oracle.testnet
+          <a href={addrHref(NET.oracle)} target="_blank" rel="noreferrer">
+            {NET.oracle}
           </a>{" "}
           (Outlayer TEE) ·{" "}
           <a href={REPO} target="_blank" rel="noreferrer">

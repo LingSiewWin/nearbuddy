@@ -2,6 +2,7 @@
 // with the method it was opened by, and the contract's `commit` / `intent` EVENT_JSON logs with the method
 // that emitted them. No fetch, so bun test checks them on fixture txs (app/__tests__).
 import type { ChainEvent, Opened } from "../../cells";
+import { NETWORKS } from "../../network";
 
 /** The slice of a FastNEAR tx this file reads. Block timestamps are ns, a string or a (lossy) JSON number. */
 export type Tx = {
@@ -18,14 +19,25 @@ export type Tx = {
   }[];
 };
 
+/** FastNEAR tx API host for a NEAR_NETWORK value: mainnet or, by default, testnet (the `txApi` column). */
+export const fastnearTxApi = (network: string | undefined) =>
+  NETWORKS[network === "mainnet" ? "mainnet" : "testnet"].txApi;
+
 const OPEN_METHODS = new Set(["open_duel", "open_duel_consented"]);
+/** The receipt's own outcome succeeded. The tx-level status is never read: FastNEAR reports SuccessReceiptId
+ *  there even when the arena receipt panicked (tx 4rmFo38n, "bad tee signature"). */
+const succeeded = (r: Tx["receipts"][number]) => {
+  const st = r.execution_outcome.outcome.status;
+  return typeof st === "object" && st !== null && ("SuccessValue" in st || "SuccessReceiptId" in st);
+};
 const ms = (ns: string | number) => Math.floor(Number(ns) / 1e6);
 const method = (r: Tx["receipts"][number]) => {
   const a = r.receipt.receipt.Action?.actions.find((x) => typeof x === "object" && x.FunctionCall);
   return typeof a === "object" ? (a.FunctionCall?.method_name ?? null) : null;
 };
 
-/** Duel opens in one tx: an arena receipt running an open method whose return value is the new duel id. */
+/** Duel opens in one tx: an arena receipt running an open method whose own outcome is a SuccessValue holding the
+ *  new duel id (a failed receipt has no SuccessValue, whatever the tx-level status says). */
 export function opensOf(t: Tx, arena: string): Opened[] {
   return t.receipts.flatMap((r) => {
     const m = method(r);
@@ -46,7 +58,7 @@ export function opensOf(t: Tx, arena: string): Opened[] {
  *  (`reveal_intent` vs `post_intent` tells a reveal from an intent posted in the clear). */
 export function eventsOf(t: Tx, arena: string): ChainEvent[] {
   return t.receipts.flatMap((r) =>
-    r.receipt.receiver_id !== arena
+    r.receipt.receiver_id !== arena || !succeeded(r) // a failed receipt's logs never landed
       ? []
       : r.execution_outcome.outcome.logs.flatMap((log): ChainEvent[] => {
           if (!log.startsWith("EVENT_JSON:")) return [];

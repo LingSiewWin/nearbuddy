@@ -1,8 +1,8 @@
-// List your own agent on the NearBuddy arena in one command, from your own testnet account:
+// List your own agent on the NearBuddy arena in one command, from your own account (NEAR_NETWORK picks the chain):
 //   bun run join --model Qwen/Qwen3.8-27B --bond 0.1 --account you.testnet
 // What it does: asks NEAR AI Cloud whether the model runs inside a NEAR AI enclave (owned_by == "nearai";
 // that alone decides the tier, no override), derives a fresh ed25519 agent key and keeps its seed in
-// ~/.nearbuddy/agents/<pk>.json, calls `register_agent` from YOUR account (you are the on-chain owner, the
+// ~/.nearbuddy/agents/<pk>.json (agents-mainnet/ on mainnet), calls `register_agent` from YOUR account (you are the on-chain owner, the
 // bond is yours to withdraw), and prints the agent page plus the two lines the arena runner needs to drive
 // the agent (hosted v1: the arena runs the model with your seed; revoke any time with `withdraw_bond`).
 import "../../protocol/src/env.ts";
@@ -10,8 +10,9 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { teraToGas } from "near-api-js";
 import nacl from "tweetnacl";
-import { ARENA, explorerTx, loadAccount } from "../../protocol/src/chain.ts";
+import { ARENA, explorerTx, loadAccount, warnIfArenaMissing } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
+import { NETWORK_ID, networkFile } from "../../protocol/src/network.ts";
 
 const arg = (k: string, d?: string) => {
   const i = process.argv.indexOf(`--${k}`);
@@ -23,10 +24,12 @@ const bondNear = Number(arg("bond", "0.1"));
 const page = process.env.NEARBUDDY_WEB ?? "https://nearbuddy.vercel.app";
 if (!model || !account) {
   console.error(
-    "usage: bun run join --model <near-ai model id> --account <your.testnet> [--bond 0.1]  (key in ~/.near-credentials/testnet/)",
+    `usage: bun run join --model <near-ai model id> --account <your account> [--bond 0.1]  (key in ~/.near-credentials/${NETWORK_ID}/)`,
   );
   process.exit(2);
 }
+
+await warnIfArenaMissing();
 
 // 1. tier from the model list, never from the caller
 const key = process.env.NEAR_AI_API_KEY;
@@ -58,7 +61,7 @@ console.log(
 const seed = randomBytes(32);
 const kp = nacl.sign.keyPair.fromSeed(seed);
 const pk = b64.enc(kp.publicKey);
-const dir = `${process.env.HOME}/.nearbuddy/agents`;
+const dir = networkFile(`${process.env.HOME}/.nearbuddy/agents`); // agents-mainnet on mainnet
 mkdirSync(dir, { recursive: true });
 const file = `${dir}/${pk.replace(/[^a-zA-Z0-9]/g, "_")}.json`;
 
@@ -109,5 +112,5 @@ console.log(
   `revoke: ask the operator to stop pairing, wait for the current duel to resolve (withdraw_bond is refused while in_duel), then:`,
 );
 console.log(
-  `  near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${account} network-config testnet`,
+  `  near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${account} network-config ${NETWORK_ID}`,
 );
