@@ -1,6 +1,6 @@
 """Export the decision log as a research dataset anyone can verify against the chain.
 
-    .venv/bin/python export_dataset.py            # writes ../dataset/{decisions.jsonl,README.md,CITATION.cff,attestations/}
+    .venv/bin/python export_dataset.py   # writes ../dataset/{decisions.jsonl,README.md,CITATION.cff,attestations/}
 
 Each exported row keeps the exact request and response bytes of the model call, so a third party can recompute
 `sha256(request_body)`, `sha256(response_body)`, the enclave text `"{model}:{req}:{res}"`, check the ed25519
