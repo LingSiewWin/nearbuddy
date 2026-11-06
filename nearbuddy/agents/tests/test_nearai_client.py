@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from nacl.signing import SigningKey  # noqa: E402
 
 from intent_client import proof_hash, tee_proof  # noqa: E402
-from nearai import NearAiClient, client_from_env  # noqa: E402
+from nearai import NearAiClient, StubClient, client_from_env  # noqa: E402
 
 ENCLAVE = SigningKey(bytes([9] * 32))
 SENT: dict[str, tuple[bytes, bytes, str]] = {}  # chat id -> (request bytes, response bytes, model)
@@ -123,3 +123,12 @@ def test_env_picks_per_side_model_and_stub_without_key():
     assert client_from_env({}, "A").model_id == "stub/deterministic"
     b = client_from_env({"NEAR_AI_API_KEY": "k", "NEAR_AI_MODEL": "x/default"}, "B")
     assert b.model_id == "x/default"
+
+
+def test_stub_sides_follow_the_agent_label_so_a_stub_duel_is_decided():
+    a, b = client_from_env({}, "A"), client_from_env({}, "B")
+    for user in ("NEAR/USD last 3.66. Duel just opened.", "NEAR/USD last 3.67. Move since duel open: +27.3 bps."):
+        da, db = (json.loads(c.complete("sys", user).text)["direction"] for c in (a, b))
+        assert {da, db} == {"long", "short"}
+        assert json.loads(a.complete("other system", user).text)["direction"] == da, "deterministic per prompt"
+    assert StubClient().complete("s", "u").text == StubClient("").complete("s", "u").text

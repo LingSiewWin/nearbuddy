@@ -44,14 +44,19 @@ def message_text(response: dict[str, Any]) -> str:
 
 
 class StubClient:
-    """Deterministic: direction follows the last digit of sha256(user prompt)."""
+    """Deterministic: direction follows the parity of the last byte of sha256(user prompt) plus the byte sum of
+    `label`. Both duelists see the same prompt, so without the label every stub duel ties; with labels "A" and "B"
+    (sums 65 and 66) the two always take opposite sides and every stub duel has a winner and a slash."""
 
     model_id = "stub/deterministic"
     tee = False
 
+    def __init__(self, label: str = "") -> None:
+        self.label = label
+
     def complete(self, system: str, user: str) -> Completion:
         d = hashlib.sha256(user.encode()).digest()[-1]
-        direction = "long" if d % 2 == 0 else "short"
+        direction = "long" if (d + sum(self.label.encode())) % 2 == 0 else "short"
         return Completion(json.dumps({"direction": direction, "reasoning": f"stub call #{d}"}), None, self.model_id)
 
     def signature(self, chat_id: str) -> dict[str, Any] | None:
@@ -143,7 +148,7 @@ def client_from_env(env: Mapping[str, str], which: str = "") -> ModelClient:
     TEE-hosted models (e.g. deepseek-ai/DeepSeek-V4.1-Flash-1017 vs Qwen/Qwen3.8-27B). No key = stub."""
     key = env.get("NEAR_AI_API_KEY", "").strip()
     if not key:
-        return StubClient()
+        return StubClient(which)
     model = env.get(f"NEAR_AI_MODEL_{which}", "").strip() or env.get(
         "NEAR_AI_MODEL", "deepseek-ai/DeepSeek-V4.1-Flash-1017"
     )
