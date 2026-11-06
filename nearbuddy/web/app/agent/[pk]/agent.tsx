@@ -134,6 +134,7 @@ function Hero({ a }: { a: AgentData }) {
   const lost = done.filter((d) => d.result === "loss").length;
   const fooled = (lies.fell + lies.named) * 2 > lies.faced; // took the lie's side on most real tests
   const hit = a.calls.scored ? Math.round((a.calls.right / a.calls.scored) * 100) : null;
+  const upto = a.recent[0]?.duel; // its newest published call: the record above stops there
   return (
     <>
       <div className="ag-id">
@@ -226,6 +227,12 @@ function Hero({ a }: { a: AgentData }) {
           </p>
         </div>
       </div>
+      {upto ? (
+        <p className="fine ag-upto">
+          Both numbers come from the published record, which ends at <a href={duelHref(upto)}>duel {upto}</a> for this
+          agent{a.inDuel != null && a.inDuel > Number(upto) ? ` (it is in duel ${a.inDuel} now)` : ""}.
+        </p>
+      ) : null}
     </>
   );
 }

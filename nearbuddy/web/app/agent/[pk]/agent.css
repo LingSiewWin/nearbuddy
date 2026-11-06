@@ -116,6 +116,12 @@
 .ag-num.fell {
   color: var(--alarm);
 }
+.ag-upto {
+  margin-top: 22px;
+}
+.ag-upto a {
+  color: var(--dim);
+}
 .ag-nums .sub {
   font-size: 17px;
   max-width: 46ch;
