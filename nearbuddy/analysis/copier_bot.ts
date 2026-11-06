@@ -142,7 +142,9 @@ async function scanChain() {
   });
   const fresh = account_txs.map((t) => t.transaction_hash).filter((h) => !scannedTx.has(h));
   for (let i = 0; i < fresh.length; i += 20) {
-    const { transactions } = await txApi<{ transactions: Tx[] }>("/transactions", { tx_hashes: fresh.slice(i, i + 20) });
+    const { transactions } = await txApi<{ transactions: Tx[] }>("/transactions", {
+      tx_hashes: fresh.slice(i, i + 20),
+    });
     for (const t of transactions) {
       scannedTx.add(t.transaction.hash); // not-yet-indexed txs are absent here and retried next scan
       chainEvents.push(...eventsOf(t));
