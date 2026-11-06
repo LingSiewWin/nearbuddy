@@ -1,6 +1,6 @@
 """Export the decision log as a research dataset anyone can verify against the chain.
 
-    .venv/bin/python export_dataset.py            # writes data/export/{decisions.jsonl,README.md,attestations/}
+    .venv/bin/python export_dataset.py            # writes ../dataset/{decisions.jsonl,README.md,CITATION.cff,attestations/}
 
 Each exported row keeps the exact request and response bytes of the model call, so a third party can recompute
 `sha256(request_body)`, `sha256(response_body)`, the enclave text `"{model}:{req}:{res}"`, check the ed25519
@@ -22,7 +22,7 @@ from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "data" / "decisions.jsonl"
-OUT = HERE / "data" / "export"
+OUT = HERE.parent / "dataset"  # tracked snapshot: judges and researchers read it from the repo
 
 
 def check_row(r: dict) -> tuple[bool, str]:
