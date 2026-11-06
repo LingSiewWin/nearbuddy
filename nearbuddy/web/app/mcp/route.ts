@@ -10,7 +10,8 @@ import { datasetBuilt, decisionBytes, getDecisions } from "../api/dataset";
 import { duelSummary } from "../api/duel";
 import { ARENA, json, jsonBody } from "../api/near";
 import { tape } from "../api/tape";
-import { NET } from "../network";
+import { followArgs, nearUsd, priceFloor } from "../lib/follow";
+import { NET, NETWORK_ID } from "../network";
 import { CHAIN } from "../ui/format";
 
 const MODERN = "2026-07-28";
@@ -26,7 +27,7 @@ const INSTRUCTIONS =
 
 // ---------- tools ----------
 type Prop = {
-  type: "string" | "integer" | "boolean";
+  type: "string" | "integer" | "number" | "boolean";
   description: string;
   pattern?: string;
   minimum?: number;
@@ -72,14 +73,66 @@ function invalid(s: Schema, a: Args): string | null {
     const v = a[k];
     if (v === undefined) continue;
     const ok =
-      p.type === "integer"
-        ? Number.isInteger(v) && (v as number) >= (p.minimum ?? -Infinity) && (v as number) <= (p.maximum ?? Infinity)
+      p.type === "integer" || p.type === "number"
+        ? (p.type === "integer" ? Number.isInteger(v) : typeof v === "number" && Number.isFinite(v)) &&
+          (v as number) >= (p.minimum ?? -Infinity) &&
+          (v as number) <= (p.maximum ?? Infinity)
         : p.type === "boolean"
           ? typeof v === "boolean"
           : typeof v === "string" && (!p.pattern || new RegExp(p.pattern).test(v));
     if (!ok) return `${k} must be ${p.description}`;
   }
   return null;
+}
+
+/** The deposit and follow calls that make the caller follow one enclave-verified agent, with deploy 15's price
+ *  floor taken from NEAR's Coinbase price now. Nothing is signed or sent here: the agent signs them itself. */
+async function followTransaction(a: Args) {
+  const pk = a.pk as string;
+  const agent = (await snapshot()).leaderboard.find((x) => x.pk === pk) ?? fail("no agent with that key");
+  if (!agent.tee) fail("its calls are not enclave-verified, and the contract refuses to let anyone follow it");
+  const capNear = (a.cap_near as number | undefined) ?? 0.2;
+  const allowanceNear = (a.allowance_near as number | undefined) ?? 1;
+  const days = (a.days as number | undefined) ?? 7;
+  if (capNear > allowanceNear) fail("cap_near must not exceed allowance_near");
+  const price = (await nearUsd()) ?? fail("Coinbase did not answer, so there is no price floor yet; try again shortly");
+  const floor = priceFloor(price);
+  const args = followArgs(pk, { capNear, allowanceNear, days, floor, now: Date.now() });
+  const cli = (method: string, json: unknown, near: number) =>
+    `near contract call-function as-transaction ${ARENA} ${method} ` +
+    `${json ? `json-args '${JSON.stringify(json)}'` : "empty-args"} prepaid-gas '30 Tgas' ` +
+    `attached-deposit '${near} NEAR' sign-as <your account> network-config ${NETWORK_ID} sign-with-keychain send`;
+  return {
+    contract: ARENA,
+    network: NETWORK_ID,
+    agent: pk,
+    model: agent.model_id,
+    price_floor: {
+      near_usd: price,
+      source: "Coinbase NEAR-USD, last trade",
+      keep_pct: 95,
+      min_out_per_near: floor,
+      unit: "USDC units (6 decimals) a fill must return per NEAR sold; the contract refuses 0",
+    },
+    calls: [
+      {
+        step: 1,
+        method: "deposit",
+        args: {},
+        attach_near: allowanceNear,
+        why: "funds your vault; withdraw returns it",
+      },
+      {
+        step: 2,
+        method: "follow",
+        args,
+        attach_near: 0,
+        why: "a spending limit, not a transfer: each fill stays under the cap, the allowance, the expiry and the floor",
+      },
+    ],
+    near_cli: [cli("deposit", null, allowanceNear), cli("follow", args, 0)],
+    stop: { method: "unfollow", args: { agent_pk: pk }, attach_near: 0 },
+  };
 }
 
 /** Standings ranked by how hard each agent is to fool, with a templated plain-English pick. */
@@ -148,7 +201,7 @@ async function whichAgentToFollow() {
           ? `; over its last ${r.window} duels it won ${r.won}, lost ${r.lost} and tied ${r.tied}, too few for the return to say much.`
           : "; it has no resolved duel among the recent ones."),
       `To follow it, deposit NEAR to your vault and call follow on ${ARENA} with a mandate (per-fill cap, ` +
-        "allowance, allowed tokens, expiry).",
+        "allowance, allowed tokens, expiry, price floor); follow_transaction builds both calls.",
     ]
       .filter(Boolean)
       .join(" ");
@@ -273,6 +326,25 @@ const TOOLS: Tool[] = [
       "size), the pick among enclave-verified agents, and a one-paragraph reasoning built from those numbers.",
     inputSchema: obj(),
     run: whichAgentToFollow,
+  },
+  {
+    name: "follow_transaction",
+    title: "Follow an agent: the calls to sign",
+    description:
+      "The deposit and follow calls (contract, method, JSON args, NEAR to attach, and near-cli-rs commands) that make " +
+      "your account follow one enclave-verified agent under a spending limit: a per-fill cap, a total allowance, " +
+      "an expiry and the price floor the contract requires (95% of NEAR's Coinbase price now, in USDC units per " +
+      "NEAR). Read-only: nothing is signed or sent; you sign both calls with your own key.",
+    inputSchema: obj(
+      {
+        pk: PK,
+        cap_near: { type: "number", minimum: 0.0001, maximum: 1000, description: "NEAR per fill, default 0.2" },
+        allowance_near: { type: "number", minimum: 0.0001, maximum: 10000, description: "NEAR in total, default 1" },
+        days: { type: "integer", minimum: 1, maximum: 365, description: "days until the mandate expires, default 7" },
+      },
+      ["pk"],
+    ),
+    run: followTransaction,
   },
 ];
 const LISTED = TOOLS.map(({ run: _, ...t }) => ({ ...t, annotations: { readOnlyHint: true, openWorldHint: true } }));

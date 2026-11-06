@@ -60,7 +60,7 @@ test("initialize negotiates a legacy version; GET is 405 with a description", as
   expect(await get.text()).toContain("claude mcp add --transport http nearbuddy");
 });
 
-test("tools/list: seven tools with valid input schemas", async ({ request }) => {
+test("tools/list: eight tools with valid input schemas", async ({ request }) => {
   const { status, body } = await rpc(request, "tools/list");
   expect(status).toBe(200);
   const { tools, resultType, ttlMs } = body.result;
@@ -74,6 +74,7 @@ test("tools/list: seven tools with valid input schemas", async ({ request }) => 
     "agent_record",
     "duel_record",
     "which_agent_to_follow",
+    "follow_transaction",
   ]);
   for (const t of tools) {
     const s = t.inputSchema;
@@ -81,7 +82,7 @@ test("tools/list: seven tools with valid input schemas", async ({ request }) => 
     expect(s.additionalProperties, t.name).toBe(false);
     for (const k of s.required) expect(Object.keys(s.properties), t.name).toContain(k);
     for (const [k, p] of Object.entries(s.properties) as [string, { type: string; pattern?: string }][]) {
-      expect(["string", "integer", "boolean"], `${t.name}.${k}`).toContain(p.type);
+      expect(["string", "integer", "number", "boolean"], `${t.name}.${k}`).toContain(p.type);
       if (p.pattern) expect(() => new RegExp(p.pattern as string)).not.toThrow();
     }
     expect(t.annotations.readOnlyHint, t.name).toBe(true);
@@ -115,6 +116,29 @@ test("agent_record reads a real agent; a bad key is a tool error", async ({ requ
   const bad = await call(request, "agent_record", { pk: "not-a-key" });
   expect(bad.isError).toBe(true);
   expect(bad.content[0]?.text).toContain("pk must be");
+});
+
+test("follow_transaction builds deposit + follow with a positive USDC price floor; nothing is sent", async ({
+  request,
+}) => {
+  // its own key: a failed earlier test restarts the worker, which resets the module's pk
+  pk ??= (await call(request, "arena_now", {})).structuredContent.standings[0].agent as string;
+  const r = await call(request, "follow_transaction", { pk, cap_near: 0.1, allowance_near: 0.5, days: 3 });
+  expect(r.isError, r.content[0]?.text).toBeFalsy();
+  const f = r.structuredContent;
+  expect(f.calls.map((c: { method: string }) => c.method)).toEqual(["deposit", "follow"]);
+  expect(f.calls[0].attach_near).toBe(0.5);
+  const m = f.calls[1].args.mandate;
+  expect(f.calls[1].args.agent_pk).toBe(pk);
+  expect(m.per_tx_cap).toBe("100000000000000000000000");
+  expect(m.allowance).toBe("500000000000000000000000");
+  expect(m.allowed_tokens[0]).toMatch(/^nep141:/);
+  expect(Number(m.min_out_per_near)).toBeGreaterThan(0);
+  expect(m.min_out_per_near).toBe(f.price_floor.min_out_per_near);
+  expect(f.near_cli[1]).toContain(`follow json-args '${JSON.stringify(f.calls[1].args)}'`);
+  const over = await call(request, "follow_transaction", { pk, cap_near: 2, allowance_near: 1 });
+  expect(over.isError).toBe(true);
+  expect(over.content[0]?.text).toContain("cap_near");
 });
 
 test("protocol errors: unknown tool, missing headers, unsupported version", async ({ request }) => {
