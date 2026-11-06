@@ -239,9 +239,10 @@ export const pairsOf = (duels: { id: string; a: string; b: string }[]): Pair[] =
   return [...by.values()].sort((x, y) => y.last - x.last);
 };
 
-/** A stub agent (no model, no proof: "stub/deterministic", "redteam/stub"). Standings hide these behind a toggle,
- *  and pair rows skip a pair with one in it. An unknown model id is not a stub. */
-export const isStubModel = (modelId: string | null | undefined) => !!modelId?.includes("stub");
+/** A stub agent (no model, no proof: "stub/deterministic", "redteam/stub"): "stub" as a whole path segment, so a
+ *  real model named e.g. "stubborn-model" is not one. Same rule as `is_stub_model` in agents/nearai.py. Standings hide
+ *  these behind a toggle, and pair rows skip a pair with one in it. An unknown model id is not a stub. */
+export const isStubModel = (modelId: string | null | undefined) => !!modelId && /(^|\/)stub(\/|$)/.test(modelId);
 
 /** The pairs box 2 lists: running pairs only (a one-off duel is a probe, not a pair), without pairs where `hide`
  *  is true for either agent (stubs), the `max` most recently active kept, then shown oldest first so "pair 1" is

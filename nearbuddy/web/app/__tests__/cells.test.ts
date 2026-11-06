@@ -181,6 +181,14 @@ describe("pairs", () => {
     expect(isStubModel("redteam/stub")).toBe(true); // the red-team probe pair
     expect(isStubModel("z-ai/glm-5.3-flash")).toBe(false);
     expect(isStubModel(undefined)).toBe(false); // unknown agent: shown
+    // a whole path segment only (same cases as agents/tests/test_nearai_client.py)
+    expect(isStubModel("stub")).toBe(true);
+    expect(isStubModel("stub/x")).toBe(true);
+    expect(isStubModel("org/stub/v2")).toBe(true);
+    expect(isStubModel("stubborn-model")).toBe(false);
+    expect(isStubModel("acme/stubborn-model")).toBe(false);
+    expect(isStubModel("acme/model-stub")).toBe(false);
+    expect(isStubModel("")).toBe(false);
     const pair = (a: string, b: string, first: number, last: number) => ({ a, b, first, last, n: 5 });
     const models: Record<string, string> = {
       q: "Qwen/Qwen3.8-27B",
