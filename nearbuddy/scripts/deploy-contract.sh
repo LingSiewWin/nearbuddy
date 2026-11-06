@@ -15,6 +15,9 @@
 # until both loop pids have exited, then until get_config.open_duels is 0 and no agent is in_duel (running
 # `runner.py --resolve-stuck` for each pair once if not, then up to IDLE_WAIT_S, 900 s), then deploys as above.
 # It never restarts the loops: on exit it prints the exact commands that do, from each loop's own command line.
+# The solver's own pairing loop (PAIR_EVERY_S, GET /pairing) opens duels too, so every deploy refuses while it is on:
+# --at-boundary checks before touching anything, and the last check right before the tx repeats it (and the idle
+# check). --force overrides both refusals on a plain deploy, never under --at-boundary.
 #
 # Signs with the legacy keychain key of the contract account (ARENA_CONTRACT, default arena.nearbuddy-solver.testnet).
 set -u
@@ -27,6 +30,7 @@ DEPLOY_LOG=$RUN/nearbuddy-deploys.log
 migrate="" margs="{}" force=0 dry=0 build=1 boundary=0
 BOUNDARY_WAIT_S=${BOUNDARY_WAIT_S:-7200} IDLE_WAIT_S=${IDLE_WAIT_S:-900} POLL_S=${BOUNDARY_POLL_S:-10}
 PY=agents/.venv/bin/python
+SOLVER_URL=${SOLVER_URL:-http://127.0.0.1:${SOLVER_PORT:-4020}}
 
 die() { echo "deploy-contract: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
@@ -80,18 +84,49 @@ print(json.dumps({"next_duel": cfg["next_duel"], "open_duels": cfg.get("open_due
 PY
 }
 
-# succeeds only when the arena is idle (or --force); prints the state either way
+# 0 = the solver's PAIR_EVERY_S loop is off, or no solver listens; 1 = it is on or its state cannot be read
+pairing_off() {
+  SOLVER_URL="$SOLVER_URL" python3 - <<'PY'
+import json, os, sys, urllib.error, urllib.request
+
+url = os.environ["SOLVER_URL"] + "/pairing"
+try:
+    p = json.load(urllib.request.urlopen(url, timeout=5))
+except urllib.error.URLError as e:
+    if isinstance(e.reason, ConnectionRefusedError):
+        print(f"pairing: no solver on {url}")
+        sys.exit(0)
+    sys.exit(f"pairing: cannot read {url}: {e.reason}")
+except Exception as e:  # noqa: BLE001 - unreadable means "cannot verify", refused by the caller
+    sys.exit(f"pairing: cannot read {url}: {e}")
+if (p.get("every_s") or 0) > 0:
+    sys.exit(f"pairing: the solver pairs idle agents every {p['every_s']}s (PAIR_EVERY_S) and can open a duel any time")
+print("pairing: off")
+PY
+}
+PAIRING_HINT="restart the solver with PAIR_EVERY_S=0 (and drop it from the env file: night-loop.sh restarts the solver)"
+
+# succeeds only when the arena is idle and the solver's pairing loop is off; --force overrides on a plain deploy,
+# never under --at-boundary. Prints the state either way.
 gate() {
-  local state
+  local state ok=0
   if ! state=$(chain); then
     echo "REFUSE: cannot read chain state; not deploying blind" >&2
+    ok=1
   else
     echo "chain: $state"
-    printf '%s' "$state" | python3 -c 'import json,sys; s=json.load(sys.stdin)
-sys.exit(0 if (s["open_duels"] or 0) == 0 and not s["in_duel"] else 1)' && return 0
-    echo "REFUSE: duels are open (open_duels > 0 or an agent is in_duel); wait for the batch boundary" >&2
+    if ! printf '%s' "$state" | python3 -c 'import json,sys; s=json.load(sys.stdin)
+sys.exit(0 if (s["open_duels"] or 0) == 0 and not s["in_duel"] else 1)'; then
+      echo "REFUSE: duels are open (open_duels > 0 or an agent is in_duel); wait for the batch boundary" >&2
+      ok=1
+    fi
   fi
-  [ "$force" = 1 ] && echo "--force given: deploying anyway" && return 0
+  if ! pairing_off; then
+    echo "REFUSE: $PAIRING_HINT" >&2
+    ok=1
+  fi
+  [ "$ok" = 0 ] && return 0
+  [ "$force" = 1 ] && [ "$boundary" = 0 ] && echo "--force given: deploying anyway" && return 0
   return 1
 }
 
@@ -139,9 +174,14 @@ loops_gone() {
   done
 }
 at_boundary() {
-  local l name pf stop drv stuck pid args cwd
+  local l name pf stop drv pid args cwd
+  # the solver's pairing loop would open duels behind the stopped loops' backs: refuse before touching anything
+  if ! pairing_off; then
+    [ "$dry" = 1 ] || die "refusing --at-boundary: $PAIRING_HINT"
+    echo "--dry-run: a real run would refuse here: $PAIRING_HINT"
+  fi
   for l in "${LOOPS[@]}"; do
-    IFS='|' read -r name pf stop drv stuck <<< "$l"
+    IFS='|' read -r name pf stop drv _ <<< "$l"
     pid=$(loop_pid "$pf")
     if [ -z "$pid" ]; then echo "$name: not running"; continue; fi
     # its own command line and directory, minus --start-batch (a restart carries on from the batch log)
