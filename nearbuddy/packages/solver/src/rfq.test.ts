@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Quote } from "./oneclick.ts";
-import { batchQuote, proRata } from "./rfq.ts";
+import { batchQuote, bpsVsOracle, duelMid, executionRecords, proRata } from "./rfq.ts";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 const withOut = (amountOut: string): Quote => ({ ...fixture, quote: { ...fixture.quote, amountOut } });
@@ -109,4 +109,43 @@ test("batchQuote refuses a negative amount", async () => {
     batchQuote([{ follower: "a", amount: -1n }], async () => fixture),
     /negative/,
   );
+});
+
+test("bpsVsOracle: positive when the follower gets more USDC than the mid gives", () => {
+  const NEAR = 10n ** 24n;
+  assert.equal(bpsVsOracle(NEAR, 3_800_000n, 380_000_000n), 0);
+  assert.equal(bpsVsOracle(NEAR, 3_838_000n, 380_000_000n), 100);
+  assert.equal(bpsVsOracle(NEAR, 3_744_739n, 380_000_000n), -145.42);
+  assert.equal(bpsVsOracle(NEAR / 10n, 374_474n, 380_000_000n), -145.42); // size-independent
+  assert.equal(bpsVsOracle(0n, 1n, 380_000_000n), null);
+});
+
+test("duelMid: close beats open, only a NEAR/USD duel counts", () => {
+  assert.deepEqual(duelMid({ symbol: "wrap.near", open_price: "380000000", outcome: { close_price: "390000000" } }), {
+    mid: "390000000",
+    source: "outlayer_close",
+  });
+  assert.deepEqual(duelMid({ symbol: "wrap.near", open_price: "380000000", outcome: null }), {
+    mid: "380000000",
+    source: "outlayer_open",
+  });
+  assert.equal(duelMid({ symbol: "wrap.near", open_price: null, outcome: null }), null);
+  assert.equal(duelMid({ symbol: "eth", open_price: "300000000000", outcome: null }), null);
+  assert.equal(duelMid(null), null);
+});
+
+test("executionRecords: one row per quoted follower, errors skipped, null bps without a mid", () => {
+  const intent = { agent_pk: "PK", duel_id: "3", nonce: "9" };
+  const quotes = [
+    { follower: "a", amount: "1000000000000000000000000", quote: fixture, quote_out: "3744739" },
+    { follower: "b", amount: "5", error: "1click quote 503" },
+  ];
+  const rows = executionRecords(intent, quotes, null);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.bps_vs_oracle, null);
+  assert.equal(rows[0]?.oracle_mid, null);
+  assert.equal(rows[0]?.quoted_at, Date.parse(fixture.timestamp));
+  const spot = executionRecords(intent, quotes, { mid: "369750000", source: "coinbase_spot" });
+  assert.equal(spot[0]?.oracle_source, "coinbase_spot");
+  assert.equal(spot[0]?.bps_vs_oracle, 127.76);
 });

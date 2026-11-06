@@ -30,7 +30,15 @@ import {
   verifyTeeProof,
 } from "../../protocol/src/intent.ts";
 import { type Quote, quote, sellNearForUsdc } from "./oneclick.ts";
-import { batchQuote, quotePrice } from "./rfq.ts";
+import {
+  batchQuote,
+  type ExecutionRecord,
+  executionRecords,
+  MAX_EXECUTION,
+  type OracleMid,
+  oracleMid,
+  quotePrice,
+} from "./rfq.ts";
 
 export interface Mandate {
   allowance: string;
@@ -175,6 +183,8 @@ export class Arena {
   readonly consumed = new Set<string>(); // `${duel_id}:${target}:${payload_hash}`
   readonly openDuels = new Set<string>();
   readonly fills: { agent_pk: string; follower: string; report: unknown; tx: string }[] = [];
+  /** Execution quality of every prepared fill, last MAX_EXECUTION (rfq.ts), served by GET /execution. */
+  readonly quality: ExecutionRecord[] = [];
   /** Pairing loop state, served by GET /pairing. `every_s` 0 = loop off. */
   readonly pairing = { every_s: 0, next_at: 0, last: [] as PairedDuel[] };
   private pairingRun: Promise<unknown> | null = null;
@@ -191,6 +201,7 @@ export class Arena {
       leaderboard?: () => Promise<AgentView[]>;
       config?: () => Promise<ArenaConfig>;
       quote?: typeof quote;
+      oracleMid?: (duel_id: string) => Promise<OracleMid | null>;
       now?: () => bigint;
       /** Backoff between RPC retries and `findDuel` polls; tests pass `async () => {}`. */
       sleep?: (ms: number) => Promise<void>;
@@ -359,6 +370,9 @@ export class Arena {
     }
     const r = await this.call(method, { signed, ...extra, tee: tee ?? null });
     const quotes = await this.quotesFor(signed.intent.agent_pk);
+    const mid = quotes.some((x) => x.quote) ? await (this.deps.oracleMid ?? oracleMid)(signed.intent.duel_id) : null;
+    this.quality.push(...executionRecords(signed.intent, quotes, mid));
+    this.quality.splice(0, Math.max(0, this.quality.length - MAX_EXECUTION));
     const rec: IntentRecord = { signed, tx: r.tx, quotes, at: Date.now() };
     this.intents.push(rec);
     if (this.intents.length > 500) this.intents.shift();
@@ -418,7 +432,10 @@ export class Arena {
   }
   /** The last 50 intents and fills only exist here (the page's SOLVER panel reads them). */
   private persistHistory() {
-    writeAtomic(HISTORY_FILE, JSON.stringify({ intents: this.intents.slice(-50), fills: this.fills.slice(-50) }));
+    writeAtomic(
+      HISTORY_FILE,
+      JSON.stringify({ intents: this.intents.slice(-50), fills: this.fills.slice(-50), quality: this.quality }),
+    );
   }
 
   /** Rebuild `openDuels` from chain and `payloads` from disk after a restart. */
@@ -436,9 +453,11 @@ export class Arena {
         const h = JSON.parse(readFileSync(HISTORY_FILE, "utf8")) as {
           intents?: IntentRecord[];
           fills?: Arena["fills"];
+          quality?: ExecutionRecord[];
         } | null;
         this.intents.push(...(h?.intents ?? []));
         this.fills.push(...(h?.fills ?? []));
+        this.quality.push(...(h?.quality ?? []).slice(-MAX_EXECUTION));
       }
     } catch (e) {
       console.log(`[arena] history file ignored: ${String(e).slice(0, 80)}`);
@@ -550,6 +569,7 @@ export class Arena {
       intents: this.intents.slice(-50).map((r) => ({ ...r.signed.intent, tx: r.tx, quotes: r.quotes, at: r.at })),
       pending: await this.pending(),
       fills: this.fills.slice(-50),
+      quality: this.quality,
     };
   }
 
@@ -561,6 +581,7 @@ export class Arena {
   ): Promise<{ code: number; body: unknown } | null> {
     if (url === "/arena") return { code: 200, body: await this.snapshot() };
     if (url === "/pairing") return { code: 200, body: this.pairing };
+    if (url === "/execution") return { code: 200, body: { quality: this.quality } };
     if (url?.startsWith("/agent_duel?")) {
       // base64 pks hold '+': a client that forgot to percent-encode it arrives as a space; base64 never has spaces
       const pk = new URLSearchParams(url.slice("/agent_duel?".length)).get("pk")?.replace(/ /g, "+");

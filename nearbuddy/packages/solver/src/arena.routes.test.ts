@@ -2,7 +2,7 @@
 // so the chain-writing paths run without network: what each route sends on chain and how it maps errors.
 
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -418,4 +418,56 @@ test("POST /duel without sigs still calls plain open_duel", async () => {
   });
   assert.equal(calls[0]!.methodName, "open_duel");
   assert.deepEqual(calls[0]!.args, duel);
+
+test("GET /execution: a batched intent records every follower's fill against the duel's Outlayer open price", async () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8"),
+  ) as import("./oneclick.ts").Quote;
+  const mandate = (cap: string) => ({
+    allowance: "10000000000000000000000000",
+    spent: "0",
+    per_tx_cap: cap,
+    allowed_tokens: [],
+    expires_at: "1900000000000000000",
+    revoked: false,
+  });
+  const asked: string[] = [];
+  const { account } = fakeSolver();
+  const arena = new Arena(account, "s.testnet", {
+    listFollowers: async () => [
+      ["f1.testnet", mandate("750000000000000000000000")], // 0.75 NEAR
+      ["f2.testnet", mandate("250000000000000000000000")], // 0.25 NEAR
+    ],
+    quote: async (req) => {
+      asked.push(req.amount);
+      return fixture; // 1.0 wNEAR -> 3.744739 USDC
+    },
+  });
+  const s = signed(KeyPair.fromRandom("ed25519"), { nonce: "7" });
+  await withRpc({ get_duel: () => ({ symbol: "wrap.near", open_price: "380000000", outcome: null }) }, async (seen) => {
+    await arena.route("POST", "/intent", JSON.stringify({ signed: s }), KEY);
+    assert.deepEqual(seen, ["get_duel"]);
+  });
+  assert.deepEqual(asked, ["1000000000000000000000000"]); // one RFQ for the sum
+  const r = (await arena.route("GET", "/execution", ""))!;
+  assert.equal(r.code, 200);
+  // 3.744739 USDC per NEAR vs a 3.80 mid: -145.42 bps at the batch price; f2's floor costs it 0.01 bps
+  const row = (follower: string, amount_in: string, quote_out: string, bps_vs_oracle: number) => ({
+    follower,
+    intent_nonce: "7",
+    amount_in,
+    quote_out,
+    oracle_mid: "380000000",
+    quoted_at: Date.parse(fixture.timestamp),
+    bps_vs_oracle,
+    agent_pk: s.intent.agent_pk,
+    duel_id: "3",
+    oracle_source: "outlayer_open",
+  });
+  assert.deepEqual((r.body as { quality: unknown[] }).quality, [
+    row("f1.testnet", "750000000000000000000000", "2808555", -145.42),
+    row("f2.testnet", "250000000000000000000000", "936184", -145.43),
+  ]);
+  const snap = (await arena.route("GET", "/arena", ""))!.body as { quality: unknown[] };
+  assert.equal(snap.quality.length, 2);
 });

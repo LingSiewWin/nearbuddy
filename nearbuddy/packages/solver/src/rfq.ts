@@ -5,6 +5,7 @@
 //     nothing to gain from being early, from splitting a mandate, or from the solver choosing an order;
 //   - the RFQ shows the market makers one size, not each follower's;
 //   - one quote per intent instead of one per follower (1Click rate limits, one `timestamp` to report).
+import { arenaView } from "../../protocol/src/chain.ts";
 import type { Quote } from "./oneclick.ts";
 
 export interface BatchFill {
@@ -82,4 +83,90 @@ export async function batchQuote(
       quote_out: parts[i]!.toString(),
     })),
   };
+}
+
+// ---- execution quality ------------------------------------------------------------------------------------------
+// Every fill the solver prepares is compared against the oracle mid (Outlayer, the price the duel is scored on),
+// so the page can show slippage per fill. Units (the web reads these): amount_in yocto wNEAR, quote_out USDC base
+// units (6 dp), oracle_mid USD x 1e8 (the contract's `open_price` scale), all decimal strings; quoted_at ms epoch;
+// bps_vs_oracle a number, positive = the follower receives more USDC than the oracle mid would give.
+
+export interface OracleMid {
+  /** NEAR/USD x 1e8, decimal string. */
+  mid: string;
+  /** `outlayer_close`, `outlayer_open` (the duel's own oracle) or `coinbase_spot` (fallback). */
+  source: string;
+}
+export interface ExecutionRecord {
+  follower: string;
+  intent_nonce: string;
+  amount_in: string;
+  quote_out: string;
+  oracle_mid: string | null;
+  quoted_at: number;
+  bps_vs_oracle: number | null;
+  agent_pk: string;
+  duel_id: string;
+  oracle_source: string | null;
+}
+export const MAX_EXECUTION = 200;
+
+/** The quotes are always wNEAR -> USDC, so only a NEAR/USD oracle is a valid mid. */
+export function duelMid(
+  duel: { symbol?: string; open_price?: string | null; outcome?: { close_price: string } | null } | null,
+): OracleMid | null {
+  if (duel?.symbol !== "wrap.near") return null;
+  if (duel.outcome) return { mid: duel.outcome.close_price, source: "outlayer_close" };
+  if (duel.open_price) return { mid: duel.open_price, source: "outlayer_open" };
+  return null;
+}
+
+/** NEAR/USD for an execution record: the duel's latest Outlayer price, else Coinbase spot (labelled), else null. */
+export async function oracleMid(duel_id: string, fetchFn: typeof fetch = fetch): Promise<OracleMid | null> {
+  try {
+    const m = duelMid(await arenaView<Parameters<typeof duelMid>[0]>("get_duel", { duel_id }));
+    if (m) return m;
+  } catch {
+    /* fall through to spot */
+  }
+  try {
+    const r = await fetchFn("https://api.coinbase.com/v2/prices/NEAR-USD/spot", { signal: AbortSignal.timeout(3000) });
+    const usd = Number(((await r.json()) as { data?: { amount?: string } }).data?.amount);
+    return r.ok && usd > 0 ? { mid: String(Math.round(usd * 1e8)), source: "coinbase_spot" } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fill price vs mid in bps (2 dp) from base units: fill price x 1e8 = quote_out (6 dp) * 1e26 / amount_in (24 dp). */
+export function bpsVsOracle(amount_in: bigint, quote_out: bigint, mid8: bigint): number | null {
+  if (amount_in <= 0n || mid8 <= 0n) return null;
+  // (quote_out * 1e26 / amount_in / mid8 - 1) * 1e8 = bps x 1e4, then rounded to 2 dp
+  return Math.round(Number((quote_out * 10n ** 34n) / (amount_in * mid8) - 10n ** 8n) / 100) / 100;
+}
+
+/** One record per quoted follower (errors skipped: nothing was prepared for them). */
+export function executionRecords(
+  intent: { agent_pk: string; duel_id: string; nonce: string },
+  quotes: { follower: string; amount: string; quote?: Quote; quote_out?: string }[],
+  mid: OracleMid | null,
+): ExecutionRecord[] {
+  return quotes.flatMap((q) =>
+    q.quote && q.quote_out !== undefined
+      ? [
+          {
+            follower: q.follower,
+            intent_nonce: intent.nonce,
+            amount_in: q.amount,
+            quote_out: q.quote_out,
+            oracle_mid: mid?.mid ?? null,
+            quoted_at: Date.parse(q.quote.timestamp),
+            bps_vs_oracle: mid ? bpsVsOracle(BigInt(q.amount), BigInt(q.quote_out), BigInt(mid.mid)) : null,
+            agent_pk: intent.agent_pk,
+            duel_id: intent.duel_id,
+            oracle_source: mid?.source ?? null,
+          },
+        ]
+      : [],
+  );
 }
