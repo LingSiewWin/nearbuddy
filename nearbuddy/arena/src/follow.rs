@@ -106,13 +106,13 @@ impl Contract {
             "vault cap"
         );
         let bal = self.vaults.get(&who).copied().unwrap_or(0) + amt;
-        self.vaults.insert(who.clone(), bal);
+        self.set_vault(&who, bal);
         self.vaults.flush();
         let cost = storage_cost_since(before);
         require!(amt > cost, "deposit required");
         let bal = bal - cost;
         require!(bal <= self.max_vault_per_account, "account cap");
-        self.vaults.insert(who, bal);
+        self.set_vault(&who, bal);
         self.vault_total += amt - cost;
         U128(bal)
     }
@@ -160,7 +160,7 @@ impl Contract {
         );
         let bal = self.vaults.get(&who).copied().unwrap_or(0);
         let pay = amount.min(bal);
-        self.vaults.insert(who.clone(), bal - pay);
+        self.set_vault(&who, bal - pay);
         self.vault_total = self.vault_total.saturating_sub(pay);
         Promise::new(who.clone())
             .transfer(NearToken::from_yoctonear(pay))
@@ -181,7 +181,7 @@ impl Contract {
             return true;
         }
         let bal = self.vaults.get(&who).copied().unwrap_or(0);
-        self.vaults.insert(who.clone(), bal.saturating_add(pay.0));
+        self.set_vault(&who, bal.saturating_add(pay.0));
         self.vault_total = self.vault_total.saturating_add(pay.0);
         if !self.pending_withdrawals.contains_key(&who) {
             self.pending_withdrawals.insert(who, (amount.0, ready_at.0));
@@ -227,7 +227,7 @@ impl Contract {
         if cost > 0 {
             let bal = self.vaults.get(&who).copied().unwrap_or(0);
             require!(bal >= cost, "insufficient");
-            self.vaults.insert(who.clone(), bal - cost);
+            self.set_vault(&who, bal - cost);
             // the storage NEAR left the vault, so it leaves the counted total too (deploy 16)
             self.vault_total = self.vault_total.saturating_sub(cost);
         }
@@ -442,9 +442,9 @@ impl Contract {
             return Err("insufficient");
         }
         m.spent = U128(spent);
-        self.vaults.insert(follower.clone(), bal - debit);
+        self.set_vault(follower, bal - debit);
         let sbal = self.vaults.get(solver).copied().unwrap_or(0);
-        self.vaults.insert(solver.clone(), sbal + f.amount_in.0);
+        self.set_vault(solver, sbal + f.amount_in.0);
         self.owner_fees += fee;
         self.vault_total = self.vault_total.saturating_sub(fee);
         self.settled_fills.insert(fkey);

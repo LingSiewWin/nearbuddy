@@ -179,6 +179,17 @@ enum Op {
         milli: u64,
     },
     WithdrawFees,
+    /// Owner `begin_reconcile`.
+    ReconcileBegin,
+    /// Owner `reconcile_page` of the next `n` vault holders in account order; `repeat` re-lists the
+    /// last one counted (refused: a holder is never counted twice).
+    ReconcilePage {
+        n: usize,
+        repeat: bool,
+    },
+    /// Owner pages the holders left, then `finish_reconcile`: `vault_total` must equal the sum of
+    /// vaults whatever moved between the pages.
+    ReconcileFinish,
     Advance {
         secs: u64,
     },
@@ -384,7 +395,18 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                 cycle,
                 v,
                 deliver,
+                // a paged reconcile spans the late fills: f0 is counted, then its vault moves
+                vec![
+                    Op::ReconcileBegin,
+                    Op::ReconcilePage {
+                        n: 1,
+                        repeat: false,
+                    },
+                    Op::Deposit { who: 0, milli: 1 },
+                    Op::ReconcilePage { n: 1, repeat: true },
+                ],
                 late_fills,
+                vec![Op::ReconcileFinish],
             ]
             .concat()
         })
@@ -447,6 +469,9 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (0..8usize).prop_map(|duel| Op::Void { duel }),
         1 => (ag, 0u64..3_000).prop_map(|(agent, milli)| Op::WithdrawBond { agent, milli }),
         1 => Just(Op::WithdrawFees),
+        1 => Just(Op::ReconcileBegin),
+        2 => (1usize..3, prop::bool::weighted(0.2)).prop_map(|(n, repeat)| Op::ReconcilePage { n, repeat }),
+        1 => Just(Op::ReconcileFinish),
         2 => (1u64..400).prop_map(|secs| Op::Advance { secs }),
         // past a closed window's grace in one step, so its fronted intents are seen to expire
         1 => Just(Op::Advance { secs: DELAY / SEC }),
@@ -602,6 +627,9 @@ struct World {
     results: Vec<Option<Vec<u8>>>,
     /// Queued vault withdrawals: (amount, ready_at).
     requests: [Option<(u128, u64)>; 4],
+    /// Paged reconcile in progress: how many holders of `ACCOUNTS` (already in account order) it
+    /// counted.
+    reconcile: Option<usize>,
     /// Per token, holdings debited by `withdraw_token` whose transfer has not confirmed yet.
     in_flight: [u128; 2],
 }
@@ -632,6 +660,7 @@ impl World {
             intents_bal: [0; 2],
             results: vec![],
             requests: [None; 4],
+            reconcile: None,
             in_flight: [0; 2],
         };
         w.env(OWNER, 0);
@@ -1271,9 +1300,63 @@ impl World {
                 let ok = self.call(OWNER, 1, |c| drop(c.withdraw_fees())).is_ok();
                 kind = Kind::Exact(ok as i128);
             }
+            Op::ReconcileBegin => {
+                self.call(OWNER, 1, |c| c.begin_reconcile()).expect("begin");
+                self.reconcile = Some(0);
+                kind = Kind::Exact(1);
+            }
+            Op::ReconcilePage { n, repeat } => {
+                let r = self.reconcile_page(n, repeat);
+                kind = Kind::Exact(r.is_ok() as i128);
+            }
+            Op::ReconcileFinish => {
+                // the holders not counted yet first, a page per transaction
+                if self.reconcile.is_some_and(|i| i < ACCOUNTS.len()) {
+                    self.reconcile_page(2, false).expect("page");
+                    self.check_money(&pre, bal0, &trie0, Kind::Exact(1));
+                    return self.step(&Op::ReconcileFinish);
+                }
+                let r = self.call(OWNER, 1, |c| c.finish_reconcile().0);
+                kind = Kind::Exact(r.is_ok() as i128);
+                match self.reconcile.take() {
+                    Some(_) => {
+                        let total = r.expect("finish");
+                        let post = self.snap();
+                        assert_eq!(
+                            total,
+                            post.vaults.iter().sum::<u128>(),
+                            "a paged reconcile missed a vault change between its pages"
+                        );
+                    }
+                    None => assert_eq!(r.unwrap_err(), "no reconcile"),
+                }
+            }
             Op::Advance { secs } => self.now += secs * SEC,
         }
         self.check_money(&pre, bal0, &trie0, kind);
+    }
+
+    /// `reconcile_page` of the next `n` holders (or the last counted again with `repeat`).
+    fn reconcile_page(&mut self, n: usize, repeat: bool) -> Result<u128, String> {
+        let from = self.reconcile.unwrap_or(0);
+        let from = if repeat { from.saturating_sub(1) } else { from };
+        let to = (from + n).min(ACCOUNTS.len());
+        let accounts: Vec<AccountId> = ACCOUNTS[from..to]
+            .iter()
+            .map(|a| a.parse().unwrap())
+            .collect();
+        let r = self.call(OWNER, 1, |c| c.reconcile_page(accounts).0);
+        match self.reconcile {
+            None => assert_eq!(r.as_ref().unwrap_err(), "no reconcile"),
+            Some(i) if repeat && i > 0 => {
+                assert_eq!(r.as_ref().unwrap_err(), "accounts not ascending")
+            }
+            Some(_) => {
+                r.as_ref().expect("an ascending page is accepted");
+                self.reconcile = Some(to);
+            }
+        }
+        r
     }
 
     /// Was `who` following agent `ag` when an intent was accepted at `at`, with that window still

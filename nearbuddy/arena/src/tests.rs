@@ -1834,6 +1834,92 @@ fn reconcile_vault_total_sets_the_sum_of_the_listed_vaults() {
 }
 
 #[test]
+fn paged_reconcile_sums_every_holder_once_and_tracks_moves_between_pages() {
+    // red team round 3 (R3): one call reads at most 100 holders; pages accumulate
+    let (mut c, _, _) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(OPERATOR, 2 * NEAR);
+    c.deposit();
+    ctx(SPECTATOR, 3 * NEAR);
+    c.deposit();
+    c.vault_total = 1; // drift to clear
+    let ids = |v: &[&str]| -> Vec<AccountId> { v.iter().map(|a| a.parse().unwrap()).collect() };
+    ctx(OWNER, 1);
+    c.begin_reconcile();
+    c.reconcile_page(ids(&[FOLLOWER]));
+    // the counted follower deposits between pages; a new holder below the cursor appears
+    ctx(FOLLOWER, NEAR);
+    c.deposit();
+    ctx("a.testnet", NEAR);
+    c.deposit();
+    ctx(OWNER, 1);
+    c.reconcile_page(ids(&[OPERATOR, SOLVER, SPECTATOR]));
+    let total = c.finish_reconcile().0;
+    let sum: u128 = ["a.testnet", FOLLOWER, OPERATOR, SOLVER, SPECTATOR]
+        .iter()
+        .map(|a| c.get_vault(a.parse().unwrap()).0)
+        .sum();
+    assert_eq!(total, sum);
+    assert_eq!(c.get_config().vault_total.0, sum);
+}
+
+#[test]
+fn paged_reconcile_refusals() {
+    let mut c = fresh(0);
+    let ids = |v: &[&str]| -> Vec<AccountId> { v.iter().map(|a| a.parse().unwrap()).collect() };
+    let refuse = |c: &mut Contract, who: &str, yocto: u128, f: &dyn Fn(&mut Contract)| {
+        ctx(who, yocto);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(c)));
+        panic_msg(r.unwrap_err())
+    };
+    let page = |a: Vec<AccountId>| {
+        move |c: &mut Contract| {
+            c.reconcile_page(a.clone());
+        }
+    };
+    assert_eq!(
+        refuse(&mut c, OWNER, 1, &page(ids(&[FOLLOWER]))),
+        "no reconcile"
+    );
+    assert_eq!(
+        refuse(&mut c, OWNER, 1, &|c: &mut Contract| {
+            c.finish_reconcile();
+        }),
+        "no reconcile"
+    );
+    assert_eq!(
+        refuse(&mut c, FOLLOWER, 1, &|c: &mut Contract| c.begin_reconcile()),
+        "not owner"
+    );
+    assert!(
+        refuse(&mut c, OWNER, 0, &|c: &mut Contract| c.begin_reconcile())
+            .contains("exactly 1 yoctoNEAR")
+    );
+    ctx(OWNER, 1);
+    c.begin_reconcile();
+    assert_eq!(
+        refuse(&mut c, OWNER, 1, &page(ids(&[OPERATOR, FOLLOWER]))),
+        "accounts not ascending"
+    );
+    assert_eq!(
+        refuse(&mut c, OWNER, 1, &page(ids(&[FOLLOWER, FOLLOWER]))),
+        "accounts not ascending"
+    );
+    ctx(OWNER, 1);
+    c.reconcile_page(ids(&[OPERATOR]));
+    // a later page may not list the last account again, nor one below it
+    for a in [OPERATOR, FOLLOWER] {
+        assert_eq!(
+            refuse(&mut c, OWNER, 1, &page(ids(&[a]))),
+            "accounts not ascending"
+        );
+    }
+    let many: Vec<AccountId> = (0..=crate::state::MAX_RECONCILE)
+        .map(|i| format!("z{i:04}.testnet").parse().unwrap())
+        .collect();
+    assert_eq!(refuse(&mut c, OWNER, 1, &page(many)), "too many accounts");
+}
+
+#[test]
 fn reconcile_vault_total_refusals() {
     let mut c = fresh(0);
     let f: AccountId = FOLLOWER.parse().unwrap();
