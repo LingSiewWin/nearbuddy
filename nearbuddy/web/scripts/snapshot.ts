@@ -7,9 +7,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Raw, sha, slim } from "../app/lib/rows";
 import { selfCheck } from "../app/lib/verdict";
+import { networkFile } from "../app/network";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const src = process.env.DATASET ?? join(root, "../dataset/decisions.jsonl");
+// dataset/ on testnet, dataset-mainnet/ on mainnet (agents/export_dataset.py), so tx hashes match the explorer
+const src = process.env.DATASET ?? join(root, `../${networkFile("dataset")}/decisions.jsonl`);
 const out = join(root, "app/data");
 
 selfCheck();
