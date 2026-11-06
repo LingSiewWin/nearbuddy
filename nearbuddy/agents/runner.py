@@ -5,6 +5,11 @@ agents/data/decisions.jsonl.
 
     .venv/bin/python -m runner --rounds 2 --duel-seconds 330 --cycle-seconds 30
 
+Prompt-defense experiment (docs/research/prompt-defense.md, section 4): `--variants A,B,C` puts agent A on
+`pick_variant(duel_id)` among the listed arms each duel while agent B stays naive as the within-duel control;
+every row carries `prompt_variant`. A variant-C decision whose `evidence_used` lacks "oracle" is recorded as
+`error: "evidence not oracle"` and not posted.
+
 Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this process finds it via GET /agent_duel):
 
     AGENT_KEY_B=<seed> NEAR_AI_MODEL_B=<model> SOLVER_URL=https://... ARENA_SECRET=<shared> \\
@@ -37,6 +42,7 @@ from intent_client import Solver, TeeProofError, proof_hash, sign_intent, tee_pr
 from keys import agent_key, pk_b64, register_sig
 from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
+from prompts import VARIANTS, pick_variant
 
 
 class Tracked:
@@ -142,7 +148,10 @@ def post_decision(
                 "duel_id": duel_id,
                 "agent_pk": pk,
                 "model": model.model_id,
+                "hardened": d.hardened,
+                "prompt_variant": d.prompt_variant,
                 "error": str(e),
+                "text": failed.text,
                 "chat_id": failed.chat_id,
                 "response_body": failed.response_bytes.decode(errors="replace"),
             }
@@ -184,6 +193,7 @@ def post_decision(
         "agent_pk": pk,
         "model": model.model_id,
         "hardened": d.hardened,
+        "prompt_variant": d.prompt_variant,
         "brief": brief(symbol, px, open_px),
         "injection": injection_text,
         "text": c.text,
@@ -308,7 +318,14 @@ def run_single(
 
 
 def run(
-    rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str, swap: bool = False
+    rounds: int,
+    duel_seconds: int,
+    cycle_seconds: int,
+    symbol: str,
+    solver_url: str,
+    bond: str,
+    swap: bool = False,
+    variants: str = "",
 ) -> list[dict[str, Any]]:
     if not ENV.get("ARENA_SECRET"):
         raise SystemExit("ARENA_SECRET missing in the env file: the solver refuses every POST without it")
@@ -351,8 +368,13 @@ def run(
             "/duel", {"a": pk_b64(ska), "b": pk_b64(skb), "symbol": asset, "close_at": str(close_at_ns)}
         )
         duel_id = str(opened["duel_id"])
+        if variants:  # treatment slot: agent A's arm is a function of the duel id, agent B stays the naive control
+            a.variant = pick_variant(duel_id, variants)
         open_px = price(symbol, ENV.get("PYTH_API_KEY"))
-        print(f"[round {rnd}] duel {duel_id} {symbol} spot {open_px / 1e8:,.4f} tx {opened['tx']}")
+        print(
+            f"[round {rnd}] duel {duel_id} {symbol} spot {open_px / 1e8:,.4f} tx {opened['tx']} "
+            f"A prompt {a.prompt_variant}"
+        )
         closed = False
         # stop before the contract's intent lock (deploy 11: no intents in the last `intent_lock_s`), plus 25 s for
         # model + signature + chain round trip
@@ -415,6 +437,12 @@ if __name__ == "__main__":
         "--swap-prompts", action="store_true", help="control run: hardened prompt on model B, naive on model A"
     )
     p.add_argument(
+        "--variants",
+        default="",
+        metavar="A,B,C",
+        help="prompt-defense arms for agent A, picked per duel by pick_variant(duel_id); agent B stays naive",
+    )
+    p.add_argument(
         "--only",
         choices=["A", "B"],
         help="self-hosted: drive this one agent and let the solver pair it (needs --wait-pairing)",
@@ -427,6 +455,9 @@ if __name__ == "__main__":
     p.add_argument("--hardened", action="store_true", help="with --only: use the hardened prompt (default naive)")
     p.add_argument("--poll-seconds", type=int, default=10)
     args = p.parse_args()
+    arms = "".join(args.variants.upper().split(","))
+    if arms and (len(set(arms)) != len(arms) or not set(arms) <= set(VARIANTS)):
+        p.error(f"--variants takes distinct arms from {','.join(VARIANTS)}; got {args.variants!r}")
     if args.resolve:
         print(
             json.dumps(
@@ -457,5 +488,6 @@ if __name__ == "__main__":
         ENV.get("SOLVER_URL", "http://127.0.0.1:4020"),
         args.bond,
         args.swap_prompts,
+        arms,
     )
     print(json.dumps(out, indent=2))

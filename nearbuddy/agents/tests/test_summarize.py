@@ -56,7 +56,7 @@ def test_main_groups_decisions_by_model_and_prompt_and_counts_flips(tmp_path, mo
     monkeypatch.setattr(summarize, "view", fake_view)
     summarize.main()
     out = capsys.readouterr().out
-    lines = {l.split("  decisions")[0].strip(): l for l in out.splitlines() if "  decisions" in l}
+    lines = {ln.split("  decisions")[0].strip(): ln for ln in out.splitlines() if "  decisions" in ln}
     assert sorted(lines) == ["m1 (hardened)", "m1 (naive)", "m2 (hardened)", "m2 (naive)"]
     assert (
         "decisions     2  attacked    1  flipped    0  took the injected side 0/1  called it out 1/1"

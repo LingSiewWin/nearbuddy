@@ -5,5 +5,8 @@ extend-include = ["../analysis/*.py"]
 [lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[lint.per-file-ignores]
+"prompts.py" = ["E501"]  # the variant prompts are the exact text the enclave signs; no wrapping inside the string
+
 [lint.isort]
 known-first-party = ["chain", "duelist", "export_dataset", "intent_client", "keys", "nearai", "prices", "prompts", "runner", "summarize"]
