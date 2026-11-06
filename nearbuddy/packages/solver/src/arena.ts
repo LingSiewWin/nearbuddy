@@ -21,7 +21,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Account, teraToGas } from "near-api-js";
-import { ARENA, arenaView } from "../../protocol/src/chain.ts";
+import { ARENA, arenaView, NEAR } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import {
   commitMessage,
@@ -197,6 +197,31 @@ export function quoteAmount(m: Mandate, feeBps = 0): bigint {
 
 export function mandateOpen(m: Mandate, nowNs: bigint): boolean {
   return !m.revoked && BigInt(m.expires_at) > nowNs && quoteAmount(m) > 0n;
+}
+
+/** The token a fill for `side` lands in (the quote's destination asset): USDC on a Short, wNEAR on a Long. It is the
+ *  fill's `token`, which settle_follow checks against `allowed_tokens`. */
+export const outputToken = (side: Side): string => fillRequest(side, 0n, "", "").destinationAsset;
+
+/** A fill's `amount_out` for one follower: the USDC share of the quote on a Short (EXACT_INPUT), the exact wNEAR
+ *  bought on a Long (EXACT_OUTPUT, equal to the NEAR amount in). */
+export const fillOut = (side: Side, amountIn: bigint, quoteOut: bigint): bigint =>
+  side === "Long" ? amountIn : quoteOut;
+
+/** settle_follow's token check (arena/src/follow.rs apply_fill): an empty list allows any token. */
+export function tokenAllowed(m: Mandate, token: string): boolean {
+  return m.allowed_tokens.length === 0 || m.allowed_tokens.includes(token);
+}
+
+const U128_MAX = (1n << 128n) - 1n;
+/** settle_follow's price floor (follow.rs apply_fill), exactly: `amount_out * 10^24 >= amount_in * min_out_per_near`
+ *  in u128, a product past u128 refused ("amount overflow"); a floor of 0 (or none, before deploy 15) passes. */
+export function meetsFloor(m: Mandate, amountIn: bigint, amountOut: bigint): boolean {
+  const floor = BigInt(m.min_out_per_near ?? "0");
+  if (floor === 0n) return true;
+  const got = amountOut * NEAR;
+  const want = amountIn * floor;
+  return got <= U128_MAX && want <= U128_MAX && got >= want;
 }
 
 /** Idle enclave agents with bond above `minBond`, sorted by pk and paired with their neighbour. Deterministic:
@@ -474,7 +499,24 @@ export class Arena {
     const cfg = await this.config();
     const verified = verifiedSettlement(cfg);
     const fee = verified ? (cfg?.fee_bps ?? 0) : 0;
-    const open = live.map(([follower, m]) => ({ follower, amount: quoteAmount(m, fee) }));
+    const all = live.map(([follower, m]) => ({ follower, amount: quoteAmount(m, fee) }));
+    // settle_follow refuses a fill whose output token the mandate does not allow: never quote (or front) one
+    const token = outputToken(side);
+    const mandates = new Map(live);
+    const wrongToken: FollowerQuote[] = all
+      .filter((f) => !tokenAllowed(mandates.get(f.follower)!, token))
+      .map((f) => ({ follower: f.follower, amount: f.amount.toString(), error: `token not allowed: ${token}` }));
+    const open = all.filter((f) => tokenAllowed(mandates.get(f.follower)!, token));
+    // a quoted fill under the follower's price floor would be refused too ("below min price")
+    const belowFloor = (x: FollowerQuote) =>
+      x.quote !== undefined &&
+      x.quote_out !== undefined &&
+      !meetsFloor(mandates.get(x.follower)!, BigInt(x.amount), fillOut(side, BigInt(x.amount), BigInt(x.quote_out)));
+    const floorError = (x: FollowerQuote): FollowerQuote => ({
+      follower: x.follower,
+      amount: x.amount,
+      error: `below min price: ${x.quote_out} out for ${x.amount} in`,
+    });
     const to = fillRecipient(this.solverId, verified);
     const payFollower = to === "follower";
     // one recipient for the whole batch: the solver, or (deploy 15) the arena, which credits each follower
@@ -494,10 +536,22 @@ export class Arena {
     this.capLedger.push(...held.values());
     let quoted: FollowerQuote[] = [];
     if (admitted.length > 0 && process.env.BATCH_RFQ !== "0" && !payFollower) {
-      const b = await batchQuote(admitted, (amount) => q(fillRequest(side, amount, solver, batchTo)));
-      quoted = b.fills.map((f) =>
-        b.quote && !f.error ? { ...f, quote: b.quote, price: b.price, recipient: batchTo } : f,
-      );
+      // Followers under their floor at the batch price leave the batch, and the rest is quoted again, so the swap
+      // the solver fronts never includes a fill settle_follow refuses. Each pass drops one follower or more.
+      const floored: FollowerQuote[] = [];
+      let batch = admitted;
+      while (batch.length > 0) {
+        const b = await batchQuote(batch, (amount) => q(fillRequest(side, amount, solver, batchTo)));
+        quoted = b.fills.map((f) =>
+          b.quote && !f.error ? { ...f, quote: b.quote, price: b.price, recipient: batchTo } : f,
+        );
+        const low = new Set(quoted.filter(belowFloor).map((x) => x.follower));
+        if (low.size === 0) break;
+        floored.push(...quoted.filter((x) => low.has(x.follower)).map(floorError));
+        batch = batch.filter((f) => !low.has(f.follower));
+        quoted = [];
+      }
+      quoted.push(...floored);
     } else
       quoted = await Promise.all(
         admitted.map(async ({ follower, amount }): Promise<FollowerQuote> => {
@@ -505,7 +559,8 @@ export class Arena {
           try {
             const r = await q(fillRequest(side, amount, solver, recipient));
             const quote_out = r.quote[variableLeg(r)];
-            return { follower, amount: amount.toString(), quote: r, recipient, quote_out, price: quotePrice(r) };
+            const x = { follower, amount: amount.toString(), quote: r, recipient, quote_out, price: quotePrice(r) };
+            return belowFloor(x) ? floorError(x) : x;
           } catch (e) {
             return { follower, amount: amount.toString(), error: String(e).slice(0, 200) };
           }
@@ -516,8 +571,8 @@ export class Arena {
       const i = !x.quote && h ? this.capLedger.indexOf(h) : -1;
       if (i >= 0) this.capLedger.splice(i, 1);
     }
-    const out = new Map<string, FollowerQuote>([...rejected, ...quoted].map((x) => [x.follower, x]));
-    return open.map((f) => out.get(f.follower)!);
+    const out = new Map<string, FollowerQuote>([...wrongToken, ...rejected, ...quoted].map((x) => [x.follower, x]));
+    return all.map((f) => out.get(f.follower)!);
   }
 
   /** Yocto quoted in the last 24 h, for CAP_PER_DAY_YOCTO. Counts prepared fills, not settled ones (conservative).
