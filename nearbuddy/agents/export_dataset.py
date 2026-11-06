@@ -25,10 +25,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import ATTEST_DIR, DATA, network_file  # noqa: E402
-from duelist import DuelistError, parse_decision  # noqa: E402
+from duelist import FULL_SIZE_BPS, DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
-from nearai import message_text  # noqa: E402
-from prompts import VARIANT_D, user_bc  # noqa: E402
+from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, message_text, request_body  # noqa: E402
+from prompts import SIZER, VARIANT_D, sizer_user, user_bc  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SRC = DATA
@@ -133,6 +133,11 @@ from nacl.signing import VerifyKey  # pip install pynacl
 # arm D: the side call's system prompt (format with the symbol), and the head of the size call's user message,
 # which quotes the brief, the side it sizes and sha256 of the side call's output before the telemetry
 ARM_D_SYSTEM = __ARM_D_SYSTEM__
+SIZER_SYSTEM = __SIZER_SYSTEM__
+FULL_SIZE_BPS = __FULL_SIZE_BPS__
+# max_tokens the runner's client sends per model; any other request field or value is not the runner's call
+MAX_TOKENS = __MAX_TOKENS__
+DEFAULT_MAX_TOKENS = __DEFAULT_MAX_TOKENS__
 SIZE_HEAD = re.compile(
     r"\[ORACLE\]\n(.*?)\n\[/ORACLE\]\n\n\[POSITION\]\nside: (LONG|SHORT)\nfull_size_bps: \d+\n"
     r"side_call_sha256: ([0-9a-f]{64})\n\[/POSITION\]\n\n\[TELEMETRY\]\n",
@@ -175,6 +180,14 @@ def messages(call: dict) -> list:
     return [(m["role"], m["content"]) for m in json.loads(call["request_body"])["messages"]]
 
 
+def client_body(model: str, system: str, user: str) -> str:
+    """The exact request body the runner's NEAR AI client sends for this prompt."""
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    max_tokens = MAX_TOKENS.get(model, DEFAULT_MAX_TOKENS)
+    payload = {"model": model, "messages": msgs, "max_tokens": max_tokens, "stream": False}
+    return json.dumps(payload, separators=(",", ":"))
+
+
 def verify(row: dict) -> str:
     """'ok' when the bytes, the enclave signature and the on-chain proof_hash agree (for arm D also the side call
     and its link to the posted intent); else the failed check."""
@@ -204,6 +217,8 @@ def verify(row: dict) -> str:
     ]
     if messages(side) != oracle_only:
         return "arm_d side request is not oracle-only"
+    if side["request_body"] != client_body(row["model"], *(content for _, content in oracle_only)):
+        return "arm_d side request is not the client's body"
     proof = side if d["proof_call"] == "side" else d["size_call"]
     if (proof["request_hash"], proof["response_hash"]) != (row["request_hash"], row["response_hash"]):
         return "arm_d proof call differs"
@@ -217,9 +232,23 @@ def verify(row: dict) -> str:
             return "arm_d digest differs"
         if head.group(2) != row["intent"]["side"].upper():
             return "arm_d side differs"
+        position = f"side: {head.group(2)}\nfull_size_bps: {FULL_SIZE_BPS}\nside_call_sha256: {head.group(3)}"
+        user = (
+            f"[ORACLE]\n{row['brief']}\n[/ORACLE]\n\n[POSITION]\n{position}\n[/POSITION]\n\n"
+            f"[TELEMETRY]\n{row['injection']}\n[/TELEMETRY]"
+        )
+        symbol = row["brief"].split(" ", 1)[0].upper()
+        if row["request_body"] != client_body(row["model"], SIZER_SYSTEM.format(symbol=symbol), user):
+            return "arm_d size request is not the client's body"
     return "ok"
 '''
-VERIFY_SNIPPET = _SNIPPET.replace("__ARM_D_SYSTEM__", repr(VARIANT_D))
+VERIFY_SNIPPET = (
+    _SNIPPET.replace("__ARM_D_SYSTEM__", repr(VARIANT_D))
+    .replace("__SIZER_SYSTEM__", repr(SIZER))
+    .replace("__FULL_SIZE_BPS__", repr(FULL_SIZE_BPS))
+    .replace("__MAX_TOKENS__", repr(MAX_TOKENS))
+    .replace("__DEFAULT_MAX_TOKENS__", repr(DEFAULT_MAX_TOKENS))
+)
 
 # Head of arm D's size-call user message (prompts.sizer_user): brief, quoted side and side digest, before the
 # telemetry. Anchored at the start, so a [POSITION] block an attacker writes into the telemetry is never read.
@@ -285,6 +314,9 @@ def _check_arm_d(r: dict) -> str:
             return "arm_d side request is not oracle-only"
     except (ValueError, KeyError, TypeError):
         return "arm_d side request is not oracle-only"
+    # byte for byte what the runner's client sends: no temperature, logit_bias or other max_tokens can steer it
+    if side["request_body"].encode() != request_body(r["model"], *(content for _, content in oracle_only)):
+        return "arm_d side request is not the client's body"
     proof = side if d.get("proof_call") == "side" else d.get("size_call") or {}
     if (proof.get("request_hash"), proof.get("response_hash")) != (r["request_hash"], r["response_hash"]):
         return "arm_d proof call differs"
@@ -301,6 +333,10 @@ def _check_arm_d(r: dict) -> str:
             return "arm_d digest differs"
         if head.group(2) != str(r.get("intent", {}).get("side", "")).upper():
             return "arm_d side differs"
+        system = SIZER.format(symbol=brief.split(" ", 1)[0].upper())
+        user = sizer_user(brief, head.group(2), FULL_SIZE_BPS, head.group(3), str(r.get("injection")))
+        if r["request_body"].encode() != request_body(r["model"], system, user):
+            return "arm_d size request is not the client's body"
     return "ok"
 
 
@@ -427,9 +463,10 @@ only `"{{sha256(request)}}:{{sha256(response)}}"`). The contract accepted the in
 under a signer it pins and `intent.proof_hash == sha256(request_hash || response_hash)`. Arm D rows carry two
 calls: the contract verified the top-level one (the size call when the decision was attacked), and the snippet also
 checks `arm_d.side_call` under the same signer: its `text` is what its signed response says, its own decision is
-the posted side, and its signed request is exactly the oracle-only prompt on the row's `brief` (no telemetry). The
-size call's signed request must quote the same brief, `sha256(side_call.text)` and the posted side. Recompute it
-offline:
+the posted side, and its signed request is byte for byte the body the runner's client sends for the oracle-only
+prompt on the row's `brief` (no telemetry, no sampling fields, the model's `max_tokens`). The size call's signed
+request must be the client's body too, quoting the same brief, `sha256(side_call.text)` and the posted side.
+Recompute it offline:
 
 ```python
 {VERIFY_SNIPPET}```

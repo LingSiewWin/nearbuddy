@@ -68,6 +68,19 @@ DEFAULT_MAX_TOKENS = 600  # pair 1 (DeepSeek-V4.1-Flash, Qwen3.8-27B): keep it, 
 MAX_TOKENS = {"Qwen/Qwen3.6-35B-A3B-FP8": 1800, "z-ai/glm-5.3-flash": 1600}
 
 
+def request_body(model_id: str, system: str, user: str, max_tokens: int | None = None) -> bytes:
+    """The exact chat-completion request bytes the enclave signs. One builder for the client, the dataset verifier
+    and the tests, so a body with any other field (temperature, logit_bias, another max_tokens) never verifies."""
+    payload = {
+        "model": model_id,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "max_tokens": max_tokens or MAX_TOKENS.get(model_id, DEFAULT_MAX_TOKENS),
+        # streaming responses are re-chunked by the gateway; the model enclave signs only the exact bytes
+        "stream": False,
+    }
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
 class NearAiClient:
     tee = True
 
@@ -84,14 +97,7 @@ class NearAiClient:
         self._max_tokens = max_tokens or MAX_TOKENS.get(model_id, DEFAULT_MAX_TOKENS)
 
     def complete(self, system: str, user: str) -> Completion:
-        payload = {
-            "model": self.model_id,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "max_tokens": self._max_tokens,
-            # streaming responses are re-chunked by the gateway; the model enclave signs only the exact bytes
-            "stream": False,
-        }
-        body = json.dumps(payload, separators=(",", ":")).encode()
+        body = request_body(self.model_id, system, user, self._max_tokens)
         r = requests.post(f"{self._base}/chat/completions", headers=self._headers, data=body, timeout=180)
         r.raise_for_status()
         j = r.json()

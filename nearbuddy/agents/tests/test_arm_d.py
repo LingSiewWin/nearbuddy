@@ -21,7 +21,7 @@ from duelist import FULL_SIZE_BPS, Duelist  # noqa: E402
 from export_dataset import VERIFY_SNIPPET, check_row  # noqa: E402
 from intent_client import Solver, proof_hash, tee_proof  # noqa: E402
 from keys import pk_b64  # noqa: E402
-from nearai import Completion  # noqa: E402
+from nearai import Completion, request_body  # noqa: E402
 from prompts import SIZER, VARIANT_D, sizer_user, system_prompt, user_bc  # noqa: E402
 
 CLOSE_NS = 1_700_000_000_000_000_000
@@ -49,11 +49,12 @@ class Enclave:
         self.unsigned: set[int] = set()  # call indexes whose signature record is withheld
         self.dropped: set[int] = set()  # call indexes whose signature fetch drops the connection
 
-    def sign(self, system: str, user: str, text: str, chat_id: str) -> Completion:
-        """A completion this enclave signed: the request bytes exactly as NearAiClient lays them out."""
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        payload = {"model": self.model_id, "messages": messages, "max_tokens": 600, "stream": False}
-        req = json.dumps(payload, separators=(",", ":")).encode()
+    def sign(self, system: str, user: str, text: str, chat_id: str, extra: dict | None = None) -> Completion:
+        """A completion this enclave signed: the request bytes NearAiClient sends, or, with `extra`, a body with
+        other sampling fields merged in (what an operator steering the enclave would send)."""
+        req = request_body(self.model_id, system, user)
+        if extra:
+            req = json.dumps({**json.loads(req), **extra}, separators=(",", ":")).encode()
         res = json.dumps({"id": chat_id, "choices": [{"message": {"content": text}}]}).encode()
         msg = f"{self.model_id}:{hashlib.sha256(req).hexdigest()}:{hashlib.sha256(res).hexdigest()}"
         self.records[chat_id] = {
@@ -267,19 +268,21 @@ SIDE_SYSTEM = VARIANT_D.format(symbol="NEAR/USD")
 SIZE_SYSTEM = SIZER.format(symbol="NEAR/USD")
 
 
-def signed(model: Enclave, system: str, user: str, text: str) -> dict:
+def signed(model: Enclave, system: str, user: str, text: str, extra: dict | None = None) -> dict:
     """A call record the same enclave really signed (any prompt, any answer): what a dishonest operator can get."""
     chat_id = f"chatcmpl-forged-{len(model.records)}"
-    c = model.sign(system, user, text, chat_id)
+    c = model.sign(system, user, text, chat_id, extra)
     return runner._call_record(c, model.records[chat_id], None)
 
 
-def forge(r: dict, model: Enclave, side_call: dict, quoted_side: str, brief: str | None = None) -> dict:
+def forge(
+    r: dict, model: Enclave, side_call: dict, quoted_side: str, brief: str | None = None, extra: dict | None = None
+) -> dict:
     """Row `r` re-linked to `side_call`: a fresh signed size call quoting `quoted_side`, the side call's digest and
     `brief`, the intent posted on `quoted_side` and re-bound to that size call's proof, as an operator could post it."""
     digest = hashlib.sha256(side_call["text"].encode()).hexdigest()
     user = sizer_user(brief or r["brief"], quoted_side, FULL_SIZE_BPS, digest, r["injection"])
-    size = signed(model, SIZE_SYSTEM, user, '{"size_bps": 5000}')
+    size = signed(model, SIZE_SYSTEM, user, '{"size_bps": 5000}', extra)
     t = copy(r)
     req, res = bytes.fromhex(size["request_hash"]), bytes.fromhex(size["response_hash"])
     t |= {k: size[k] for k in ("text", "chat_id", "request_body", "response_body", "request_hash", "response_hash")}
@@ -408,3 +411,37 @@ def test_dropped_signature_fetch_on_either_call_skips_the_cycle(enclave_agent):
         r = rows()[-1]
         assert r["error"].startswith("transient: signature") and "intent" not in r, dropped
         assert r["arm_d"]["side_call"]["tee"] is None or dropped == 1
+
+
+STEERED = [
+    {"logit_bias": {"16843": 100}},  # push the token for "short"
+    {"temperature": 2},
+    {"max_tokens": 1},
+]
+
+
+@pytest.mark.parametrize("extra", STEERED)
+def test_side_call_steered_through_sampling_fields_is_rejected(enclave_agent, extra):
+    """Review d5403b5: the same oracle-only messages, but a body the runner's client never sends. Validly signed by
+    the same enclave; only the request fields differ."""
+    d, sk, comp, model = enclave_agent
+    r = attacked_row(enclave_agent)
+    steered = signed(model, SIDE_SYSTEM, user_bc(r["brief"], None), '{"direction": "short"}', extra)
+    assert_rejected(forge(r, model, steered, "Short"), "arm_d side request is not the client's body")
+
+
+@pytest.mark.parametrize("extra", STEERED)
+def test_size_call_steered_through_sampling_fields_is_rejected(enclave_agent, extra):
+    d, sk, comp, model = enclave_agent
+    r = attacked_row(enclave_agent)
+    t = forge(r, model, r["arm_d"]["side_call"], "Long", extra=extra)
+    assert_rejected(t, "arm_d size request is not the client's body")
+
+
+def test_the_runner_client_body_is_the_one_the_verifier_rebuilds(enclave_agent):
+    """Honest rows from the real runner path verify, so the shared builder matches what the client sent."""
+    r = attacked_row(enclave_agent)
+    assert r["request_body"].encode() == request_body(
+        r["model"], SIZE_SYSTEM, json.loads(r["request_body"])["messages"][1]["content"]
+    )
+    assert check_row(r) == (True, "ok") and snippet_verify(r) == "ok"
