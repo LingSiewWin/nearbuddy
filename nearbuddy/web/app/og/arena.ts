@@ -2,14 +2,16 @@
 // as the arena's "Who falls for fake news" squares: model family and prompt), the foot from the chain's live
 // duel. The record is a local file and the chain may be slow or down, so the chain gets a short deadline
 // and every part has a static stand-in: the card always renders.
-import { type Summary, snapshot, summary } from "../api/arena";
+import { type Agent, type Config, type Duel, type Summary, summary } from "../api/arena";
 import { type Decision, getDecisions } from "../api/dataset";
+import { ARENA, RPC, viewOn } from "../api/near";
 import { pct, promptName, who } from "../ui/format";
 import type { Card, Mark, Span } from "./card";
 import { toneOf } from "./card";
 
 const CHAIN_MS = 3_500;
 const MIN_LIES = 5; // a group needs this many attacks before the card quotes it
+const view = viewOn(ARENA);
 
 type Group = { model: string; arm: string; rows: Decision[]; fell: number; spotted: number };
 
@@ -66,9 +68,34 @@ export const FALLBACK = {
   foot: ["Five-minute duels on NEAR testnet"],
 } satisfies Card;
 
+/** The newest duel in the v1 shape: two round trips, not the arena page's full scan, because a crawler
+ * usually lands on a cold function and waits only seconds. */
+async function read(): Promise<Summary> {
+  const config = (await view("get_config", {})) as Config;
+  const n = Number(config.next_duel);
+  const [leaderboard, duel] = await Promise.all([
+    view("leaderboard", {}) as Promise<Agent[]>,
+    n ? (view("get_duel", { duel_id: String(n - 1) }) as Promise<Duel | null>) : null,
+  ]);
+  const duels = duel ? [duel] : [];
+  return summary({ at: Date.now(), rpc: RPC, contract: ARENA, config, leaderboard, duels, solver: null });
+}
+// kept for 20 s and shared by concurrent cards; a read that misses one card's deadline still serves the next
+let last: { at: number; s: Promise<Summary> } | null = null;
+function newest(): Promise<Summary> {
+  if (!last || Date.now() - last.at > 20_000) {
+    const s = read();
+    last = { at: Date.now(), s };
+    s.catch(() => {
+      if (last?.s === s) last = null;
+    });
+  }
+  return last.s;
+}
+
 export async function arenaCard(): Promise<Card> {
   const chain = Promise.race([
-    snapshot().then((s) => summary(s)),
+    newest(),
     new Promise<null>((ok) => setTimeout(() => ok(null), CHAIN_MS)),
   ]).catch(() => null);
   const [decisions, s] = await Promise.all([getDecisions().catch(() => []), chain]);
