@@ -103,7 +103,7 @@ def test_report_on_synthetic_rows():
     # final calls: Long in up duel 1, Short in down duel 2
     assert cal[3] == "2/2 = 1.00 [0.34, 1.00] PROVISIONAL, 2 agent-duels"
     # always Long is right in duel 1 only: the model alone is right in duel 2 -> 1:0; momentum is right in both
-    assert cal[4] == "1/2; model BETTER 1:0 PROVISIONAL" and cal[5] == "2/2; model EVEN 0:0 PROVISIONAL"
+    assert cal[4] == "1/2; model BETTER 1:0 p=1 PROVISIONAL" and cal[5] == "2/2; model EVEN 0:0 p=1 PROVISIONAL"
     assert cal[6] == "3/4 = 0.75 [0.20, 0.97] PROVISIONAL, 2 agent-duels |"  # forward: 3 of 4 right to the close
     assert line("| ALL GROUPS |", "## 1.").split(" | ")[3].startswith("3/3 = 1.00")  # + b's final Long in duel 1
     assert line("| N (hardened) |", "## 1.").split(" | ")[1].endswith("(base 1.00)")  # duel 3 unresolved: out
@@ -161,11 +161,26 @@ def test_cluster_n_drives_interval_and_firm():
     assert mr.clustered(two, [True, False], 0.5).endswith(", 2 agent-duels")
 
 
+def test_sign_p_by_hand():
+    # 3:18, n = 21: 2 * (C(21,0) + C(21,1) + C(21,2) + C(21,3)) / 2^21 = 2 * (1 + 21 + 210 + 1330) / 2097152
+    assert mr.sign_p(3, 18) == mr.sign_p(18, 3) == 3124 / 2097152  # 0.00149
+    # 20:5, n = 25: 2 * (1 + 25 + 300 + 2300 + 12650 + 53130) / 2^25 = 136812 / 33554432 = 0.00408
+    assert mr.sign_p(20, 5) == 136812 / 33554432
+    assert mr.sign_p(7, 0) == 2 / 128 and mr.sign_p(8, 0) == 2 / 256  # 0.0156 and 0.0078: the 0.01 line
+    assert mr.sign_p(1, 1) == mr.sign_p(0, 0) == mr.sign_p(1, 0) == 1.0  # capped
+
+
 def test_paired_says_direction():
-    # 25 duels only the model got right, 5 only the baseline: wilson(25, 30) = [0.66, 0.93] excludes 0.5
+    # 25 duels only the model got right, 5 only the baseline: wilson(25, 30) = [0.66, 0.93] excludes 0.5;
+    # p = 2 * (1 + 30 + 435 + 4060 + 27405 + 142506) / 2^30 = 0.00032
     model = [True] * 25 + [False] * 5 + [True] * 10
     base = [False] * 25 + [True] * 5 + [True] * 10  # 10 concordant duels do not count
-    assert mr.paired(model, base) == "model BETTER 25:5 FIRM"
-    assert mr.paired(base, model) == "model WORSE 5:25 FIRM"
-    assert mr.paired(model[5:], base[5:]) == "model BETTER 20:5 PROVISIONAL"  # 25 discordant < 30
-    assert mr.paired([True, False], [False, True]) == "model EVEN 1:1 PROVISIONAL"
+    assert mr.paired(model, base) == "model BETTER 25:5 p=0.00032 FIRM"
+    assert mr.paired(base, model) == "model WORSE 5:25 p=0.00032 FIRM"
+    # 25 discordant < 30, but the exact p 0.0041 < 0.01 makes it FIRM
+    assert mr.paired(model[5:], base[5:]) == "model BETTER 20:5 p=0.0041 FIRM"
+    # the review's 3:18 (p 0.0015) is FIRM by p alone
+    assert mr.paired([False] * 3 + [True] * 18, [True] * 3 + [False] * 18) == "model BETTER 18:3 p=0.0015 FIRM"
+    assert mr.paired([True] * 7, [False] * 7) == "model BETTER 7:0 p=0.016 PROVISIONAL"  # just above 0.01
+    assert mr.paired([True] * 8, [False] * 8) == "model BETTER 8:0 p=0.0078 FIRM"
+    assert mr.paired([True, False], [False, True]) == "model EVEN 1:1 p=1 PROVISIONAL"

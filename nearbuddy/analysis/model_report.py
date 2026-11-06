@@ -17,7 +17,8 @@ the 95% Wilson interval and FIRM/PROVISIONAL treat each agent-duel, a distinct (
 observation at the pooled rate: wilson(p * m, m) with m agent-duels. That assumes the calls inside an agent-duel
 are fully correlated, the conservative end. FIRM: m >= 30 and the interval excludes the baseline. Model vs
 always-Long and vs momentum is a paired sign test on the duels where exactly one of the two is right: BETTER or
-WORSE by the larger count, FIRM when those discordant duels number >= 30 and their Wilson interval excludes 0.5.
+WORSE by the larger count, with the exact two-sided binomial p; FIRM when p < 0.01, or when those discordant duels
+number >= 30 and their Wilson interval excludes 0.5.
 Means carry a normal 95% CI over decisions and are descriptive only.
 
 Run:  agents/.venv/bin/python analysis/model_report.py [path/to/decisions.jsonl]
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -93,15 +95,22 @@ def clustered(rows: list[dict], hit: list[bool], baseline: float) -> str:
     return f"{k}/{n} = {k / n:.2f} [{lo:.2f}, {hi:.2f}] {'FIRM' if firm else 'PROVISIONAL'}, {m} agent-duels"
 
 
+def sign_p(b: int, c: int) -> float:
+    """Exact two-sided binomial p of b:c under 1/2: twice the tail at the smaller count, capped at 1."""
+    n = b + c
+    return min(1.0, 2 * sum(math.comb(n, i) for i in range(min(b, c) + 1)) / 2**n)
+
+
 def paired(model: list[bool], base: list[bool]) -> str:
     """Sign test of the model's hits against a baseline's hits on the same duels: b duels only the model got right,
     c only the baseline did."""
     b = sum(x and not y for x, y in zip(model, base, strict=True))
     c = sum(y and not x for x, y in zip(model, base, strict=True))
     lo, hi = ie.wilson(b, b + c)
-    firm = b + c >= 30 and not lo <= 0.5 <= hi
+    p = sign_p(b, c)
+    firm = p < 0.01 or (b + c >= 30 and not lo <= 0.5 <= hi)
     side = "BETTER" if b > c else "WORSE" if c > b else "EVEN"
-    return f"model {side} {b}:{c} {'FIRM' if firm else 'PROVISIONAL'}"
+    return f"model {side} {b}:{c} p={p:.2g} {'FIRM' if firm else 'PROVISIONAL'}"
 
 
 def brief_bps(r: dict) -> float:
@@ -166,7 +175,8 @@ def render(rows: list[dict], duels: dict[str, dict], sets: dict[str, list[str]])
         "last decision per resolved, non-flat duel; a coin hits 0.50, always-Long hits the up share of those duels, "
         "the momentum rule (Long when the final brief's move since open is >= 0) is the baseline that already sees "
         "most of the duel; model vs each is a paired sign test (b:c = duels only the model got right : duels only "
-        "the baseline got right). Last column: every unattacked decision scored from its own spot to the close, the "
+        "the baseline got right; exact two-sided binomial p, FIRM at p < 0.01). Last column: every unattacked "
+        "decision scored from its own spot to the close, the "
         "forward-looking test. Intervals and FIRM count agent-duels, not decisions.",
         "",
     ]
