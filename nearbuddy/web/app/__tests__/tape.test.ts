@@ -98,10 +98,19 @@ describe("decode: real testnet transactions", () => {
     });
   });
 
-  test("an open_duel without an open_price log has no duel id or price", () => {
+  test("an open_duel without an open_price log takes its id from the method's return value", () => {
+    const f = copy(openDuel);
+    for (const r of f.tx.receipts) r.execution_outcome.outcome.logs = [];
+    expect(run(f)).toMatchObject({ kind: "open", duel: 347, price: null, a: AGENT_A, b: AGENT_B });
+  });
+
+  test("a refused open_duel with no log and no return value has no duel id or price", () => {
     const f = copy(openDuel);
     f.meta.is_success = false;
-    for (const r of f.tx.receipts) r.execution_outcome.outcome.logs = [];
+    for (const r of f.tx.receipts) {
+      r.execution_outcome.outcome.logs = [];
+      (r.execution_outcome.outcome as { status?: unknown }).status = { Failure: {} };
+    }
     expect(run(f)).toMatchObject({ kind: "open", ok: false, duel: null, price: null, a: AGENT_A, b: AGENT_B });
   });
 
