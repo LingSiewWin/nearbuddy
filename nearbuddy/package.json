@@ -9,7 +9,7 @@
     "api": "bun packages/resource-server/src/index.ts",
     "solver": "bun packages/solver/src/index.ts",
     "demo": "bun packages/demo/src/index.ts",
-    "test": "bun test packages/protocol/src packages/solver/src",
+    "test": "bun test packages/protocol/src packages/solver/src packages/demo/src",
     "lint": "biome check .",
     "format": "biome format --write .",
     "web": "bun --cwd web dev",
