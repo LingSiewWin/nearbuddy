@@ -11,13 +11,17 @@
 # Logs: /tmp/nearbuddy-pair2-night.log (one line per batch), /tmp/nearbuddy-pair2-batch<N>.log (runner),
 # /tmp/nearbuddy-pair2-spectator-<N>.log, /tmp/nearbuddy-pair2-resolve-stuck.log.
 # Run it detached: nohup scripts/second-loop.sh --until 0530 > /tmp/nearbuddy-pair2-driver.log 2>&1 &
+# Stop at the next batch boundary: touch /tmp/nearbuddy-pair2-loop.stop (the loop leaves it in place; remove it before a
+# restart). SIGINT to a backgrounded bash is ignored, and the next batch starts within a second of the last one.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
 PAIR=p2
-LOG=/tmp/nearbuddy-pair2-night.log
-PIDFILE=/tmp/nearbuddy-pair2-loop.pid
-STUCK_LOG=/tmp/nearbuddy-pair2-resolve-stuck.log
+RUN=${NEARBUDDY_RUN_DIR:-/tmp} # logs, pidfiles and stop files; tests point it at a temp dir
+LOG=$RUN/nearbuddy-pair2-night.log
+PIDFILE=$RUN/nearbuddy-pair2-loop.pid
+STOP_FILE=$RUN/nearbuddy-pair2-loop.stop # present = finish the running batch, start no other, exit 0
+STUCK_LOG=$RUN/nearbuddy-pair2-resolve-stuck.log
 SOLVER_PORT=${SOLVER_PORT:-4020}
 SPECTATOR_ID=${SPECTATOR_ID:-nearbuddy-solver.testnet}
 SPECTATOR_DELAY_S=100 # the runner registers and opens round 0 first
@@ -79,28 +83,28 @@ log() { echo "$(date '+%H:%M') $*" >> "$LOG"; }
 show() { printf '+'; printf ' %q' "$@"; printf '\n'; }
 
 # pair 2's keys (read-only views); exit 1 = one of them is still in a duel
-agents=$("${check_cmd[@]}" 2> /tmp/nearbuddy-pair2-check.log)
+agents=$("${check_cmd[@]}" 2> "$RUN/nearbuddy-pair2-check.log")
 check_rc=$?
-[ -n "$agents" ] || die "could not derive pair $PAIR's keys: $(tail -1 /tmp/nearbuddy-pair2-check.log)"
+[ -n "$agents" ] || die "could not derive pair $PAIR's keys: $(tail -1 "$RUN/nearbuddy-pair2-check.log")"
 spectator_cmd=(env AGENTS="$agents" DUELS="$rounds" TARGET=alt PAYLOAD_SET="$payload_set" SPECTATOR_ID="$SPECTATOR_ID"
   IDLE_MINUTES="$IDLE_MINUTES" bun packages/demo/src/spectator.ts)
 
 if [ "$dry" = 1 ]; then
   echo "# pair $PAIR: A $model_a, B $model_b; until $until_hhmm ($(date -r "$deadline" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$deadline" '+%Y-%m-%d %H:%M')), batches from $start_batch, lock $PIDFILE, log $LOG"
   show "${check_cmd[@]}"
-  if [ "$check_rc" -ne 0 ]; then echo "  -> would refuse to start: $(tr '\n' ' ' < /tmp/nearbuddy-pair2-check.log)"; else echo "  -> no pair $PAIR agent in a duel"; fi
+  if [ "$check_rc" -ne 0 ]; then echo "  -> would refuse to start: $(tr '\n' ' ' < "$RUN/nearbuddy-pair2-check.log")"; else echo "  -> no pair $PAIR agent in a duel"; fi
   echo "# batch $start_batch"
   echo "+ wait for http://127.0.0.1:$SOLVER_PORT/arena (never restarted here)"
   echo "+ after ${SPECTATOR_DELAY_S}s, in the background:"
-  show "${spectator_cmd[@]}"; echo "  > /tmp/nearbuddy-pair2-spectator-$start_batch.log"
-  show "${runner_cmd[@]}"; echo "  > /tmp/nearbuddy-pair2-batch$start_batch.log"
+  show "${spectator_cmd[@]}"; echo "  > $RUN/nearbuddy-pair2-spectator-$start_batch.log"
+  show "${runner_cmd[@]}"; echo "  > $RUN/nearbuddy-pair2-batch$start_batch.log"
   echo "# then stop the spectator; on a non-zero runner exit also:"
   show "${stuck_cmd[@]}"; echo "  >> $STUCK_LOG"
   echo "+ sleep $BACKOFF_S"
   exit 0
 fi
 
-[ "$check_rc" -eq 0 ] || die "pair $PAIR agents are in a duel ($(tr '\n' ' ' < /tmp/nearbuddy-pair2-check.log)); run: ${stuck_cmd[*]}"
+[ "$check_rc" -eq 0 ] || die "pair $PAIR agents are in a duel ($(tr '\n' ' ' < "$RUN/nearbuddy-pair2-check.log")); run: ${stuck_cmd[*]}"
 
 other_runners() { pgrep -f "agents/runner\.py --pair-tag $PAIR --rounds" | tr '\n' ' '; }
 
@@ -143,9 +147,13 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep "$BACKOFF_S"
     continue
   fi
+  if [ -e "$STOP_FILE" ]; then # checked right before a batch starts: deploy-contract.sh --at-boundary
+    log "stopping at boundary ($STOP_FILE present), next would be #$i"
+    exit 0
+  fi
   log "batch $i A $model_a B $model_b variants ${variants:-none} payload $payload_set"
-  batch_log=/tmp/nearbuddy-pair2-batch$i.log
-  (sleep "$SPECTATOR_DELAY_S"; exec "${spectator_cmd[@]}") > "/tmp/nearbuddy-pair2-spectator-$i.log" 2>&1 &
+  batch_log=$RUN/nearbuddy-pair2-batch$i.log
+  (sleep "$SPECTATOR_DELAY_S"; exec "${spectator_cmd[@]}") > "$RUN/nearbuddy-pair2-spectator-$i.log" 2>&1 &
   spec=$!
   "${runner_cmd[@]}" > "$batch_log" 2>&1 &
   runner=$!
