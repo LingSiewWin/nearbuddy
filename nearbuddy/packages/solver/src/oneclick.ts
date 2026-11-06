@@ -2,7 +2,7 @@
 // (https://1click.chaindefuser.com/docs/v0/openapi.yaml, read 2026-11-05). Mainnet only: there is
 // no 1Click testnet. Dry quotes are free and keyless; without a partner key a real swap carries a
 // 25 bps platform fee. `swap` is the only paid path and is never called by the arena loop.
-import { teraToGas, type Account } from "near-api-js";
+import { actions, teraToGas, type Account } from "near-api-js";
 
 export const ONECLICK_URL = process.env.ONECLICK_URL ?? "https://1click.chaindefuser.com";
 export const ONECLICK_JWT = process.env.ONECLICK_JWT;
@@ -84,30 +84,47 @@ export function sellNearForUsdcOnChain(amountYocto: bigint, account: string): Qu
   };
 }
 
-export interface SwapResult { quote: Quote; wrapTx: string; depositTx: string; status: SwapStatus; amountOut?: string }
+export interface SwapResult {
+  quote: Quote; wrapTx: string; depositTx: string; status: SwapStatus; amountOut?: string;
+  /** Wall-clock ms per leg: quote, the one deposit tx, 1Click from deposit to a final status. */
+  legs: { quote_ms: number; deposit_ms: number; fill_ms: number };
+}
+
+const STORAGE = 1_250_000_000_000_000_000_000n; // wrap.near storage_balance_bounds.min
 
 export async function executeSwap(account: Account, amountYocto: bigint, log: (s: string) => void = () => {}): Promise<SwapResult> {
+  const t0 = Date.now();
   const q = await quote(sellNearForUsdcOnChain(amountYocto, account.accountId));
   const dep = q.quote.depositAddress;
   if (!dep) throw new Error("quote has no depositAddress (dry?)");
-  log(`quote ${q.quote.amountInFormatted} wNEAR -> ${q.quote.amountOutFormatted} USDC, deposit to ${dep}, deadline ${q.quote.deadline}`);
-  // wrap: near_deposit mints wNEAR 1:1 (storage_deposit first in case the account is new to wrap.near)
-  await account.callFunctionRaw({ contractId: "wrap.near", methodName: "storage_deposit", args: {}, gas: teraToGas("30"), deposit: 1_250_000_000_000_000_000_000n });
-  const wrap = await account.callFunctionRaw({ contractId: "wrap.near", methodName: "near_deposit", args: {}, gas: teraToGas("30"), deposit: amountYocto });
-  log(`wrapped ${amountYocto} yocto: ${wrap.transaction.hash}`);
-  // the deposit address must hold a wNEAR storage slot before it can receive
-  await account.callFunctionRaw({ contractId: "wrap.near", methodName: "storage_deposit", args: { account_id: dep }, gas: teraToGas("30"), deposit: 1_250_000_000_000_000_000_000n });
-  const xfer = await account.callFunctionRaw({
-    contractId: "wrap.near", methodName: "ft_transfer", args: { receiver_id: dep, amount: amountYocto.toString() }, gas: teraToGas("30"), deposit: 1n,
-  });
-  log(`ft_transfer to deposit address: ${xfer.transaction.hash}`);
+  const t1 = Date.now();
+  log(`quote ${q.quote.amountInFormatted} wNEAR -> ${q.quote.amountOutFormatted} USDC, deposit to ${dep}, deadline ${q.quote.deadline} (${t1 - t0} ms)`);
+  // One transaction, three actions on wrap.near: storage for the deposit address (refunded by wrap.near if it
+  // already has one), near_deposit minting the exact amount (the sender's own storage is paid from the same
+  // call when it is new to wrap.near), ft_transfer to the deposit address. Measured: one tx ~2.5 s where the
+  // old four sequential calls took ~33 s on rpc.mainnet.near.org.
+  const registered = (await account.provider.callFunction({ contractId: "wrap.near", method: "storage_balance_of", args: { account_id: account.accountId } })) as unknown;
+  const acts = [
+    ...(registered ? [] : [actions.functionCall("storage_deposit", {}, teraToGas("10"), STORAGE)]),
+    actions.functionCall("storage_deposit", { account_id: dep }, teraToGas("10"), STORAGE),
+    actions.functionCall("near_deposit", {}, teraToGas("10"), amountYocto),
+    actions.functionCall("ft_transfer", { receiver_id: dep, amount: amountYocto.toString() }, teraToGas("30"), 1n),
+  ];
+  const xfer = await account.signAndSendTransaction({ receiverId: "wrap.near", actions: acts });
+  const t2 = Date.now();
+  log(`wrapped and transferred ${amountYocto} yocto to the deposit address in one tx: ${xfer.transaction.hash} (${t2 - t1} ms)`);
   await submitDeposit(xfer.transaction.hash, dep);
   let st = await status(dep);
-  for (let i = 0; i < 40 && !["SUCCESS", "REFUNDED", "FAILED"].includes(st.status); i++) {
-    await new Promise((r) => setTimeout(r, 5_000));
+  for (let i = 0; i < 60 && !["SUCCESS", "REFUNDED", "FAILED"].includes(st.status); i++) {
+    await new Promise((r) => setTimeout(r, 2_000));
     st = await status(dep);
-    log(`status ${st.status}`);
+    log(`status ${st.status} (${Date.now() - t2} ms after deposit)`);
   }
+  const t3 = Date.now();
   if (st.status !== "SUCCESS") throw new Error(`swap ended ${st.status} (deposit tx ${xfer.transaction.hash}); not a proof`);
-  return { quote: q, wrapTx: wrap.transaction.hash, depositTx: xfer.transaction.hash, status: st.status, amountOut: (st.swapDetails as { amountOut?: string } | undefined)?.amountOut };
+  return {
+    quote: q, wrapTx: xfer.transaction.hash, depositTx: xfer.transaction.hash, status: st.status,
+    amountOut: (st.swapDetails as { amountOut?: string } | undefined)?.amountOut,
+    legs: { quote_ms: t1 - t0, deposit_ms: t2 - t1, fill_ms: t3 - t2 },
+  };
 }
