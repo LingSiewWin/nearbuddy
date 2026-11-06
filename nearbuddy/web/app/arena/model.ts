@@ -6,7 +6,9 @@ import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import type { Tick } from "../lib/live";
 
-export type Intent = Extract<ArenaEvent, { kind: "intent" }>;
+/** A public call: a plain intent, or a sealed (commit-reveal) intent once it is revealed. */
+export type Intent = Extract<ArenaEvent, { kind: "intent" | "reveal" }>;
+export const isCall = (e: ArenaEvent): e is Intent => e.kind === "intent" || e.kind === "reveal";
 export type Attack = Extract<ArenaEvent, { kind: "attack" }>;
 export type Side = {
   agent: string;
@@ -96,9 +98,7 @@ export function priceAt(ticks: Tick[], t: number): number | null {
 }
 
 export const duelEvents = (events: ArenaEvent[], duel: number) => ({
-  intents: events
-    .filter((e): e is Intent => e.kind === "intent" && e.duel === duel && e.ok)
-    .sort((x, y) => x.at - y.at),
+  intents: events.filter((e): e is Intent => isCall(e) && e.duel === duel && e.ok).sort((x, y) => x.at - y.at),
   attacks: events
     .filter((e): e is Attack => e.kind === "attack" && e.duel === duel && e.ok)
     .sort((x, y) => x.at - y.at),
@@ -125,7 +125,7 @@ export function latestStory(
   if (atk) {
     const reply =
       events
-        .filter((e): e is Intent => e.kind === "intent" && e.ok && e.agent === atk.target && e.at > atk.at)
+        .filter((e): e is Intent => isCall(e) && e.ok && e.agent === atk.target && e.at > atk.at)
         .sort((x, y) => x.at - y.at)[0] ?? null;
     return {
       attack: atk,

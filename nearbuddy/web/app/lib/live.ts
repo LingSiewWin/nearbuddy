@@ -107,7 +107,8 @@ export function useEvents(initial: ArenaEvent[]) {
         2_500,
       );
     };
-    for (const k of ["intent", "attack", "open", "resolve", "register", "other"]) es.addEventListener(k, on);
+    for (const k of ["intent", "commit", "reveal", "attack", "open", "resolve", "register", "other"])
+      es.addEventListener(k, on);
     return () => es.close();
   }, [initial]);
   return { events, fresh };

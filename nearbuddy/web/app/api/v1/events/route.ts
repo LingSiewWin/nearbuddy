@@ -1,4 +1,4 @@
-// GET /api/v1/events?limit=50&since=<block>  newest-first arena events (intent, attack, open, resolve,
+// GET /api/v1/events?limit=50&since=<block>  newest-first arena events (intent, commit, reveal, attack, open, resolve,
 // register, other) decoded from the contract's transactions. `since` keeps only events after that block.
 import { json, jsonBody } from "../../near";
 import { tape } from "../../tape";

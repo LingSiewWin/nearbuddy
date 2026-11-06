@@ -8,7 +8,7 @@ import type { ArenaEvent } from "../api/tape";
 import type { Tick } from "../lib/live";
 import { Seal, useDrawer } from "../ui/drawer";
 import { clock, duelHref, mmss, near, pct, tone, who } from "../ui/format";
-import { type Focus, type Intent, markPct, openOf, priceAt } from "./model";
+import { type Focus, type Intent, isCall, markPct, openOf, priceAt } from "./model";
 
 type Filter = "all" | "calls" | "attacks" | "duels";
 
@@ -55,7 +55,7 @@ function Positions({ f, events, ticks, now }: { f: Focus; events: ArenaEvent[]; 
   const price = f.live ? (ticks.at(-1)?.p ?? null) : f.close;
   const open = openOf(f, ticks);
   const since = (pk: string) =>
-    events.find((e): e is Intent => e.kind === "intent" && e.ok && e.agent === pk && e.duel === f.duel)?.at;
+    events.find((e): e is Intent => isCall(e) && e.ok && e.agent === pk && e.duel === f.duel)?.at;
   const row = (s: Focus["a"], k: string) => {
     const at = since(s.agent);
     return (
@@ -116,7 +116,7 @@ export function Tape({
         filter === "all"
           ? true
           : filter === "calls"
-            ? e.kind === "intent"
+            ? isCall(e) || e.kind === "commit"
             : filter === "attacks"
               ? e.kind === "attack"
               : e.kind === "open" || e.kind === "resolve",
@@ -137,7 +137,7 @@ export function Tape({
 
   const reply = (pk: string, after: number) =>
     events
-      .filter((e): e is Intent => e.kind === "intent" && e.ok && e.agent === pk && e.at > after)
+      .filter((e): e is Intent => isCall(e) && e.ok && e.agent === pk && e.at > after)
       .sort((x, y) => x.at - y.at)[0];
 
   const row = (l: Line) => {
@@ -175,7 +175,20 @@ export function Tape({
       </time>
     );
     const cls = `row r-${e.kind}${fresh.has(e.tx) ? " new" : ""}${e.ok ? "" : " r-fail"}`;
-    if (e.kind === "intent") {
+    if (e.kind === "commit") {
+      const m = modelOf(e.agent);
+      return (
+        <div key={e.tx} className={`${cls} ${tone(m)}`} title="a hidden call: only its hash is public until the reveal">
+          {time}
+          <span className="ty">seal</span>
+          <span className="who">{who(m)}</span>
+          <span className="wt">sealed a call, revealed later</span>
+          <span />
+          <span className="px">{px?.toFixed(4) ?? ""}</span>
+        </div>
+      );
+    }
+    if (isCall(e)) {
       const m = modelOf(e.agent);
       const d = byTx.get(e.tx);
       return (
@@ -187,7 +200,7 @@ export function Tape({
           title={d?.reason ?? "open the proof"}
         >
           {time}
-          <span className="ty">call</span>
+          <span className="ty">{e.kind === "reveal" ? "reveal" : "call"}</span>
           <span className="who">{who(m)}</span>
           <span className="wt">
             {e.ok ? `${e.side} ${e.size / 100}%` : `${e.side} refused`}

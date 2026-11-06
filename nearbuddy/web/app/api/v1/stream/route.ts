@@ -1,7 +1,7 @@
 // GET /api/v1/stream  Server-Sent Events: every new arena event as it lands on chain.
 // On connect it replays events after Last-Event-ID (or the newest 20), then polls the tape every 2 s.
 // The stream ends after WINDOW ms with a retry hint; EventSource reconnects and resumes from its last id.
-// Event names are the event kinds (intent, attack, open, resolve, register, other); id is the block height.
+// Event names are the event kinds (intent, commit, reveal, attack, open, resolve, register, other); id is the block height.
 import { tape } from "../../tape";
 
 const WINDOW = 120_000;

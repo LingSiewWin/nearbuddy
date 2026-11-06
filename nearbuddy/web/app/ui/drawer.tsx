@@ -7,7 +7,7 @@ import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { clock, modelName, promptName, stake, TAMPER_TX, tone, txUrl, who } from "./format";
 
-type Intent = Extract<ArenaEvent, { kind: "intent" }>;
+type Intent = Extract<ArenaEvent, { kind: "intent" | "reveal" }>;
 type Attack = Extract<ArenaEvent, { kind: "attack" }>;
 export type DrawerItem =
   | { kind: "intent"; ev: Intent; model: string; d?: Decision | undefined }
