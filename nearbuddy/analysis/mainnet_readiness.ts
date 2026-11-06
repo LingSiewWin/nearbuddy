@@ -8,6 +8,7 @@
 //   MAINNET_RPC=https://rpc.mainnet.fastnear.com OWNER_ID_MAINNET=nearbuddy.near SOLVER_ID_MAINNET=solver.nearbuddy.near
 import "../packages/protocol/src/env.ts";
 import { randomBytes } from "node:crypto";
+import { NETWORKS } from "../packages/protocol/src/network.ts";
 import { quote, sellNearForUsdc, USDC_NEAR, WNEAR } from "../packages/solver/src/oneclick.ts";
 
 const RPC = process.env.MAINNET_RPC ?? "https://rpc.mainnet.fastnear.com";
@@ -33,8 +34,18 @@ async function rpc<T>(method: string, params: unknown, url = RPC): Promise<T> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
-  const j = (await r.json()) as { result?: T; error?: { cause?: { name?: string }; message?: string } };
-  if (j.error) throw new Error(j.error.cause?.name ?? j.error.message ?? JSON.stringify(j.error));
+  const j = (await r.json()) as {
+    result?: T;
+    error?: { cause?: { name?: string; info?: unknown }; message?: string; data?: unknown };
+  };
+  // the cause name first (UNKNOWN_ACCOUNT is matched on it), then whatever detail the node gave (MethodNotFound)
+  if (j.error)
+    throw new Error(
+      [j.error.cause?.name, j.error.data, j.error.cause?.info, j.error.message]
+        .filter((x) => x !== undefined)
+        .map((x) => (typeof x === "string" ? x : JSON.stringify(x)))
+        .join(": ") || JSON.stringify(j.error),
+    );
   return j.result as T;
 }
 const account = (id: string) =>
@@ -221,11 +232,14 @@ for (const m of MODELS) {
 }
 
 // ---- the arena: deploy 15 (verified settlement) -------------------------------------------------------------
-// Read from ARENA_CONTRACT on NEAR_RPC (testnet by default). Before deploy 15 every check here says "not deployed"
-// (SKIP) instead of failing; on a mainnet arena (an id ending in .near) the mainnet values are required.
-const ARENA_RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org";
-const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
+// Read from ARENA_CONTRACT (testnet arena by default) on NEAR_RPC, else the network table's RPC for the arena's
+// network. On testnet an arena without deploy 15 reports "not deployed" (SKIP); on a mainnet arena (an id ending in
+// .near) that is a FAIL and the mainnet values are required.
+const ARENA = process.env.ARENA_CONTRACT ?? NETWORKS.testnet.arena;
 const ON_MAINNET = ARENA.endsWith(".near");
+const ARENA_RPC = process.env.NEAR_RPC ?? NETWORKS[ON_MAINNET ? "mainnet" : "testnet"].rpc;
+// The testnet stand-in for intents.near that deploy 15 is migrated with (scripts/deploy15-testnet.sh).
+const INTENTS_STUB = process.env.INTENTS_STUB ?? "intents-stub.nearbuddy-solver.testnet";
 const MAX_VAULT_MAINNET = 27n * 10n ** 24n; // the week-4 cap: 100 USDC total
 type V15Config = {
   owner: string;
@@ -243,18 +257,15 @@ type V15Config = {
 const arenaCfg = await view<V15Config>(ARENA, "get_config", {}, ARENA_RPC).catch(() => null);
 const v15 = typeof arenaCfg?.intents_account === "string";
 const notDeployed = (): [Row["result"], string] => [
-  "SKIP",
+  ON_MAINNET ? "FAIL" : "SKIP",
   arenaCfg ? "not deployed: get_config has no intents_account (deploy 14 or earlier)" : `cannot read ${ARENA}`,
 ];
 const v15check = (name: string, fn: (c: V15Config) => Promise<[Row["result"], string]>) =>
   check(`${ARENA} ${name}`, async () => (v15 && arenaCfg ? fn(arenaCfg) : notDeployed()));
 
 await v15check("deploy 15: intents_account", async (c) => {
-  const want = ON_MAINNET ? "intents.near" : c.intents_account;
-  return [
-    c.intents_account === want ? "PASS" : "FAIL",
-    `${c.intents_account}${ON_MAINNET ? " (mainnet needs intents.near)" : ""}`,
-  ];
+  const want = ON_MAINNET ? "intents.near" : INTENTS_STUB;
+  return [c.intents_account === want ? "PASS" : "FAIL", ` (want )`];
 });
 await v15check("deploy 15: intents_account answers mt_batch_balance_of for the arena", async (c) => {
   const b = await view<string[]>(
@@ -301,9 +312,13 @@ await v15check("deploy 15: duel_lock readable", async (c) => {
 });
 await v15check("deploy 15: leaderboard pages, list_followers gone", async () => {
   const page = await view<unknown[]>(ARENA, "leaderboard", { from: 0, limit: 1 }, ARENA_RPC);
+  // gone only on a MethodNotFound answer; any other error (RPC down, bad args) says nothing either way
   const gone = await view(ARENA, "list_followers", { agent_pk: "" }, ARENA_RPC).then(
     () => false,
-    () => true,
+    (e) => {
+      if (/MethodNotFound/.test(String((e as Error).message ?? e))) return true;
+      throw e;
+    },
   );
   return [
     page.length <= 1 && gone ? "PASS" : "FAIL",
