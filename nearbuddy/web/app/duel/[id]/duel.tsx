@@ -240,7 +240,9 @@ function Head({ d, price, now }: { d: DuelData; price: number | null; now: numbe
       sub = (
         <>
           {nm(d.a)} is <b>{sideWord(d.a.side)}</b>, {nm(d.b)} is <b>{sideWord(d.b.side)}</b>
-          {move == null ? ". " : `, and ${moved.replace("rose", "is up").replace("fell", "is down")} since the bell. `}
+          {move == null
+            ? ". "
+            : `, and ${moved.replace("rose", "is up").replace("fell", "is down")} since the duel opened. `}
           {lead ? (
             <>
               If it ends now, {nm(lag)} pays {nm(lead)} <b>{pay != null ? near(pay) : `${d.slashPct}% of its bond`}</b>.

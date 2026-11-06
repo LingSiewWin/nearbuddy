@@ -23,9 +23,10 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
   const end = d.live ? Math.min(now || t0, t1) : t1;
   const x = (t: number) => Math.max(0, Math.min(1, (t - t0) / (t1 - t0))) * 100;
   const win = ticks.filter((k) => k.t >= t0 - 2_000 && k.t <= end + 2_000);
-  const open = openOf(d, ticks);
+  const open = openOf(d, ticks); // live: Coinbase at the open, to compare like with like
+  const oracleOpen = d.open ?? open; // the dashed line and its label are the oracle's own open
   const close = d.live ? null : d.close;
-  const vals = win.map((k) => k.p).concat(open ? [open] : [], close ? [close] : []);
+  const vals = win.map((k) => k.p).concat(oracleOpen ? [oracleOpen] : [], close ? [close] : []);
   const lo = Math.min(...vals);
   const hi = Math.max(...vals);
   const pad = Math.max((hi - lo) * 0.15, (open ?? 1) * 0.0004);
@@ -101,7 +102,7 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
               ? "waiting for trades"
               : "price history not available"
             : d.live
-              ? `${moved(move)} since the bell`
+              ? `${moved(move)} since the duel opened`
               : `${moved(move)} at the oracle's close`}
         </div>
       </div>
@@ -114,16 +115,16 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
         ) : null}
         <div className="plot">
           <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-label="NEAR price during the duel">
-            {open && close ? (
+            {oracleOpen && close ? (
               <rect
                 x="0"
                 width="1000"
-                y={Math.min(y(open), y(close))}
-                height={Math.abs(y(open) - y(close))}
+                y={Math.min(y(oracleOpen), y(close))}
+                height={Math.abs(y(oracleOpen) - y(close))}
                 className="band"
               />
             ) : null}
-            {[open, close].map((p, i) =>
+            {[oracleOpen, close].map((p, i) =>
               p ? (
                 <line
                   // biome-ignore lint/suspicious/noArrayIndexKey: two fixed rules, open then close
@@ -147,9 +148,9 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
               strokeLinejoin="round"
             />
           </svg>
-          {open ? (
-            <span className={`openlab${y(open) < 25 ? " below" : ""}`} style={{ top: `${y(open)}%` }}>
-              {d.open ? "oracle open" : "open"} {usd(open)}
+          {oracleOpen ? (
+            <span className={`openlab${y(oracleOpen) < 25 ? " below" : ""}`} style={{ top: `${y(oracleOpen)}%` }}>
+              {d.open ? "oracle open" : "open"} {usd(oracleOpen)}
             </span>
           ) : null}
           {close ? (
