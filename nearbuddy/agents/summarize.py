@@ -95,8 +95,9 @@ def main() -> None:
     # One pass, per model; totals are the sums.
     per: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])  # decisions, attacked, flipped
 
-    def label(r: dict) -> str:  # model x prompt, so the swapped-prompt control rows stay separate
-        return f"{r.get('model', '?')} ({'hardened' if r.get('hardened') else 'naive'})"
+    def label(r: dict) -> str:  # model x prompt arm, so control and A/B/C rows stay separate; pre-v2 rows fall back
+        arm = r.get("prompt_variant") or ("hardened" if r.get("hardened") else "naive")
+        return f"{r.get('model', '?')} ({arm})"
 
     for duel_rows in by_duel.values():
         prev: dict[str, str] = {}

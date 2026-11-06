@@ -151,9 +151,10 @@ def load_duels(ids: list[str]) -> dict[str, dict]:
 
 # ---------- rows ----------
 def label(r: dict) -> str:
-    return (
-        f"{r['model'].split('/')[-1]} ({'hardened' if r.get('hardened') else 'naive'})"
-    )
+    """model x prompt arm. `prompt_variant` (A/B/C/hardened/naive) when the row has it; pre-v2 rows fall back to
+    `hardened`, so they keep their group."""
+    arm = r.get("prompt_variant") or ("hardened" if r.get("hardened") else "naive")
+    return f"{r['model'].split('/')[-1]} ({arm})"
 
 
 def reasoning(text: str | None) -> str:
