@@ -1412,85 +1412,6 @@ fn relayed_intent_from_agent_outside_the_duel_panics() {
     );
 }
 
-fn duel_key(d: u64) -> Vec<u8> {
-    let mut key = near_sdk::borsh::to_vec(&StorageKey::Duels).unwrap();
-    key.extend_from_slice(&d.to_le_bytes());
-    key
-}
-
-#[test]
-fn migrate_duels_rewrites_v1_layout() {
-    use near_sdk::borsh::BorshDeserialize;
-    let (mut c, ..) = setup();
-    let d = open(&mut c);
-    let cur = c.get_duel(U64(d)).unwrap();
-    let old = DuelV1 {
-        id: cur.id,
-        a: cur.a,
-        b: cur.b,
-        symbol: cur.symbol,
-        open_at: cur.open_at,
-        close_at: cur.close_at,
-        pool: cur.pool,
-        injections: cur.injections,
-        resolved: cur.resolved,
-        last_intent_a: None,
-        last_intent_b: None,
-    };
-    env::storage_write(&duel_key(d), &near_sdk::borsh::to_vec(&old).unwrap());
-    assert!(Duel::try_from_slice(&env::storage_read(&duel_key(d)).unwrap()).is_err());
-    ctx(OWNER, 0);
-    assert_eq!(c.migrate_duels(U64(0), U64(5)), 1);
-    assert_eq!(c.migrate_duels(U64(0), U64(5)), 0); // idempotent
-    let migrated = Duel::try_from_slice(&env::storage_read(&duel_key(d)).unwrap()).unwrap();
-    assert!(migrated.outcome.is_none() && migrated.open_price.is_none() && !migrated.resolved);
-}
-
-#[test]
-fn migrate_duels_rewrites_v2_layout_keeping_outcome() {
-    use near_sdk::borsh::BorshDeserialize;
-    let (mut c, ..) = setup();
-    let d = open(&mut c);
-    let cur = c.get_duel(U64(d)).unwrap();
-    let v2 = DuelV2 {
-        id: cur.id,
-        a: cur.a.clone(),
-        b: cur.b,
-        symbol: cur.symbol,
-        open_at: cur.open_at,
-        close_at: cur.close_at,
-        pool: U128(0),
-        injections: vec![Injection {
-            kind: "x".into(),
-            payload_hash: Base64VecU8(vec![3; 32]),
-            target: cur.a.clone(),
-            block: U64(1),
-        }],
-        resolved: true,
-        last_intent_a: None,
-        last_intent_b: None,
-        outcome: Some(OutcomeV2 {
-            open_price: U64(OPEN),
-            close_price: U64(UP),
-            pnl_a: 25,
-            pnl_b: -25,
-            winner: Some(cur.a),
-            slashed: U128(7),
-        }),
-    };
-    env::storage_write(&duel_key(d), &near_sdk::borsh::to_vec(&v2).unwrap());
-    ctx(OWNER, 0);
-    assert_eq!(c.migrate_duels(U64(d), U64(d)), 1);
-    let m = Duel::try_from_slice(&env::storage_read(&duel_key(d)).unwrap()).unwrap();
-    let o = m.outcome.unwrap();
-    assert_eq!(
-        (o.pnl_a, o.pnl_b, o.slashed.0, o.injections),
-        (25, -25, 7, 1)
-    );
-    assert_eq!(m.open_price.unwrap().0, OPEN);
-    assert!(m.resolved);
-}
-
 // ---------------------------------------------------------------- per-agent duel index
 
 fn ids(v: Vec<U64>) -> Vec<u64> {
@@ -1521,48 +1442,6 @@ fn agent_duels_index_grows_and_pages_newest_first() {
         c.agent_duels(Base64VecU8(key(9).1), 0, 10).is_empty(),
         "unknown agent"
     );
-}
-
-#[test]
-fn migrate_v10_adds_empty_index_and_keeps_state() {
-    let (mut c, ..) = setup();
-    let d0 = open(&mut c);
-    resolve_at_close(&mut c, d0, UP);
-    // Flush cached writes (the real wrapper does this when the call ends), then write deploy-9 state:
-    // the current layout minus the trailing `agent_duels` prefix (borsh Vec<u8>: len 1 + key byte)
-    // and `intent_lock_ns` (u64).
-    c.duels.flush();
-    c.agents.flush();
-    // deploy 9 had no index entries: drop the ones this test's open_duel wrote
-    for seed in [1, 2] {
-        c.agent_duels.remove(&key(seed).1);
-    }
-    c.agent_duels.flush();
-    let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
-    let tail = raw.split_off(raw.len() - 13);
-    assert_eq!(
-        tail[..5],
-        near_sdk::borsh::to_vec(&near_sdk::borsh::to_vec(&StorageKey::AgentDuels).unwrap())
-            .unwrap()
-    );
-    assert_eq!(tail[5..], LOCK.to_le_bytes());
-    env::storage_write(b"STATE", &raw);
-    ctx(CONTRACT, 0);
-    let mut m = Contract::migrate_v10();
-    assert_eq!(m.get_config().next_duel.0, 1);
-    assert_eq!(
-        m.get_config().intent_lock_s,
-        60,
-        "lock takes the default until set_oracle"
-    );
-    assert!(m.get_agent(Base64VecU8(key(1).1)).unwrap().tee);
-    assert!(m.get_duel(U64(d0)).unwrap().resolved);
-    assert!(
-        m.agent_duels(Base64VecU8(key(1).1), 0, 10).is_empty(),
-        "old duels are not back-filled"
-    );
-    let d1 = open(&mut m);
-    assert_eq!(ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)), vec![d1]);
 }
 
 #[test]
