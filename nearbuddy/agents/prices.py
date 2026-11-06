@@ -52,7 +52,7 @@ def price(symbol: str, pyth_key: str | None = None, attempts: int = 4) -> int:
             return coinbase_price(symbol)
         except requests.RequestException as e:
             last = e
-            time.sleep(2 ** i)
+            time.sleep(2**i)
     raise RuntimeError(f"price fetch failed after {attempts} attempts: {last}")
 
 

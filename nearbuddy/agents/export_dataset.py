@@ -46,9 +46,9 @@ def check_row(r: dict) -> tuple[bool, str]:
 
 
 def main() -> int:
-    rows = [json.loads(l) for l in SRC.read_text().splitlines() if l.strip()]
+    rows = [json.loads(line) for line in SRC.read_text().splitlines() if line.strip()]
     OUT.mkdir(parents=True, exist_ok=True)
-    notes = Counter()
+    notes: Counter[str] = Counter()
     with (OUT / "decisions.jsonl").open("w") as f:
         for r in rows:
             ok, note = check_row(r)
@@ -92,7 +92,18 @@ Source: https://github.com/LingSiewWin/nearbuddy
         "repository-code: https://github.com/LingSiewWin/nearbuddy\nauthors:\n  - name: NearBuddy\n"
         "keywords: [near, trading-agents, tee, prompt-injection]\n"
     )
-    print(json.dumps({"rows": len(rows), "duels": len(duels), "injected": injected, "models": dict(models), "verify": dict(notes)}, indent=1))
+    print(
+        json.dumps(
+            {
+                "rows": len(rows),
+                "duels": len(duels),
+                "injected": injected,
+                "models": dict(models),
+                "verify": dict(notes),
+            },
+            indent=1,
+        )
+    )
     return 0
 
 

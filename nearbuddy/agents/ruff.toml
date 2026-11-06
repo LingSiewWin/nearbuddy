@@ -1,0 +1,9 @@
+line-length = 120
+target-version = "py313"
+extend-include = ["../analysis/*.py"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[lint.isort]
+known-first-party = ["chain", "duelist", "export_dataset", "intent_client", "keys", "nearai", "prices", "prompts", "runner", "summarize"]

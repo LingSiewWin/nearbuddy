@@ -7,19 +7,34 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from nacl.exceptions import BadSignatureError  # noqa: E402
 from nacl.signing import SigningKey  # noqa: E402
 
-from intent_client import INTENT_DOMAIN, ZERO_PROOF, TeeProofError, intent_message, proof_hash, sign_intent, tee_proof, tee_text  # noqa: E402
+from intent_client import (  # noqa: E402
+    INTENT_DOMAIN,
+    ZERO_PROOF,
+    TeeProofError,
+    intent_message,
+    proof_hash,
+    sign_intent,
+    tee_proof,
+    tee_text,
+)
 from nearai import StubClient  # noqa: E402
 from prices import normalise  # noqa: E402
 
 # Same fixture as packages/protocol/src/intent.test.ts and arena/src/tests.rs intent_message_len_matches_ts.
 FIXTURE = {
-    "agent_pk": base64.b64encode(bytes([1] * 32)).decode(), "duel_id": "7", "side": "Short", "size_bps": 5000,
-    "nonce": "3", "expires_at": "1700000000000000000", "proof_hash": base64.b64encode(ZERO_PROOF).decode(),
+    "agent_pk": base64.b64encode(bytes([1] * 32)).decode(),
+    "duel_id": "7",
+    "side": "Short",
+    "size_bps": 5000,
+    "nonce": "3",
+    "expires_at": "1700000000000000000",
+    "proof_hash": base64.b64encode(ZERO_PROOF).decode(),
 }
 # Printed by `cargo test intent_message_len_matches_ts -- --nocapture` (INTENT_HEX).
-RUST_HEX = "6e65617262756464792d696e74656e742d76312000000001010101010101010101010101010101010101010101010101010101010101010700000000000000018813030000000000000000002a36fe9c9717200000000000000000000000000000000000000000000000000000000000000000000000"
+RUST_HEX = "6e65617262756464792d696e74656e742d76312000000001010101010101010101010101010101010101010101010101010101010101010700000000000000018813030000000000000000002a36fe9c9717200000000000000000000000000000000000000000000000000000000000000000000000"  # noqa: E501
 
 # Real record from NEAR AI Cloud, 2026-11-06 (deepseek-ai/DeepSeek-V4.1-Flash-1017, provider_tee, ed25519).
 REAL_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
@@ -27,7 +42,8 @@ REAL_REQ = bytes.fromhex("eddd4548b2b35d65de9b8617c6632b09d487606c74c02fbab9bac1
 REAL_RES = bytes.fromhex("c4f9c6e53487a744f1687c06d00d09735e7f2a8c4215a019f97150ff6c2dc09f")
 REAL_RECORD = {
     "text": f"{REAL_MODEL}:{REAL_REQ.hex()}:{REAL_RES.hex()}",
-    "signature": "3b24456ee898ba8e684c10e7ad373d42e88d9c26ce4cf1a47187f2112dd66eac6aea43f8df942829c3836b3cedc1119ad7efc48c3d12b29056129a366fbe620b",
+    "signature": "3b24456ee898ba8e684c10e7ad373d42e88d9c26ce4cf1a47187f2112dd66eac"
+    "6aea43f8df942829c3836b3cedc1119ad7efc48c3d12b29056129a366fbe620b",
     "signing_address": "236f5a6b91dd47dc3b7b36e43d4eb531a042ffb8f8fbf3a1555b78cef4fdda4c",
     "signing_algo": "ed25519",
     "signature_kind": "provider_tee",
@@ -94,8 +110,9 @@ def test_normalise_pyth():
 
 
 def test_price_retries_transient_errors(monkeypatch):
-    import prices
     import requests as rq
+
+    import prices
 
     calls = {"n": 0}
 
@@ -130,5 +147,5 @@ def test_register_sig_covers_domain_and_owner():
     sk = SigningKey(bytes([3] * 32))
     sig = base64.b64decode(runner.register_sig(sk, "someone.testnet"))
     sk.verify_key.verify(b"nearbuddy-register-v1" + b"someone.testnet", sig)
-    with pytest.raises(Exception):
+    with pytest.raises(BadSignatureError):
         sk.verify_key.verify(b"nearbuddy-register-v1" + b"other.testnet", sig)

@@ -12,7 +12,7 @@ import hashlib
 import json
 import struct
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import requests
 from nacl.exceptions import BadSignatureError
@@ -68,7 +68,7 @@ def sign_intent(sk: SigningKey, intent: dict[str, Any]) -> dict[str, Any]:
     return {"intent": intent, "signature": base64.b64encode(sig).decode()}
 
 
-def proof_hash(request_hash: Optional[bytes], response_hash: Optional[bytes] = None) -> str:
+def proof_hash(request_hash: bytes | None, response_hash: bytes | None = None) -> str:
     """`Intent.proof_hash`: sha256(request_hash || response_hash) of the enclave-signed completion;
     32 zero bytes when the decision had no TEE (stub model)."""
     if not request_hash or not response_hash:
@@ -118,7 +118,12 @@ class Solver:
     secret: str = ""
 
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        r = requests.post(f"{self.url}{path}", data=json.dumps(body), headers={"content-type": "application/json", "x-arena-key": self.secret}, timeout=300)
+        r = requests.post(
+            f"{self.url}{path}",
+            data=json.dumps(body),
+            headers={"content-type": "application/json", "x-arena-key": self.secret},
+            timeout=300,
+        )
         if r.status_code != 200:
             raise RuntimeError(f"solver {path} {r.status_code}: {r.text[:300]}")
         return r.json()

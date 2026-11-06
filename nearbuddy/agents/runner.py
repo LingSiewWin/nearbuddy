@@ -37,10 +37,14 @@ from nacl.signing import SigningKey
 
 from duelist import Duelist, DuelistError
 from intent_client import Solver, TeeProofError, pk_b64, proof_hash, sign_intent, tee_proof
-from nearai import Completion, client_from_env
+from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
 
-ENV = {**dotenv_values(Path(__file__).resolve().parents[1] / ".env"), **os.environ}
+# a bare `KEY` line in .env reads as None; drop it so every value is a str
+ENV: dict[str, str] = {
+    **{k: v for k, v in dotenv_values(Path(__file__).resolve().parents[1] / ".env").items() if v is not None},
+    **os.environ,
+}
 DATA = Path(__file__).resolve().parent / "data" / "decisions.jsonl"
 ATTEST_DIR = Path(__file__).resolve().parent / "data" / "attestations"
 RPC = ENV.get("NEAR_RPC", "https://near-testnet.drpc.org")
@@ -50,9 +54,10 @@ ASSETS = {"NEAR/USD": "wrap.near"}
 
 
 def agent_key(name: str, tee: bool, tag: str = "") -> SigningKey:
-    """`AGENT_KEY_*` is a raw seed handed over by a builder; otherwise demo keys come straight from AGENT_SEED_*; TEE-backed duelists use a key derived from the same seed, so
-    the plain demo agents and the enclave-proved agents are distinct registrations on chain. `tag` derives one
-    more key per seed (the swapped-prompt control registers the other model under it)."""
+    """`AGENT_KEY_*` is a raw seed handed over by a builder; otherwise demo keys come straight from AGENT_SEED_*;
+    TEE-backed duelists use a key derived from the same seed, so the plain demo agents and the enclave-proved
+    agents are distinct registrations on chain. `tag` derives one more key per seed (the swapped-prompt control
+    registers the other model under it)."""
     key = ENV.get(f"AGENT_KEY_{name}", "")
     if key:  # an outside builder's agent (from `bun run join`): the hex is the ed25519 seed itself, no derivation
         return SigningKey(bytes.fromhex(key))
@@ -79,7 +84,21 @@ def agent_tier_on_chain(pk: str) -> bool | None:
     return None if a is None else bool(a.get("tee"))
 
 
-def make_duelist(name: str, model_client, hardened: bool, tag: str = "") -> tuple[Duelist, SigningKey, Any]:
+class Tracked:
+    """`complete_fn` for a Duelist that keeps the last Completion (exact bytes, chat id) for the TEE proof."""
+
+    def __init__(self, client: ModelClient) -> None:
+        self.client = client
+        self.last = Completion("", None, client.model_id)
+
+    def __call__(self, system: str, user: str) -> str:
+        self.last = self.client.complete(system, user)
+        return self.last.text
+
+
+def make_duelist(
+    name: str, model_client: ModelClient, hardened: bool, tag: str = ""
+) -> tuple[Duelist, SigningKey, Tracked]:
     sk = agent_key(name, model_client.tee, tag)
     if ENV.get(f"AGENT_KEY_{name}"):
         # a builder's agent: the tier is whatever `register_agent` recorded, not what the client class assumes
@@ -87,12 +106,7 @@ def make_duelist(name: str, model_client, hardened: bool, tag: str = "") -> tupl
         if tier is not None and tier != model_client.tee:
             model_client.tee = tier
 
-    def complete(system: str, user: str) -> str:
-        c: Completion = model_client.complete(system, user)
-        complete.last = c  # type: ignore[attr-defined]
-        return c.text
-
-    complete.last = Completion("", None, model_client.model_id)  # type: ignore[attr-defined]
+    complete = Tracked(model_client)
     d = Duelist(address=pk_b64(sk), hardened=hardened, model=model_client.model_id, complete_fn=complete)
     return d, sk, complete
 
@@ -103,15 +117,26 @@ def record(row: dict[str, Any]) -> None:
         f.write(json.dumps(row) + "\n")
 
 
-def view(method: str, args: dict) -> Any:
-    body = {"jsonrpc": "2.0", "id": 1, "method": "query", "params": {"request_type": "call_function", "finality": "final", "account_id": ARENA, "method_name": method, "args_base64": base64.b64encode(json.dumps(args).encode()).decode()}}
+def view(method: str, args: dict[str, Any]) -> Any:
+    body: dict[str, Any] = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "query",
+        "params": {
+            "request_type": "call_function",
+            "finality": "final",
+            "account_id": ARENA,
+            "method_name": method,
+            "args_base64": base64.b64encode(json.dumps(args).encode()).decode(),
+        },
+    }
     r = requests.post(RPC, json=body, headers={"User-Agent": "nearbuddy/1"}, timeout=30).json()
     if "error" in r:
         raise RuntimeError(f"{RPC} {method}: {r['error'].get('message', r['error'])}")
     return json.loads(bytes(r["result"]["result"]).decode())
 
 
-def save_attestation(model_client) -> str | None:
+def save_attestation(model_client: ModelClient) -> str | None:
     """Fetch and keep the enclave attestation once per model per run; the file is the raw material a third
     party feeds to NVIDIA NRAS and dcap-qvl to check the signer we trust on chain."""
     att = model_client.attestation()
@@ -160,8 +185,22 @@ def resolve_duel(solver: Solver, duel_id: str, attempts: int = 4) -> dict[str, A
     return {"tx": txs[-1] if txs else "", "txs": txs, "outcome": outcome}
 
 
-def post_decision(solver: Solver, duel_id: str, symbol: str, px: int, open_px: int, close_at_ns: int, pending: dict[str, list], nonce: int,
-                  label: str, d: Duelist, sk: SigningKey, comp, model, attestations: dict[str, str | None]) -> tuple[int, str]:
+def post_decision(
+    solver: Solver,
+    duel_id: str,
+    symbol: str,
+    px: int,
+    open_px: int,
+    close_at_ns: int,
+    pending: dict[str, list[dict[str, Any]]],
+    nonce: int,
+    label: str,
+    d: Duelist,
+    sk: SigningKey,
+    comp: Tracked,
+    model: ModelClient,
+    attestations: dict[str, str | None],
+) -> tuple[int, str]:
     """One decision for one agent: prompt the model with the brief and any pending injection, re-encode the
     enclave signature as the `TeeProof`, post the signed intent through the solver and append one dataset row.
     Returns (nonce, status): "posted", "skipped" (no decision or no proof) or "closed" (chain clock passed close_at)."""
@@ -171,10 +210,19 @@ def post_decision(solver: Solver, duel_id: str, symbol: str, px: int, open_px: i
     try:
         decision = d.decide(symbol, brief(symbol, px, open_px), injection_text)
     except DuelistError as e:
-        c = comp.last
-        record({"duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "error": str(e), "chat_id": c.chat_id, "response_body": c.response_bytes.decode(errors="replace")})
+        failed = comp.last
+        record(
+            {
+                "duel_id": duel_id,
+                "agent_pk": pk,
+                "model": model.model_id,
+                "error": str(e),
+                "chat_id": failed.chat_id,
+                "response_body": failed.response_bytes.decode(errors="replace"),
+            }
+        )
         return nonce, "skipped"
-    c: Completion = comp.last
+    c = comp.last
     sig_record = model.signature(c.chat_id) if c.chat_id else None
     tee = None
     if sig_record:
@@ -183,21 +231,45 @@ def post_decision(solver: Solver, duel_id: str, symbol: str, px: int, open_px: i
         except TeeProofError as e:
             print(f"  {pk[:8]} enclave record rejected locally: {e}")
     if model.tee and not tee:
-        record({"duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "error": "no tee proof", "chat_id": c.chat_id, "signature_record": sig_record})
+        record(
+            {
+                "duel_id": duel_id,
+                "agent_pk": pk,
+                "model": model.model_id,
+                "error": "no tee proof",
+                "chat_id": c.chat_id,
+                "signature_record": sig_record,
+            }
+        )
         print(f"  {pk[:8]} no verifiable enclave signature for {c.chat_id}; decision not posted")
         return nonce, "skipped"
     nonce += 1
     intent = {
-        "agent_pk": pk, "duel_id": duel_id, "side": "Long" if decision.direction > 0 else "Short",
-        "size_bps": 5000, "nonce": str(nonce), "expires_at": str(close_at_ns + 60_000_000_000),
+        "agent_pk": pk,
+        "duel_id": duel_id,
+        "side": "Long" if decision.direction > 0 else "Short",
+        "size_bps": 5000,
+        "nonce": str(nonce),
+        "expires_at": str(close_at_ns + 60_000_000_000),
         "proof_hash": proof_hash(c.request_hash, c.response_hash) if tee else proof_hash(None),
     }
     row = {
-        "duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "hardened": d.hardened,
-        "brief": brief(symbol, px, open_px), "injection": injection_text, "text": c.text, "chat_id": c.chat_id,
-        "request_body": c.request_bytes.decode(errors="replace"), "response_body": c.response_bytes.decode(errors="replace"),
-        "request_hash": c.request_hash.hex() if c.request_bytes else None, "response_hash": c.response_hash.hex() if c.response_bytes else None,
-        "signature_record": sig_record, "tee": tee, "attestation_file": attestations.get(model.model_id), "intent": intent,
+        "duel_id": duel_id,
+        "agent_pk": pk,
+        "model": model.model_id,
+        "hardened": d.hardened,
+        "brief": brief(symbol, px, open_px),
+        "injection": injection_text,
+        "text": c.text,
+        "chat_id": c.chat_id,
+        "request_body": c.request_bytes.decode(errors="replace"),
+        "response_body": c.response_bytes.decode(errors="replace"),
+        "request_hash": c.request_hash.hex() if c.request_bytes else None,
+        "response_hash": c.response_hash.hex() if c.response_bytes else None,
+        "signature_record": sig_record,
+        "tee": tee,
+        "attestation_file": attestations.get(model.model_id),
+        "intent": intent,
     }
     try:
         posted = solver.post("/intent", {"signed": sign_intent(sk, intent), "tee": tee})
@@ -210,9 +282,24 @@ def post_decision(solver: Solver, duel_id: str, symbol: str, px: int, open_px: i
         return nonce, "closed"
     if inj:
         solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
-    record({**row, "tx": posted["tx"],
-            "quotes": [{"follower": q["follower"], "amount": q["amount"], "amountOut": (q.get("quote") or {}).get("quote", {}).get("amountOut")} for q in posted.get("quotes", [])]})
-    print(f"  {label} {intent['side']} nonce {nonce} tee={'kind ' + str(tee['kind']) if tee else 'none'} tx {posted['tx']} quotes {len(posted.get('quotes', []))}")
+    record(
+        {
+            **row,
+            "tx": posted["tx"],
+            "quotes": [
+                {
+                    "follower": q["follower"],
+                    "amount": q["amount"],
+                    "amountOut": (q.get("quote") or {}).get("quote", {}).get("amountOut"),
+                }
+                for q in posted.get("quotes", [])
+            ],
+        }
+    )
+    print(
+        f"  {label} {intent['side']} nonce {nonce} tee={'kind ' + str(tee['kind']) if tee else 'none'} "
+        f"tx {posted['tx']} quotes {len(posted.get('quotes', []))}"
+    )
     return nonce, "posted"
 
 
@@ -226,7 +313,9 @@ def wait_for_duel(solver: Solver, pk: str, poll_s: int, skip: str | None = None)
         time.sleep(poll_s)
 
 
-def run_single(name: str, hardened: bool, cycle_seconds: int, poll_seconds: int, symbol: str, solver_url: str, bond: str) -> None:
+def run_single(
+    name: str, hardened: bool, cycle_seconds: int, poll_seconds: int, symbol: str, solver_url: str, bond: str
+) -> None:
     """Self-hosted mode: drive one agent (`AGENT_KEY_<name>` or the derived key) from this machine. The solver
     pairs it (PAIR_EVERY_S) and opens the duel; this process only decides, proves and posts for its own side,
     then asks the oracle to resolve once and waits for the next pairing. Runs until interrupted."""
@@ -245,7 +334,10 @@ def run_single(name: str, hardened: bool, cycle_seconds: int, poll_seconds: int,
     nonce = int(time.time() * 1000)
     last: str | None = None
     while True:
-        print(f"{name} {pk[:8]} {'hardened' if hardened else 'naive'} waiting for pairing (GET /agent_duel every {poll_seconds} s)")
+        print(
+            f"{name} {pk[:8]} {'hardened' if hardened else 'naive'} waiting for pairing "
+            f"(GET /agent_duel every {poll_seconds} s)"
+        )
         duel_id = wait_for_duel(solver, pk, poll_seconds, skip=last)
         duel = view("get_duel", {"duel_id": duel_id})
         close_at_ns = int(duel["close_at"])
@@ -253,31 +345,45 @@ def run_single(name: str, hardened: bool, cycle_seconds: int, poll_seconds: int,
         # the oracle's open price once its callback landed, else our spot: the same brief either way
         open_px = int(duel["open_price"]) if duel.get("open_price") else price(sym, ENV.get("PYTH_API_KEY"))
         other = duel["b"] if duel["a"] == pk else duel["a"]
-        print(f"[duel {duel_id}] {sym} vs {other[:8]} open {open_px / 1e8:,.4f} closes in {(close_at_ns - time.time_ns()) // 1_000_000_000} s")
+        print(
+            f"[duel {duel_id}] {sym} vs {other[:8]} open {open_px / 1e8:,.4f} "
+            f"closes in {(close_at_ns - time.time_ns()) // 1_000_000_000} s"
+        )
         closed = False
-        while not closed and time.time_ns() < close_at_ns - 25_000_000_000:  # leave 25 s for model + signature + chain round trip
+        while (
+            not closed and time.time_ns() < close_at_ns - 25_000_000_000
+        ):  # leave 25 s for model + signature + chain round trip
             px = price(sym, ENV.get("PYTH_API_KEY"))
             pending = solver.get("/arena")["pending"]
-            nonce, status = post_decision(solver, duel_id, sym, px, open_px, close_at_ns, pending, nonce, name, d, sk, comp, model, attestations)
+            nonce, status = post_decision(
+                solver, duel_id, sym, px, open_px, close_at_ns, pending, nonce, name, d, sk, comp, model, attestations
+            )
             closed = status == "closed"
             if not closed:
                 time.sleep(cycle_seconds)
         while time.time_ns() < close_at_ns + 2_000_000_000:
             time.sleep(1)
-        try:  # permissionless on chain; the solver pays the oracle deposit. Once: the other side or the operator may already have asked.
+        # permissionless on chain; the solver pays the oracle deposit. Once: the other side or the operator may
+        # already have asked.
+        try:
             r = solver.post("/resolve", {"duel_id": duel_id})
             print(f"[duel {duel_id}] resolve tx {r.get('tx')}")
         except RuntimeError as e:
             print(f"[duel {duel_id}] resolve not sent ({str(e)[:100]}); waiting for someone else's")
         o = wait_outcome(duel_id)
         if o:
-            print(f"[duel {duel_id}] oracle {int(o['open_price']) / 1e8:,.4f} -> {int(o['close_price']) / 1e8:,.4f}  A {o['pnl_a']} bps  B {o['pnl_b']} bps  winner {str(o.get('winner'))[:8]}")
+            print(
+                f"[duel {duel_id}] oracle {int(o['open_price']) / 1e8:,.4f} -> {int(o['close_price']) / 1e8:,.4f}  "
+                f"A {o['pnl_a']} bps  B {o['pnl_b']} bps  winner {str(o.get('winner'))[:8]}"
+            )
         else:
             print(f"[duel {duel_id}] oracle callback not yet landed; the next pairing waits for it")
         last = duel_id
 
 
-def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str, swap: bool = False) -> list[dict[str, Any]]:
+def run(
+    rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_url: str, bond: str, swap: bool = False
+) -> list[dict[str, Any]]:
     if not ENV.get("ARENA_SECRET"):
         raise SystemExit("ARENA_SECRET missing in the env file: the solver refuses every POST without it")
     asset = ASSETS.get(symbol)
@@ -291,11 +397,21 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
     tag = "swap" if swap else ""
     a, ska, ca = make_duelist("A", model_a, hardened=True, tag=tag)
     b, skb, cb = make_duelist("B", model_b, hardened=False, tag=tag)
-    solver_id = ENV.get("SOLVER_ID", "nearbuddy-solver.testnet")  # the account that signs register_agent = on-chain owner
+    solver_id = ENV.get(
+        "SOLVER_ID", "nearbuddy-solver.testnet"
+    )  # the account that signs register_agent = on-chain owner
     for sk, m in ((ska, model_a), (skb, model_b)):
         try:
-            solver.post("/register", {"agent_pk": pk_b64(sk), "model_id": m.model_id, "bond": bond, "tee": m.tee,
-                                      "register_sig": register_sig(sk, solver_id)})
+            solver.post(
+                "/register",
+                {
+                    "agent_pk": pk_b64(sk),
+                    "model_id": m.model_id,
+                    "bond": bond,
+                    "tee": m.tee,
+                    "register_sig": register_sig(sk, solver_id),
+                },
+            )
             print(f"registered {pk_b64(sk)[:8]} as {m.model_id} tee={m.tee}")
         except RuntimeError as e:
             if "agent exists" not in str(e):
@@ -305,7 +421,9 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
     nonce = int(time.time() * 1000)
     for rnd in range(rounds):
         close_at_ns = (time.time_ns() // 1_000_000_000 + duel_seconds) * 1_000_000_000
-        opened = solver.post("/duel", {"a": pk_b64(ska), "b": pk_b64(skb), "symbol": asset, "close_at": str(close_at_ns)})
+        opened = solver.post(
+            "/duel", {"a": pk_b64(ska), "b": pk_b64(skb), "symbol": asset, "close_at": str(close_at_ns)}
+        )
         duel_id = str(opened["duel_id"])
         open_px = price(symbol, ENV.get("PYTH_API_KEY"))
         print(f"[round {rnd}] duel {duel_id} {symbol} spot {open_px / 1e8:,.4f} tx {opened['tx']}")
@@ -317,7 +435,22 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
             px = price(symbol, ENV.get("PYTH_API_KEY"))
             pending = solver.get("/arena")["pending"]
             for label, d, sk, comp, model in (("A", a, ska, ca, model_a), ("B", b, skb, cb, model_b)):
-                nonce, status = post_decision(solver, duel_id, symbol, px, open_px, close_at_ns, pending, nonce, label, d, sk, comp, model, attestations)
+                nonce, status = post_decision(
+                    solver,
+                    duel_id,
+                    symbol,
+                    px,
+                    open_px,
+                    close_at_ns,
+                    pending,
+                    nonce,
+                    label,
+                    d,
+                    sk,
+                    comp,
+                    model,
+                    attestations,
+                )
                 if status == "closed":
                     closed = True
                     break
@@ -328,9 +461,16 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
         resolved = resolve_duel(solver, duel_id)
         o = resolved["outcome"]
         if o:
-            print(f"[round {rnd}] resolve tx {resolved['tx']}  oracle {int(o['open_price']) / 1e8:,.4f} -> {int(o['close_price']) / 1e8:,.4f}  A {o['pnl_a']} bps  B {o['pnl_b']} bps  winner {str(o.get('winner'))[:8]}")
+            print(
+                f"[round {rnd}] resolve tx {resolved['tx']}  "
+                f"oracle {int(o['open_price']) / 1e8:,.4f} -> {int(o['close_price']) / 1e8:,.4f}  "
+                f"A {o['pnl_a']} bps  B {o['pnl_b']} bps  winner {str(o.get('winner'))[:8]}"
+            )
         else:
-            print(f"[round {rnd}] resolve tx {resolved['tx']}  oracle callback not yet landed; rerun: python runner.py --resolve {duel_id}")
+            print(
+                f"[round {rnd}] resolve tx {resolved['tx']}  oracle callback not yet landed; "
+                f"rerun: python runner.py --resolve {duel_id}"
+            )
         results.append({"duel_id": duel_id, "open_tx": opened["tx"], "resolve_tx": resolved["tx"], "outcome": o})
     return results
 
@@ -338,24 +478,58 @@ def run(rounds: int, duel_seconds: int, cycle_seconds: int, symbol: str, solver_
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--rounds", type=int, default=1)
-    p.add_argument("--duel-seconds", type=int, default=330)  # Outlayer caches a price for 300 s; shorter duels close on the open price
+    p.add_argument(
+        "--duel-seconds", type=int, default=330
+    )  # Outlayer caches a price for 300 s; shorter duels close on the open price
     p.add_argument("--cycle-seconds", type=int, default=20)
     p.add_argument("--symbol", default="NEAR/USD")
     p.add_argument("--bond", default="100000000000000000000000")  # 0.1 NEAR
     p.add_argument("--resolve", help="ask the oracle to resolve a closed duel id")
-    p.add_argument("--swap-prompts", action="store_true", help="control run: hardened prompt on model B, naive on model A")
-    p.add_argument("--only", choices=["A", "B"], help="self-hosted: drive this one agent and let the solver pair it (needs --wait-pairing)")
-    p.add_argument("--wait-pairing", action="store_true", help="with --only: poll GET /agent_duel until the solver's pairing loop opens a duel")
+    p.add_argument(
+        "--swap-prompts", action="store_true", help="control run: hardened prompt on model B, naive on model A"
+    )
+    p.add_argument(
+        "--only",
+        choices=["A", "B"],
+        help="self-hosted: drive this one agent and let the solver pair it (needs --wait-pairing)",
+    )
+    p.add_argument(
+        "--wait-pairing",
+        action="store_true",
+        help="with --only: poll GET /agent_duel until the solver's pairing loop opens a duel",
+    )
     p.add_argument("--hardened", action="store_true", help="with --only: use the hardened prompt (default naive)")
     p.add_argument("--poll-seconds", type=int, default=10)
     args = p.parse_args()
     if args.resolve:
-        print(json.dumps(resolve_duel(Solver(ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), ENV.get("ARENA_SECRET", "")), args.resolve)))
+        print(
+            json.dumps(
+                resolve_duel(
+                    Solver(ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), ENV.get("ARENA_SECRET", "")), args.resolve
+                )
+            )
+        )
         raise SystemExit(0)
     if args.only:
         if not args.wait_pairing:
             p.error("--only needs --wait-pairing: the solver opens the duel, this process only plays one side")
-        run_single(args.only, args.hardened, args.cycle_seconds, args.poll_seconds, args.symbol, ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), args.bond)
+        run_single(
+            args.only,
+            args.hardened,
+            args.cycle_seconds,
+            args.poll_seconds,
+            args.symbol,
+            ENV.get("SOLVER_URL", "http://127.0.0.1:4020"),
+            args.bond,
+        )
         raise SystemExit(0)
-    out = run(args.rounds, args.duel_seconds, args.cycle_seconds, args.symbol, ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), args.bond, args.swap_prompts)
+    out = run(
+        args.rounds,
+        args.duel_seconds,
+        args.cycle_seconds,
+        args.symbol,
+        ENV.get("SOLVER_URL", "http://127.0.0.1:4020"),
+        args.bond,
+        args.swap_prompts,
+    )
     print(json.dumps(out, indent=2))

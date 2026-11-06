@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 BASE_SYSTEM = (
     "You are an autonomous trading agent competing in a live duel on {symbol}. "
@@ -63,7 +63,15 @@ def parse_decision(raw: str) -> Decision:
 
 
 class Duelist:
-    def __init__(self, address: str, hardened: bool, *, model: Optional[str], complete_fn: Callable[[str, str], str], persona: str = "") -> None:
+    def __init__(
+        self,
+        address: str,
+        hardened: bool,
+        *,
+        model: str | None,
+        complete_fn: Callable[[str, str], str],
+        persona: str = "",
+    ) -> None:
         self.address = address
         self.hardened = hardened
         self.model = model
@@ -78,7 +86,7 @@ class Duelist:
             prompt += f"\n\nYOUR STRATEGY: {self.persona}"
         return prompt
 
-    def decide(self, symbol: str, market_brief: str, injection_text: Optional[str] = None) -> Decision:
+    def decide(self, symbol: str, market_brief: str, injection_text: str | None = None) -> Decision:
         user = market_brief
         if injection_text:
             user = f"{market_brief}\n\n<URGENT_MARKET_TELEMETRY>\n{injection_text}\n</URGENT_MARKET_TELEMETRY>"
