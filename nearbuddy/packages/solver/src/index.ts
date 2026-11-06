@@ -28,6 +28,8 @@ const guarantor = new Guarantor(account, SOLVER_ID);
 // Arena: POST /duel, /intent, /chaos, /resolve, /settle_follow, GET /arena (see arena.ts).
 const arena = new Arena(account, SOLVER_ID);
 void arena.bootstrap();
+// PAIR_EVERY_S > 0: pair idle enclave agents into duels every N seconds (self-hosted runners wait on GET /agent_duel).
+arena.startPairing(Number(process.env.PAIR_EVERY_S ?? 0));
 
 // ---- persisted state -------------------------------------------------------------------------
 type Carried = { s: SignedIou; at: number };

@@ -11,8 +11,9 @@ import type { Quote } from "./oneclick.ts";
 const scratch = mkdtempSync(join(tmpdir(), "arena-test-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
 process.env.ARENA_HISTORY = join(scratch, "history.json");
-const { Arena, mandateOpen, quoteAmount } = await import("./arena.ts");
+const { Arena, mandateOpen, pairIdle, quoteAmount } = await import("./arena.ts");
 type Mandate = import("./arena.ts").Mandate;
+type AgentView = import("./arena.ts").AgentView;
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 const NOW = 1_700_000_000_000_000_000n;
@@ -81,4 +82,26 @@ test("POST routes need the shared secret; GET /arena does not", async () => {
 test("payload hash is sha256 of the payload bytes", () => {
   const h = createHash("sha256").update("BTC banned").digest("base64");
   assert.equal(h.length, 44);
+});
+
+test("pairIdle pairs idle enclave agents above the min bond, neighbours by pk, odd one waits", () => {
+  const ag = (pk: string, over: Partial<AgentView> = {}): AgentView => ({ pk, model_id: "m", bond: "100", tee: true, in_duel: null, ...over });
+  const board = [ag("D"), ag("B"), ag("A"), ag("C", { in_duel: "7" }), ag("E", { tee: false }), ag("F", { bond: "10" }), ag("G")];
+  assert.deepEqual(pairIdle(board, 50n), [["A", "B"], ["D", "G"]]);
+  assert.deepEqual(pairIdle(board), [["A", "B"], ["D", "F"]]); // min bond 0: F qualifies, G is the odd one out
+  assert.deepEqual(pairIdle([ag("A")]), []);
+});
+
+test("route: GET /agent_duel returns the agent's open duel from get_agent, decoding a '+' in the pk", async () => {
+  const seen: string[] = [];
+  const arena = new Arena({} as never, "s.testnet", {
+    getAgent: async (pk) => { seen.push(pk); return pk === "a+b=" ? { pk, model_id: "m", bond: "1", tee: true, in_duel: "42" } : null; },
+  });
+  const hit = (await arena.route("GET", "/agent_duel?pk=a%2Bb%3D", ""))!.body as { duel_id: string | null; registered: boolean };
+  assert.deepEqual([hit.registered, hit.duel_id], [true, "42"]);
+  const miss = (await arena.route("GET", "/agent_duel?pk=zzzz", ""))!.body as { duel_id: string | null; registered: boolean };
+  assert.deepEqual([miss.registered, miss.duel_id], [false, null]);
+  assert.equal((await arena.route("GET", "/agent_duel?pk=", ""))!.code, 400);
+  assert.deepEqual(seen, ["a+b=", "zzzz"]);
+  assert.deepEqual((await arena.route("GET", "/pairing", ""))!.body, { every_s: 0, next_at: 0, last: [] });
 });

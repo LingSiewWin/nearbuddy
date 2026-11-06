@@ -9,6 +9,8 @@
 //   POST /open_price {duel_id}                               -> {tx}  (re-ask the oracle for a missing open price)
 //   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}
 //   GET  /arena                                              -> snapshot incl. pending injections with payloads
+//   GET  /pairing                                            -> {every_s, next_at, last:[{duel_id, a, b, tx, at}]}  (PAIR_EVERY_S loop)
+//   GET  /agent_duel?pk=<base64>                             -> {agent_pk, registered, duel_id|null}  (a self-hosted runner finds its duel)
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -23,6 +25,14 @@ export interface Fill { intent_nonce: string; token: string; amount_in: string; 
 export interface Injection { duel_id: string; target: string; kind: string; payload: string; payload_hash: string; block: string }
 export interface FollowerQuote { follower: string; amount: string; quote?: Quote; error?: string }
 interface IntentRecord { signed: SignedIntent; tx: string; quotes: FollowerQuote[]; at: number }
+/** `AgentView` from the contract (`leaderboard`, `get_agent`): the fields the pairing loop reads. */
+export interface AgentView { pk: string; model_id: string; bond: string; tee: boolean; in_duel: string | null }
+interface PairedDuel { at: number; duel_id: string; a: string; b: string; tx: string }
+/** Duel length the pairing loop opens; must stay above the contract's `min_duel_s` (310 s). */
+const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330);
+/** Yocto bond an agent needs above to be paired; 0 = any funded agent. */
+const PAIR_MIN_BOND = BigInt(process.env.PAIR_MIN_BOND ?? "0");
+const PAIR_SYMBOL = process.env.PAIR_SYMBOL ?? "wrap.near";
 
 /// Shared secret for the POST routes: every one of them spends the solver's NEAR or debits a follower.
 /// Unset = routes refuse all POSTs (the on-chain gate trusts this account, so the port must not be open).
@@ -68,6 +78,15 @@ export function mandateOpen(m: Mandate, nowNs: bigint): boolean {
   return !m.revoked && BigInt(m.expires_at) > nowNs && quoteAmount(m) > 0n;
 }
 
+/** Idle enclave agents with bond above `minBond`, sorted by pk and paired with their neighbour. Deterministic:
+ *  two solvers reading the same leaderboard propose the same pairs. An odd agent waits for the next tick. */
+export function pairIdle(agents: AgentView[], minBond = 0n): [string, string][] {
+  const idle = agents.filter((a) => a.tee && a.in_duel == null && BigInt(a.bond) > minBond).map((a) => a.pk).sort();
+  const pairs: [string, string][] = [];
+  for (let i = 0; i + 1 < idle.length; i += 2) pairs.push([idle[i]!, idle[i + 1]!]);
+  return pairs;
+}
+
 export class Arena {
   readonly intents: IntentRecord[] = [];
   /** payload_hash -> payload, filled by /chaos; an injection is "pending" once its hash is on chain. */
@@ -75,16 +94,55 @@ export class Arena {
   readonly consumed = new Set<string>(); // `${duel_id}:${target}:${payload_hash}`
   readonly openDuels = new Set<string>();
   readonly fills: { agent_pk: string; follower: string; report: unknown; tx: string }[] = [];
+  /** Pairing loop state, served by GET /pairing. `every_s` 0 = loop off. */
+  readonly pairing = { every_s: 0, next_at: 0, last: [] as PairedDuel[] };
+  private pairingRun: Promise<unknown> | null = null;
   constructor(
     private readonly solver: Account,
     readonly solverId: string,
     private readonly deps: {
       listFollowers?: (agent_pk: string) => Promise<[string, Mandate][]>;
       getDuel?: (duel_id: string) => Promise<{ injections: { kind: string; payload_hash: string; target: string; block: string }[]; resolved: boolean } | null>;
+      getAgent?: (agent_pk: string) => Promise<AgentView | null>;
+      leaderboard?: () => Promise<AgentView[]>;
       quote?: typeof quote;
       now?: () => bigint;
     } = {},
   ) {}
+
+  /** One pairing tick: open a DUEL_SECONDS duel for every pair `pairIdle` makes of the leaderboard. A pair whose
+   *  open fails (one side got a duel meanwhile, RPC error) is skipped and retried on the next tick. */
+  async pairOnce(): Promise<string[]> {
+    const agents = await (this.deps.leaderboard ?? (() => arenaView<AgentView[]>("leaderboard", {})))();
+    const opened: string[] = [];
+    for (const [a, b] of pairIdle(agents, PAIR_MIN_BOND)) {
+      const close_at = (BigInt(Date.now()) * 1_000_000n + BigInt(DUEL_SECONDS) * 1_000_000_000n).toString();
+      try {
+        const r = await this.openDuel(a, b, PAIR_SYMBOL, close_at);
+        this.pairing.last.push({ at: Date.now(), duel_id: r.duel_id, a, b, tx: r.tx });
+        opened.push(r.duel_id);
+        console.log(`[arena] paired ${a.slice(0, 8)} vs ${b.slice(0, 8)}: duel ${r.duel_id} tx ${r.tx}`);
+      } catch (e) {
+        console.log(`[arena] pairing ${a.slice(0, 8)} vs ${b.slice(0, 8)} failed: ${String(e).slice(0, 120)}`);
+      }
+    }
+    if (this.pairing.last.length > 50) this.pairing.last.splice(0, this.pairing.last.length - 50);
+    return opened;
+  }
+
+  /** Every `everyS` seconds pair the idle enclave agents. ponytail: pairs every idle verified agent whether or
+   *  not a runner is alive behind it; add a heartbeat (`POST /ready`) when unattended agents waste oracle deposits. */
+  startPairing(everyS: number) {
+    if (everyS <= 0) return;
+    this.pairing.every_s = everyS;
+    this.pairing.next_at = Date.now() + everyS * 1000;
+    setInterval(() => {
+      this.pairing.next_at = Date.now() + everyS * 1000;
+      if (this.pairingRun) return; // a tick still opening duels: skip, never overlap open_duel calls
+      this.pairingRun = this.pairOnce().catch((e) => console.log(`[arena] pairing tick failed: ${String(e).slice(0, 120)}`)).finally(() => (this.pairingRun = null));
+    }, everyS * 1000).unref();
+    console.log(`[arena] pairing idle enclave agents every ${everyS}s into ${DUEL_SECONDS}s duels (min bond ${PAIR_MIN_BOND} yocto)`);
+  }
 
   /** `call` with the on-chain oracle deposit; a stale memo after `set_oracle` is refreshed and the call retried once. */
   private async callWithOracleDeposit(methodName: string, args: Record<string, unknown>, extra = 0n) {
@@ -301,6 +359,14 @@ export class Arena {
 
   async route(method: string | undefined, url: string | undefined, body: string, headers: Record<string, string | string[] | undefined> = {}): Promise<{ code: number; body: unknown } | null> {
     if (url === "/arena") return { code: 200, body: await this.snapshot() };
+    if (url === "/pairing") return { code: 200, body: this.pairing };
+    if (url?.startsWith("/agent_duel?")) {
+      // base64 pks hold '+': a client that forgot to percent-encode it arrives as a space; base64 never has spaces
+      const pk = new URLSearchParams(url.slice("/agent_duel?".length)).get("pk")?.replace(/ /g, "+");
+      if (!pk) return { code: 400, body: { error: "pk required" } };
+      const agent = await (this.deps.getAgent ?? ((p: string) => arenaView<AgentView | null>("get_agent", { agent_pk: p })))(pk);
+      return { code: 200, body: { agent_pk: pk, registered: agent !== null, duel_id: agent?.in_duel ?? null } };
+    }
     if (method === "POST" && url === "/chaos") return { code: 200, body: this.stash((JSON.parse(body) as { payload: string }).payload) };
     const mine = ["/duel", "/register", "/intent", "/resolve", "/open_price", "/settle_follow", "/consume"].includes(url ?? "");
     if (!mine) return null;
