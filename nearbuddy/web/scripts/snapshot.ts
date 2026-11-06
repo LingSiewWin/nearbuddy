@@ -46,6 +46,13 @@ if (!raws.length) console.warn(`snapshot: no rows at ${src}; the pages show live
 
 const attacks: Record<string, string> = {};
 for (const r of raws) if (r.injection) attacks[sha(r.injection).toString("base64")] = r.injection;
+// the spectator bot's list too, so a live attack shows its words before the dataset is re-exported
+const spectator = join(root, "../packages/demo/src/spectator.ts");
+const list = existsSync(spectator) ? readFileSync(spectator, "utf8").match(/const PAYLOADS = \[([\s\S]*?)\];/) : null;
+for (const lit of list?.[1]?.match(/"(?:[^"\\]|\\.)*"/g) ?? []) {
+  const t = JSON.parse(lit) as string;
+  attacks[sha(t).toString("base64")] = t;
+}
 
 const last = new Map<string, Side>(); // `${duel}:${agent}` -> previous side, for "Reverse your call"
 const rows: Decision[] = [];
