@@ -195,8 +195,10 @@ impl Contract {
     /// vault. `min_out_per_near` must be set (clients derive it from the oracle mid less slippage), so
     /// a solver can never settle a fill for a token amount of output. `revoked_at` is reset to 0.
     /// Panics: "paused", "migrating", "agent missing", "agent unverified", "empty mandate",
-    /// "price floor required", "insufficient". The mandate records the follow time: only intents
-    /// accepted from then on settle against it (deploy 16).
+    /// "price floor required", "refollow too soon", "insufficient". The record keeps when the
+    /// follower followed: an update while the mandate is live keeps the window (fronted fills stay
+    /// settleable); a re-follow after an unfollow or the expiry refuses only intents of the gap
+    /// (see `VersionedMandate::refollowed`).
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
         self.not_paused();
         self.not_migrating();
@@ -211,12 +213,15 @@ impl Contract {
             revoked_at: U64(0),
             ..mandate
         };
-        let before = env::storage_usage();
         let who = env::predecessor_account_id();
-        self.follows.insert(
-            follow_key(&agent_pk.0, &who),
-            VersionedMandate::V3(mandate, env::block_timestamp()),
-        );
+        let key = follow_key(&agent_pk.0, &who);
+        let now = env::block_timestamp();
+        let rec = match self.follows.get(&key) {
+            Some(old) => old.refollowed(mandate, now, self.withdraw_delay_ns),
+            None => VersionedMandate::V3(mandate, now),
+        };
+        let before = env::storage_usage();
+        self.follows.insert(key, rec);
         self.follows.flush();
         let cost = storage_cost_since(before);
         if cost > 0 {
@@ -383,10 +388,11 @@ impl Contract {
             .follows
             .get_mut(&follow_key(agent_pk, follower))
             .ok_or("no mandate")?;
-        // a follower copies only intents accepted from its latest (re)follow on: one accepted while
-        // it was not following (before the first follow, or between an unfollow and a re-follow,
-        // which resets `revoked`) never settles. Same block counts as after. Pre-16 mandates: no time.
-        if v.followed_at().is_some_and(|t| at < t) {
+        // a follower copies only intents accepted while it was following: never one from before the
+        // first follow or from a gap between an unfollow (or expiry) and a re-follow, and one from a
+        // closed window only within its grace (see `VersionedMandate::refollowed`). Same block counts
+        // as following. Pre-16 mandates (`V2`) have no follow time.
+        if !v.covers(at, now, grace) {
             return Err("intent before follow");
         }
         let m = v.current_mut();

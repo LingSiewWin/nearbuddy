@@ -1097,27 +1097,153 @@ fn intent_posted_before_the_follow_never_settles() {
     assert_eq!(r.rejected, vec![(0, "intent before follow".to_string())]);
 }
 
+/// The follower's stored record for agent `seed`.
+fn record(c: &Contract, seed: u8) -> VersionedMandate {
+    let k = crate::follow::follow_key(&key(seed).1, &FOLLOWER.parse().unwrap());
+    c.follows.get(&k).unwrap().clone()
+}
+
+fn refollow_at(c: &mut Contract, ts: u64) {
+    ctx_at(FOLLOWER, 0, ts);
+    c.follow(Base64VecU8(key(1).1), hour_mandate());
+}
+
 #[test]
-fn refollow_does_not_revive_intents_from_the_unfollowed_window() {
-    // re-follow resets `revoked`; the follow time keeps the gap closed
+fn mandate_update_while_following_keeps_fronted_fills() {
+    // red team round 3: a re-follow moved the follow time and voided every fronted fill for free
+    let (mut c, d, _) = setup_follow(hour_mandate());
+    post_a_at(&mut c, &key(1).0, &key(7).0, d, 2, NOW + SEC);
+    let mut m = hour_mandate();
+    m.per_tx_cap = U128(2 * NEAR);
+    ctx_at(FOLLOWER, 0, NOW + 2 * SEC);
+    c.follow(Base64VecU8(key(1).1), m);
+    assert!(
+        matches!(record(&c, 1), VersionedMandate::V3(ref m, NOW) if m.per_tx_cap.0 == 2 * NEAR),
+        "the mandate changed, the window did not"
+    );
+    let fills = vec![fill(1, "usdc", 50), fill(2, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 3 * SEC).unwrap();
+    assert_eq!((r.settled, r.rejected.len()), (2, 0));
+}
+
+#[test]
+fn unfollow_refollow_refuses_only_the_gap() {
     let (mut c, d, _) = setup_follow(hour_mandate());
     let (ska, tee) = (key(1).0, key(7).0);
+    post_a_at(&mut c, &ska, &tee, d, 2, NOW + SEC / 2);
     ctx_at(FOLLOWER, 0, NOW + SEC);
     c.unfollow(Base64VecU8(key(1).1));
-    post_a_at(&mut c, &ska, &tee, d, 2, NOW + 2 * SEC);
-    ctx_at(FOLLOWER, 0, NOW + 3 * SEC);
-    c.follow(Base64VecU8(key(1).1), hour_mandate());
-    post_a_at(&mut c, &ska, &tee, d, 3, NOW + 4 * SEC);
+    post_a_at(&mut c, &ska, &tee, d, 3, NOW + 2 * SEC); // in the gap
+    refollow_at(&mut c, NOW + 3 * SEC);
+    assert!(matches!(
+        record(&c, 1),
+        VersionedMandate::V4(_, NOW, g, f) if g == NOW + SEC && f == NOW + 3 * SEC
+    ));
+    post_a_at(&mut c, &ska, &tee, d, 4, NOW + 4 * SEC);
     let fills = vec![
         fill(1, "usdc", 50),
-        fill(2, "usdc", 50),
         fill(3, "usdc", 50),
+        fill(4, "usdc", 50),
     ];
     let answer = covering(&c, &fills);
     let r = settle_answered(&mut c, 1, fills, answer, NOW + 5 * SEC).unwrap();
-    assert_eq!(r.settled, 1, "only nonce 3, posted after the re-follow");
-    let before = "intent before follow".to_string();
-    assert_eq!(r.rejected, vec![(0, before.clone()), (1, before)]);
+    assert_eq!(
+        r.settled, 2,
+        "nonce 1 (before the unfollow, in grace) and 4 (after the re-follow)"
+    );
+    assert_eq!(r.rejected, vec![(1, "intent before follow".to_string())]);
+    // nonce 2 was also fronted before the unfollow: it settles until the grace ends, not after
+    let fills = vec![fill(2, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let late = settle_answered(&mut c, 1, fills.clone(), answer, NOW + SEC + GRACE);
+    assert_eq!(late.unwrap_err(), "intent before follow");
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC + GRACE - 1);
+    assert_eq!(r.unwrap().settled, 1);
+}
+
+#[test]
+fn refollow_after_the_grace_starts_a_fresh_window() {
+    let (mut c, ..) = setup_follow(hour_mandate());
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.unfollow(Base64VecU8(key(1).1));
+    refollow_at(&mut c, NOW + SEC + GRACE);
+    assert!(matches!(record(&c, 1), VersionedMandate::V3(_, f) if f == NOW + SEC + GRACE));
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC + GRACE);
+    assert_eq!(r.unwrap_err(), "intent before follow");
+}
+
+#[test]
+fn refollow_after_expiry_refuses_only_the_gap() {
+    let mut m = hour_mandate();
+    m.expires_at = U64(NOW + 2 * SEC);
+    let (mut c, d, _) = setup_follow(m);
+    let (ska, tee) = (key(1).0, key(7).0);
+    post_a_at(&mut c, &ska, &tee, d, 2, NOW + SEC);
+    post_a_at(&mut c, &ska, &tee, d, 3, NOW + 2 * SEC); // at the expiry: in the gap
+    refollow_at(&mut c, NOW + 3 * SEC);
+    post_a_at(&mut c, &ska, &tee, d, 4, NOW + 4 * SEC);
+    let fills = vec![
+        fill(2, "usdc", 50),
+        fill(3, "usdc", 50),
+        fill(4, "usdc", 50),
+    ];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 5 * SEC).unwrap();
+    assert_eq!(r.settled, 2);
+    assert_eq!(r.rejected, vec![(1, "intent before follow".to_string())]);
+}
+
+#[test]
+fn second_refollow_waits_for_the_first_windows_grace() {
+    let (mut c, ..) = setup_follow(hour_mandate());
+    let unfollow_at = |c: &mut Contract, ts: u64| {
+        ctx_at(FOLLOWER, 0, ts);
+        c.unfollow(Base64VecU8(key(1).1));
+    };
+    unfollow_at(&mut c, NOW + SEC);
+    refollow_at(&mut c, NOW + 2 * SEC);
+    unfollow_at(&mut c, NOW + 3 * SEC);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        refollow_at(&mut c, NOW + SEC + GRACE - 1)
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "refollow too soon");
+    // once nonce 1's grace is over the record keeps the second window and the new one
+    refollow_at(&mut c, NOW + SEC + GRACE);
+    assert!(matches!(
+        record(&c, 1),
+        VersionedMandate::V4(_, s, g, f)
+            if s == NOW + 2 * SEC && g == NOW + 3 * SEC && f == NOW + SEC + GRACE
+    ));
+}
+
+#[test]
+fn stored_mandate_versions_keep_their_borsh_tags() {
+    // V4 is appended: records written by deploy 15 (V2) and 16 (V3) decode unchanged, no migration
+    let m = hour_mandate();
+    let v3 = near_sdk::borsh::to_vec(&VersionedMandate::V3(m.clone(), 7)).unwrap();
+    assert_eq!(v3[0], 1);
+    let back: VersionedMandate = near_sdk::borsh::from_slice(&v3).unwrap();
+    assert!(matches!(back, VersionedMandate::V3(_, 7)));
+    assert_eq!(
+        near_sdk::borsh::to_vec(&VersionedMandate::V2(m.clone())).unwrap()[0],
+        0
+    );
+    assert_eq!(
+        near_sdk::borsh::to_vec(&VersionedMandate::V4(m, 1, 2, 3)).unwrap()[0],
+        2
+    );
+}
+
+#[test]
+fn deploy_15_mandate_update_keeps_v2() {
+    let (mut c, ..) = setup_follow(hour_mandate());
+    as_v15_mandate(&mut c, 1);
+    refollow_at(&mut c, NOW + SEC);
+    assert!(matches!(record(&c, 1), VersionedMandate::V2(_)));
 }
 
 #[test]

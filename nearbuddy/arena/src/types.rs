@@ -162,27 +162,88 @@ pub struct Mandate {
 #[derive(Clone, Debug)]
 pub enum VersionedMandate {
     V2(Mandate),
-    /// From deploy 16: the mandate plus the block time of the (re)follow that stored it. Fills for
-    /// intents accepted before that time are refused ("intent before follow").
+    /// From deploy 16: the mandate plus the block time of the follow that opened the current
+    /// following window. Fills for intents accepted before it are refused ("intent before follow").
     V3(Mandate, u64),
+    /// From deploy 16.1, written by a re-follow inside the grace of the closed mandate:
+    /// `(mandate, prev_start, gap_start, followed_at)`. The follower followed over
+    /// `[prev_start, gap_start)` and again from `followed_at`. Intents in the first window stay
+    /// settleable until `gap_start + grace`, like any closed mandate's; intents outside both windows
+    /// are refused ("intent before follow").
+    V4(Mandate, u64, u64, u64),
 }
 
 impl VersionedMandate {
     pub fn current(&self) -> &Mandate {
         match self {
-            VersionedMandate::V2(m) | VersionedMandate::V3(m, _) => m,
+            VersionedMandate::V2(m)
+            | VersionedMandate::V3(m, _)
+            | VersionedMandate::V4(m, _, _, _) => m,
         }
     }
     pub fn current_mut(&mut self) -> &mut Mandate {
         match self {
-            VersionedMandate::V2(m) | VersionedMandate::V3(m, _) => m,
+            VersionedMandate::V2(m)
+            | VersionedMandate::V3(m, _)
+            | VersionedMandate::V4(m, _, _, _) => m,
         }
     }
-    /// When the follower (re)followed; `None` for a mandate stored before deploy 16.
+    /// Start of the current following window; `None` for a mandate stored before deploy 16.
     pub fn followed_at(&self) -> Option<u64> {
         match self {
             VersionedMandate::V2(_) => None,
-            VersionedMandate::V3(_, t) => Some(*t),
+            VersionedMandate::V3(_, t) | VersionedMandate::V4(_, _, _, t) => Some(*t),
+        }
+    }
+
+    /// When this mandate stopped covering new intents, as of `now`: its revoke, else its expiry
+    /// once passed. `None` while it is live.
+    fn closed_at(&self, now: u64) -> Option<u64> {
+        let m = self.current();
+        if m.revoked {
+            Some(m.revoked_at.0)
+        } else {
+            (now >= m.expires_at.0).then_some(m.expires_at.0)
+        }
+    }
+
+    /// The record `follow` stores when the follower sends `m` over this one at `now`.
+    /// - Still live: only the mandate changes. The window keeps its start, so a mandate update can
+    ///   never void a fill the solver already fronted.
+    /// - Closed (revoke or expiry) less than `grace` ago: `V4`, so intents of the closed window keep
+    ///   their grace and only the gap `[closed, now)` is refused.
+    /// - Closed longer ago: `V3(m, now)`; every earlier intent is past its grace anyway.
+    ///
+    /// Two windows fit in a record, so a re-follow while an older window is still in its grace
+    /// panics "refollow too soon"; it succeeds once that grace (at most `grace`) has passed.
+    pub fn refollowed(&self, m: Mandate, now: u64, grace: u64) -> VersionedMandate {
+        use VersionedMandate::*;
+        let Some(closed) = self.closed_at(now) else {
+            return match self {
+                V2(_) => V2(m),
+                V3(_, f) => V3(m, *f),
+                V4(_, s, g, f) => V4(m, *s, *g, *f),
+            };
+        };
+        if let V4(_, _, g, _) = self {
+            near_sdk::require!(now >= g.saturating_add(grace), "refollow too soon");
+        }
+        if now >= closed.saturating_add(grace) {
+            V3(m, now)
+        } else {
+            V4(m, self.followed_at().unwrap_or(0), closed, now)
+        }
+    }
+
+    /// Whether a fill for an intent accepted at `at` may settle against this record's follow
+    /// windows at `now` (the mandate's own revoke and expiry are checked separately).
+    pub fn covers(&self, at: u64, now: u64, grace: u64) -> bool {
+        match self {
+            VersionedMandate::V2(_) => true,
+            VersionedMandate::V3(_, f) => at >= *f,
+            VersionedMandate::V4(_, s, g, f) => {
+                at >= *f || (at >= *s && at < *g && now < g.saturating_add(grace))
+            }
         }
     }
 }
