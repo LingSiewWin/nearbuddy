@@ -75,7 +75,7 @@ def balance(acct):
 accounts = E["ACCOUNTS"].split()
 with ThreadPoolExecutor(max_workers=6) as ex:
     cfg_f = ex.submit(view, "get_config", {})
-    board_f = ex.submit(view, "leaderboard", {})
+    board_f = ex.submit(view, "leaderboard", {"from": 0, "limit": 100})  # paged from deploy 15; ignored before
     bal_f = {a: ex.submit(balance, a) for a in accounts}
     cfg = cfg_f.result()
     duel = view("get_duel", {"duel_id": str(int(cfg["next_duel"]) - 1)}) if cfg else None
