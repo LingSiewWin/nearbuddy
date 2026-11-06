@@ -46,11 +46,13 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
     const mark = d.live ? markPct(s, open, price) : (s.score ?? 0);
     const vs = d.live ? markPct(other, open, price) : (other.score ?? 0);
     const state = d.live
-      ? Math.abs(mark - vs) < 0.005
-        ? "level"
-        : mark > vs
-          ? "ahead"
-          : "behind"
+      ? !s.side && !other.side
+        ? "no call yet"
+        : Math.abs(mark - vs) < 0.005
+          ? "level"
+          : mark > vs
+            ? "ahead"
+            : "behind"
       : d.winner == null
         ? `level, ${pct(mark)}`
         : d.winner === s.agent

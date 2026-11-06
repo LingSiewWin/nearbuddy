@@ -272,7 +272,14 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
       sub = (
         <>
           Duel {d.duel} ended {Math.round((now - d.closes) / 60_000)} min ago. It is scored as soon as anyone asks the
-          price oracle for the close. At the last trade, {lead ? <>{nm(lead)} was ahead</> : "the two sides were level"}
+          price oracle for the close. At the last trade,{" "}
+          {lead ? (
+            <>{nm(lead)} was ahead</>
+          ) : d.a.side || d.b.side ? (
+            "the two sides were level"
+          ) : (
+            "neither side had revealed a call"
+          )}
           .
         </>
       );

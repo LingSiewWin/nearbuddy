@@ -45,7 +45,14 @@ export function Headline({
       <>
         Duel {f.duel} closed {Math.round((now - f.closes) / 60_000)} min ago and is waiting to be scored. Anyone can
         trigger that on chain; the TEE oracle supplies the closing price. At the last trade,{" "}
-        {lead ? <>{lead === "a" ? A : B} was ahead</> : "the two sides were level"}.
+        {lead ? (
+          <>{lead === "a" ? A : B} was ahead</>
+        ) : f.a.side || f.b.side ? (
+          "the two sides were level"
+        ) : (
+          "neither side had revealed a call"
+        )}
+        .
       </>
     );
   } else if (f.live && (price == null || !open)) {
@@ -178,7 +185,15 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
             {s.side ?? "No call yet"}
             {s.side ? `, ${stake(s.size_pct)}` : ""}
           </span>
-          <span className="st">{Math.abs(mark - other) < 0.005 ? "level" : mark > other ? "ahead" : "behind"}</span>
+          <span className="st">
+            {!s.side && !(s === f.a ? f.b : f.a).side
+              ? "no call yet"
+              : Math.abs(mark - other) < 0.005
+                ? "level"
+                : mark > other
+                  ? "ahead"
+                  : "behind"}
+          </span>
         </div>
         <div className={`trk lane ${k}`}>
           <div className="rail">
