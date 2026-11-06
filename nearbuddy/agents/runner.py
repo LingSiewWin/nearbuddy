@@ -286,9 +286,9 @@ def run_single(
             f"closes in {(close_at_ns - time.time_ns()) // 1_000_000_000} s"
         )
         closed = False
-        while (
-            not closed and time.time_ns() < close_at_ns - 25_000_000_000
-        ):  # leave 25 s for model + signature + chain round trip
+        lock_s = int((view("get_config", {}) or {}).get("intent_lock_s", 0) or 0)
+        stop_ns = close_at_ns - (lock_s + 25) * 1_000_000_000  # intent lock + model/signature/chain round trip
+        while not closed and time.time_ns() < stop_ns:
             px = price(sym, ENV.get("PYTH_API_KEY"))
             pending = solver.get("/arena")["pending"]
             nonce, status = post_decision(
