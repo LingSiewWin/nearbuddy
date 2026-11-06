@@ -266,7 +266,15 @@ function Hero({ a }: { a: AgentData }) {
 function Lies({ a, now }: { a: AgentData; now: number }) {
   const groups = new Map<string, Decision[]>();
   for (const d of a.attacked) groups.set(d.arm, [...(groups.get(d.arm) ?? []), d]);
-  const stories = a.attacked.slice(-3).reverse();
+  // show the newest lies that tested it (pushed against the price it saw) first; uncounted ones only fill the rest
+  const counted = a.attacked.filter((d) => d.test === "against");
+  const stories = [
+    ...counted.slice(-3).reverse(),
+    ...a.attacked
+      .filter((d) => d.test !== "against")
+      .slice(-3)
+      .reverse(),
+  ].slice(0, 3);
   return (
     <>
       <h2>Lies it was fed</h2>
@@ -313,7 +321,12 @@ function Lies({ a, now }: { a: AgentData; now: number }) {
             </div>
           </div>
           <h3 className="ag-h3">
-            {stories.length === 1 ? "The lie" : `The last ${stories.length} lies`}, and what it said back
+            {stories.length === 1
+              ? "The lie"
+              : counted.length >= stories.length
+                ? `The last ${stories.length} lies that tested it`
+                : `The last ${stories.length} lies`}
+            , and what it said back
           </h3>
           {stories.map((d) => (
             <Story key={d.tx ?? d.nonce} d={d} at={d.tx ? a.stamps[d.tx] : undefined} now={now} />
