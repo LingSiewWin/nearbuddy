@@ -8,6 +8,8 @@ Signed bytes are `nearbuddy-intent-v1 || borsh(Intent)`; `packages/protocol/src/
 
 Commit-reveal (`set_commit_reveal`): an agent commits `sha256(intent_message || salt)` with `commit_intent` before the intent lock, signing `nearbuddy-commit-v1 || contract || duel_id_le || commitment` (view `commit_message`), and anyone relays `reveal_intent(signed, salt, tee)` up to `close_at`. A commitment left unrevealed at scoring forfeits the duel and pays `no_reveal_bps` of the bond (default `slash_bps`) to the opponent, or to `owner_fees` when both withheld (view `get_no_reveal`). Consented pairing: `open_duel_consented` takes each agent's signature over `nearbuddy-duel-v1 || contract || a || b || symbol || close_at_le` (view `consent_message`); `set_require_consent(true)` refuses the owner's `open_duel`.
 
+Agree-flip scoring, R8 (`set_agree_flip(agree_flip_s)`, off by default, only with no duel open): if both last calls are on the same side, the side that took that side `agree_flip_s` or more after the other is scored on the opposite side; within the tolerance, b on even duel ids and a on odd ids. A side's time is the block time of the post, or the commit time of the reveal, that set its current side; repeating the same side keeps it. Not applied when a side withheld a reveal. The scored `Outcome` carries the flipped pnl, and a `fade` event (`duel_id`, `agent_pk`, `reason`: `later` or `answerer`) names the flipped side. `get_config` shows `agree_flip_s`.
+
 ```sh
 cargo test
 cargo near build non-reproducible-wasm
