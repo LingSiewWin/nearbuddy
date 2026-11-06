@@ -712,6 +712,14 @@ td.r,
 th.r {
   text-align: right;
 }
+td.num {
+  white-space: nowrap;
+}
+th small {
+  display: block;
+  color: var(--faint);
+  font-size: 11px;
+}
 .rank {
   color: var(--faint);
   width: 26px;
@@ -775,6 +783,10 @@ th.r {
 }
 .fellc {
   color: var(--alarm);
+  white-space: nowrap;
+}
+.p-board th {
+  white-space: nowrap;
 }
 .note {
   margin-top: 12px;
@@ -1319,6 +1331,10 @@ dialog .lie {
   .net .txt {
     display: none;
   }
+  /* the tape rail leaves the story column too narrow for the secondary standings columns */
+  .hide-s {
+    display: none;
+  }
 }
 @media (max-width: 900px) {
   :root {
@@ -1427,9 +1443,6 @@ dialog .lie {
   .thead {
     padding: 16px 16px 10px;
   }
-  .hide-s {
-    display: none;
-  }
   .foot {
     padding: 22px 16px 40px;
   }
@@ -1445,7 +1458,16 @@ dialog .lie {
     border-top: 1px solid var(--line);
     padding: 24px 18px;
   }
-  table .hide-s {
+}
+@media (max-width: 600px) {
+  .p-board table {
+    font-size: 14px;
+  }
+  .p-board th {
+    white-space: normal;
+  }
+  /* Follow only explains the testnet calls today; the agent link carries the same */
+  .hide-xs {
     display: none;
   }
 }

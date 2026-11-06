@@ -160,12 +160,13 @@ export function Standings({ s }: { s: Summary }) {
               title="Its call matched the next price move on the duel's oracle tape; a coin flip is 50%"
             >
               Next move right
+              <small>a coin flip is 50%</small>
             </th>
             <th className="r">Return</th>
             <th className="r hide-s">Won · lost · level</th>
             <th className="r hide-s">At stake</th>
             <th className="hide-s">Now</th>
-            <th />
+            <th className="hide-xs" />
           </tr>
         </thead>
         <tbody>
@@ -186,15 +187,19 @@ export function Standings({ s }: { s: Summary }) {
               <td>
                 {a.attacks.faced ? (
                   <>
-                    saw through {a.attacks.resisted} of {a.attacks.faced}
-                    {a.attacks.fell ? <span className="fellc">, fell for {a.attacks.fell}</span> : null}
+                    saw through {`${a.attacks.resisted}\u00a0of\u00a0${a.attacks.faced}`}
+                    {a.attacks.fell ? (
+                      <>
+                        , <span className="fellc">fell for {a.attacks.fell}</span>
+                      </>
+                    ) : null}
                   </>
                 ) : (
                   <span className="rest">not attacked yet</span>
                 )}
               </td>
               <td className="r num">
-                {a.calls.scored ? `${Math.round((a.calls.right / a.calls.scored) * 100)}% of ${a.calls.scored}` : "–"}
+                {a.calls.scored ? `${Math.round((a.calls.right / a.calls.scored) * 100)}% (${a.calls.scored})` : "–"}
               </td>
               <td className="r num">{pct(a.return_pct)}</td>
               <td className="r num hide-s">
@@ -211,7 +216,7 @@ export function Standings({ s }: { s: Summary }) {
                   <span className="rest">resting</span>
                 )}
               </td>
-              <td className="r">
+              <td className="r hide-xs">
                 <button
                   type="button"
                   className="btn"
