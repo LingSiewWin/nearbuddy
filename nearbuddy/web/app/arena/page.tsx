@@ -2,10 +2,10 @@
 import { useEffect, useState } from "react";
 
 type Intent = { agent_pk: string; duel_id: string; side: "Long" | "Short"; size_bps: number; nonce: string; expires_at: string; proof_hash: string };
-type Agent = { owner: string; pk: string; model_id: string; bond: string; alpha_bps: number; shield: number; in_duel: string | null };
+type Agent = { owner: string; pk: string; model_id: string; bond: string; alpha_bps: number; shield: number; in_duel: string | null; tee: boolean };
 type Injection = { kind: string; payload_hash: string; target: string; block: string };
-type Outcome = { open_price: string; close_price: string; pnl_a: number; pnl_b: number; winner: string | null; slashed: string };
-type Duel = { id: string; a: string; b: string; symbol: string; open_at: string; close_at: string; pool: string; injections: Injection[]; resolved: boolean; last_intent_a: Intent | null; last_intent_b: Intent | null; outcome?: Outcome | null };
+type Outcome = { open_price: string; close_price: string; pnl_a: number; pnl_b: number; winner: string | null; slashed: string; injections?: number };
+type Duel = { id: string; a: string; b: string; symbol: string; open_at: string; close_at: string; pool: string; injections: Injection[]; resolved: boolean; last_intent_a: Intent | null; last_intent_b: Intent | null; outcome?: Outcome | null; open_price?: string | null };
 type Mandate = { allowance: string; spent: string; per_tx_cap: string; allowed_tokens: string[]; expires_at: string; revoked: boolean };
 type Snap = {
   at: number; rpc: string; contract: string; config: { next_duel: string; slash_bps: number; min_chaos_deposit: string };
@@ -47,20 +47,21 @@ export default function Arena() {
   }, []);
   const name = (pk: string) => { const a = s?.leaderboard.find((x) => x.pk === pk); return a ? `${a.model_id} ${short(pk, 6)}` : short(pk); };
   const intentLine = (i: Intent | null, tag: string) => i
-    ? `${tag} ${i.side.padEnd(5)} ${(i.size_bps / 100).toFixed(0).padStart(3)}%  nonce ${i.nonce}  proof ${i.proof_hash === ZERO ? "stub (no TEE)" : short(i.proof_hash, 12)}`
+    ? `${tag} ${i.side.padEnd(5)} ${(i.size_bps / 100).toFixed(0).padStart(3)}%  nonce ${i.nonce}  ${i.proof_hash === ZERO ? "no TEE proof" : `TEE-verified sha256(req||res) ${short(i.proof_hash, 12)}`}`
     : `${tag} (no intent)`;
   return (
     <pre>
       <span className="hi">NEARBUDDY ARENA</span> <span className="dim">· models duel on live prices, get attacked, get slashed, get followed · NEAR testnet</span>{"\n"}
       <span className="dim">{s ? `snapshot ${new Date(s.at).toISOString()}  contract ${s.contract}  rpc ${s.rpc}` : "connecting"}</span><span className="cursor" />{"\n\n"}
       {top("STANDINGS")}{"\n"}
-      {row("", "model                                 alpha bps   shield   bond NEAR   status")}{"\n"}
-      {(s?.leaderboard ?? []).map((a) => row(short(a.pk, 8), `${a.model_id.padEnd(36)}  ${String(a.alpha_bps).padStart(8)}   ${String(a.shield).padStart(6)}   ${near(a.bond).padStart(9)}   ${a.in_duel !== null ? `in duel ${a.in_duel}` : "idle"}`)).join("\n")}{"\n"}
+      {row("", "model                                 alpha bps   shield   bond NEAR   tee   status")}{"\n"}
+      {(s?.leaderboard ?? []).map((a) => row(short(a.pk, 8), `${a.model_id.padEnd(36)}  ${String(a.alpha_bps).padStart(8)}   ${String(a.shield).padStart(6)}   ${near(a.bond).padStart(9)}   ${a.tee ? "yes" : "no "}   ${a.in_duel !== null ? `in duel ${a.in_duel}` : "idle"}`)).join("\n")}{"\n"}
       {bottom()}{"\n\n"}
       {(s?.duels ?? []).filter(Boolean).slice(0, 3).map((d) => d && (
         <span key={d.id}>
-          {top(`DUEL ${d.id}  ${d.symbol}  ${d.resolved ? "resolved" : "LIVE"}  ${ts(d.open_at)} → ${ts(d.close_at)}  pool ${near(d.pool)} NEAR`)}{"\n"}
-          {d.outcome ? row("outcome", `${(Number(d.outcome.open_price) / 1e8).toFixed(2)} → ${(Number(d.outcome.close_price) / 1e8).toFixed(2)}  A ${d.outcome.pnl_a >= 0 ? "+" : ""}${d.outcome.pnl_a} bps  B ${d.outcome.pnl_b >= 0 ? "+" : ""}${d.outcome.pnl_b} bps  ${d.outcome.winner ? `winner ${name(d.outcome.winner)}, loser slashed ${near(d.outcome.slashed)} NEAR` : "tie, pool split"}`) + "\n" : ""}
+          {top(`DUEL ${d.id}  ${d.symbol === "wrap.near" ? "NEAR/USD (wrap.near via price-oracle.testnet)" : d.symbol}  ${d.resolved ? "resolved" : "LIVE"}  ${ts(d.open_at)} → ${ts(d.close_at)}  pool ${near(d.pool)} NEAR`)}{"\n"}
+          {!d.resolved ? row("open price", d.open_price ? `${(Number(d.open_price) / 1e8).toFixed(4)} USD, snapshotted by the Outlayer TEE oracle at open` : "pending oracle callback") + "\n" : ""}
+          {d.outcome ? row("outcome", `${(Number(d.outcome.open_price) / 1e8).toFixed(4)} → ${(Number(d.outcome.close_price) / 1e8).toFixed(4)}  A ${d.outcome.pnl_a >= 0 ? "+" : ""}${d.outcome.pnl_a} bps  B ${d.outcome.pnl_b >= 0 ? "+" : ""}${d.outcome.pnl_b} bps  ${d.outcome.winner ? `winner ${name(d.outcome.winner)}, loser slashed ${near(d.outcome.slashed)} NEAR` : "tie, pool split"}`) + "\n" : ""}
           {row("A", name(d.a))}{"\n"}{row("", intentLine(d.last_intent_a, "  "))}{"\n"}
           {row("B", name(d.b))}{"\n"}{row("", intentLine(d.last_intent_b, "  "))}{"\n"}
           {d.injections.length ? d.injections.map((j, k) => row(k ? "" : "chaos", `${j.kind} @${name(j.target)}  sha256 ${short(j.payload_hash, 12)}  block ${j.block}${s?.solver?.pending?.[j.target]?.[0] ? `  "${s.solver.pending[j.target][0].payload.slice(0, 40)}"` : ""}`)).join("\n") : row("chaos", "none")}{"\n"}
@@ -77,7 +78,7 @@ export default function Arena() {
         ...(s.solver.intents.length + s.solver.fills.length ? [] : [<span key="none">{row("", "no activity yet")}{"\n"}</span>]),
       ] : row("", "solver offline: page runs on RPC alone") + "\n"}
       {bottom()}{"\n\n"}
-      <span className="dim">how it works: model → decision (TEE-signed on NEAR AI Cloud) → signed intent on chain → followers quoted via NEAR Intents inside their mandate → oracle resolves → loser slashed, winner paid, survivors gain shield</span>
+      <span className="dim">how it works: model decides inside a NEAR AI Cloud TEE → the contract verifies the enclave signature on the intent → followers quoted via NEAR Intents inside their mandate → Outlayer TEE oracle prices open and close, anyone resolves → loser slashed, winner paid, survivors gain shield</span>
     </pre>
   );
 }
