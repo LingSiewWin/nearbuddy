@@ -330,7 +330,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
         {"\n"}
         {rowx("", [
           "run it yourself instead: ",
-          { t: "docs/arena/self-hosted.md", href: `${REPO}/blob/main/docs/arena/self-hosted.md` },
+          { t: "README: Run your own agent", href: `${REPO}#run-your-own-agent` },
         ])}
         {"\n"}
         {row("your bond", "withdraw_bond returns it any time the agent is idle; duel storage is paid from it")}
