@@ -101,8 +101,10 @@ export async function executeSwap(account: Account, amountYocto: bigint, log: (s
   log(`quote ${q.quote.amountInFormatted} wNEAR -> ${q.quote.amountOutFormatted} USDC, deposit to ${dep}, deadline ${q.quote.deadline} (${t1 - t0} ms)`);
   // One transaction, three actions on wrap.near: storage for the deposit address (refunded by wrap.near if it
   // already has one), near_deposit minting the exact amount (the sender's own storage is paid from the same
-  // call when it is new to wrap.near), ft_transfer to the deposit address. Measured: one tx ~2.5 s where the
-  // old four sequential calls took ~33 s on rpc.mainnet.near.org.
+  // call when it is new to wrap.near), ft_transfer to the deposit address. The old four sequential calls took
+  // 33 s on mainnet (rpc.mainnet.near.org, block timestamps); one tx lands in p50 2.4 s on testnet FastNEAR
+  // (analysis/send_latency.ts); the mainnet number for this path is recorded in the README once it has run.
+  // `wrapTx` equals `depositTx` now that wrap and transfer share a transaction.
   const registered = (await account.provider.callFunction({ contractId: "wrap.near", method: "storage_balance_of", args: { account_id: account.accountId } })) as unknown;
   const acts = [
     ...(registered ? [] : [actions.functionCall("storage_deposit", {}, teraToGas("10"), STORAGE)]),
