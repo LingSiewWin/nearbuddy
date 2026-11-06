@@ -183,6 +183,7 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
           {d.live ? null : (
             <Machine
               path={`/api/verify?duel=${d.duel}`}
+              once
               note="JSON, one line per check"
               desc="This duel re-read from public sources by the same checks as bun run verify-duel: every signature and enclave proof, both oracle prices, the score, the slash and the payout, each PASS, FAIL, SKIP or INFO with its evidence. MCP: verify_duel."
             />

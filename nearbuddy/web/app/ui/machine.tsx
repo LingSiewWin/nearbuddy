@@ -45,6 +45,7 @@ export function Machine({
   desc,
   sample = path,
   stream = false,
+  once = false,
 }: {
   method?: "GET" | "SSE";
   path: string;
@@ -52,6 +53,7 @@ export function Machine({
   desc: string;
   sample?: string | null;
   stream?: boolean;
+  once?: boolean; // the answer never changes (a resolved duel's re-check): fetch it once, do not poll
 }) {
   const view = useView();
   const [origin, setOrigin] = useState("");
@@ -66,12 +68,12 @@ export function Machine({
         .then((j) => alive && setData(j))
         .catch(() => {});
     get();
-    const id = setInterval(get, 10_000);
+    const id = once ? undefined : setInterval(get, 10_000);
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, [view, sample, stream]);
+  }, [view, sample, stream, once]);
   return (
     <div className="m">
       <div className="ep">
