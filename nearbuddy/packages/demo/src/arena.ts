@@ -14,7 +14,7 @@ import { ARENA, NEAR, arenaView, explorerTx, fmtNear, loadAccount } from "../../
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const FOLLOWER_ID = process.env.FOLLOWER_ID ?? "nearbuddy-owner.testnet";
 const CAP = NEAR / 5n; // 0.2 NEAR per fill
-const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 120); // public RPCs take seconds per call; keep the duel open long enough for both intents
+const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330); // the Outlayer oracle caches a price for 300 s; a shorter duel would close on its own open price (the contract enforces min_duel_s)
 
 const seedA = process.env.AGENT_SEED_A, seedB = process.env.AGENT_SEED_B;
 if (!seedA || !seedB || !process.env.ARENA_SECRET) throw new Error("AGENT_SEED_A, AGENT_SEED_B and ARENA_SECRET must be set in the env file");
