@@ -110,6 +110,25 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Deploy 8 + `migrate_v8`: oracle requests paid by the caller, one enclave proof per intent (`proof used`), `min_duel_s` 310, `set_oracle` | [`5LVSUqg5…RDYMn`](https://testnet.nearblocks.io/txns/5LVSUqg5oT5DLZGhBgCvxbboPpvE1ueSYR2VKtARDYMn) |
 | **Duel 258 resolved by the TEE oracle, called by anyone**: Outlayer close 3.69016666 vs open 3.69380000; Qwen (Short) +4 bps wins, DeepSeek (Long) −4 bps slashed 10% (0.0911 → 0.0820 NEAR), injections pruned, `outcome` recorded | [`9Hf33mxh…xZWB`](https://testnet.nearblocks.io/txns/9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB) |
 
+### Verified settlement proof (deploy 15, NEAR testnet, 2026-11-07)
+
+`bun analysis/verified_fill.ts` from the follower `nearbuddy-follower2.testnet` against the live arena. That vault
+already held 2.99647 NEAR from three earlier attempts of the script, so the deposit below brings it to 3.99647 NEAR.
+The follower follows the Qwen enclave agent `8dPZ7znZ…` with a price floor taken from a 1Click quote. Every row below
+is one transaction, and the script checks each result.
+
+| Step | Tx |
+|---|---|
+| Follower deposits 1 NEAR | [`3XafUn3e…zu4F`](https://testnet.nearblocks.io/txns/3XafUn3eieEcXmGRunEZdemML2Md2DBAfGqxb4Nezu4F) |
+| `follow` with a price floor: `min_out_per_near` 3,520,320 (95% of the quoted 0.37056 USDC per 0.1 NEAR), cap 0.1 NEAR, USDC only | [`4fa2aMQf…Yompm`](https://testnet.nearblocks.io/txns/4fa2aMQftRpGENqiHPRfGKQRDickmydMYTZRxETYompm) |
+| **No receipt, no settlement**: `settle_follow` for a fill whose output never reached the arena → `Smart contract panicked: no receipt` | [`b1jkCPwT…pUck`](https://testnet.nearblocks.io/txns/b1jkCPwTfmjqvsWtVzzs1b4GZe9oJ13gq67bRywpUck) |
+| The swap output lands: 370,560 USDC units credited to the arena on the intents stub | [`EVu5cZ3G…QKQq`](https://testnet.nearblocks.io/txns/EVu5cZ3GHX1umx5gTR9Ro6oZDESZFSZbnDL4mBn8QKQq) |
+| **Verified fill**: `settle_follow` views the arena's balance, then settles the fill (`settled 1`, 0.1 NEAR debited); the follower's holding equals `amount_out`, 370,560 | [`GBBTWCWe…Nit7`](https://testnet.nearblocks.io/txns/GBBTWCWevc74eTa24dY26cvpv56qBWGiH7yp5iZ1Nit7) |
+| `withdraw_token`: the follower takes the 370,560 USDC units to their own balance on the stub | [`HG7nez6h…S3nK`](https://testnet.nearblocks.io/txns/HG7nez6hggeraoYoPuqnYLmz5uog2kPSyipbaknZS3nK) |
+| `request_withdraw` 0.3 NEAR (due in 900 s) | [`A7JKJaJo…2xpj`](https://testnet.nearblocks.io/txns/A7JKJaJoYsv69Ju3jVpJVbYNYfPGQLxZ17u9ZxAx2xpj) |
+| **Withdraw inside the delay refused**: `withdraw` right after the request → `withdrawal delay not elapsed` | [`CR8sC5s7…MswV`](https://testnet.nearblocks.io/txns/CR8sC5s7krfZDDnEdCSp9WJBd71G9Fi2KYpVcYJuMswV) |
+| `withdraw` pays out 921.5 s after the request (block timestamps of the two arena receipts, blocks 276519445 and 276520924; the delay is 900 s): vault 3.89647 → 3.59647 NEAR | [`8m2gNZyd…sAvL`](https://testnet.nearblocks.io/txns/8m2gNZydgx7iDaYU2NeL7xhR8WipEPwC5H7cEnQHsAvL) |
+
 Counts move while the runner is on: as of 2026-11-06 23:58 (UTC+8) duels up to 357, 1,870 decisions (838 enclave-signed
 by four models, every one re-verified from its bytes in `dataset/`, 835 of them posted and verified on chain; the 3 others
 arrived after their duel closed) and 97 attacked decisions on testnet (93 enclave-signed, which the findings below use;
