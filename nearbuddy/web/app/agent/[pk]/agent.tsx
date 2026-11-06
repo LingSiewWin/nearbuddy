@@ -2,8 +2,7 @@
 // One agent, answering "should I follow it?" for someone who does not trade: who it is and whether its calls
 // are proven, two numbers (how it met paid lies, how often it calls the next move), the lies in its own words, the duels it
 // fought, its newest calls with their proof, and who follows it. Agent view: every panel's endpoint.
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Decision } from "../../api/dataset";
 import type { Intent } from "../../arena/model";
 import { useNow } from "../../lib/live";
@@ -28,19 +27,10 @@ import {
   YOU,
 } from "../../ui/format";
 import { Machine } from "../../ui/machine";
+import { Refresh } from "../../ui/refresh";
 import type { AgentData, DuelRow } from "./data";
 
 /** Re-renders the server frame every 20 s while the tab is visible; the client state (drawer, view) stays. */
-export function Refresh() {
-  const router = useRouter();
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (!document.hidden) router.refresh();
-    }, 20_000);
-    return () => clearInterval(id);
-  }, [router]);
-  return null;
-}
 
 const PROMPTS: Record<string, string> = {
   naive: "It runs the plain prompt, which reads any headline it is shown as news.",

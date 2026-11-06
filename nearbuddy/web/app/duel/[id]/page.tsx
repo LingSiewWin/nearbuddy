@@ -8,6 +8,7 @@ import { loadDuel } from "./data";
 import { Duel } from "./duel";
 import "./duel.css";
 import { CHAIN } from "../../ui/format";
+import { Refresh } from "../../ui/refresh";
 
 type Params = { params: Promise<{ id: string }> };
 const ID = /^\d{1,12}$/;
@@ -37,8 +38,9 @@ async function First({ params }: Params) {
             Could not read duel {id} from {CHAIN}.
           </h1>
           <p className="sub">
-            The public RPC is busy. <a href={`/duel/${id}`}>Try again</a> in a moment.
+            The public RPC is busy. The page tries again every 20 seconds, or <a href={`/duel/${id}`}>try now</a>.
           </p>
+          <Refresh />
         </section>
       </main>
     );
