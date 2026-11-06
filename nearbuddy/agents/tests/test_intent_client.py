@@ -70,9 +70,30 @@ def test_proof_hash():
     assert proof_hash(REAL_REQ, REAL_RES) != proof_hash(REAL_RES, REAL_REQ)
 
 
+def test_proof_hash_is_zero_unless_both_hashes_are_present():
+    zero = base64.b64encode(ZERO_PROOF).decode()
+    assert proof_hash(REAL_REQ) == zero  # response missing
+    assert proof_hash(REAL_REQ, None) == zero
+    assert proof_hash(None, REAL_RES) == zero  # request missing
+    assert proof_hash(b"", REAL_RES) == zero and proof_hash(REAL_REQ, b"") == zero  # empty bytes count as missing
+    assert len(base64.b64decode(proof_hash(REAL_REQ, REAL_RES))) == 32
+
+
 def test_tee_text_formats():
     assert tee_text(2, REAL_MODEL, REAL_REQ, REAL_RES) == REAL_RECORD["text"].encode()
     assert tee_text(1, "ignored", REAL_REQ, REAL_RES) == f"{REAL_REQ.hex()}:{REAL_RES.hex()}".encode()
+
+
+def test_tee_text_only_the_gateway_kind_drops_the_model():
+    body = f"{REAL_REQ.hex()}:{REAL_RES.hex()}"
+    assert tee_text(1, REAL_MODEL, REAL_REQ, REAL_RES) == body.encode()
+    for kind in (0, 2, 3):  # anything but kind 1 is bound to the model id
+        assert tee_text(kind, REAL_MODEL, REAL_REQ, REAL_RES) == f"{REAL_MODEL}:{body}".encode(), kind
+    assert tee_text(2, "a/b", REAL_REQ, REAL_RES) != tee_text(2, "a/c", REAL_REQ, REAL_RES)
+    assert tee_text(2, REAL_MODEL, REAL_REQ, REAL_RES) != tee_text(2, REAL_MODEL, REAL_RES, REAL_REQ)
+    assert len(tee_text(1, "", bytes(32), bytes(32))) == 64 + 1 + 64  # hex is lowercase, no 0x prefix
+    assert tee_text(1, "", bytes(32), bytes(32)).decode().islower() is False  # all zeros: no letters at all
+    assert tee_text(2, "M", bytes([255]) * 32, bytes(32)).decode().startswith("M:" + "ff" * 32 + ":")
 
 
 def test_real_enclave_record_verifies_and_reencodes():
