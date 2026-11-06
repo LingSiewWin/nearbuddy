@@ -25,8 +25,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import ATTEST_DIR, DATA, network_file  # noqa: E402
+from duelist import DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 from nearai import message_text  # noqa: E402
+from prompts import VARIANT_D, user_bc  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SRC = DATA
@@ -121,16 +123,21 @@ FIELDS: list[tuple[str, str, str]] = [
 ]
 
 # Runs as-is in tests/test_export_dataset.py against real rows; keep it equivalent to check_row.
-VERIFY_SNIPPET = '''import base64
+_SNIPPET = r'''import base64
 import hashlib
 import json
 import re
 
 from nacl.signing import VerifyKey  # pip install pynacl
 
-# arm D's size call quotes the side it sizes and sha256 of the side call's output, in this block of its request
-POSITION = re.compile(r"\\[POSITION\\](?:\\\\n|\\n)side: (LONG|SHORT)(?:\\\\n|\\n)full_size_bps: \\d+(?:\\\\n|\\n)"
-                      r"side_call_sha256: ([0-9a-f]{64})")
+# arm D: the side call's system prompt (format with the symbol), and the head of the size call's user message,
+# which quotes the brief, the side it sizes and sha256 of the side call's output before the telemetry
+ARM_D_SYSTEM = __ARM_D_SYSTEM__
+SIZE_HEAD = re.compile(
+    r"\[ORACLE\]\n(.*?)\n\[/ORACLE\]\n\n\[POSITION\]\nside: (LONG|SHORT)\nfull_size_bps: \d+\n"
+    r"side_call_sha256: ([0-9a-f]{64})\n\[/POSITION\]\n\n\[TELEMETRY\]\n",
+    re.DOTALL,
+)
 
 
 def verify_call(call: dict, model: str) -> str:
@@ -150,6 +157,22 @@ def verify_call(call: dict, model: str) -> str:
     signer = bytes.fromhex(rec["signing_address"].removeprefix("0x"))
     VerifyKey(signer).verify(text.encode(), bytes.fromhex(rec["signature"].removeprefix("0x")))  # raises if forged
     return "ok"
+
+
+def direction(text: str) -> str | None:
+    """'Long' / 'Short' from a decision's JSON, as the runner parsed it; None when there is none."""
+    m = re.search(r"\{.*\}", text or "", re.DOTALL)
+    try:
+        token = str(json.loads(m.group(0)).get("direction", "")).strip().lower() if m else ""
+    except (ValueError, AttributeError):
+        token = ""
+    if token in ("long", "buy", "up", "+1", "1"):
+        return "Long"
+    return "Short" if token in ("short", "sell", "down", "-1") else None
+
+
+def messages(call: dict) -> list:
+    return [(m["role"], m["content"]) for m in json.loads(call["request_body"])["messages"]]
 
 
 def verify(row: dict) -> str:
@@ -173,22 +196,37 @@ def verify(row: dict) -> str:
     msg = json.loads(side["response_body"])["choices"][0]["message"]
     if side["text"] != (msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""):
         return "arm_d side text differs from bytes"
+    if direction(side["text"]) != row["intent"]["side"]:
+        return "arm_d side call direction differs"
+    oracle_only = [
+        ("system", ARM_D_SYSTEM.format(symbol=row["brief"].split(" ", 1)[0].upper())),
+        ("user", f"[ORACLE]\n{row['brief']}\n[/ORACLE]"),
+    ]
+    if messages(side) != oracle_only:
+        return "arm_d side request is not oracle-only"
     proof = side if d["proof_call"] == "side" else d["size_call"]
     if (proof["request_hash"], proof["response_hash"]) != (row["request_hash"], row["response_hash"]):
         return "arm_d proof call differs"
     if d["proof_call"] == "size":
-        quoted = POSITION.search(row["request_body"])
-        if not quoted or quoted.group(2) != hashlib.sha256(side["text"].encode()).hexdigest():
+        head = SIZE_HEAD.match(messages(row)[-1][1])
+        if not head:
+            return "arm_d size request malformed"
+        if head.group(1) != row["brief"]:
+            return "arm_d size call brief differs"
+        if head.group(3) != hashlib.sha256(side["text"].encode()).hexdigest():
             return "arm_d digest differs"
-        if quoted.group(1) != row["intent"]["side"].upper():
+        if head.group(2) != row["intent"]["side"].upper():
             return "arm_d side differs"
     return "ok"
 '''
+VERIFY_SNIPPET = _SNIPPET.replace("__ARM_D_SYSTEM__", repr(VARIANT_D))
 
-# arm D's size call quotes the side it sizes and sha256 of the side call's output, in this block of its request (raw
-# newlines or JSON-escaped `\n`, depending on how the body was serialised)
-POSITION = re.compile(
-    r"\[POSITION\](?:\\n|\n)side: (LONG|SHORT)(?:\\n|\n)full_size_bps: \d+(?:\\n|\n)side_call_sha256: ([0-9a-f]{64})"
+# Head of arm D's size-call user message (prompts.sizer_user): brief, quoted side and side digest, before the
+# telemetry. Anchored at the start, so a [POSITION] block an attacker writes into the telemetry is never read.
+SIZE_HEAD = re.compile(
+    r"\[ORACLE\]\n(.*?)\n\[/ORACLE\]\n\n\[POSITION\]\nside: (LONG|SHORT)\nfull_size_bps: \d+\n"
+    r"side_call_sha256: ([0-9a-f]{64})\n\[/POSITION\]\n\n\[TELEMETRY\]\n",
+    re.DOTALL,
 )
 
 
@@ -210,10 +248,15 @@ def _check_call(c: dict, model: str) -> str:
     return "ok"
 
 
+def _messages(c: dict) -> list[tuple[str, str]]:
+    return [(m["role"], m["content"]) for m in json.loads(c["request_body"])["messages"]]
+
+
 def _check_arm_d(r: dict) -> str:
-    """Arm D: the side call verifies under the same enclave signer, its stored text is what its signed response
-    says, the proof call is the row's top-level call, and the size call's signed request quotes sha256 of the side
-    call's text and the side that was posted."""
+    """Arm D. The side call verifies under the same enclave signer; its stored text is what its signed response
+    says; its own decision is the posted side; its signed request is exactly the oracle-only prompt on the row's
+    brief (no telemetry). The proof call is the row's top-level call, and the size call's signed request quotes the
+    same brief, sha256 of the side call's text and the posted side."""
     d = r["arm_d"]
     side = d.get("side_call") or {}
     note = _check_call(side, r["model"])
@@ -226,14 +269,37 @@ def _check_arm_d(r: dict) -> str:
             return "arm_d side text differs from bytes"
     except (ValueError, KeyError, IndexError, TypeError):
         return "arm_d side text differs from bytes"
+    try:
+        chose = "Long" if parse_decision(side["text"]).direction > 0 else "Short"
+    except DuelistError:
+        chose = None
+    if chose != r.get("intent", {}).get("side"):
+        return "arm_d side call direction differs"
+    brief = str(r.get("brief") or "")
+    oracle_only = [
+        ("system", VARIANT_D.format(symbol=brief.split(" ", 1)[0].upper())),
+        ("user", user_bc(brief, None)),
+    ]
+    try:
+        if _messages(side) != oracle_only:
+            return "arm_d side request is not oracle-only"
+    except (ValueError, KeyError, TypeError):
+        return "arm_d side request is not oracle-only"
     proof = side if d.get("proof_call") == "side" else d.get("size_call") or {}
     if (proof.get("request_hash"), proof.get("response_hash")) != (r["request_hash"], r["response_hash"]):
         return "arm_d proof call differs"
     if d.get("proof_call") == "size":
-        quoted = POSITION.search(r["request_body"])
-        if not quoted or quoted.group(2) != hashlib.sha256(side["text"].encode()).hexdigest():
+        try:
+            head = SIZE_HEAD.match(_messages(r)[-1][1])
+        except (ValueError, KeyError, TypeError, IndexError):
+            head = None
+        if not head:
+            return "arm_d size request malformed"
+        if head.group(1) != brief:
+            return "arm_d size call brief differs"
+        if head.group(3) != hashlib.sha256(side["text"].encode()).hexdigest():
             return "arm_d digest differs"
-        if quoted.group(1) != str(r.get("intent", {}).get("side", "")).upper():
+        if head.group(2) != str(r.get("intent", {}).get("side", "")).upper():
             return "arm_d side differs"
     return "ok"
 
@@ -360,8 +426,10 @@ The enclave signs `"{{model}}:{{sha256(request)}}:{{sha256(response)}}"` (`provi
 only `"{{sha256(request)}}:{{sha256(response)}}"`). The contract accepted the intent only if that signature verified
 under a signer it pins and `intent.proof_hash == sha256(request_hash || response_hash)`. Arm D rows carry two
 calls: the contract verified the top-level one (the size call when the decision was attacked), and the snippet also
-checks `arm_d.side_call` under the same signer, that its `text` is what its signed response says, and that the size
-call's signed request quotes `sha256(side_call.text)` and the side that was posted. Recompute it offline:
+checks `arm_d.side_call` under the same signer: its `text` is what its signed response says, its own decision is
+the posted side, and its signed request is exactly the oracle-only prompt on the row's `brief` (no telemetry). The
+size call's signed request must quote the same brief, `sha256(side_call.text)` and the posted side. Recompute it
+offline:
 
 ```python
 {VERIFY_SNIPPET}```
@@ -395,6 +463,9 @@ https://testnet.nearblocks.io and compare the posted intent with `intent`.
 - **Error rows.** Rows with `error` were not posted on chain (`tx` is null or absent). Parse failures keep `text`
   and `response_body` but no signature, so they do not verify; late rows (`duel closed`, `intent lock`) verify but
   have no on-chain intent. Leave error rows out of win-rate counts.
+- **Re-rolls are invisible.** Sampling is not deterministic, so the operator could repeat a call (in any arm, or
+  arm D's side call) until it returns a wanted answer and publish only that one. A signature proves a completion
+  happened, not that it was the only one.
 - **Small and testnet.** Few attacked rows per arm and testnet stakes; treat rates as provisional.
 
 ## Citation
