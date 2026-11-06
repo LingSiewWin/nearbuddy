@@ -20,7 +20,9 @@ ARENA = ENV.get("ARENA_CONTRACT", NET["arena"])
 ASSETS = {"NEAR/USD": "wrap.near"}
 
 
-def rpc(method: str, params: dict[str, Any], what: str = "", retries: int = RETRIES, timeout: float = 30) -> Any:
+def rpc(
+    method: str, params: dict[str, Any], what: str = "", retries: int = RETRIES, timeout: float = 30, first: int = 0
+) -> Any:
     """One JSON-RPC call with retries; rate limits and internal errors back off and alternate endpoints. `retries`
     and `timeout` bound a caller that has its own deadline (with the defaults one call can take minutes)."""
     body: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
@@ -28,7 +30,7 @@ def rpc(method: str, params: dict[str, Any], what: str = "", retries: int = RETR
     endpoints = [RPC, RPC_FALLBACK] if RPC_FALLBACK and RPC_FALLBACK != RPC else [RPC]
     last = ""
     for attempt in range(retries):
-        url = endpoints[attempt % len(endpoints)]
+        url = endpoints[(attempt + first) % len(endpoints)]
         try:
             resp = requests.post(url, json=body, headers={"User-Agent": "nearbuddy/1"}, timeout=timeout)
             r = resp.json()
@@ -65,11 +67,19 @@ def view(method: str, args: dict[str, Any]) -> Any:
     return json.loads(bytes(result["result"]).decode())
 
 
+_now_reads = 0  # chain_now_ns alternates endpoints across calls, one attempt each
+
+
 def chain_now_ns(timeout: float = 5) -> int:
     """Timestamp of the latest final block. The contract's `env::block_timestamp()` is at least this for any
-    transaction sent now, so a check against it never runs ahead of the chain. One attempt per endpoint, each at most
-    `timeout` seconds: the caller (runner.hold_until_lock) polls against a deadline and must get control back."""
-    return int(rpc("block", {"finality": "final"}, retries=2, timeout=timeout)["header"]["timestamp_nanosec"])
+    transaction sent now, so a check against it never runs ahead of the chain. One attempt of at most `timeout`
+    seconds, no backoff: the caller (runner.hold_until_lock) polls against a deadline, retries itself and must get
+    control back in time. Successive calls alternate RPC and fallback, so a dead endpoint costs every other read."""
+    global _now_reads
+    _now_reads += 1
+    return int(
+        rpc("block", {"finality": "final"}, retries=1, timeout=timeout, first=_now_reads)["header"]["timestamp_nanosec"]
+    )
 
 
 def warn_if_arena_missing(network: str = NETWORK, arena: str = ARENA, rpc: str = RPC) -> bool:

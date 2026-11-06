@@ -56,16 +56,18 @@ def test_chain_now_reads_the_final_block_time_as_an_exact_int(monkeypatch):
     assert bodies[0]["method"] == "block" and bodies[0]["params"] == {"finality": "final"}
 
 
-def test_chain_now_is_bounded_two_short_attempts_no_long_backoff(monkeypatch):
-    calls: list[float] = []
+def test_chain_now_is_one_short_attempt_and_alternates_endpoints(monkeypatch):
+    calls: list[tuple[str, float]] = []
     sleeps: list[float] = []
 
     def fake_post(url, json=None, headers=None, timeout=None):
-        calls.append(timeout)
+        calls.append((url, timeout))
         return _Resp({"error": {"message": "You reached Public endpoint rate limit"}}, 429)
 
     monkeypatch.setattr(chain.requests, "post", fake_post)
     monkeypatch.setattr(chain.time, "sleep", sleeps.append)
-    with pytest.raises(RuntimeError, match="after 2 attempts"):
-        chain.chain_now_ns(timeout=1.5)
-    assert calls == [1.5, 1.5] and sleeps == [1], "one backoff between the two attempts, none after the last"
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="after 1 attempts"):
+            chain.chain_now_ns(timeout=1.5)
+    assert [t for _, t in calls] == [1.5, 1.5] and sleeps == [], "one attempt per call, no backoff"
+    assert {u for u, _ in calls} == {chain.RPC, chain.RPC_FALLBACK}, "successive reads alternate endpoints"

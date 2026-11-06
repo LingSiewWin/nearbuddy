@@ -369,6 +369,35 @@ def test_a_slow_rpc_cannot_hold_the_reveal_past_the_backstop(env, monkeypatch):
     assert not [r for r in rows() if r.get("error")], "no deadline miss"
 
 
+def test_a_hanging_rpc_with_a_short_lock_still_reveals_before_the_deadline(env, monkeypatch):
+    # the real chain_now_ns over a fake transport that hangs for the whole timeout of every attempt (requests.post)
+    # and a fake clock for the backoff (time.sleep): with a 10 s lock the backstop leaves 2 s before the reveal
+    # deadline, so a read may not cost more than the budget it was given
+    import chain
+
+    clock, players = env
+    monkeypatch.setattr(runner, "chain_now_ns", chain.chain_now_ns)
+    attempts = []
+
+    hang_from = CLOSE_NS - runner.BACKSTOP_BEFORE_CLOSE_NS - int(5.2 * S)  # a full 5 s budget is left
+
+    def hanging(url, json=None, headers=None, timeout=None):
+        if clock.ns < hang_from:  # answers at once, but the chain's final block lags far behind
+            lagging = {"result": {"header": {"timestamp_nanosec": str(clock.ns - 100 * S)}}}
+            return type("R", (), {"status_code": 200, "json": lambda self: lagging})()
+        attempts.append(timeout)  # from here every attempt hangs for its whole timeout
+        clock.ns += int(timeout * S)
+        raise requests.Timeout("read timed out")
+
+    monkeypatch.setattr(chain.requests, "post", hanging)
+    solver = FakeSolver(clock)
+    play(solver, players)
+    deadline = CLOSE_NS - runner.REVEAL_MARGIN_S * S
+    assert attempts and all(a <= 5 for a in attempts), attempts
+    assert reveal_times(solver) and all(t < deadline for t in reveal_times(solver)), reveal_times(solver)
+    assert not [r for r in rows() if r.get("error")], "no deadline miss"
+
+
 def test_a_slow_last_cycle_never_sleeps_past_the_commit_window(env, monkeypatch):
     # duel 464: the last cycle started just before stop_ns, a slow model call ran past it, then the full
     # cycle_seconds sleep ran past close_at - REVEAL_MARGIN_S, and both reveals were refused as late
