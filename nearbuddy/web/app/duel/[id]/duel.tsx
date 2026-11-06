@@ -77,10 +77,14 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
     <DrawerProvider>
       <div className="abanner m">
         <p>
-          Agent view. Each panel is now the endpoint behind it, with a curl line and a live sample. No key needed. The
-          duel record is in the contract&apos;s raw units; a route for one duel in plain units is on its way.
+          Agent view. Each panel is now the endpoint behind it, with a curl line and a live sample. No key needed. Start
+          with /api/v1/duels/{d.duel} for this duel in plain units; /api/duel?id={d.duel} is the contract&apos;s raw
+          record.
         </p>
         <div className="eps">
+          <span>
+            GET <code>/api/v1/duels/{d.duel}</code>
+          </span>
           <span>
             GET <code>/api/duel?id={d.duel}</code>
           </span>
@@ -92,9 +96,6 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
           </span>
           <span>
             GET <code>/api/v1/decisions/{"{tx}"}</code>
-          </span>
-          <span>
-            coming: GET <code>/api/v1/duels/{d.duel}</code>
           </span>
         </div>
       </div>
@@ -112,9 +113,14 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
             <Race d={d} ticks={ticks} now={now} src={src} />
           </div>
           <Machine
+            path={`/api/v1/duels/${d.duel}`}
+            note="JSON, plain units"
+            desc="This duel in plain units: both sides' scored call and whether its proof verified, the oracle's open and close in USD, each side's return in percent, the winner and what the loser paid in NEAR, its attacks, the published decisions and its chain events. Times in milliseconds."
+          />
+          <Machine
             path={`/api/duel?id=${d.duel}`}
             note="JSON, raw units, cached 20 s"
-            desc="The contract's record of this duel plus both agents. open_at and close_at are nanoseconds, prices are USD × 1e8, pool, bond and slashed are yoctoNEAR, pnl_a and pnl_b are each side's score in basis points. last_intent_a and last_intent_b are the calls that were scored. GET /api/v1/duels/<id> in plain units is coming; until then this is the source."
+            desc="The contract's own record of this duel plus both agents. open_at and close_at are nanoseconds, prices are USD × 1e8, pool, bond and slashed are yoctoNEAR, pnl_a and pnl_b are each side's score in basis points. last_intent_a and last_intent_b are the calls that were scored."
           />
         </section>
         <section className="p-news">
