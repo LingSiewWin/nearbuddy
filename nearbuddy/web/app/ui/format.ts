@@ -3,9 +3,14 @@
 const MINUS = "−";
 
 /** "deepseek-ai/DeepSeek-V4.1-Flash-1017" -> "DeepSeek", "Qwen/Qwen3.8-27B" -> "Qwen". */
+/** The family with an attached version, so two generations live at once stay apart:
+ *  "Qwen/Qwen3.8-27B" -> "Qwen3.8", "deepseek-ai/DeepSeek-V4.1-Flash-1017" -> "DeepSeek", "z-ai/glm-5.3" -> "GLM". */
 export const who = (model: string | null | undefined) => {
   const base = (model ?? "").split("/").pop() ?? "";
-  return base.match(/^[A-Za-z]+/)?.[0] ?? (base || "unknown");
+  const m = base.match(/^([A-Za-z]+)(\d[\d.]*\d|\d)?/);
+  if (!m) return base || "unknown";
+  const family = (m[1] as string).length <= 3 ? (m[1] as string).toUpperCase() : (m[1] as string);
+  return family + (m[2] ?? "");
 };
 /** "deepseek-ai/DeepSeek-V4.1-Flash-1017" -> "DeepSeek-V4.1-Flash". */
 export const modelName = (model: string | null | undefined) =>

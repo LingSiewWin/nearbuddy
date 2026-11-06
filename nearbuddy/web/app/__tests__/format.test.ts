@@ -9,8 +9,10 @@ const MINUS = "−";
 describe("who / modelName / tone", () => {
   test("who: the family name", () => {
     expect(who(DEEP)).toBe("DeepSeek");
-    expect(who(QWEN)).toBe("Qwen");
-    expect(who("gpt-5")).toBe("gpt");
+    expect(who(QWEN)).toBe("Qwen3.8");
+    expect(who("Qwen/Qwen3.6-35B-A3B-FP8")).toBe("Qwen3.6");
+    expect(who("z-ai/glm-5.3-flash")).toBe("GLM");
+    expect(who("gpt-5")).toBe("GPT");
   });
   test("who: a name with no leading letters is kept whole; nothing is 'unknown'", () => {
     expect(who("stub/123abc")).toBe("123abc");

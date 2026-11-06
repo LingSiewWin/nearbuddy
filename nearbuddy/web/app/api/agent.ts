@@ -167,6 +167,7 @@ export async function agentSummary(pk: string) {
     model: a.model_id,
     owner: a.owner,
     prompt: mine.at(-1)?.arm ?? null,
+    prompts: [...new Set(mine.map((d) => d.arm))],
     verified: a.tee,
     return_pct: a.alpha_bps / 100,
     bond_near: nearOf(a.bond),

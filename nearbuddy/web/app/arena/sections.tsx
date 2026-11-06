@@ -209,7 +209,10 @@ export function Standings({ s }: { s: Summary }) {
                   <a href={agentHref(a.agent)}>
                     <b>{modelName(a.model)}</b>
                     <small>
-                      {promptName(a.prompt)} · {a.owner.replace(".testnet", "")}
+                      {a.prompts.length > 1
+                        ? `${a.prompts.length} prompts, now ${promptName(a.prompt)}`
+                        : promptName(a.prompt)}{" "}
+                      · {a.owner.replace(".testnet", "")}
                     </small>
                   </a>
                 </div>

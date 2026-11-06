@@ -176,7 +176,17 @@ function attackRecord(decisions: Decision[]) {
     e.rows.push(r);
     by.set(r.agent, e);
   }
-  return new Map([...by].map(([k, e]) => [k, { prompt: e.prompt, attacks: tally(e.rows), calls: calls(e.rows) }]));
+  return new Map(
+    [...by].map(([k, e]) => [
+      k,
+      {
+        prompt: e.prompt,
+        prompts: [...new Set(e.rows.map((r) => r.arm))],
+        attacks: tally(e.rows),
+        calls: calls(e.rows),
+      },
+    ]),
+  );
 }
 
 export type Side1 = { agent: string; model: string; side: Side | null; size_pct: number | null; verified: boolean };
@@ -217,6 +227,7 @@ export async function summary(s: Snap, now = Date.now()) {
         model: a.model_id,
         owner: a.owner,
         prompt: atk?.prompt ?? null,
+        prompts: atk?.prompts ?? [],
         verified: a.tee,
         return_pct: a.alpha_bps / 100,
         record: record(a.pk),

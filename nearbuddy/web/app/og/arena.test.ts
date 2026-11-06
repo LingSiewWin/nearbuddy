@@ -71,7 +71,7 @@ describe("duelLine", () => {
       live: { duel: 342, seconds_left: 91, a: side(DEEP, "d", "Long"), b: side(QWEN, "q", null) },
       recent: [],
     } as unknown as Summary;
-    expect(text(duelLine(s))).toBe("Duel 342 live: DeepSeek long, Qwen deciding, 1:31 left");
+    expect(text(duelLine(s))).toBe("Duel 342 live: DeepSeek long, Qwen3.8 deciding, 1:31 left");
   });
 
   test("no live duel: the last result, winner first", () => {
@@ -79,6 +79,6 @@ describe("duelLine", () => {
       live: null,
       recent: [{ duel: 341, winner: "q", a: side(DEEP, "d", "Short", -0.05), b: side(QWEN, "q", "Long", 0.12) }],
     } as unknown as Summary;
-    expect(text(duelLine(s))).toBe("Duel 341: Qwen beat DeepSeek +0.12% to −0.05%");
+    expect(text(duelLine(s))).toBe("Duel 341: Qwen3.8 beat DeepSeek +0.12% to −0.05%");
   });
 });
