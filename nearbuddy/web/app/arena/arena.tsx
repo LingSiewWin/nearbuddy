@@ -130,15 +130,15 @@ export default function Arena({ initial }: { initial: Initial }) {
             {f ? (
               <>
                 <Headline f={f} price={price} open={f ? openOf(f, ticks) : null} now={now} />
-                {f.live && s.also_live.length ? (
+                {s.also_live.length ? (
                   <p className="fine also">
-                    Also live, and on the tape:{" "}
+                    {f.live ? "Also live, and on the tape:" : "Live now, on the tape:"}{" "}
                     {s.also_live.map((o, i) => (
                       <span key={o.duel}>
                         {i ? " · " : ""}
                         <a href={duelHref(o.duel)}>
                           duel {o.duel}, {who(o.a)} vs {who(o.b)}
-                          {o.test ? " (a test duel)" : ""}
+                          {o.test ? " (not a ranked pair)" : ""}
                         </a>
                       </span>
                     ))}

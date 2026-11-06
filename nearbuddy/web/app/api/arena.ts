@@ -213,8 +213,9 @@ export async function summary(s: Snap, now = Date.now()) {
     const a = lb.find((x) => x.pk === pk);
     return !!a?.tee && !isTestAgent(a.model_id);
   };
-  // the hero is the newest open duel between enclave-verified models; red-team or test duels never take it
-  const live = open.find((d) => trusted(d.a) && trusted(d.b)) ?? open[0]; // live_duels lists every open one
+  // the hero is the newest open duel between two ranked (enclave-verified, non-test) agents; when every open duel
+  // has a stub, red-team or unproven agent in it, there is no hero and the page leads with the newest result
+  const live = open.find((d) => trusted(d.a) && trusted(d.b)) ?? null; // live_duels lists every open one
   const liveAttacks = await Promise.all(
     (live?.injections ?? []).map(async (j) => ({
       target: j.target,
@@ -261,7 +262,7 @@ export async function summary(s: Snap, now = Date.now()) {
     contract: s.contract,
     duels_total: Number(s.config.next_duel),
     live_duels: open.map((d) => Number(d.id)),
-    // the other open duels, so a page can say what else the tape is showing; `test`: a stub or red-team agent plays
+    // the other open duels, so a page can say what else the tape is showing; `test`: not a ranked pair
     also_live: open
       .filter((d) => d !== live)
       .map((d) => ({

@@ -94,6 +94,15 @@ describe("summary: records", () => {
     ]);
   });
 
+  test("no hero when every open duel has a test agent in it; the page lists them as live", async () => {
+    const s = await summary(
+      snap({ leaderboard: lb, duels: [duel("12", STUB, A, { resolved: false, outcome: null }), won("10", A, B, A)] }),
+      NOW,
+    );
+    expect(s.live).toBeNull();
+    expect(s.also_live).toEqual([{ duel: 12, a: "stub/always-long", b: "Qwen/Qwen3.8-27B", test: true }]);
+  });
+
   test("stub and unverified agents are hidden from the standings; the rest keep their units", async () => {
     const s = await summary(snap({ leaderboard: lb }));
     expect(s.standings.map((x) => x.agent)).toEqual([A]);
@@ -113,7 +122,9 @@ describe("summary: records", () => {
 });
 
 describe("summary: live vs recent", () => {
-  const live = duel("12", A, STUB, {
+  const D = "test-agent-d";
+  const board = [...lb, agent(D, "z-ai/glm-5.3-flash")];
+  const live = duel("12", A, D, {
     resolved: false,
     outcome: null,
     pool: `3${YOCTO}`,
@@ -122,11 +133,11 @@ describe("summary: live vs recent", () => {
     close_at: ns(NOW + 90_400),
     injections: [{ kind: "fake_news", payload_hash: "unknown-hash", target: A, block: "1" }],
     last_intent_a: intent(A, "12", "Short", { size_bps: 2500 }),
-    last_intent_b: intent(STUB, "12", "Long", { proof_hash: ZERO_PROOF }),
+    last_intent_b: intent(D, "12", "Long", { proof_hash: ZERO_PROOF }),
   });
 
   test("the first unresolved duel is live, in human units", async () => {
-    const s = await summary(snap({ leaderboard: lb, duels: [live, won("10", A, B, A)] }), NOW);
+    const s = await summary(snap({ leaderboard: board, duels: [live, won("10", A, B, A)] }), NOW);
     expect(s.live).toEqual({
       duel: 12,
       market: "NEAR/USD",
@@ -136,20 +147,21 @@ describe("summary: live vs recent", () => {
       pot_near: 3,
       open_price_usd: 3.7795,
       a: { agent: A, model: "Qwen/Qwen3.8-27B", side: "Short", size_pct: 25, verified: true },
-      // a hidden stub still shows its model in a duel; a zero proof hash is not verified
-      b: { agent: STUB, model: "stub/always-long", side: "Long", size_pct: 50, verified: false },
+      // a zero proof hash is not a verified call, even from an enclave agent
+      b: { agent: D, model: "z-ai/glm-5.3-flash", side: "Long", size_pct: 50, verified: false },
       attacks: [{ target: A, kind: "fake_news", text: null, payload_sha256: "unknown-hash" }],
     });
   });
 
   test("seconds_left never goes negative after the bell", async () => {
-    const s = await summary(snap({ leaderboard: lb, duels: [live] }), NOW + 200_000);
+    const s = await summary(snap({ leaderboard: board, duels: [live] }), NOW + 200_000);
     expect(s.live?.seconds_left).toBe(0);
   });
 
-  test("an agent missing from the leaderboard is 'unregistered'; no call means no side", async () => {
+  test("a duel with an unregistered agent is never the hero; also_live lists it with no model", async () => {
     const s = await summary(snap({ duels: [duel("12", "ghost", B, { resolved: false, outcome: null })] }));
-    expect(s.live?.a).toEqual({ agent: "ghost", model: "unregistered", side: null, size_pct: null, verified: false });
+    expect(s.live).toBeNull();
+    expect(s.also_live).toEqual([{ duel: 12, a: null, b: null, test: true }]); // no leaderboard in this snapshot
   });
 
   test("with every duel resolved nothing is live; recent is the newest ten, scored by the contract", async () => {

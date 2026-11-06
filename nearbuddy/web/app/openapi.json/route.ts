@@ -167,14 +167,17 @@ const schemas = {
     contract: t("string"),
     duels_total: t("integer"),
     live_duels: arr(
-      t("integer", "every open duel, newest first; `live` details the newest between enclave-verified models"),
+      t("integer", "every open duel, newest first; `live` details the newest between two ranked agents, or is null"),
     ),
     also_live: arr(
       obj({
         duel: t("integer"),
         a: orNull("string"),
         b: orNull("string"),
-        test: t("boolean", "a stub or red-team agent plays in it"),
+        test: t(
+          "boolean",
+          "either agent is outside the standings: a stub, a red-team agent or one without enclave proof",
+        ),
       }),
     ),
     rules: obj({
