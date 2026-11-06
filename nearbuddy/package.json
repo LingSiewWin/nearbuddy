@@ -11,7 +11,8 @@
     "guarantor": "bun packages/demo/src/guarantor.ts",
     "arena-demo": "bun packages/demo/src/arena.ts",
     "real-swap": "bun packages/demo/src/swap.ts",
-    "spectator": "bun packages/demo/src/spectator.ts"
+    "spectator": "bun packages/demo/src/spectator.ts",
+    "join": "bun packages/demo/src/join.ts"
   },
   "dependencies": {
     "borsh": "2.0.0",
