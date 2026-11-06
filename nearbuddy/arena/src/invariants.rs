@@ -1517,6 +1517,26 @@ impl World {
             .collect();
         let pk = Base64VecU8(self.pks[agent].clone());
         let follower: AccountId = ACCOUNTS[who].parse().unwrap();
+        // the views a solver checks before fronting agree with the model (round 3, R4)
+        self.env(OWNER, 0);
+        let c: Contract = env::state_read().expect("state");
+        for f in &fills {
+            let n = f.intent_nonce.0;
+            assert_eq!(
+                c.intent_accepted_at(pk.clone(), U64(n)).map(|t| t.0),
+                self.accepted_at.get(&(agent, n)).copied(),
+                "intent_accepted_at"
+            );
+        }
+        assert_eq!(
+            c.get_follow_time(pk.clone(), follower.clone()).map(|t| t.0),
+            self.windows
+                .get(&(agent, who))
+                .and_then(|w| w.last())
+                .map(|(s, _)| *s),
+            "get_follow_time"
+        );
+        drop(c);
         let sent = self.call(SOLVER, 0, |c| {
             drop(c.settle_follow(pk.clone(), follower.clone(), fills.clone()))
         });

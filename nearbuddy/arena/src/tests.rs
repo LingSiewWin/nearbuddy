@@ -1221,6 +1221,31 @@ fn second_refollow_waits_for_the_first_windows_grace() {
 }
 
 #[test]
+fn follow_time_and_accept_time_views() {
+    // red team round 3 (R4): a solver can check the accept-time rules before fronting
+    let (mut c, ..) = setup_follow(hour_mandate());
+    let (pk, f) = (Base64VecU8(key(1).1), || {
+        FOLLOWER.parse::<AccountId>().unwrap()
+    });
+    assert_eq!(c.get_follow_time(pk.clone(), f()), Some(U64(NOW)));
+    assert_eq!(c.get_follow_time(Base64VecU8(key(2).1), f()), None);
+    assert_eq!(c.intent_accepted_at(pk.clone(), U64(1)), Some(U64(NOW)));
+    assert_eq!(c.intent_accepted_at(pk.clone(), U64(9)), None);
+    c.used_nonces.insert(nonce_key(&key(1).1, 9));
+    assert_eq!(
+        c.intent_accepted_at(pk.clone(), U64(9)),
+        Some(U64(0)),
+        "pre-16: time unknown"
+    );
+    as_v15_mandate(&mut c, 1);
+    assert_eq!(
+        c.get_follow_time(pk, f()),
+        None,
+        "pre-16 mandate: no follow time"
+    );
+}
+
+#[test]
 fn stored_mandate_versions_keep_their_borsh_tags() {
     // V4 is appended: records written by deploy 15 (V2) and 16 (V3) decode unchanged, no migration
     let m = hour_mandate();

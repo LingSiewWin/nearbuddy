@@ -39,6 +39,26 @@ impl Contract {
             .map(|v| v.current().clone())
     }
 
+    /// Start of `follower`'s current follow window for `agent_pk` (unix ns): fills for intents
+    /// accepted from then on pass the follow-time rule. `None` with no mandate or one stored before
+    /// deploy 16 (no follow time). A re-follow inside a closed window's grace also keeps that
+    /// window's intents settleable until the grace ends (see `VersionedMandate::refollowed`).
+    /// View: anyone, no deposit, no panics.
+    pub fn get_follow_time(&self, agent_pk: Base64VecU8, follower: AccountId) -> Option<U64> {
+        self.follows
+            .get(&follow_key(&agent_pk.0, &follower))
+            .and_then(|v| v.followed_at())
+            .map(U64)
+    }
+
+    /// When the agent's intent `nonce` was accepted (unix ns); 0 for one accepted before deploy 16
+    /// (time not recorded); `None` if it never was. `settle_follow` compares it with the mandate's
+    /// follow time, revoke and expiry. View: anyone, no deposit, no panics.
+    pub fn intent_accepted_at(&self, agent_pk: Base64VecU8, nonce: U64) -> Option<U64> {
+        self.accepted_at(&crate::nonce_key(&agent_pk.0, nonce.0))
+            .map(U64)
+    }
+
     /// Fill output credited to `follower` in `token_id` and not yet withdrawn.
     /// View: anyone, no deposit, no panics.
     pub fn get_holding(&self, follower: AccountId, token_id: String) -> U128 {
