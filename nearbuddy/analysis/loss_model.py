@@ -133,9 +133,7 @@ def V(k: str) -> Any:
     return ASSUMPTIONS[k][0]
 
 
-def sample_latency(
-    spec: tuple[str, float, float | None], sigma: float, rng: random.Random
-) -> float:
+def sample_latency(spec: tuple[str, float, float | None], sigma: float, rng: random.Random) -> float:
     kind, a, b = spec
     if kind == "lognormal":
         return rng.lognormvariate(math.log(a), sigma if b is None else b)
@@ -211,14 +209,10 @@ def simulate(chain: str, n: int, rng: random.Random) -> dict[str, Any]:
         if i < n_cap:
             W = l_pull + tail
             N = poisson(book_rate * W, rng)
-            exposures.append(
-                max(0.0, rng.gauss(N * a_mean, math.sqrt(N * a_var))) if N else 0.0
-            )
+            exposures.append(max(0.0, rng.gauss(N * a_mean, math.sqrt(N * a_var))) if N else 0.0)
 
     exposures.sort()
-    stake = exposures[
-        min(len(exposures) - 1, int(V("exposure_percentile") * len(exposures)))
-    ]
+    stake = exposures[min(len(exposures) - 1, int(V("exposure_percentile") * len(exposures)))]
     annual_vol = V("book_swipes_per_day") * 365 * (sum_a / n)
     return dict(
         chain=chain,
@@ -233,13 +227,9 @@ def simulate(chain: str, n: int, rng: random.Random) -> dict[str, Any]:
     )
 
 
-def loss_bps(
-    r: dict[str, Any], p_adv: float, ledger_on: bool, bot: bool = False
-) -> float:
+def loss_bps(r: dict[str, Any], p_adv: float, ledger_on: bool, bot: bool = False) -> float:
     adv = r["adv_bot"] if bot else r["adv_h"]
-    loss = p_adv * adv * (1 - V("recovery_rate")) + (
-        0.0 if ledger_on else r["race_off"]
-    )
+    loss = p_adv * adv * (1 - V("recovery_rate")) + (0.0 if ledger_on else r["race_off"])
     return 1e4 * loss / r["mean_amt"]
 
 
@@ -251,11 +241,7 @@ def floor_bps(
     bot: bool = False,
 ) -> float:
     gas = 1e4 * r["gas_usd"] / r["mean_amt"]
-    return (
-        loss_bps(r, p_adv, ledger_on, bot)
-        + gas
-        + (r["capital_bps"] if capital else 0.0)
-    )
+    return loss_bps(r, p_adv, ledger_on, bot) + gas + (r["capital_bps"] if capital else 0.0)
 
 
 def self_check(results: dict[str, dict[str, Any]]) -> None:
@@ -273,9 +259,7 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
     grid = V("p_adv_grid")
     out: list[str] = []
     p = out.append
-    p(
-        f"NearBuddy guarantor loss model  trials={n} seed={seed} runtime={secs:.1f}s  (python3 -I, stdlib)"
-    )
+    p(f"NearBuddy guarantor loss model  trials={n} seed={seed} runtime={secs:.1f}s  (python3 -I, stdlib)")
     p("")
     p("ASSUMPTIONS")
     for k, (v, src) in ASSUMPTIONS.items():
@@ -287,9 +271,7 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
             f"gas_pull_usd={c['gas_pull_usd']}  {c['source']}"
         )
     p("")
-    p(
-        "SCENARIOS  (loss and floor in bps of guaranteed volume; p99 exposure = stake S in $)"
-    )
+    p("SCENARIOS  (loss and floor in bps of guaranteed volume; p99 exposure = stake S in $)")
     hdr = (
         f"{'chain':18s} {'ledger':6s} {'p_adv':>7s} {'loss_bps':>10s} {'gas_bps':>8s} "
         f"{'p99_exp_$':>10s} {'cap_bps':>8s} {'floor_bps':>10s} {'floor+cap':>10s}"
@@ -306,9 +288,7 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
                     f"{floor_bps(r, pa, on):10.4f}"
                 )
     p("")
-    p(
-        "LEDGER VALUE  (race loss removed by the reservation ledger; same events become declines)"
-    )
+    p("LEDGER VALUE  (race loss removed by the reservation ledger; same events become declines)")
     for k in DEFAULT_CHAINS:
         r = results[k]
         p(
@@ -324,9 +304,7 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
             f"cap={r['capital_bps']:.5f} bps  floor+cap={floor_bps(r, 1e-4, True):.4f} bps"
         )
     p("")
-    p(
-        "SENSITIVITY  bot adversary (zero reaction time, drain races pull head-on), ledger on, p_adv=1e-4"
-    )
+    p("SENSITIVITY  bot adversary (zero reaction time, drain races pull head-on), ledger on, p_adv=1e-4")
     for k in DEFAULT_CHAINS:
         r = results[k]
         p(
@@ -337,9 +315,7 @@ def report(results: dict[str, dict[str, Any]], n: int, seed: int, secs: float) -
     p("")
     lim = V("insurable_bps")
     ok = [k for k in DEFAULT_CHAINS if floor_bps(results[k], 1e-3, True) <= lim]
-    p(
-        f"INSURABLE at <= {lim:.0f} bps with ledger on, worst p_adv={grid[-1]:.0e}: {', '.join(ok) or 'none'}"
-    )
+    p(f"INSURABLE at <= {lim:.0f} bps with ledger on, worst p_adv={grid[-1]:.0e}: {', '.join(ok) or 'none'}")
     return "\n".join(out)
 
 
