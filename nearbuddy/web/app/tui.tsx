@@ -177,6 +177,7 @@ const explorer = (net: NetworkId = NETWORK_ID) => NETWORKS[net].explorer;
 export const txHref = (tx: string, net?: NetworkId) => `${explorer(net)}/txns/${tx}`;
 export const addrHref = (acct: string, net?: NetworkId) => `${explorer(net)}/address/${acct}`;
 export const agentHref = (pk: string) => `/agent/${encodeURIComponent(pk)}`;
+export const followerHref = (account: string) => `/follower/${encodeURIComponent(account)}`;
 export const duelHref = (id: string | number) => `/duel/${id}`;
 export const blockHref = (height: string, net?: NetworkId) => `${explorer(net)}/blocks/${height}`;
 export const REPO = "https://github.com/LingSiewWin/nearbuddy";
