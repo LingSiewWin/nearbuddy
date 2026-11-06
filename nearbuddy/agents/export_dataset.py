@@ -118,7 +118,44 @@ FIELDS: list[tuple[str, str, str]] = [
         "expires_at (ns), proof_hash}`; `proof_hash` = base64 `sha256(request_hash || response_hash)`, 32 zero "
         "bytes for stub rows.",
     ),
-    ("tx", "string \\| null", "NEAR testnet transaction hash of `post_intent`; null when the intent was not posted."),
+    (
+        "tx",
+        "string \\| null",
+        "NEAR testnet transaction hash that put `intent` on chain: `post_intent`, or `reveal_intent` under "
+        "commit-reveal (then equal to `revealed_tx`); null when the intent was not posted or revealed.",
+    ),
+    (
+        "commitment",
+        "string \\| null",
+        "Commit-reveal only: base64 `sha256(intent_message(intent) || salt)`, the 32 bytes `commit_intent` stored "
+        "while the side was hidden. The salt is not in the row; it is in the `reveal_intent` args of `revealed_tx`. "
+        "Null on a row that kept an earlier commitment.",
+    ),
+    (
+        "committed_tx",
+        "string \\| null",
+        "Commit-reveal only: transaction hash of `commit_intent` for `commitment`; null when the commit was refused "
+        "or not sent.",
+    ),
+    (
+        "revealed_tx",
+        "string \\| null",
+        "Commit-reveal only: transaction hash of `reveal_intent`, which verified the enclave proof and opened the "
+        "commitment; null when the commitment was never revealed (replaced, kept, late or refused).",
+    ),
+    (
+        "kept_commitment",
+        "string \\| null",
+        "Commit-reveal only: this call chose the same side and size as the commitment already on chain, so the "
+        "runner kept that one (its base64 `commitment`) instead of committing again; the row's intent was never "
+        "sent.",
+    ),
+    (
+        "replaced_by",
+        "string \\| null",
+        "Commit-reveal only: a later `commit_intent` (this tx hash) replaced this row's commitment on chain before "
+        "it was revealed; the row's intent never reached the chain.",
+    ),
     (
         "quotes",
         "list[struct] \\| null",
@@ -128,7 +165,8 @@ FIELDS: list[tuple[str, str, str]] = [
         "error",
         "string \\| null",
         "Why the decision was not posted (unparseable output, `no tee proof`, `duel closed`, `intent lock`, "
-        "`evidence not oracle`); absent on posted rows.",
+        "`evidence not oracle`, and under commit-reveal `reveal failed: ...` or `commitment not on chain`); absent "
+        "on posted rows.",
     ),
     ("verifiable", "bool", "Added by the exporter: every hash, the enclave signature and `proof_hash` check out."),
     ("verify_note", "string", "Added by the exporter: `ok` or the first check that failed (e.g. `no tee bytes`)."),
@@ -493,7 +531,9 @@ print(sum(verify(r) == "ok" for r in rows), "of", len(rows), "rows verify")
 To tie the signer to hardware, open `attestations/<attestation_file>`, find the entry in
 `report.model_attestations` whose `signing_address` equals the row's, and check its `intel_quote` with dcap-qvl and
 its `nvidia_payload` with NVIDIA NRAS (the nonce is in the file). To tie the row to the chain, look up `tx` on
-https://testnet.nearblocks.io and compare the posted intent with `intent`.
+https://testnet.nearblocks.io and compare the posted intent with `intent`. Under commit-reveal, `tx` is the
+`reveal_intent` (`revealed_tx`): its args carry the same intent, the enclave proof and the salt, so
+`sha256(intent_message(intent) || salt)` must equal `commitment`, which `committed_tx` stored before the reveal.
 
 ## Known limitations
 
@@ -510,8 +550,13 @@ https://testnet.nearblocks.io and compare the posted intent with `intent`.
   `train` (the 8 payloads the hardened prompt was written against) and `holdout` (8 later payloads with the same
   slots, never used to edit prompts). Rows carry no set label; split by exact `injection` text against those lists.
 - **Error rows.** Rows with `error` were not posted on chain (`tx` is null or absent). Parse failures keep `text`
-  and `response_body` but no signature, so they do not verify; late rows (`duel closed`, `intent lock`) verify but
-  have no on-chain intent. Leave error rows out of win-rate counts.
+  and `response_body` (and from duel 399 on the exact `request_body`) but no signature, since no proof is requested
+  for a call with no decision, so they do not verify (`no tee bytes` or `no signature record`); late rows
+  (`duel closed`, `intent lock`) verify but have no on-chain intent. Leave error rows out of win-rate counts.
+- **Commit-reveal rows.** A revealed intent verifies exactly like a posted one (`tx` = `revealed_tx`). A row with
+  `replaced_by` or `kept_commitment` also verifies from its bytes, but its intent never reached the chain: count
+  only rows with a `tx` when scoring calls. `commitment` cannot be recomputed from the row alone; the salt is in
+  the `reveal_intent` args.
 - **Re-rolls are invisible.** Sampling is not deterministic, so the operator could repeat a call (in any arm, or
   arm D's side call) until it returns a wanted answer and publish only that one. A signature proves a completion
   happened, not that it was the only one.

@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -82,7 +83,10 @@ def test_intent_committing_to_another_completion_is_rejected():
 
 
 # Hub card, built from the tracked snapshot so the YAML, the schema table and the snippet are checked on real rows.
-SNAPSHOT = Path(__file__).resolve().parents[2] / "dataset" / "decisions.jsonl"
+# NEARBUDDY_DATASET points the snapshot checks at another export (a dry run before refreshing dataset/)
+SNAPSHOT = Path(
+    os.environ.get("NEARBUDDY_DATASET") or Path(__file__).resolve().parents[2] / "dataset" / "decisions.jsonl"
+)
 ROWS = [json.loads(line) for line in SNAPSHOT.read_text().splitlines() if line.strip()]
 CARD = card(ROWS, "decisions.parquet")
 
