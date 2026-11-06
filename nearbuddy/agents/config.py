@@ -27,6 +27,7 @@ NETWORKS: dict[str, dict[str, str]] = {
         "solver": "nearbuddy-solver.testnet",
         "owner": "nearbuddy-owner.testnet",
         "oracle": "price-oracle.testnet",
+        "txApi": "https://tx.test.fastnear.com/v0",
     },
     "mainnet": {
         "rpc": "https://free.rpc.fastnear.com",
@@ -36,6 +37,7 @@ NETWORKS: dict[str, dict[str, str]] = {
         "solver": "solver.nearbuddy.near",
         "owner": "nearbuddy.near",
         "oracle": "price-oracle.near",
+        "txApi": "https://tx.main.fastnear.com/v0",
     },
 }
 NETWORK = ENV.get("NEAR_NETWORK", "testnet")
@@ -56,10 +58,11 @@ OVERRIDES = (
     "JOIN_ACCOUNT",
     "COPIER_RPC",
     "COPIER_TX_API",
+    "FASTNEAR_TX_API",
 )
 FOREIGN = {
     "mainnet": re.compile(r"testnet|(^|[/.])test\."),
-    "testnet": re.compile(r"\.near$|mainnet|//(free\.)?rpc\.fastnear\.com|//near\.drpc\.org"),
+    "testnet": re.compile(r"\.near$|mainnet|//(free\.)?rpc\.fastnear\.com|//near\.drpc\.org|//tx\.main\."),
 }
 
 

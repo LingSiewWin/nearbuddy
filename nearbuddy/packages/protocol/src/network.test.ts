@@ -53,6 +53,7 @@ test("testnet refuses a .near account or a mainnet RPC override", () => {
     ["NEAR_RPC", "https://free.rpc.fastnear.com"],
     ["NEAR_RPC_FALLBACK", "https://near.drpc.org"],
     ["NEAR_SEND_RPC", "https://rpc.mainnet.near.org"],
+    ["FASTNEAR_TX_API", "https://tx.main.fastnear.com/v0"],
   ] as const)
     assert.throws(() => assertNetworkConfig("testnet", { [k]: v }), new RegExp(`NEAR_NETWORK=testnet but ${k}=`));
   // the testnet row itself and the mainnet-only 1Click account pass
@@ -73,6 +74,7 @@ test("mainnet row: fastnear first, drpc fallback, nearblocks.io, .near accounts"
     solver: "solver.nearbuddy.near",
     owner: "nearbuddy.near",
     oracle: "price-oracle.near",
+    txApi: "https://tx.main.fastnear.com/v0",
   });
 });
 

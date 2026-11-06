@@ -34,9 +34,9 @@ from statistics import mean, median, stdev
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "agents"))
-from config import DATA, NETWORK, network_file  # noqa: E402
+from config import DATA, NET, network_file  # noqa: E402
 
-TX_API = os.environ.get("COPIER_TX_API", f"https://tx.{'main' if NETWORK == 'mainnet' else 'test'}.fastnear.com/v0")
+TX_API = os.environ.get("COPIER_TX_API", NET["txApi"])
 HORIZONS = ("+15s", "+60s", "+90s", "close")
 PUBLIC, COMMIT_REVEAL = "public post_intent", "commit-reveal"
 

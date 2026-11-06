@@ -13,6 +13,7 @@ export interface Network {
   solver: string; // solver account: signs open_duel / settle, owns registered agents
   owner: string; // default follower / spectator account
   oracle: string; // Outlayer TEE price oracle
+  txApi: string; // FastNEAR tx API (POST /account, POST /transactions)
 }
 
 export const NETWORKS: Record<NetworkId, Network> = {
@@ -24,6 +25,7 @@ export const NETWORKS: Record<NetworkId, Network> = {
     solver: "nearbuddy-solver.testnet",
     owner: "nearbuddy-owner.testnet",
     oracle: "price-oracle.testnet",
+    txApi: "https://tx.test.fastnear.com/v0",
   },
   mainnet: {
     rpc: "https://free.rpc.fastnear.com", // rpc.mainnet.near.org is rate-limited and took 33 s per tx
@@ -33,6 +35,7 @@ export const NETWORKS: Record<NetworkId, Network> = {
     solver: "solver.nearbuddy.near",
     owner: "nearbuddy.near",
     oracle: "price-oracle.near",
+    txApi: "https://tx.main.fastnear.com/v0",
   },
 };
 
@@ -58,12 +61,13 @@ export const OVERRIDES = [
   "JOIN_ACCOUNT",
   "COPIER_RPC",
   "COPIER_TX_API",
+  "FASTNEAR_TX_API",
 ] as const;
 // What the other network's values look like: on mainnet any testnet name or test.* host; on testnet a .near
 // account or a mainnet RPC host.
 const FOREIGN: Record<NetworkId, RegExp> = {
   mainnet: /testnet|(^|[/.])test\./,
-  testnet: /\.near$|mainnet|\/\/(free\.)?rpc\.fastnear\.com|\/\/near\.drpc\.org/,
+  testnet: /\.near$|mainnet|\/\/(free\.)?rpc\.fastnear\.com|\/\/near\.drpc\.org|\/\/tx\.main\./,
 };
 
 /** Throws when an override names the other network: a mainnet run with a leftover testnet RPC or account (or the

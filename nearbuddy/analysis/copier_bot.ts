@@ -26,7 +26,7 @@ const HORIZONS_S = [15, 60, 90] as const;
 const HARDENED = ["Ul+W6UJK", "qZ+N09R4"];
 const NAIVE = ["8dPZ7znZ", "fwHajcL3"];
 // POST /account, POST /transactions (<= 20)
-const TX_API = process.env.COPIER_TX_API ?? `https://tx.${MAINNET ? "main" : "test"}.fastnear.com/v0`;
+const TX_API = process.env.COPIER_TX_API ?? NET.txApi;
 const SOLVER = process.env.COPIER_SOLVER ?? process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
 const args = process.argv.slice(2);
 const REVEAL_AWARE = args.includes("--mode") && args[args.indexOf("--mode") + 1] === "reveal-aware";
