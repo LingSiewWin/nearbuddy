@@ -4,7 +4,7 @@
 // sha256 on chain; known texts (from the published dataset) are joined back by hash.
 // The account list is re-read at most every TTL ms (one fetch at a time, however many clients poll);
 // transactions are immutable, so their decoded events are kept by hash.
-import { attackTexts as attackText } from "./dataset";
+import { attackText } from "./dataset";
 import { ARENA } from "./near";
 
 const TX_API = process.env.FASTNEAR_TX_API ?? "https://tx.test.fastnear.com";
@@ -116,7 +116,7 @@ export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
         target: String(args.target),
         attack: String(args.kind),
         hash,
-        text: attackText[hash] ?? null,
+        text: null, // joined by hash in build()
         paid: fc.deposit,
       };
     }
@@ -177,7 +177,10 @@ async function build(): Promise<ArenaEvent[]> {
       const byHash = new Map(transactions.map((t) => [t.transaction.hash, t]));
       for (const m of c) {
         const t = byHash.get(m.transaction_hash);
-        if (t) seen.set(m.transaction_hash, decode(m, t));
+        if (!t) continue;
+        const e = decode(m, t);
+        if (e.kind === "attack") e.text = await attackText(e.hash);
+        seen.set(m.transaction_hash, e);
       }
     }),
   );

@@ -4,8 +4,8 @@
 // RPC is throttled. Resolved duels never change, so they are kept in memory and not re-read.
 // `summary()` turns the raw snapshot into the v1 shape: human units (NEAR, USD, %, ms) and per-agent
 // records, with each agent's prompt and attack verdicts joined from the published dataset.
-import { attackTexts, decisions } from "./dataset";
 import { proven } from "../cells";
+import { attackText, type Decision, getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
 
 const SCAN = Number(process.env.ARENA_SCAN ?? 40);
@@ -163,7 +163,7 @@ export const shortModel = (m: string) =>
     ?.replace(/-\d{4}$/, "") ?? m;
 
 /** Per agent: the prompt it ran most recently and how it met attacks, from the published dataset. */
-function attackRecord() {
+function attackRecord(decisions: Decision[]) {
   const by = new Map<string, { prompt: string; faced: number; fell: number; spotted: number }>();
   for (const r of decisions) {
     const e = by.get(r.agent) ?? { prompt: r.arm, faced: 0, fell: 0, spotted: 0 };
@@ -177,7 +177,6 @@ function attackRecord() {
   }
   return by;
 }
-const ATTACKS = attackRecord();
 
 export type Side1 = { agent: string; model: string; side: Side | null; size_pct: number | null; verified: boolean };
 const sideOf = (pk: string, i: Intent | null, lb: Agent[]): Side1 => ({
@@ -188,10 +187,19 @@ const sideOf = (pk: string, i: Intent | null, lb: Agent[]): Side1 => ({
   verified: proven(i, ZERO),
 });
 
-export function summary(s: Snap, now = Date.now()) {
+export async function summary(s: Snap, now = Date.now()) {
+  const ATTACKS = attackRecord(await getDecisions());
   const lb = s.leaderboard;
   const done = s.duels.filter((d) => d.resolved && d.outcome);
   const live = s.duels.find((d) => !d.resolved);
+  const liveAttacks = await Promise.all(
+    (live?.injections ?? []).map(async (j) => ({
+      target: j.target,
+      kind: j.kind,
+      text: await attackText(j.payload_hash),
+      payload_sha256: j.payload_hash,
+    })),
+  );
   const record = (pk: string) => {
     const mine = done.filter((d) => d.a === pk || d.b === pk);
     const won = mine.filter((d) => d.outcome?.winner === pk).length;
@@ -237,12 +245,7 @@ export function summary(s: Snap, now = Date.now()) {
           open_price_usd: usd(live.open_price),
           a: sideOf(live.a, live.last_intent_a, lb),
           b: sideOf(live.b, live.last_intent_b, lb),
-          attacks: live.injections.map((j) => ({
-            target: j.target,
-            kind: j.kind,
-            text: attackTexts[j.payload_hash] ?? null,
-            payload_sha256: j.payload_hash,
-          })),
+          attacks: liveAttacks,
         }
       : null,
     standings,

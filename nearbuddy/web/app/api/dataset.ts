@@ -1,25 +1,54 @@
-// The published decisions dataset as the web app sees it: app/data/*.json, written by scripts/snapshot.ts at
-// build time from ../dataset/decisions.jsonl. Rows are enclave-verified decisions with the model's own
-// reasoning and, when attacked, the attack text and a plain verdict.
+// The decisions dataset as the web app sees it. Always: the build-time snapshot (app/data/decisions.json,
+// from ../dataset/decisions.jsonl). Optionally, when DECISIONS_LIVE points at the runner's decisions.jsonl
+// (a local demo next to a running runner), the newest rows of that file too, re-read at most every 3 s, so
+// a live duel shows each model's reasoning as it decides. On a host without the runner it is unset.
+import { open, stat } from "node:fs/promises";
 import data from "../data/decisions.json";
-import type { Side, Verdict } from "../lib/verdict";
+import { type Decision, type Raw, slim } from "../lib/rows";
 
-export type Decision = {
-  duel: string;
-  agent: string;
-  model: string;
-  arm: string;
-  side: Side;
-  size: number;
-  at: number;
-  reason: string;
-  brief: string;
-  attack: string | null;
-  pushed: Side | null;
-  verdict: Verdict | null;
-  tx: string | null;
-};
-const d = data as unknown as { rows: Decision[]; attacks: Record<string, string>; built: number };
-export const decisions = d.rows;
-export const attackTexts = d.attacks;
-export const datasetBuilt = d.built;
+export type { Decision };
+
+const snap = data as unknown as { rows: Decision[]; attacks: Record<string, string>; built: number };
+const known = new Set(snap.rows.map((r) => r.tx));
+export const datasetBuilt = snap.built;
+
+const LIVE = process.env.DECISIONS_LIVE;
+const TAIL = 4 * 1024 * 1024; // last 4 MB of the file: hundreds of rows
+let live: { at: number; rows: Decision[]; attacks: Record<string, string> } = { at: 0, rows: [], attacks: {} };
+
+async function tail() {
+  if (!LIVE || Date.now() - live.at < 3_000) return live;
+  try {
+    const size = (await stat(LIVE)).size;
+    const f = await open(LIVE, "r");
+    const buf = Buffer.alloc(Math.min(TAIL, size));
+    await f.read(buf, 0, buf.length, size - buf.length);
+    await f.close();
+    const lines = buf
+      .toString("utf8")
+      .split("\n")
+      .slice(size > TAIL ? 1 : 0); // drop a cut first line
+    const raws = lines.flatMap((l) => {
+      try {
+        return l ? [JSON.parse(l) as Raw] : [];
+      } catch {
+        return [];
+      }
+    });
+    const s = slim(raws);
+    live = { at: Date.now(), rows: s.rows.filter((r) => !known.has(r.tx)), attacks: s.attacks };
+  } catch {
+    live = { ...live, at: Date.now() };
+  }
+  return live;
+}
+
+/** Every known decision, oldest first. */
+export async function getDecisions(): Promise<Decision[]> {
+  const t = await tail();
+  return t.rows.length ? [...snap.rows, ...t.rows] : snap.rows;
+}
+/** The attack text behind an on-chain payload hash, when any source knows it. */
+export async function attackText(hash: string): Promise<string | null> {
+  return snap.attacks[hash] ?? (await tail()).attacks[hash] ?? null;
+}

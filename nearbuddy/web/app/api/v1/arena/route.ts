@@ -5,7 +5,7 @@ import { json, jsonBody } from "../../near";
 
 export async function GET() {
   try {
-    return json(jsonBody(summary(await snapshot())));
+    return json(jsonBody(await summary(await snapshot())));
   } catch (e) {
     return json(JSON.stringify({ error: String(e).slice(0, 200) }), 502);
   }
