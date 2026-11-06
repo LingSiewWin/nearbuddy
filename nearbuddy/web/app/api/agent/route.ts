@@ -6,7 +6,7 @@
 // ponytail: scans every duel of the era (memoised once resolved); a per-agent era tally in the contract or
 // an indexer when duel counts reach the thousands.
 import type { Fill } from "../../cells";
-import { ORACLE_ERA_FROM, operatorIds, oracleIds, type ScoredDuel, tally, unread } from "../../eras";
+import { isVoid, ORACLE_ERA_FROM, operatorIds, oracleIds, type ScoredDuel, tally, unread } from "../../eras";
 import { chunked, readDuel } from "../duels";
 import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
 
@@ -109,7 +109,15 @@ async function build(pk: string, era: "oracle" | "operator"): Promise<string> {
     const it = isA ? d.last_intent_a : d.last_intent_b;
     const pnl = d.outcome ? (isA ? d.outcome.pnl_a : d.outcome.pnl_b) : null;
     const result =
-      !d.resolved || !d.outcome ? "open" : d.outcome.winner === null ? "tie" : d.outcome.winner === pk ? "win" : "loss";
+      !d.resolved || !d.outcome
+        ? "open"
+        : isVoid(d.outcome)
+          ? "void"
+          : d.outcome.winner === null
+            ? "tie"
+            : d.outcome.winner === pk
+              ? "win"
+              : "loss";
     return {
       id: d.id,
       opponent: isA ? d.b : d.a,

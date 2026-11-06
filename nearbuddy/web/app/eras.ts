@@ -27,7 +27,13 @@ export type ScoredDuel = {
   a: string;
   b: string;
   resolved: boolean;
-  outcome?: { pnl_a: number; pnl_b: number; winner: string | null } | null;
+  outcome?: {
+    pnl_a: number;
+    pnl_b: number;
+    winner: string | null;
+    open_price?: string | number;
+    close_price?: string | number;
+  } | null;
   no_reveal?: [boolean, boolean] | null; // get_no_reveal, deploy 14 on
 };
 /** Oracle-era duels a split cannot trust yet: a failed read (null), or a resolved duel whose `no_reveal` read
@@ -35,14 +41,23 @@ export type ScoredDuel = {
 export const unread = (duels: (ScoredDuel | null)[], noReveal: boolean) =>
   duels.filter((d) => !d || (noReveal && d.resolved && d.no_reveal === undefined)).length;
 
-export type Tally = { alpha_bps: number; wins: number; ties: number; losses: number; duels: number };
+/** `void_duel` writes an outcome with both prices 0 (no oracle price ever arrived); it was never played. */
+export const isVoid = (o: { open_price?: string | number; close_price?: string | number } | null | undefined) =>
+  !!o && Number(o.open_price) === 0 && Number(o.close_price) === 0;
+
+/** `duels` = scored duels (wins + ties + losses); voided duels are counted apart and add nothing. */
+export type Tally = { alpha_bps: number; wins: number; ties: number; losses: number; voids: number; duels: number };
 
 /** One agent's alpha and record over resolved duels, credited as `finish` does: a side that left a
- *  commitment unrevealed takes no gain, only its loss. */
+ *  commitment unrevealed takes no gain, only its loss. A voided duel is not a tie. */
 export function tally(pk: string, duels: ScoredDuel[]): Tally {
-  const t: Tally = { alpha_bps: 0, wins: 0, ties: 0, losses: 0, duels: 0 };
+  const t: Tally = { alpha_bps: 0, wins: 0, ties: 0, losses: 0, voids: 0, duels: 0 };
   for (const d of duels) {
     if (!d.resolved || !d.outcome || (d.a !== pk && d.b !== pk)) continue;
+    if (isVoid(d.outcome)) {
+      t.voids += 1; // void_duel leaves alpha alone
+      continue;
+    }
     const side = d.a === pk ? 0 : 1;
     const pnl = side === 0 ? d.outcome.pnl_a : d.outcome.pnl_b;
     t.alpha_bps += d.no_reveal?.[side] ? Math.min(pnl, 0) : pnl;

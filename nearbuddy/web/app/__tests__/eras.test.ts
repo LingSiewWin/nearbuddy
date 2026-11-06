@@ -5,6 +5,7 @@ import { afterAll, describe, expect, mock, setSystemTime, test } from "bun:test"
 import {
   eraSplit,
   isOracleEra,
+  isVoid,
   ORACLE_ERA_FROM,
   operatorIds,
   oracleEraFrom,
@@ -128,14 +129,23 @@ describe("eras", () => {
   });
   test("tally credits like the contract: open duels skipped, an unrevealed side keeps only its loss", () => {
     const ds = ["257", "258", "259", "260"].map((id) => DUELS[id] as ScoredDuel);
-    expect(tally(P, ds)).toEqual({ alpha_bps: 10, wins: 1, ties: 1, losses: 1, duels: 3 });
+    expect(tally(P, ds)).toEqual({ alpha_bps: 10, wins: 1, ties: 1, losses: 1, voids: 0, duels: 3 });
     const withheld = { ...(DUELS["257"] as ScoredDuel), no_reveal: [true, false] as [boolean, boolean] };
     expect(tally(P, [withheld]).alpha_bps).toBe(0); // +30 withheld: no gain
     expect(tally(Q, [{ ...withheld, no_reveal: [false, true] }]).alpha_bps).toBe(-30); // a loss stays
     expect(eraSplit(AGENTS, ds)).toEqual({
-      [P]: { oracle: { alpha_bps: 10, wins: 1, ties: 1, losses: 1, duels: 3 }, operator_alpha_bps: 90 },
-      [Q]: { oracle: { alpha_bps: -10, wins: 1, ties: 1, losses: 1, duels: 3 }, operator_alpha_bps: -30 },
+      [P]: { oracle: { alpha_bps: 10, wins: 1, ties: 1, losses: 1, voids: 0, duels: 3 }, operator_alpha_bps: 90 },
+      [Q]: { oracle: { alpha_bps: -10, wins: 1, ties: 1, losses: 1, voids: 0, duels: 3 }, operator_alpha_bps: -30 },
     });
+  });
+  test("a voided duel (both prices 0, as void_duel writes it) is counted apart, not as a tie", () => {
+    const base = scored(300, P, Q, 0, 0, null);
+    const voided = { ...base, outcome: { ...base.outcome, open_price: "0", close_price: "0" } } as ScoredDuel;
+    expect(isVoid(voided.outcome)).toBe(true);
+    expect(isVoid((DUELS["259"] as ScoredDuel).outcome)).toBe(false); // a real 0-0 tie has prices
+    expect(isVoid(null)).toBe(false);
+    const ds = [voided, DUELS["259"] as ScoredDuel];
+    expect(tally(P, ds)).toEqual({ alpha_bps: 0, wins: 0, ties: 1, losses: 0, voids: 1, duels: 1 });
   });
   test("pages assume this build's network before the API answers", () => {
     const was = process.env.NEXT_PUBLIC_NEAR_NETWORK;
@@ -159,7 +169,7 @@ describe("routes", () => {
     const j = await arena();
     expect(j.eras).toMatchObject({ from: 257, complete: true, unread: 0, operator_duels: 257, oracle_duels: 3 });
     expect(j.eras.by_agent[P]).toEqual({
-      oracle: { alpha_bps: 10, wins: 1, ties: 1, losses: 1, duels: 3 },
+      oracle: { alpha_bps: 10, wins: 1, ties: 1, losses: 1, voids: 0, duels: 3 },
       operator_alpha_bps: 90,
     });
     expect(j.eras.by_agent[Q].operator_alpha_bps).toBe(-30);
@@ -172,7 +182,7 @@ describe("routes", () => {
     expect(j.era).toBe("oracle");
     expect(j.duels.map((d: { id: string }) => d.id)).toEqual(["260", "259", "258", "257"]);
     expect(j.eras).toMatchObject({ complete: true, unread: 0 });
-    expect(j.eras.oracle).toEqual({ alpha_bps: 10, wins: 1, ties: 1, losses: 1, duels: 3 });
+    expect(j.eras.oracle).toEqual({ alpha_bps: 10, wins: 1, ties: 1, losses: 1, voids: 0, duels: 3 });
     expect(j.eras.operator).toEqual({ alpha_bps: 90, duels: 257, mine: null });
     const op = await (await GET(new Request(`http://x/api/agent?pk=${encodeURIComponent(P)}&era=operator`))).json();
     expect(op.era).toBe("operator");
@@ -193,7 +203,7 @@ describe("routes", () => {
     const k = await arena();
     expect(k.eras).toMatchObject({ complete: true, unread: 0 });
     expect(k.eras.by_agent[P]).toEqual({
-      oracle: { alpha_bps: 50, wins: 2, ties: 1, losses: 1, duels: 4 },
+      oracle: { alpha_bps: 50, wins: 2, ties: 1, losses: 1, voids: 0, duels: 4 },
       operator_alpha_bps: 90, // unchanged: the late read lands in the oracle era, not the remainder
     });
   });

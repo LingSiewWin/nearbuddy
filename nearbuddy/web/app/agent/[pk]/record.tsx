@@ -45,7 +45,7 @@ type DuelRow = {
   open_at: string;
   close_at: string;
   resolved: boolean;
-  result: "open" | "tie" | "win" | "loss";
+  result: "open" | "tie" | "win" | "loss" | "void";
   pnl: number | null;
   side: "Long" | "Short" | null;
   size_bps: number | null;
@@ -80,7 +80,8 @@ type Rec = {
 };
 type Era = "oracle" | "operator";
 
-const glyph = { win: "█", tie: "▄", loss: "▁", open: "▒" } as const;
+const glyph = { win: "█", tie: "▄", loss: "▁", open: "▒", void: "·" } as const;
+const resultClass = (r: DuelRow["result"]) => (r === "void" ? "dim" : r); // a void was never scored
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
 const proven = (d: DuelRow) => !!d.proof_hash && d.proof_hash !== ZERO;
 
@@ -133,6 +134,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const wins = done.filter((d) => d.result === "win").length;
   const losses = done.filter((d) => d.result === "loss").length;
   const ties = done.filter((d) => d.result === "tie").length;
+  const voids = done.filter((d) => d.result === "void").length;
   const net = done.reduce((s, d) => s + (d.pnl ?? 0), 0);
   const verified = duels.filter(proven).length;
   const attacks = duels.reduce((s, d) => s + d.attacks, 0);
@@ -174,7 +176,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           ? { t: `${bps(d.pnl)} bps`.padStart(8), c: d.pnl > 0 ? "win" : d.pnl < 0 ? "loss" : "tie" }
           : "   - bps",
         `  ${String(d.attacks).padStart(3)}  `,
-        { t: d.result.padEnd(6), c: d.result },
+        { t: d.result.padEnd(6), c: resultClass(d.result) },
         "  ",
         proven(d)
           ? {
@@ -346,7 +348,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
               [ties, "tie"],
               [losses, "loss"],
             ],
-            done.length,
+            done.length - voids,
           ),
           "  ",
           { t: `${wins} win`, c: "win" },
@@ -354,6 +356,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           { t: `${ties} tie`, c: "tie" },
           "  ",
           { t: `${losses} loss`, c: "loss" },
+          voids ? { t: `  ${voids} void`, c: "dim", title: "voided: no oracle price arrived, never scored" } : "",
           `   net `,
           { t: `${bps(net)} bps`, c: net > 0 ? "win" : net < 0 ? "loss" : "tie" },
           `   slashed ${near(slashed)} NEAR`,
@@ -365,7 +368,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
               duels
                 .slice()
                 .reverse()
-                .map((d) => ({ t: glyph[d.result], c: d.result, title: `duel #${d.id} ${d.result}` })),
+                .map((d) => ({ t: glyph[d.result], c: resultClass(d.result), title: `duel #${d.id} ${d.result}` })),
             )
           : rowx("timeline", [{ t: "no duels in this window", c: "dim" }])}
         {"\n"}
@@ -377,6 +380,8 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           { t: "▁ loss", c: "loss" },
           "  ",
           { t: "▒ open", c: "open" },
+          "  ",
+          { t: "· void", c: "dim" },
           { t: "   oldest → newest", c: "dim" },
         ])}
         {"\n"}

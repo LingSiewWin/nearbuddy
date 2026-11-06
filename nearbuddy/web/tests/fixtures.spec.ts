@@ -442,3 +442,69 @@ test("agent: record from duel 257 on, operator era behind a toggle", async ({ pa
   await expect(page.getByRole("link", { name: "#300" })).toBeVisible();
   await shot(page, "agent-eras");
 });
+
+test("agent: a voided duel is counted as void, not a tie; the pre-API frame uses the build's network", async ({
+  page,
+}) => {
+  const row = (id: string, result: string, pnl: number, prices: [string, string]) => ({
+    id,
+    opponent: PK_B,
+    symbol: "wrap.near",
+    open_at: NS(now - 600_000),
+    close_at: NS(now - 300_000),
+    resolved: true,
+    result,
+    pnl,
+    side: "Long",
+    size_bps: 5000,
+    proof_hash: PROOF,
+    open_price: prices[0],
+    close_price: prices[1],
+    slashed: "0",
+    attacks: 0,
+    attacks_on_me: null,
+  });
+  let release = () => {};
+  const answered = new Promise<void>((r) => {
+    release = r;
+  });
+  await page.route("**/api/agent**", async (r) => {
+    await answered; // hold the API so the first frame is visible
+    await r.fulfill({
+      json: {
+        at: now,
+        rpc: "https://fixture.rpc",
+        contract: "arena.nearbuddy-solver.testnet",
+        next_duel: 412,
+        slash_bps: 1000,
+        min_chaos_deposit: "10000000000000000000000",
+        agent: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+        followers: [],
+        execution: null,
+        era: "oracle",
+        scanned: 155,
+        eras: {
+          from: 257,
+          complete: true,
+          unread: 0,
+          oracle: { ...tallyOf(-20, 1, 0, 1), voids: 1 },
+          operator: { alpha_bps: 160, duels: 257, mine: null },
+        },
+        duels: [
+          row("301", "void", 0, ["0", "0"]),
+          row("300", "loss", -45, ["256100000", "255000000"]),
+          row("299", "win", 25, ["256100000", "257400000"]),
+        ],
+      },
+      headers: { "cache-control": "no-store" },
+    });
+  });
+  await page.goto(`/agent/${encodeURIComponent(PK_A)}`);
+  const body = page.locator("body");
+  // this Playwright build has no NEXT_PUBLIC_NEAR_NETWORK: testnet, so 257 (a mainnet build reads 0, unit-tested)
+  await expect(body).toContainText("oracle-scored, duels 257+ · 0 duels");
+  release();
+  await expect(body).toContainText("1 win  0 tie  1 loss  1 void   net -20 bps");
+  await expect(page.locator('span[title="duel #301 void"]')).toHaveText("·");
+  await expect(page.locator('span[title="duel #301 void"]')).toHaveClass("dim");
+});
