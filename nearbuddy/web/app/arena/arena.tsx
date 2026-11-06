@@ -3,7 +3,17 @@
 // three duels with every decision's proof, and who follows whom under a mandate. One vocabulary:
 // "enclave-verified" for an intent signed inside a NEAR AI TEE, "attack" for a paid prompt injection.
 import { useEffect, useState } from "react";
-import { type CommitConfig, commitWord, FILL_HEAD, type Fill, fillCells, lastFills, proven } from "../cells";
+import {
+  type CommitConfig,
+  commitWord,
+  FILL_HEAD,
+  type Fill,
+  type FollowerQuote,
+  fillCells,
+  lastFills,
+  proven,
+  quoteOut,
+} from "../cells";
 import {
   addrHref,
   agentHref,
@@ -92,7 +102,7 @@ type Snap = {
   solver: null | {
     intents: (Intent & {
       tx: string;
-      quotes: { follower: string; amount: string; quote?: { quote: { amountOutFormatted: string } } }[];
+      quotes: FollowerQuote[];
     })[];
     pending: Record<string, { kind: string; payload: string }[]>;
     fills: { follower: string; tx: string; report: { settled: number; rejected: [number, string][] } }[];
@@ -431,7 +441,7 @@ export default function Arena() {
                   "intent",
                   `${i.side.padEnd(5)} ${short(i.agent_pk, 6)}  tx `,
                   i.tx,
-                  `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${q.quote?.quote.amountOutFormatted ?? "?"} USDC`).join("; ") || "no followers"}`,
+                  `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${quoteOut(q)} USDC`).join("; ") || "no followers"}`,
                 )}
                 {"\n"}
               </span>

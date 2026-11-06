@@ -109,3 +109,16 @@ export const followerQuality = (q: Fill[] | null | undefined, followers: string[
       },
     ];
   });
+
+/** A solver intent's per-follower quote. With batched RFQ `quote` is the whole batch and `quote_out` is
+ *  this follower's pro-rata share (6-dp base units); older solvers send only `quote`. */
+export type FollowerQuote = {
+  follower: string;
+  amount: string;
+  quote_out?: string;
+  price?: string | number;
+  quote?: { quote: { amountOutFormatted: string } };
+};
+/** USDC out for one follower: its batch share when present, else the 1Click quote, else "?". */
+export const quoteOut = (q: FollowerQuote) =>
+  q.quote_out ? usdc(q.quote_out) : (q.quote?.quote.amountOutFormatted ?? "?");
