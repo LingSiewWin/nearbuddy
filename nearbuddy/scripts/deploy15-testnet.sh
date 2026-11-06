@@ -133,7 +133,14 @@ else
     m=$(q view "$ARENA" get_config | field migrating) || die "cannot read get_config"
     [ "$m" = false ] && break
     echo "batch $i (migrating $m)"
-    "${follows_cmd[@]}" >/dev/null 2>&1 || die "migrate_follows failed in batch $i"
+    if ! out=$("${follows_cmd[@]}" 2>&1); then
+      # a lagging get_config read can send one call too many; the contract then answers "migration done"
+      if printf '%s\n' "$out" | grep -q "migration done"; then
+        echo "migration already done"
+        break
+      fi
+      die "migrate_follows failed in batch $i: $(printf '%s\n' "$out" | tail -3)"
+    fi
     sleep 3
   done
 fi
