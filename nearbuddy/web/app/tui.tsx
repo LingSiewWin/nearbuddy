@@ -1,6 +1,7 @@
-// Terminal-UI primitives shared by /arena and /agent: fixed-width boxes, rows, bars and links drawn with
-// box-drawing characters inside a <pre>, btop-style (numbered box titles, block-character bars).
-// Every line is exactly W characters wide; on narrow screens the <pre> scrolls sideways (globals.css).
+// Terminal-UI primitives shared by /arena, /agent and /duel: fixed-width boxes, rows, bars and links drawn
+// with box-drawing characters inside a <pre>, btop-style (numbered box titles, block-character bars).
+// Every line is exactly W characters wide; under 600 px the trailing padding is hidden and rows wrap
+// (globals.css), so the text stays readable on a phone at the cost of the right border.
 import type { ReactNode } from "react";
 
 export const W = 112;
@@ -8,6 +9,7 @@ const KEY = 16;             // label column
 const VW = W - KEY - 5;     // value column: W minus "│ ", label, " ", " │"
 export const NEAR = 10n ** 24n;
 export const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+export const TAMPER_TX = "4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt"; // flipped-byte proof refused on chain (README)
 
 export const near = (y: string | null | undefined, d = 3) => {
   if (!y) return "-";
@@ -18,38 +20,61 @@ export const short = (s: string | null | undefined, n = 10) => (s ? `${s.slice(0
 export const ts = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(11, 19);
 export const price8 = (p: string | number | null | undefined) => (p == null ? "-" : (Number(p) / 1e8).toFixed(4));
 export const bps = (n: number) => `${n >= 0 ? "+" : ""}${n}`;
-
-const label = (k: string) => k.padEnd(KEY).slice(0, KEY);
-export const row = (k: string, v: string) => `│ ${label(k)} ${v.padEnd(VW).slice(0, VW)} │`;
-export const top = (t: string) => `┌─ ${t} ${"─".repeat(Math.max(0, W - t.length - 5))}┐`;
-export const bottom = () => `└${"─".repeat(W - 2)}┘`;
-
-/** btop-style box title: a coloured index digit, the name, then the rule. */
-export const boxTitle = (n: number, name: string, extra = ""): ReactNode => {
-  const text = `${n}${name}${extra ? ` ${extra}` : ""}`;
-  return <>{"┌─"}<span className="num">{n}</span><span className="hi">{name}</span>{extra ? <span className="dim">{` ${extra}`}</span> : ""}{" "}{"─".repeat(Math.max(0, W - text.length - 4))}{"┐"}</>;
+/** "m:ss" until a ns timestamp, or null once it has passed. */
+export const countdown = (ns: string, nowMs: number) => {
+  const s = Math.floor((Number(BigInt(ns) / 1_000_000n) - nowMs) / 1000);
+  return s <= 0 ? null : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
-/** One coloured/linked piece of a row value. Plain strings are uncoloured text. */
-export type Cell = string | { t: string; c?: string; href?: string; title?: string };
+/** One coloured/linked piece of a row. Plain strings are uncoloured text; `onClick` renders a button. */
+export type Cell = string | { t: string; c?: string; href?: string; title?: string; onClick?: () => void };
 
-/** `row()` whose value is built from cells; padding and border stay exact, overflow is cut. */
-export const rowx = (k: string | Cell, cells: Cell[], kc?: string): ReactNode => {
-  let left = VW;
+/** Renders cells into at most `width` characters; returns the nodes and the characters used. */
+const cells = (list: Cell[], width: number, dc?: string): [ReactNode[], number] => {
+  let left = width;
   const out: ReactNode[] = [];
-  const ko = typeof k === "string" ? { t: k } : k;
-  const kt = ko.t.slice(0, KEY); const kpad = " ".repeat(KEY - kt.length);
-  const key = ko.href ? <><a className={ko.c ?? kc ?? "hi"} href={ko.href} title={ko.title}>{kt}</a>{kpad}</> : kc ? <span className={kc}>{label(ko.t)}</span> : label(ko.t);
-  cells.forEach((cell, i) => {
+  list.forEach((cell, i) => {
     const o = typeof cell === "string" ? { t: cell } : cell;
     const t = o.t.slice(0, Math.max(0, left)); left -= t.length;
     if (!t) return;
-    if (o.href) out.push(<a key={i} className={o.c ?? "hi"} href={o.href} title={o.title} target={o.href.startsWith("/") ? undefined : "_blank"} rel="noreferrer">{t}</a>);
+    if (o.href) out.push(<a key={i} className={o.c ?? dc ?? "hi"} href={o.href} title={o.title} target={o.href.startsWith("/") ? undefined : "_blank"} rel="noreferrer">{t}</a>);
+    else if (o.onClick) out.push(<button key={i} type="button" className={`lnk ${o.c ?? "hi"}`} onClick={o.onClick} title={o.title}>{t}</button>);
     else if (o.c || o.title) out.push(<span key={i} className={o.c} title={o.title}>{t}</span>);
     else out.push(t);
   });
-  return <>{"│ "}{key}{" "}{out}{" ".repeat(Math.max(0, left))}{" │"}</>;
+  return [out, width - left];
 };
+
+/** A row: label column (string or cells) then value cells; padding and border stay exact, overflow is cut. */
+export const rowx = (k: string | Cell | Cell[], v: Cell[], kc?: string): ReactNode => {
+  const ks = Array.isArray(k) ? k : [typeof k === "string" ? { t: k, c: kc } : { c: kc, ...k }];
+  const [key, ku] = cells(ks, KEY, kc);
+  const [val, vu] = cells(v, VW);
+  return <>{"│ "}{key}{" ".repeat(KEY - ku)}{" "}{val}<span className="pad">{" ".repeat(VW - vu)}{" │"}</span></>;
+};
+export const row = (k: string, v: string) => rowx(k, [v]);
+/** Dim explanation rows at the bottom of a box: "term = five words · term = …", packed into as many rows as fit. */
+export const legend = (t: string): ReactNode => {
+  const lines: string[] = [];
+  for (const part of t.split(" · ")) {
+    const last = lines.length - 1;
+    if (last >= 0 && `${lines[last]} · ${part}`.length <= VW) lines[last] = `${lines[last]} · ${part}`;
+    else lines.push(part);
+  }
+  return <>{lines.map((l, i) => <span key={i}>{i ? "\n" : ""}{rowx({ t: i ? "" : "legend", c: "dim" }, [{ t: l, c: "dim" }])}</span>)}</>;
+};
+
+/** btop-style box title: a coloured index digit, the name (linked when `href`), then the rule. */
+export const boxTitle = (n: number, name: string, extra = "", href?: string): ReactNode => {
+  const text = `${n}${name}${extra ? ` ${extra}` : ""}`;
+  return <span className="rule">{"┌─"}<span className="num">{n}</span>{href ? <a className="hi" href={href}>{name}</a> : <span className="hi">{name}</span>}{extra ? <span className="dim">{` ${extra}`}</span> : ""}{" "}{"─".repeat(Math.max(0, W - text.length - 4))}{"┐"}</span>;
+};
+/** Divider inside a box: `├─ cells ──┤`. */
+export const rule = (v: Cell[]): ReactNode => {
+  const [out, used] = cells(v, W - 6);
+  return <span className="rule">{"├─ "}{out}{" "}{"─".repeat(W - 5 - used)}{"┤"}</span>;
+};
+export const bottom = (): ReactNode => <span className="rule">{`└${"─".repeat(W - 2)}┘`}</span>;
 
 /** A block-character bar: `frac` of `width` filled. */
 export const bar = (frac: number, width = 30) => {
@@ -78,7 +103,17 @@ export const addrHref = (acct: string, net?: "testnet" | "mainnet") => `${explor
 export const agentHref = (pk: string) => `/agent/${encodeURIComponent(pk)}`;
 export const duelHref = (id: string | number) => `/duel/${id}`;
 export const blockHref = (height: string, net?: "testnet" | "mainnet") => `${explorer(net)}/blocks/${height}`;
+export const REPO = "https://github.com/LingSiewWin/nearbuddy";
 
 /** `row()` with a tx hash rendered as a nearblocks link; padding and border stay intact. */
 export const linkRow = (k: string, before: string, tx: string, after: string, net: "testnet" | "mainnet" = "testnet"): ReactNode =>
   rowx(k, [before, { t: short(tx, 10), href: txHref(tx, net), title: tx }, after]);
+
+/** JSON from one of our api routes; a non-JSON body (a framework 500 page) or an `error` field becomes a short Error. */
+export async function getJson<T>(url: string): Promise<T> {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!(r.headers.get("content-type") ?? "").includes("json")) throw new Error(`HTTP ${r.status}`);
+  const j = (await r.json()) as T & { error?: string };
+  if (j.error) throw new Error(j.error);
+  return j;
+}

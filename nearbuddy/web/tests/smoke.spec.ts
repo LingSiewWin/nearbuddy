@@ -4,9 +4,12 @@ import { expect, test } from "@playwright/test";
 
 const box = (name: string) => `pre span.hi:text-is("${name}")`;
 
-test("/arena renders the STANDINGS box", async ({ page }) => {
-  await page.goto("/arena");
-  await expect(page.locator("body")).toContainText("STANDINGS");
+test("/ redirects to /arena, which renders the standings box", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/arena$/);
+  await expect(page).toHaveTitle("arena · NearBuddy");
+  await expect(page.locator(box("standings"))).toBeVisible();
+  await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
 });
 
 test("/agent/<pk> renders the record box", async ({ page, request }) => {
@@ -14,6 +17,7 @@ test("/agent/<pk> renders the record box", async ({ page, request }) => {
   const pk = snap.leaderboard[0]?.pk as string;
   expect(pk).toBeTruthy();
   await page.goto(`/agent/${encodeURIComponent(pk)}`);
+  await expect(page).toHaveTitle(`agent ${pk.slice(0, 8)}… · NearBuddy`);
   await expect(page.locator(box("record"))).toBeVisible();
   await expect(page.locator("body")).toContainText(pk.slice(0, 10));
 });
@@ -23,6 +27,7 @@ test("/duel/<newest> renders the sides box", async ({ page, request }) => {
   const id = Number(snap.config.next_duel) - 1;
   expect(id).toBeGreaterThanOrEqual(0);
   await page.goto(`/duel/${id}`);
+  await expect(page).toHaveTitle(`duel #${id} · NearBuddy`);
   await expect(page.locator(box("sides"))).toBeVisible();
   await expect(page.locator("body")).toContainText(`DUEL #${id}`);
   await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
