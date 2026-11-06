@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -41,6 +42,35 @@ NETWORK = ENV.get("NEAR_NETWORK", "testnet")
 if NETWORK not in NETWORKS:
     raise ValueError(f"NEAR_NETWORK={NETWORK}: testnet or mainnet")
 NET = NETWORKS[NETWORK]
+
+# Same rule as assertNetworkConfig in network.ts: an override that names the other network stops the process.
+OVERRIDES = (
+    "NEAR_RPC",
+    "NEAR_RPC_FALLBACK",
+    "NEAR_SEND_RPC",
+    "ARENA_CONTRACT",
+    "SOLVER_ID",
+    "ORACLE_ACCOUNT",
+    "FOLLOWER_ID",
+    "SPECTATOR_ID",
+    "JOIN_ACCOUNT",
+    "COPIER_RPC",
+    "COPIER_TX_API",
+)
+FOREIGN = {
+    "mainnet": re.compile(r"testnet|(^|[/.])test\."),
+    "testnet": re.compile(r"\.near$|mainnet|//(free\.)?rpc\.fastnear\.com|//near\.drpc\.org"),
+}
+
+
+def assert_network_config(network: str, env: dict[str, str]) -> None:
+    bad = [k for k in OVERRIDES if env.get(k) and FOREIGN[network].search(env[k])]
+    if bad:
+        pairs = ", ".join(f"{k}={env[k]}" for k in bad)
+        raise ValueError(f"NEAR_NETWORK={network} but {pairs} belongs to the other network: fix or unset")
+
+
+assert_network_config(NETWORK, ENV)
 
 DATA = HERE / "data" / "decisions.jsonl"
 ATTEST_DIR = HERE / "data" / "attestations"

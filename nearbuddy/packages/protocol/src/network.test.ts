@@ -1,6 +1,39 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { NETWORKS, networkId } from "./network.ts";
+import { assertNetworkConfig, NETWORKS, networkId } from "./network.ts";
+
+test("mainnet refuses any override that names testnet", () => {
+  for (const [k, v] of [
+    ["NEAR_RPC", "https://near-testnet.drpc.org"],
+    ["NEAR_RPC_FALLBACK", "https://test.rpc.fastnear.com"],
+    ["NEAR_SEND_RPC", "https://rpc.testnet.near.org"],
+    ["ARENA_CONTRACT", "arena.nearbuddy-solver.testnet"],
+    ["SOLVER_ID", "nearbuddy-solver.testnet"],
+    ["ORACLE_ACCOUNT", "price-oracle.testnet"],
+    ["COPIER_TX_API", "https://tx.test.fastnear.com/v0"],
+  ] as const)
+    assert.throws(() => assertNetworkConfig("mainnet", { [k]: v }), new RegExp(`NEAR_NETWORK=mainnet but ${k}=`));
+  assertNetworkConfig("mainnet", { NEAR_RPC: "https://rpc.mainnet.near.org", SOLVER_ID: "contest.near" });
+});
+
+test("testnet refuses a .near account or a mainnet RPC override", () => {
+  for (const [k, v] of [
+    ["ARENA_CONTRACT", "arena.nearbuddy.near"],
+    ["SOLVER_ID", "solver.nearbuddy.near"],
+    ["FOLLOWER_ID", "nearbuddy.near"],
+    ["NEAR_RPC", "https://free.rpc.fastnear.com"],
+    ["NEAR_RPC_FALLBACK", "https://near.drpc.org"],
+    ["NEAR_SEND_RPC", "https://rpc.mainnet.near.org"],
+  ] as const)
+    assert.throws(() => assertNetworkConfig("testnet", { [k]: v }), new RegExp(`NEAR_NETWORK=testnet but ${k}=`));
+  // the testnet row itself and the mainnet-only 1Click account pass
+  assertNetworkConfig("testnet", {
+    NEAR_RPC: NETWORKS.testnet.rpc,
+    NEAR_SEND_RPC: NETWORKS.testnet.fallback,
+    ARENA_CONTRACT: NETWORKS.testnet.arena,
+    ONECLICK_ACCOUNT: "siewwin.near",
+  });
+});
 
 test("mainnet row: fastnear first, drpc fallback, nearblocks.io, .near accounts", () => {
   assert.deepEqual(NETWORKS.mainnet, {

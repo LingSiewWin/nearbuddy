@@ -44,5 +44,38 @@ export function networkId(
   return name;
 }
 
+/** Single-value overrides that must belong to the selected network. ONECLICK_ACCOUNT and NEAR_MAINNET_RPC are
+ *  absent on purpose: 1Click is mainnet-only on every network. */
+export const OVERRIDES = [
+  "NEAR_RPC",
+  "NEAR_RPC_FALLBACK",
+  "NEAR_SEND_RPC",
+  "ARENA_CONTRACT",
+  "SOLVER_ID",
+  "ORACLE_ACCOUNT",
+  "FOLLOWER_ID",
+  "SPECTATOR_ID",
+  "JOIN_ACCOUNT",
+  "COPIER_RPC",
+  "COPIER_TX_API",
+] as const;
+// What the other network's values look like: on mainnet any testnet name or test.* host; on testnet a .near
+// account or a mainnet RPC host.
+const FOREIGN: Record<NetworkId, RegExp> = {
+  mainnet: /testnet|(^|[/.])test\./,
+  testnet: /\.near$|mainnet|\/\/(free\.)?rpc\.fastnear\.com|\/\/near\.drpc\.org/,
+};
+
+/** Throws when an override names the other network: a mainnet run with a leftover testnet RPC or account (or the
+ *  reverse) stops at startup instead of signing or reading on the wrong chain. */
+export function assertNetworkConfig(id: NetworkId, env: Record<string, string | undefined> = process.env): void {
+  const bad = OVERRIDES.filter((k) => env[k] && FOREIGN[id].test(env[k]));
+  if (bad.length)
+    throw new Error(
+      `NEAR_NETWORK=${id} but ${bad.map((k) => `${k}=${env[k]}`).join(", ")} belongs to the other network: fix or unset`,
+    );
+}
+
 export const NETWORK_ID = networkId();
 export const NET = NETWORKS[NETWORK_ID];
+assertNetworkConfig(NETWORK_ID);

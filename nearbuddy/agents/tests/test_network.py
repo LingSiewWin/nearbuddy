@@ -14,12 +14,12 @@ import pytest
 AGENTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENTS))
 
-OVERRIDES = ("NEAR_RPC", "NEAR_RPC_FALLBACK", "ARENA_CONTRACT", "SOLVER_ID")
+OVERRIDES = importlib.import_module("config").OVERRIDES
 
 
 @pytest.fixture
 def load(monkeypatch):
-    def _load(network: str | None):
+    def _load(network: str | None, **env: str):
         monkeypatch.setattr(dotenv, "dotenv_values", lambda *_a, **_k: {})
         for k in OVERRIDES:
             monkeypatch.delenv(k, raising=False)
@@ -27,6 +27,8 @@ def load(monkeypatch):
             monkeypatch.delenv("NEAR_NETWORK", raising=False)
         else:
             monkeypatch.setenv("NEAR_NETWORK", network)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
         config = importlib.reload(importlib.import_module("config"))
         return (
             config,
@@ -59,12 +61,9 @@ def test_mainnet_row(load):
     assert config.NET["explorer"] == "https://nearblocks.io"
 
 
-def test_env_override_still_wins(load, monkeypatch):
-    monkeypatch.setenv("ARENA_CONTRACT", "arena.other.near")
-    monkeypatch.setattr(dotenv, "dotenv_values", lambda *_a, **_k: {})
-    monkeypatch.setenv("NEAR_NETWORK", "mainnet")
-    importlib.reload(importlib.import_module("config"))
-    assert importlib.reload(importlib.import_module("chain")).ARENA == "arena.other.near"
+def test_env_override_still_wins(load):
+    _, chain, _ = load("mainnet", ARENA_CONTRACT="arena.other.near")
+    assert chain.ARENA == "arena.other.near"
 
 
 def test_unknown_network_refused(load):
@@ -77,3 +76,41 @@ def test_same_table_as_typescript():
     script = 'import { NETWORKS } from "./packages/protocol/src/network.ts"; console.log(JSON.stringify(NETWORKS))'
     out = subprocess.run(["bun", "-e", script], cwd=AGENTS.parent, capture_output=True, text=True, check=True)
     assert json.loads(out.stdout) == importlib.import_module("config").NETWORKS
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("NEAR_RPC", "https://near-testnet.drpc.org"),
+        ("NEAR_RPC_FALLBACK", "https://test.rpc.fastnear.com"),
+        ("NEAR_SEND_RPC", "https://rpc.testnet.near.org"),
+        ("ARENA_CONTRACT", "arena.nearbuddy-solver.testnet"),
+        ("SOLVER_ID", "nearbuddy-solver.testnet"),
+    ],
+)
+def test_mainnet_refuses_testnet_override(load, key, value):
+    with pytest.raises(ValueError, match=f"NEAR_NETWORK=mainnet but {key}="):
+        load("mainnet", **{key: value})
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("ARENA_CONTRACT", "arena.nearbuddy.near"),
+        ("SOLVER_ID", "solver.nearbuddy.near"),
+        ("NEAR_RPC", "https://free.rpc.fastnear.com"),
+        ("NEAR_RPC_FALLBACK", "https://near.drpc.org"),
+        ("NEAR_SEND_RPC", "https://rpc.mainnet.near.org"),
+    ],
+)
+def test_testnet_refuses_mainnet_override(load, key, value):
+    with pytest.raises(ValueError, match=f"NEAR_NETWORK=testnet but {key}="):
+        load("testnet", **{key: value})
+
+
+def test_matching_overrides_and_the_1click_account_pass():
+    config = importlib.import_module("config")
+    config.assert_network_config(
+        "testnet", {"ARENA_CONTRACT": "arena.nearbuddy-solver.testnet", "ONECLICK_ACCOUNT": "x.near"}
+    )
+    config.assert_network_config("mainnet", {"NEAR_RPC": "https://rpc.mainnet.near.org", "SOLVER_ID": "contest.near"})
