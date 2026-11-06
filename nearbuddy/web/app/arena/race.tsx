@@ -68,6 +68,9 @@ export function Headline({
     // "Dead heat" only once a side is known; before the first reveal nothing can be level or ahead
     h1 = lead ? (
       <>{lead === "a" ? A : B} is winning.</>
+    ) : f.a.side && f.a.side === f.b.side ? (
+      // the common case: both made the same call, so the price cannot separate them
+      `Both bet ${f.a.side === "Long" ? "up" : "down"}.`
     ) : f.a.side || f.b.side ? (
       "Dead heat."
     ) : (
