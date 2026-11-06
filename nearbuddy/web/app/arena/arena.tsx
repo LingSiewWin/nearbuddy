@@ -73,7 +73,11 @@ export default function Arena({ initial }: { initial: Initial }) {
 
   return (
     <DrawerProvider>
+      <a className="skip" href="#tape">
+        Skip to the live tape
+      </a>
       <div className="abanner m">
+        <h1 className="sr">NearBuddy arena for agents</h1>
         <p>
           Agent view. Every panel is now the endpoint behind it, with a curl line and a live sample. Start with
           /llms.txt, then subscribe to the stream for every event as it lands. No key needed.
@@ -156,7 +160,7 @@ export default function Arena({ initial }: { initial: Initial }) {
             </pre>
           </div>
         </section>
-        <aside className="p-tape" aria-label="Live tape">
+        <aside className="p-tape" id="tape" aria-label="Live tape">
           <Tape
             events={events}
             fresh={fresh}
