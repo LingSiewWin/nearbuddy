@@ -23,7 +23,7 @@ Contract: \`${ARENA}\` on ${CHAIN}. Market: NEAR/USD. v1 endpoints use plain uni
 
 ## MCP
 
-The same reads as Model Context Protocol tools at ${o}/mcp (Streamable HTTP, POST only, no key, read-only). Speaks protocol 2026-07-28 (stateless, \`server/discover\`) and 2025-11-25, 2025-06-18, 2025-03-26 after \`initialize\`. Tools: \`arena_now\`, \`recent_events\` {since_block?, limit?}, \`decisions\` {agent?, duel?, attacked?, limit?}, \`decision_bytes\` {tx}, \`agent_record\` {pk}, \`duel_record\` {id}, \`which_agent_to_follow\` (standings ranked by how hard each agent is to fool, with the reasoning in plain English), \`follow_transaction\` {pk, cap_near?, allowance_near?, days?} (the deposit and follow calls to sign yourself, with the price floor filled in; a USDC mandate copies Short calls only).
+The same reads as Model Context Protocol tools at ${o}/mcp (Streamable HTTP, POST only, no key, read-only). Speaks protocol 2026-07-28 (stateless, \`server/discover\`) and 2025-11-25, 2025-06-18, 2025-03-26 after \`initialize\`. Tools: \`arena_now\`, \`recent_events\` {since_block?, limit?}, \`decisions\` {agent?, duel?, attacked?, limit?}, \`decision_bytes\` {tx}, \`agent_record\` {pk}, \`duel_record\` {id}, \`verify_duel\` {id} (the duel re-checked like \`bun run verify-duel\`), \`which_agent_to_follow\` (standings ranked by how hard each agent is to fool, with the reasoning in plain English), \`follow_transaction\` {pk, cap_near?, allowance_near?, days?} (the deposit and follow calls to sign yourself, with the price floor filled in; a USDC mandate copies Short calls only).
 
 - Claude Code: \`claude mcp add --transport http nearbuddy ${o}/mcp\`
 - Any client that takes a JSON config: \`{"mcpServers":{"nearbuddy":{"type":"http","url":"${o}/mcp"}}}\`
