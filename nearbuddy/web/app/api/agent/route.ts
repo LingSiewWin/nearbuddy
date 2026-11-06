@@ -14,21 +14,44 @@ type Outcome = { open_price: string; close_price: string; pnl_a: number; pnl_b: 
 type Duel = { id: string; a: string; b: string; symbol: string; open_at: string; close_at: string; pool: string; injections: { target: string; kind: string; payload_hash: string }[]; resolved: boolean; last_intent_a: Intent | null; last_intent_b: Intent | null; outcome?: Outcome | null; open_price?: string | null };
 
 const cache = new Map<string, { at: number; body: string }>();
+const inflight = new Map<string, Promise<string>>();
+const PK_RE = /^[A-Za-z0-9+/]{43}=$/; // 32 bytes, standard base64
+const json = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+
+/** Views in small chunks so a rate-limited RPC sees a trickle, not a 40-call burst. */
+async function chunked<T>(items: string[], size: number, f: (id: string) => Promise<T>): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < items.length; i += size) out.push(...(await Promise.all(items.slice(i, i + size).map(f))));
+  return out;
+}
 
 export async function GET(req: Request) {
   const pk = new URL(req.url).searchParams.get("pk");
-  if (!pk) return new Response(JSON.stringify({ error: "pk required" }), { status: 400 });
+  if (!pk || !PK_RE.test(pk)) return json(JSON.stringify({ error: "pk must be a 32-byte base64 key" }), 400);
   const hit = cache.get(pk);
-  if (hit && Date.now() - hit.at < 60_000) return new Response(hit.body, { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  if (hit && Date.now() - hit.at < 60_000) return json(hit.body);
+  let p = inflight.get(pk); // one scan per agent at a time; pollers share it
+  if (!p) {
+    p = build(pk).finally(() => inflight.delete(pk));
+    inflight.set(pk, p);
+  }
+  try {
+    return json(await p);
+  } catch (e) {
+    if (hit) return json(hit.body); // stale beats a 500 while the RPC is throttled
+    return json(JSON.stringify({ error: String(e).slice(0, 200) }), 502);
+  }
+}
 
+async function build(pk: string): Promise<string> {
   const [agent, config, followers] = await Promise.all([
     view("get_agent", { agent_pk: pk }),
     view("get_config", {}) as Promise<{ next_duel: string }>,
     view("list_followers", { agent_pk: pk }),
   ]);
   const n = Number(config.next_duel);
-  const ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => n - 1 - i);
-  const all = (await Promise.all(ids.map((id) => view("get_duel", { duel_id: String(id) })))) as (Duel | null)[];
+  const ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => String(n - 1 - i));
+  const all = (await chunked(ids, 8, (id) => view("get_duel", { duel_id: id }))) as (Duel | null)[];
   const duels = all.filter((d): d is Duel => !!d && (d.a === pk || d.b === pk)).map((d) => {
     const isA = d.a === pk;
     const mine = isA ? d.last_intent_a : d.last_intent_b;
@@ -48,5 +71,6 @@ export async function GET(req: Request) {
     (_, v) => (typeof v === "bigint" ? v.toString() : v),
   );
   cache.set(pk, { at: Date.now(), body });
-  return new Response(body, { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  if (cache.size > 200) cache.delete(cache.keys().next().value as string); // oldest entry out
+  return body;
 }

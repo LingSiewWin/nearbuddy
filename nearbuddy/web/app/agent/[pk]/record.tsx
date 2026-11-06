@@ -42,7 +42,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const net = done.reduce((s, d) => s + (d.pnl ?? 0), 0);
   const verified = duels.filter(proven).length;
   const attacks = duels.reduce((s, d) => s + d.attacks, 0);
-  const attacked = duels.filter((d) => d.attacks > 0);
+  const attacked = done.filter((d) => d.attacks > 0); // open duels cannot be "not lost" yet
   const survived = attacked.filter((d) => d.result !== "loss").length;
   const slashed = done.reduce((s, d) => s + BigInt(d.slashed || "0"), 0n).toString();
   const trust = a ? (a.tee ? { t: "ENCLAVE-VERIFIED", c: "ok" } : { t: "UNVERIFIED TIER", c: "unv" }) : { t: "", c: "" };
