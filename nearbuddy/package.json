@@ -10,6 +10,8 @@
     "solver": "bun packages/solver/src/index.ts",
     "demo": "bun packages/demo/src/index.ts",
     "test": "bun test packages/protocol/src packages/solver/src",
+    "lint": "biome check .",
+    "format": "biome format --write .",
     "web": "bun --cwd web dev",
     "guarantor": "bun packages/demo/src/guarantor.ts",
     "arena-demo": "bun packages/demo/src/arena.ts",
@@ -24,6 +26,7 @@
     "viem": "2.57.16"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.5",
     "@types/node": "26.6.5",
     "typescript": "7.0.2"
   }

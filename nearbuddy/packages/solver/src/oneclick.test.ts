@@ -1,7 +1,7 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { quote, sellNearForUsdc, sellNearForUsdcOnChain, USDC_NEAR, WNEAR, type Quote } from "./oneclick.ts";
+import { test } from "node:test";
+import { type Quote, quote, sellNearForUsdc, sellNearForUsdcOnChain, USDC_NEAR, WNEAR } from "./oneclick.ts";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 
@@ -44,26 +44,44 @@ test("executeSwap sends one wrap.near transaction with storage, wrap and transfe
     if (u.endsWith("/v0/quote")) {
       const body = JSON.parse(String(init?.body));
       assert.equal(body.dry, false);
-      return new Response(JSON.stringify({ ...fixture, quote: { ...fixture.quote, depositAddress: dep, deadline: "2099-01-01T00:00:00Z" } }));
+      return new Response(
+        JSON.stringify({
+          ...fixture,
+          quote: { ...fixture.quote, depositAddress: dep, deadline: "2099-01-01T00:00:00Z" },
+        }),
+      );
     }
     if (u.endsWith("/v0/deposit/submit")) return new Response(JSON.stringify({ status: "KNOWN_DEPOSIT_TX" }));
-    if (u.includes("/v0/status")) return new Response(JSON.stringify(++statusCalls < 2 ? { status: "PROCESSING" } : { status: "SUCCESS", swapDetails: { amountOut: "1864135" } }));
+    if (u.includes("/v0/status"))
+      return new Response(
+        JSON.stringify(
+          ++statusCalls < 2 ? { status: "PROCESSING" } : { status: "SUCCESS", swapDetails: { amountOut: "1864135" } },
+        ),
+      );
     throw new Error(`unexpected fetch ${u}`);
   }) as typeof fetch;
   const sent: { receiverId: string; actions: unknown[] }[] = [];
   const account = {
     accountId: "someone.near",
     provider: { callFunction: async () => null }, // not yet registered on wrap.near
-    signAndSendTransaction: async (p: { receiverId: string; actions: unknown[] }) => { sent.push(p); return { transaction: { hash: "TX1" } }; },
+    signAndSendTransaction: async (p: { receiverId: string; actions: unknown[] }) => {
+      sent.push(p);
+      return { transaction: { hash: "TX1" } };
+    },
   } as unknown as Parameters<typeof executeSwap>[0];
   try {
     const r = await executeSwap(account, 5n * 10n ** 23n);
     assert.equal(sent.length, 1, "one transaction, not four");
     assert.equal(sent[0]!.receiverId, "wrap.near");
-    const methods = sent[0]!.actions.map((a) => (a as { functionCall: { methodName: string } }).functionCall.methodName);
+    const methods = sent[0]!.actions.map(
+      (a) => (a as { functionCall: { methodName: string } }).functionCall.methodName,
+    );
     assert.deepEqual(methods, ["storage_deposit", "storage_deposit", "near_deposit", "ft_transfer"]);
     const xfer = (sent[0]!.actions[3] as { functionCall: { args: Uint8Array } }).functionCall.args;
-    assert.deepEqual(JSON.parse(new TextDecoder().decode(xfer)), { receiver_id: dep, amount: "500000000000000000000000" });
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(xfer)), {
+      receiver_id: dep,
+      amount: "500000000000000000000000",
+    });
     assert.equal(r.status, "SUCCESS");
     assert.equal(r.amountOut, "1864135");
     assert.equal(r.depositTx, "TX1");
@@ -78,12 +96,21 @@ function fakeOneClick(dep: string, statuses: string[]) {
   const real = globalThis.fetch;
   globalThis.fetch = (async (url: string) => {
     const u = String(url);
-    if (u.endsWith("/v0/quote")) return new Response(JSON.stringify({ ...fixture, quote: { ...fixture.quote, depositAddress: dep, deadline: "2099-01-01T00:00:00Z" } }));
+    if (u.endsWith("/v0/quote"))
+      return new Response(
+        JSON.stringify({
+          ...fixture,
+          quote: { ...fixture.quote, depositAddress: dep, deadline: "2099-01-01T00:00:00Z" },
+        }),
+      );
     if (u.endsWith("/v0/deposit/submit")) return new Response(JSON.stringify({ status: "KNOWN_DEPOSIT_TX" }));
-    if (u.includes("/v0/status")) return new Response(JSON.stringify({ status: statuses.length > 1 ? statuses.shift() : statuses[0] }));
+    if (u.includes("/v0/status"))
+      return new Response(JSON.stringify({ status: statuses.length > 1 ? statuses.shift() : statuses[0] }));
     throw new Error(`unexpected fetch ${u}`);
   }) as typeof fetch;
-  return () => { globalThis.fetch = real; };
+  return () => {
+    globalThis.fetch = real;
+  };
 }
 
 test("executeSwap skips the sender's storage_deposit when wrap.near already knows the account", async () => {
@@ -94,14 +121,23 @@ test("executeSwap skips the sender's storage_deposit when wrap.near already know
   const account = {
     accountId: "someone.near",
     provider: { callFunction: async () => ({ total: "1250000000000000000000", available: "0" }) }, // registered
-    signAndSendTransaction: async (p: { actions: unknown[] }) => { sent.push(p); return { transaction: { hash: "TX2" } }; },
+    signAndSendTransaction: async (p: { actions: unknown[] }) => {
+      sent.push(p);
+      return { transaction: { hash: "TX2" } };
+    },
   } as unknown as Parameters<typeof executeSwap>[0];
   try {
     const r = await executeSwap(account, 10n ** 23n);
-    const methods = sent[0]!.actions.map((a) => (a as { functionCall: { methodName: string } }).functionCall.methodName);
+    const methods = sent[0]!.actions.map(
+      (a) => (a as { functionCall: { methodName: string } }).functionCall.methodName,
+    );
     assert.deepEqual(methods, ["storage_deposit", "near_deposit", "ft_transfer"]);
     const storage = (sent[0]!.actions[0] as { functionCall: { args: Uint8Array } }).functionCall.args;
-    assert.deepEqual(JSON.parse(new TextDecoder().decode(storage)), { account_id: dep }, "the one storage_deposit is for the deposit address");
+    assert.deepEqual(
+      JSON.parse(new TextDecoder().decode(storage)),
+      { account_id: dep },
+      "the one storage_deposit is for the deposit address",
+    );
     assert.equal(r.status, "SUCCESS");
     assert.equal(r.amountOut, undefined, "no swapDetails in the status reply");
   } finally {
@@ -132,7 +168,10 @@ test("executeSwap refuses a quote without a deposit address before sending anyth
   const account = {
     accountId: "someone.near",
     provider: { callFunction: async () => null },
-    signAndSendTransaction: async () => { sent++; return { transaction: { hash: "TX4" } }; },
+    signAndSendTransaction: async () => {
+      sent++;
+      return { transaction: { hash: "TX4" } };
+    },
   } as unknown as Parameters<typeof executeSwap>[0];
   try {
     await assert.rejects(executeSwap(account, 1n), /no depositAddress/);

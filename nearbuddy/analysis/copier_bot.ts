@@ -21,18 +21,34 @@ const OUT = new URL("./data/copier.jsonl", import.meta.url).pathname;
 
 type Intent = { agent_pk: string; side: "Long" | "Short"; size_bps: number; nonce: string };
 type Duel = {
-  id: string; a: string; b: string; close_at: string; resolved: boolean;
-  last_intent_a: Intent | null; last_intent_b: Intent | null;
-  outcome: { open_price: string; close_price: string } | null; open_price: string | null;
+  id: string;
+  a: string;
+  b: string;
+  close_at: string;
+  resolved: boolean;
+  last_intent_a: Intent | null;
+  last_intent_b: Intent | null;
+  outcome: { open_price: string; close_price: string } | null;
+  open_price: string | null;
 };
 type Row = {
-  duel_id: string; agent_pk: string; agent: "hardened" | "naive" | "other"; side: "Long" | "Short"; size_bps: number;
-  nonce: string; detected_at: string; open_price: string | null; p0: number | null;
-  p15: number | null; p60: number | null; p90: number | null; close_price: string | null;
+  duel_id: string;
+  agent_pk: string;
+  agent: "hardened" | "naive" | "other";
+  side: "Long" | "Short";
+  size_bps: number;
+  nonce: string;
+  detected_at: string;
+  open_price: string | null;
+  p0: number | null;
+  p15: number | null;
+  p60: number | null;
+  p90: number | null;
+  close_price: string | null;
 };
 
 const provider = new JsonRpcProvider({ url: RPC });
-const view = <T,>(method: string, args: Record<string, unknown>) =>
+const view = <T>(method: string, args: Record<string, unknown>) =>
   provider.callFunction({ contractId: ARENA, method, args }) as Promise<T>;
 const agentClass = (pk: string): Row["agent"] =>
   HARDENED.some((p) => pk.startsWith(p)) ? "hardened" : NAIVE.some((p) => pk.startsWith(p)) ? "naive" : "other";
@@ -56,16 +72,23 @@ function stats(xs: number[]) {
   if (n === 0) return { n, mean: NaN, hit: NaN, lo: NaN, hi: NaN };
   const mean = xs.reduce((a, b) => a + b, 0) / n;
   const sd = n > 1 ? Math.sqrt(xs.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1)) : 0;
-  const half = 1.96 * sd / Math.sqrt(n);
+  const half = (1.96 * sd) / Math.sqrt(n);
   return { n, mean, hit: xs.filter((x) => x > 0).length / n, lo: mean - half, hi: mean + half };
 }
 
 function report(rows: Row[]) {
   const horizons: [string, (r: Row) => number | null][] = [
-    ...HORIZONS_S.map((h): [string, (r: Row) => number | null] => [`+${h}s`, (r) => r[`p${h}` as "p15" | "p60" | "p90"]]),
+    ...HORIZONS_S.map((h): [string, (r: Row) => number | null] => [
+      `+${h}s`,
+      (r) => r[`p${h}` as "p15" | "p60" | "p90"],
+    ]),
     ["close", (r) => (r.close_price ? Number(r.close_price) / 1e8 : null)],
   ];
-  const groups: [string, (r: Row) => boolean][] = [["all", () => true], ["hardened", (r) => r.agent === "hardened"], ["naive", (r) => r.agent === "naive"]];
+  const groups: [string, (r: Row) => boolean][] = [
+    ["all", () => true],
+    ["hardened", (r) => r.agent === "hardened"],
+    ["naive", (r) => r.agent === "naive"],
+  ];
   const f = (x: number, d = 2) => (Number.isNaN(x) ? "-" : x.toFixed(d));
   console.log(`\n${rows.length} intents in ${OUT}`);
   console.log("group     horizon  n     mean_bps  hit    ci95");
@@ -76,13 +99,20 @@ function report(rows: Row[]) {
         return r.p0 && p1 ? [ret(r.side, r.p0, p1)] : [];
       });
       const s = stats(xs);
-      console.log(`${g.padEnd(9)} ${h.padEnd(8)} ${String(s.n).padEnd(5)} ${f(s.mean).padStart(8)}  ${f(s.hit)}  [${f(s.lo)}, ${f(s.hi)}]`);
+      console.log(
+        `${g.padEnd(9)} ${h.padEnd(8)} ${String(s.n).padEnd(5)} ${f(s.mean).padStart(8)}  ${f(s.hit)}  [${f(s.lo)}, ${f(s.hi)}]`,
+      );
     }
   }
 }
 
 const readRows = (): Row[] =>
-  existsSync(OUT) ? readFileSync(OUT, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Row) : [];
+  existsSync(OUT)
+    ? readFileSync(OUT, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as Row)
+    : [];
 
 // ---- collection -------------------------------------------------------------------------------
 const pending = new Map<string, Row[]>(); // duel id -> rows waiting for the oracle close
@@ -92,7 +122,7 @@ let written = 0;
 function flush(duelId: string, closePrice: string | null) {
   for (const row of pending.get(duelId) ?? []) {
     row.close_price = closePrice;
-    appendFileSync(OUT, JSON.stringify(row) + "\n");
+    appendFileSync(OUT, `${JSON.stringify(row)}\n`);
     written++;
   }
   pending.delete(duelId);
@@ -101,9 +131,19 @@ function flush(duelId: string, closePrice: string | null) {
 async function onIntent(d: Duel, it: Intent) {
   const t0 = Date.now();
   const row: Row = {
-    duel_id: d.id, agent_pk: it.agent_pk, agent: agentClass(it.agent_pk), side: it.side, size_bps: it.size_bps,
-    nonce: it.nonce, detected_at: new Date(t0).toISOString(), open_price: d.open_price ?? null, p0: await spot(),
-    p15: null, p60: null, p90: null, close_price: null,
+    duel_id: d.id,
+    agent_pk: it.agent_pk,
+    agent: agentClass(it.agent_pk),
+    side: it.side,
+    size_bps: it.size_bps,
+    nonce: it.nonce,
+    detected_at: new Date(t0).toISOString(),
+    open_price: d.open_price ?? null,
+    p0: await spot(),
+    p15: null,
+    p60: null,
+    p90: null,
+    close_price: null,
   };
   console.log(`${row.detected_at} duel ${d.id} ${row.agent} ${it.agent_pk.slice(0, 8)} ${it.side} @ ${row.p0}`);
   for (const h of HORIZONS_S) {
@@ -145,11 +185,13 @@ async function collect(minutes: number) {
         }
         if (done.has(id)) continue;
         if (d.resolved) {
-          tracked.delete(id); done.add(id);
+          tracked.delete(id);
+          done.add(id);
           // give in-flight +90 s fetches time to land before writing the duel's rows
           setTimeout(() => flush(id, d.outcome?.close_price ?? null), FLUSH_DELAY_MS);
         } else if (Date.now() > Number(BigInt(d.close_at) / 1_000_000n) + 15 * 60_000) {
-          tracked.delete(id); done.add(id); // never resolved; write what we have
+          tracked.delete(id);
+          done.add(id); // never resolved; write what we have
           setTimeout(() => flush(id, null), FLUSH_DELAY_MS);
         } else tracked.set(id, d);
       }

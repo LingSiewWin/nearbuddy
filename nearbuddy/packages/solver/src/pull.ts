@@ -2,9 +2,15 @@
 // The transaction is signed by the NearBuddy vault contract through NEAR Chain Signatures: the
 // solver builds and hashes the unsigned tx, the contract asks the MPC network to sign the hash,
 // the solver attaches r/s/v and broadcasts. The puller address is derived from (contract, path).
-import { teraToGas, type Account } from "near-api-js";
+import { type Account, teraToGas } from "near-api-js";
 import {
-  createPublicClient, encodeFunctionData, http, keccak256, parseAbi, serializeTransaction, type Hex,
+  createPublicClient,
+  encodeFunctionData,
+  type Hex,
+  http,
+  keccak256,
+  parseAbi,
+  serializeTransaction,
 } from "viem";
 import { sepolia } from "viem/chains";
 import { CONTRACT } from "../../protocol/src/chain.ts";
@@ -35,7 +41,13 @@ export async function observe(wallet: Hex): Promise<{ balance: bigint; allowance
   return { balance, allowance };
 }
 
-export interface PullResult { ok: boolean; txHash?: Hex; reason?: string; nearTx?: string; mpcMs?: number }
+export interface PullResult {
+  ok: boolean;
+  txHash?: Hex;
+  reason?: string;
+  nearTx?: string;
+  mpcMs?: number;
+}
 
 /** Build, MPC-sign via the contract, broadcast, and wait for the receipt. */
 export async function pull(solver: Account, from: Hex, to: Hex, amount: bigint): Promise<PullResult> {
@@ -53,21 +65,42 @@ export async function pull(solver: Account, from: Hex, to: Hex, amount: bigint):
     return { ok: false, reason: `simulation reverted: ${(e as Error).message.split("\n")[0]}` };
   }
   const tx = {
-    chainId: CHAIN_ID, type: "eip1559" as const, nonce, to: USDC, data, value: 0n, gas: (gas * 13n) / 10n,
-    maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+    chainId: CHAIN_ID,
+    type: "eip1559" as const,
+    nonce,
+    to: USDC,
+    data,
+    value: 0n,
+    gas: (gas * 13n) / 10n,
+    maxFeePerGas: fees.maxFeePerGas,
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
   };
   const hash = keccak256(serializeTransaction(tx));
   const t0 = Date.now();
   const r = await solver.callFunctionRaw({
-    contractId: CONTRACT, methodName: "request_pull_signature",
-    args: { payload_hex: hash.slice(2), path: MPC_PATH }, gas: teraToGas("300"), deposit: 1n,
+    contractId: CONTRACT,
+    methodName: "request_pull_signature",
+    args: { payload_hex: hash.slice(2), path: MPC_PATH },
+    gas: teraToGas("300"),
+    deposit: 1n,
   });
   const mpcMs = Date.now() - t0;
   const st = r.status as { SuccessValue?: string };
-  if (!st.SuccessValue) return { ok: false, reason: `MPC signing failed: ${JSON.stringify(r.status).slice(0, 200)}`, nearTx: r.transaction.hash };
-  const sig = JSON.parse(Buffer.from(st.SuccessValue, "base64").toString()) as { big_r: { affine_point: string }; s: { scalar: string }; recovery_id: number };
+  if (!st.SuccessValue)
+    return {
+      ok: false,
+      reason: `MPC signing failed: ${JSON.stringify(r.status).slice(0, 200)}`,
+      nearTx: r.transaction.hash,
+    };
+  const sig = JSON.parse(Buffer.from(st.SuccessValue, "base64").toString()) as {
+    big_r: { affine_point: string };
+    s: { scalar: string };
+    recovery_id: number;
+  };
   const signed = serializeTransaction(tx, {
-    r: ("0x" + sig.big_r.affine_point.slice(2)) as Hex, s: ("0x" + sig.s.scalar) as Hex, yParity: sig.recovery_id,
+    r: `0x${sig.big_r.affine_point.slice(2)}` as Hex,
+    s: `0x${sig.s.scalar}` as Hex,
+    yParity: sig.recovery_id,
   });
   try {
     const txHash = await evm.sendRawTransaction({ serializedTransaction: signed });
@@ -76,6 +109,11 @@ export async function pull(solver: Account, from: Hex, to: Hex, amount: bigint):
       ? { ok: true, txHash, nearTx: r.transaction.hash, mpcMs }
       : { ok: false, txHash, reason: "reverted on-chain", nearTx: r.transaction.hash, mpcMs };
   } catch (e) {
-    return { ok: false, reason: `broadcast failed: ${(e as Error).message.split("\n")[0]}`, nearTx: r.transaction.hash, mpcMs };
+    return {
+      ok: false,
+      reason: `broadcast failed: ${(e as Error).message.split("\n")[0]}`,
+      nearTx: r.transaction.hash,
+      mpcMs,
+    };
   }
 }

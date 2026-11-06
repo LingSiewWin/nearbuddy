@@ -1,14 +1,20 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
 import { KeyPair } from "near-api-js";
-import { certMessage, signCert, verifyCert, type GuaranteeCert } from "./cert.ts";
+import { certMessage, type GuaranteeCert, signCert, verifyCert } from "./cert.ts";
 import { b64, hex } from "./index.ts";
 
 // Same fixture as contract test `cert_encoding_is_stable` (cert(7, 1_000)).
 const fixture: GuaranteeCert = {
-  solver: "solver.testnet", issuer: "issuer.testnet", chain_id: 11_155_111,
-  wallet: "0x199870e7585835cf0475918177bf6a42b0c52c7d", token: "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
-  amount: "5000000", payout: "1000", nonce: "7", expires_at: "1700000000000001000",
+  solver: "solver.testnet",
+  issuer: "issuer.testnet",
+  chain_id: 11_155_111,
+  wallet: "0x199870e7585835cf0475918177bf6a42b0c52c7d",
+  token: "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
+  amount: "5000000",
+  payout: "1000",
+  nonce: "7",
+  expires_at: "1700000000000001000",
 };
 // Printed by `cargo test --lib cert_encoding_is_stable -- --nocapture`.
 const RUST_HEX =

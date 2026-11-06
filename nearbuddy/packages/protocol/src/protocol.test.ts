@@ -1,6 +1,6 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Agent, iouMessage, verifyIou, hex, b64 } from "./index.ts";
+import { test } from "node:test";
+import { Agent, b64, hex, iouMessage, verifyIou } from "./index.ts";
 
 // Pinned from contract unit test `message_encoding_is_stable` (cargo test -- --nocapture).
 const RUST_HEX =

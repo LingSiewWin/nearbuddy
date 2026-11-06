@@ -15,9 +15,8 @@ export function loadAccount(accountId: string): Account {
   const envKey = process.env[`NEAR_KEY_${accountId.replace(/[.-]/g, "_").toUpperCase()}`];
   const key =
     envKey ??
-    (JSON.parse(
-      readFileSync(`${process.env.HOME}/.near-credentials/testnet/${accountId}.json`, "utf8"),
-    ).private_key as string);
+    (JSON.parse(readFileSync(`${process.env.HOME}/.near-credentials/testnet/${accountId}.json`, "utf8"))
+      .private_key as string);
   return new Account(accountId, sendProvider, key as KeyPairString);
 }
 
@@ -25,14 +24,29 @@ export async function view<T>(method: string, args: Record<string, unknown>): Pr
   return (await provider.callFunction({ contractId: CONTRACT, method, args })) as T;
 }
 
-export interface Vault { balance: string; pending_withdraw: [string, string] | null }
-export interface Mandate {
-  owner: string; allowance: string; spent: string; per_tx_cap: string;
-  allowed_payees: string[]; expires_at: string; revoked: boolean;
+export interface Vault {
+  balance: string;
+  pending_withdraw: [string, string] | null;
 }
-export interface Solver { stake: string; fees_earned: string; ious_settled: number }
+export interface Mandate {
+  owner: string;
+  allowance: string;
+  spent: string;
+  per_tx_cap: string;
+  allowed_payees: string[];
+  expires_at: string;
+  revoked: boolean;
+}
+export interface Solver {
+  stake: string;
+  fees_earned: string;
+  ious_settled: number;
+}
 export interface SettlementReport {
-  settled: number; total_paid: string; solver_fee: string; covered_by_solver: string;
+  settled: number;
+  total_paid: string;
+  solver_fee: string;
+  covered_by_solver: string;
   rejected: { index: number; reason: string }[];
 }
 

@@ -3,20 +3,33 @@
 //   RUNS=10 bun analysis/send_latency.ts            (spends ~0.001 NEAR per run from SENDER, default nearbuddy-solver.testnet)
 import "../packages/protocol/src/env.ts";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { Account, JsonRpcProvider, actions, teraToGas, type KeyPairString } from "near-api-js";
+import { Account, actions, JsonRpcProvider, type KeyPairString, teraToGas } from "near-api-js";
 
 const SENDER = process.env.SENDER ?? "nearbuddy-solver.testnet";
 const DEP = process.env.DEP ?? "nearbuddy-owner.testnet"; // stands in for the 1Click deposit address
 const RUNS = Number(process.env.RUNS ?? 10);
-const RPCS = (process.env.RPCS ?? "https://test.rpc.fastnear.com,https://near-testnet.drpc.org,https://rpc.testnet.near.org").split(",");
+const RPCS = (
+  process.env.RPCS ?? "https://test.rpc.fastnear.com,https://near-testnet.drpc.org,https://rpc.testnet.near.org"
+).split(",");
 const WAITS = ["EXECUTED_OPTIMISTIC", "FINAL"] as const;
-const key = JSON.parse(readFileSync(`${process.env.HOME}/.near-credentials/testnet/${SENDER}.json`, "utf8")).private_key as KeyPairString;
+const key = JSON.parse(readFileSync(`${process.env.HOME}/.near-credentials/testnet/${SENDER}.json`, "utf8"))
+  .private_key as KeyPairString;
 const out = new URL("./data/send_latency.jsonl", import.meta.url).pathname;
 mkdirSync(new URL("./data/", import.meta.url).pathname, { recursive: true });
 
 const wrapDeposit = actions.functionCall("near_deposit", {}, teraToGas("30"), 1_000_000_000_000_000_000_000n); // 0.001 NEAR
-const storageDep = actions.functionCall("storage_deposit", { account_id: DEP }, teraToGas("30"), 1_250_000_000_000_000_000_000n);
-const xfer = actions.functionCall("ft_transfer", { receiver_id: DEP, amount: "1000000000000000000000" }, teraToGas("30"), 1n);
+const storageDep = actions.functionCall(
+  "storage_deposit",
+  { account_id: DEP },
+  teraToGas("30"),
+  1_250_000_000_000_000_000_000n,
+);
+const xfer = actions.functionCall(
+  "ft_transfer",
+  { receiver_id: DEP, amount: "1000000000000000000000" },
+  teraToGas("30"),
+  1n,
+);
 
 async function blockTime(provider: JsonRpcProvider, hash: string): Promise<number> {
   const b = await provider.viewBlock({ blockId: hash } as never);
@@ -34,18 +47,30 @@ for (const rpc of RPCS) {
         let hashes: string[] = [];
         try {
           if (shape === "single") {
-            const r = await account.signAndSendTransaction({ receiverId: "wrap.testnet", actions: [wrapDeposit], waitUntil });
+            const r = await account.signAndSendTransaction({
+              receiverId: "wrap.testnet",
+              actions: [wrapDeposit],
+              waitUntil,
+            });
             hashes = [r.transaction.hash];
           } else if (shape === "batch2") {
-            const r = await account.signAndSendTransaction({ receiverId: "wrap.testnet", actions: [storageDep, xfer], waitUntil });
+            const r = await account.signAndSendTransaction({
+              receiverId: "wrap.testnet",
+              actions: [storageDep, xfer],
+              waitUntil,
+            });
             hashes = [r.transaction.hash];
           } else {
-            const a = await account.signAndSendTransaction({ receiverId: "wrap.testnet", actions: [storageDep], waitUntil });
+            const a = await account.signAndSendTransaction({
+              receiverId: "wrap.testnet",
+              actions: [storageDep],
+              waitUntil,
+            });
             const b = await account.signAndSendTransaction({ receiverId: "wrap.testnet", actions: [xfer], waitUntil });
             hashes = [a.transaction.hash, b.transaction.hash];
           }
         } catch (e) {
-          appendFileSync(out, JSON.stringify({ rpc, waitUntil, shape, error: String(e).slice(0, 160), at: t0 }) + "\n");
+          appendFileSync(out, `${JSON.stringify({ rpc, waitUntil, shape, error: String(e).slice(0, 160), at: t0 })}\n`);
           console.log(`${rpc} ${waitUntil} ${shape} ERR ${String(e).slice(0, 100)}`);
           continue;
         }
@@ -54,10 +79,17 @@ for (const rpc of RPCS) {
         try {
           const st = await provider.viewTransactionStatus({ txHash: hashes[0]!, accountId: SENDER, waitUntil: "NONE" });
           includedMs = (await blockTime(provider, st.transaction_outcome.block_hash)) - t0;
-        } catch { /* block lookup is best effort */ }
+        } catch {
+          /* block lookup is best effort */
+        }
         const k = `${rpc.replace("https://", "")} ${waitUntil} ${shape}`;
-        (rows[k] ??= []).push(wall);
-        appendFileSync(out, JSON.stringify({ rpc, waitUntil, shape, wall_ms: wall, included_after_ms: includedMs, txs: hashes, at: t0 }) + "\n");
+        const series = rows[k] ?? [];
+        rows[k] = series;
+        series.push(wall);
+        appendFileSync(
+          out,
+          `${JSON.stringify({ rpc, waitUntil, shape, wall_ms: wall, included_after_ms: includedMs, txs: hashes, at: t0 })}\n`,
+        );
         console.log(`${k} run ${i}: ${wall} ms (included after ${includedMs} ms) ${hashes.join(",")}`);
       }
     }

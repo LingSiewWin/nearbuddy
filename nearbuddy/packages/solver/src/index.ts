@@ -5,22 +5,35 @@
 // GET  /supported                                                   -> {kinds:[{x402Version, scheme, network}]}
 // Carried IOUs persist to a JSON file so a restart loses nothing. Auto-settles on batch size, age, or owner withdrawal.
 import "../../protocol/src/env.ts";
-import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { dirname } from "node:path";
 import { teraToGas } from "near-api-js";
-import { verifyIou, type SignedIou } from "../../protocol/src/index.ts";
-import { NETWORK, SCHEME, X402_VERSION, type SettlementResponse, type VerifyRequest, type VerifyResponse } from "../../protocol/src/x402.ts";
 import {
-  CONTRACT, getMandate, getVault, loadAccount, type Mandate, type SettlementReport, type Vault,
+  CONTRACT,
+  getMandate,
+  getVault,
+  loadAccount,
+  type Mandate,
+  type SettlementReport,
+  type Vault,
 } from "../../protocol/src/chain.ts";
-import { Guarantor } from "./guarantor.ts";
+import { type SignedIou, verifyIou } from "../../protocol/src/index.ts";
+import {
+  NETWORK,
+  SCHEME,
+  type SettlementResponse,
+  type VerifyRequest,
+  type VerifyResponse,
+  X402_VERSION,
+} from "../../protocol/src/x402.ts";
 import { Arena } from "./arena.ts";
+import { Guarantor } from "./guarantor.ts";
 
 const SOLVER_ID = process.env.SOLVER_ID ?? "nearbuddy-solver.testnet";
 const PORT = Number(process.env.SOLVER_PORT ?? 4020);
 const LEDGER_FILE = process.env.SOLVER_LEDGER ?? new URL("../../../.solver-ledger.json", import.meta.url).pathname;
-const AUTO_BATCH = Number(process.env.SOLVER_AUTO_BATCH ?? 200);      // settle when carrying this many
+const AUTO_BATCH = Number(process.env.SOLVER_AUTO_BATCH ?? 200); // settle when carrying this many
 const AUTO_AGE_MS = Number(process.env.SOLVER_AUTO_AGE_MS ?? 60_000); // or when the oldest IOU is this old
 const account = loadAccount(SOLVER_ID);
 // Guarantor layer: POST /guarantee, POST /pull, POST /settle_pulls, GET /guarantor (see guarantor.ts).
@@ -34,8 +47,8 @@ arena.startPairing(Number(process.env.PAIR_EVERY_S ?? 0));
 // ---- persisted state -------------------------------------------------------------------------
 type Carried = { s: SignedIou; at: number };
 let ledger: Carried[] = [];
-const seen = new Set<string>();                 // agent_pk:nonce
-const pending = new Map<string, bigint>();      // off-chain tally per agent key, incl. unsettled
+const seen = new Set<string>(); // agent_pk:nonce
+const pending = new Map<string, bigint>(); // off-chain tally per agent key, incl. unsettled
 function load() {
   if (!existsSync(LEDGER_FILE)) return;
   ledger = JSON.parse(readFileSync(LEDGER_FILE, "utf8")) as Carried[];
@@ -76,15 +89,22 @@ export async function underwrite(s: SignedIou): Promise<{ ok: boolean; reason?: 
   if (BigInt(m.expires_at) <= BigInt(Date.now()) * 1_000_000n) return { ok: false, reason: "mandate expired" };
   const amt = BigInt(iou.amount);
   if (amt === 0n || amt > BigInt(m.per_tx_cap)) return { ok: false, reason: "amount exceeds per_tx_cap" };
-  if (m.allowed_payees.length && !m.allowed_payees.includes(iou.payee)) return { ok: false, reason: "payee not allowed" };
+  if (m.allowed_payees.length && !m.allowed_payees.includes(iou.payee))
+    return { ok: false, reason: "payee not allowed" };
   const carried = pending.get(iou.agent_pk) ?? 0n;
-  if (BigInt(m.spent) + carried + amt > BigInt(m.allowance)) return { ok: false, reason: "allowance exhausted (incl. unsettled)" };
+  if (BigInt(m.spent) + carried + amt > BigInt(m.allowance))
+    return { ok: false, reason: "allowance exhausted (incl. unsettled)" };
 
   const v = await cached<Vault | null>(`v:${iou.owner}`, () => getVault(iou.owner));
   if (!v) return { ok: false, reason: "no vault" };
-  if (v.pending_withdraw) { void settle().catch(() => {}); return { ok: false, reason: "owner has a withdrawal pending" }; }
+  if (v.pending_withdraw) {
+    void settle().catch(() => {});
+    return { ok: false, reason: "owner has a withdrawal pending" };
+  }
   // Solver policy: only underwrite what the vault can already cover, so stake is never at risk.
-  const ownerCarried = ledger.filter((c) => c.s.iou.owner === iou.owner).reduce((a, c) => a + BigInt(c.s.iou.amount), 0n);
+  const ownerCarried = ledger
+    .filter((c) => c.s.iou.owner === iou.owner)
+    .reduce((a, c) => a + BigInt(c.s.iou.amount), 0n);
   if (BigInt(v.balance) < ownerCarried + amt) return { ok: false, reason: "vault balance below carried exposure" };
 
   seen.add(key);
@@ -108,7 +128,10 @@ async function doSettle(): Promise<SettleResult | null> {
   if (!ledger.length) return null;
   const batch = ledger.slice(0, 200);
   const res = await account.callFunctionRaw({
-    contractId: CONTRACT, methodName: "settle_batch", args: { ious: batch.map((c) => c.s) }, gas: teraToGas("300"),
+    contractId: CONTRACT,
+    methodName: "settle_batch",
+    args: { ious: batch.map((c) => c.s) },
+    gas: teraToGas("300"),
   });
   const status = res.status as { SuccessValue?: string };
   if (!status.SuccessValue) throw new Error(`settle failed: ${JSON.stringify(res.status)}`);
@@ -121,7 +144,9 @@ async function doSettle(): Promise<SettleResult | null> {
   save();
   const outcomes = [res.transaction_outcome, ...res.receipts_outcome] as { outcome: { gas_burnt: number } }[];
   const gasTgas = outcomes.reduce((a, o) => a + Number(o.outcome.gas_burnt), 0) / 1e12;
-  console.log(`[solver] settled ${batch.length} IOUs in tx ${res.transaction.hash}, ${gasTgas.toFixed(2)} TGas, rejected ${report.rejected.length}`);
+  console.log(
+    `[solver] settled ${batch.length} IOUs in tx ${res.transaction.hash}, ${gasTgas.toFixed(2)} TGas, rejected ${report.rejected.length}`,
+  );
   return { txHash: res.transaction.hash as string, report, count: batch.length, gasTgas };
 }
 
@@ -131,20 +156,29 @@ function json(res: import("node:http").ServerResponse, code: number, body: unkno
   res.end(JSON.stringify(body));
 }
 const ledgerView = () => ({
-  solver: SOLVER_ID, carrying: ledger.length, oldest_ms: ledger.length ? Date.now() - ledger[0]!.at : 0,
+  solver: SOLVER_ID,
+  carrying: ledger.length,
+  oldest_ms: ledger.length ? Date.now() - ledger[0]!.at : 0,
   exposure: [...pending.entries()].map(([pk, v]) => ({ agent_pk: pk, yocto: v.toString() })),
 });
 
 if (process.argv[1]?.endsWith("solver/src/index.ts")) {
   load();
   setInterval(() => {
-    if (ledger.length && Date.now() - ledger[0]!.at >= AUTO_AGE_MS) void settle().catch((e) => console.error("[solver] auto-settle failed:", e));
+    if (ledger.length && Date.now() - ledger[0]!.at >= AUTO_AGE_MS)
+      void settle().catch((e) => console.error("[solver] auto-settle failed:", e));
   }, 5_000).unref();
 
   createServer(async (req, res) => {
     const body = await new Promise<string>((r, rej) => {
       let b = "";
-      req.on("data", (c) => { b += c; if (b.length > 65_536) { rej(new Error("body over 64 KiB")); req.destroy(); } });
+      req.on("data", (c) => {
+        b += c;
+        if (b.length > 65_536) {
+          rej(new Error("body over 64 KiB"));
+          req.destroy();
+        }
+      });
       req.on("end", () => r(b));
     });
     try {
@@ -153,20 +187,46 @@ if (process.argv[1]?.endsWith("solver/src/index.ts")) {
         const pp = v.paymentPayload;
         if (v.x402Version !== X402_VERSION || pp.accepted.scheme !== SCHEME || pp.accepted.network !== NETWORK)
           return json(res, 200, { isValid: false, invalidReason: "unsupported_scheme" } satisfies VerifyResponse);
-        if (pp.payload.iou.payee !== v.paymentRequirements.payTo || BigInt(pp.payload.iou.amount) < BigInt(v.paymentRequirements.amount))
-          return json(res, 200, { isValid: false, invalidReason: "iou does not satisfy requirements" } satisfies VerifyResponse);
+        if (
+          pp.payload.iou.payee !== v.paymentRequirements.payTo ||
+          BigInt(pp.payload.iou.amount) < BigInt(v.paymentRequirements.amount)
+        )
+          return json(res, 200, {
+            isValid: false,
+            invalidReason: "iou does not satisfy requirements",
+          } satisfies VerifyResponse);
         const out = await underwrite(pp.payload);
-        return json(res, 200, { isValid: out.ok, payer: pp.payload.iou.owner, invalidReason: out.reason, extra: { solver: SOLVER_ID } } satisfies VerifyResponse);
+        return json(res, 200, {
+          isValid: out.ok,
+          payer: pp.payload.iou.owner,
+          invalidReason: out.reason,
+          extra: { solver: SOLVER_ID },
+        } satisfies VerifyResponse);
       }
       if (req.method === "POST" && req.url === "/settle") {
         const r = await settle();
-        const out: SettlementResponse & { report?: SettlementReport; count?: number; gasTgas?: number; txHash?: string } = r
-          ? { success: true, transaction: r.txHash, network: NETWORK, amount: r.report.total_paid, txHash: r.txHash, report: r.report, count: r.count, gasTgas: r.gasTgas }
+        const out: SettlementResponse & {
+          report?: SettlementReport;
+          count?: number;
+          gasTgas?: number;
+          txHash?: string;
+        } = r
+          ? {
+              success: true,
+              transaction: r.txHash,
+              network: NETWORK,
+              amount: r.report.total_paid,
+              txHash: r.txHash,
+              report: r.report,
+              count: r.count,
+              gasTgas: r.gasTgas,
+            }
           : { success: true, transaction: "", network: NETWORK, errorReason: "nothing to settle" };
         return json(res, 200, out);
       }
       if (req.url === "/ledger") return json(res, 200, ledgerView());
-      if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: X402_VERSION, scheme: SCHEME, network: NETWORK }] });
+      if (req.url === "/supported")
+        return json(res, 200, { kinds: [{ x402Version: X402_VERSION, scheme: SCHEME, network: NETWORK }] });
       const g = await guarantor.route(req.method, req.url, body);
       if (g) return json(res, g.code, g.body);
       const a = await arena.route(req.method, req.url, body, req.headers);
@@ -176,5 +236,9 @@ if (process.argv[1]?.endsWith("solver/src/index.ts")) {
       console.error(`[solver] ${req.method} ${req.url} failed:`, String(e).slice(0, 300));
       json(res, 500, { error: String(e) });
     }
-  }).listen(PORT, () => console.log(`[solver] ${SOLVER_ID} facilitator on :${PORT}, contract ${CONTRACT}, auto-settle at ${AUTO_BATCH} IOUs or ${AUTO_AGE_MS / 1000}s`));
+  }).listen(PORT, () =>
+    console.log(
+      `[solver] ${SOLVER_ID} facilitator on :${PORT}, contract ${CONTRACT}, auto-settle at ${AUTO_BATCH} IOUs or ${AUTO_AGE_MS / 1000}s`,
+    ),
+  );
 }

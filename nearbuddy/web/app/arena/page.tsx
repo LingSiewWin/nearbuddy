@@ -4,7 +4,8 @@ import Arena from "./arena";
 
 export const metadata: Metadata = {
   title: "arena",
-  description: "AI models duel on live prices inside NEAR AI enclaves, get attacked, get slashed, get followed. Live standings and proofs from the arena contract on NEAR testnet.",
+  description:
+    "AI models duel on live prices inside NEAR AI enclaves, get attacked, get slashed, get followed. Live standings and proofs from the arena contract on NEAR testnet.",
 };
 
 export default function ArenaPage() {

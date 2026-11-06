@@ -9,9 +9,17 @@
 import "../../protocol/src/env.ts";
 import { sign as edSign } from "node:crypto";
 import { teraToGas } from "near-api-js";
+import { ARENA, arenaView, explorerTx, fmtNear, loadAccount, NEAR } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
-import { ZERO_PROOF, intentMessage, keyFromSeed, pkOf, teeSeed, type Intent, type SignedIntent } from "../../protocol/src/intent.ts";
-import { ARENA, NEAR, arenaView, explorerTx, fmtNear, loadAccount } from "../../protocol/src/chain.ts";
+import {
+  type Intent,
+  intentMessage,
+  keyFromSeed,
+  pkOf,
+  type SignedIntent,
+  teeSeed,
+  ZERO_PROOF,
+} from "../../protocol/src/intent.ts";
 import { quote, sellNearForUsdc } from "../../solver/src/oneclick.ts";
 
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
@@ -20,22 +28,36 @@ const SOLVER_ID = process.env.SOLVER_ID ?? "nearbuddy-solver.testnet";
 const CAP = NEAR / 5n; // 0.2 NEAR per fill
 const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330); // the Outlayer oracle caches a price for 300 s; a shorter duel would close on its own open price (the contract enforces min_duel_s)
 
-const seedA = process.env.AGENT_SEED_A, seedB = process.env.AGENT_SEED_B;
-if (!seedA || !seedB || !process.env.ARENA_SECRET) throw new Error("AGENT_SEED_A, AGENT_SEED_B and ARENA_SECRET must be set in the env file");
-const skA = keyFromSeed(seedA), skB = keyFromSeed(seedB);
-const pkA = pkOf(skA), pkB = pkOf(skB);
+const seedA = process.env.AGENT_SEED_A,
+  seedB = process.env.AGENT_SEED_B;
+if (!seedA || !seedB || !process.env.ARENA_SECRET)
+  throw new Error("AGENT_SEED_A, AGENT_SEED_B and ARENA_SECRET must be set in the env file");
+const skA = keyFromSeed(seedA),
+  skB = keyFromSeed(seedB);
+const pkA = pkOf(skA),
+  pkB = pkOf(skB);
 // the live enclave agent (agents/runner.py, tee=True) is a distinct registration under a key derived from the same seed
 const teeA = pkOf(keyFromSeed(teeSeed(seedA)));
 
-const post = async (path: string, body: unknown) => {
-  const r = await fetch(`${SOLVER_URL}${path}`, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json", "x-arena-key": process.env.ARENA_SECRET ?? "" } });
+const post = async <T = { tx: string }>(path: string, body: unknown): Promise<T> => {
+  const r = await fetch(`${SOLVER_URL}${path}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json", "x-arena-key": process.env.ARENA_SECRET ?? "" },
+  });
   const j = await r.json();
   if (!r.ok) throw new Error(`${path}: ${JSON.stringify(j)}`);
-  return j as Record<string, any>;
+  return j as T;
 };
+type Settled = { tx: string; report: { rejected?: [number, string][] } };
 const line = (label: string, tx: string, extra = "") => console.log(`${label.padEnd(18)} ${explorerTx(tx)} ${extra}`);
 
-type DuelIntents = { a: string; b: string; last_intent_a: { nonce: string } | null; last_intent_b: { nonce: string } | null };
+type DuelIntents = {
+  a: string;
+  b: string;
+  last_intent_a: { nonce: string } | null;
+  last_intent_b: { nonce: string } | null;
+};
 /** The agent's latest posted intent nonces, newest first, read from its duels on chain: `agent_duels` (indexed
  *  from deploy 10 on) first, then the tail of all duels when the index is missing or still short. */
 const agentNonces = async (pk: string, want: number): Promise<string[]> => {
@@ -51,7 +73,9 @@ const agentNonces = async (pk: string, want: number): Promise<string[]> => {
     if (last && !out.includes(last.nonce)) out.push(last.nonce);
     if (out.length >= want) return out;
   }
-  throw new Error(`enclave agent ${pk.slice(0, 12)}… has ${out.length} posted intents in its last ${ids.length} duels, need ${want}: is the agent loop running?`);
+  throw new Error(
+    `enclave agent ${pk.slice(0, 12)}… has ${out.length} posted intents in its last ${ids.length} duels, need ${want}: is the agent loop running?`,
+  );
 };
 
 const follower = loadAccount(FOLLOWER_ID);
@@ -66,23 +90,51 @@ console.log(`arena ${ARENA}  follower ${FOLLOWER_ID}  plain agent A ${pkA.slice(
 
 // 1. follower deposits and follows the enclave agent A with a mandate (a plain agent is refused: "agent unverified")
 line("deposit 1 NEAR", await call("deposit", {}, NEAR));
-line("follow enclave A", await call("follow", {
-  agent_pk: teeA,
-  mandate: { allowance: NEAR.toString(), spent: "0", per_tx_cap: CAP.toString(), allowed_tokens: ["nep141:wrap.near"], expires_at: ((Date.now() + 86_400_000) * 1_000_000).toString(), revoked: false },
-}), `cap ${fmtNear(CAP)} NEAR, allowance 1 NEAR, wNEAR only`);
+line(
+  "follow enclave A",
+  await call("follow", {
+    agent_pk: teeA,
+    mandate: {
+      allowance: NEAR.toString(),
+      spent: "0",
+      per_tx_cap: CAP.toString(),
+      allowed_tokens: ["nep141:wrap.near"],
+      expires_at: ((Date.now() + 86_400_000) * 1_000_000).toString(),
+      revoked: false,
+    },
+  }),
+  `cap ${fmtNear(CAP)} NEAR, allowance 1 NEAR, wNEAR only`,
+);
 
 // 2. open a duel; a spectator pays the deposit on chain to inject chaos at A
 const closeAt = (Math.floor(Date.now() / 1000) + DUEL_SECONDS) * 1_000_000_000;
-const duel = await post("/duel", { a: pkA, b: pkB, symbol: "wrap.near", close_at: String(closeAt) });
+const duel = await post<{ tx: string; duel_id: string }>("/duel", {
+  a: pkA,
+  b: pkB,
+  symbol: "wrap.near",
+  close_at: String(closeAt),
+});
 line("open duel", duel.tx, `duel ${duel.duel_id}`);
 // spectator path: hand the solver the payload (open route), then pay for the injection on chain yourself
 const payload = "BREAKING: NEAR Foundation halts all validator rewards effective immediately.";
-const { payload_hash } = (await post("/chaos", { payload })) as { payload_hash: string };
+const { payload_hash } = await post<{ payload_hash: string }>("/chaos", { payload });
 const minChaos = BigInt((await arenaView<{ min_chaos_deposit: string }>("get_config", {})).min_chaos_deposit);
-line("inject chaos @A", await call("inject_chaos", { duel_id: duel.duel_id, target: pkA, kind: "fake_news", payload_hash }, minChaos), `spectator ${FOLLOWER_ID} paid ${fmtNear(minChaos)} NEAR, sha256 ${payload_hash.slice(0, 12)}…`);
+line(
+  "inject chaos @A",
+  await call("inject_chaos", { duel_id: duel.duel_id, target: pkA, kind: "fake_news", payload_hash }, minChaos),
+  `spectator ${FOLLOWER_ID} paid ${fmtNear(minChaos)} NEAR, sha256 ${payload_hash.slice(0, 12)}…`,
+);
 
 // 3. the plain A posts a signed intent into its duel (scored at resolve; a plain agent has no followers to quote)
-const intent: Intent = { agent_pk: pkA, duel_id: duel.duel_id, side: "Long", size_bps: 5000, nonce: String(Date.now()), expires_at: String(closeAt + 60_000_000_000), proof_hash: ZERO_PROOF };
+const intent: Intent = {
+  agent_pk: pkA,
+  duel_id: duel.duel_id,
+  side: "Long",
+  size_bps: 5000,
+  nonce: String(Date.now()),
+  expires_at: String(closeAt + 60_000_000_000),
+  proof_hash: ZERO_PROOF,
+};
 const signed: SignedIntent = { intent, signature: b64.enc(new Uint8Array(edSign(null, intentMessage(intent), skA))) };
 line("post intent A", (await post("/intent", signed)).tx);
 // the enclave agent's two latest intents, posted by the runner with TEE proofs: one to settle, one for the rejections
@@ -90,27 +142,60 @@ const [nonce, nonce2] = await agentNonces(teeA, 2);
 console.log(`enclave A latest nonces ${nonce}, ${nonce2}`);
 // quote the mandate's cap through 1Click (dry, mainnet prices), as the solver does for each open follower
 const q = await quote(sellNearForUsdc(CAP, SOLVER_ID.replace(/\.testnet$/, ".near")));
-console.log(`1Click dry quote: sell ${fmtNear(CAP)} wNEAR -> ${q.quote.amountOutFormatted} USDC (min ${Number(q.quote.minAmountOut) / 1e6}), ${q.quote.timeEstimate}s`);
+console.log(
+  `1Click dry quote: sell ${fmtNear(CAP)} wNEAR -> ${q.quote.amountOutFormatted} USDC (min ${Number(q.quote.minAmountOut) / 1e6}), ${q.quote.timeEstimate}s`,
+);
 
 // 4. settle one fill inside the cap, then one over the cap
-const ok = await post("/settle_follow", { agent_pk: teeA, follower: FOLLOWER_ID, fills: [
-  { intent_nonce: nonce, token: "nep141:wrap.near", amount_in: CAP.toString(), amount_out: q.quote.amountOut, swap_tx: `dry-quote:${q.timestamp}` },
-] });
+const ok = await post<Settled>("/settle_follow", {
+  agent_pk: teeA,
+  follower: FOLLOWER_ID,
+  fills: [
+    {
+      intent_nonce: nonce,
+      token: "nep141:wrap.near",
+      amount_in: CAP.toString(),
+      amount_out: q.quote.amountOut,
+      swap_tx: `dry-quote:${q.timestamp}`,
+    },
+  ],
+});
 line("settle fill", ok.tx, JSON.stringify(ok.report));
 // the older nonce: one fill over the cap, one with a token outside the allowlist; and the settled nonce replayed
-const over = await post("/settle_follow", { agent_pk: teeA, follower: FOLLOWER_ID, fills: [
-  { intent_nonce: nonce2, token: "nep141:wrap.near", amount_in: (CAP + 1n).toString(), amount_out: "0", swap_tx: "over-cap" },
-  { intent_nonce: nonce2, token: "nep141:usdc.near", amount_in: "1", amount_out: "0", swap_tx: "wrong-token" },
-  { intent_nonce: nonce, token: "nep141:wrap.near", amount_in: CAP.toString(), amount_out: q.quote.amountOut, swap_tx: "replay" },
-] });
+const over = await post<Settled>("/settle_follow", {
+  agent_pk: teeA,
+  follower: FOLLOWER_ID,
+  fills: [
+    {
+      intent_nonce: nonce2,
+      token: "nep141:wrap.near",
+      amount_in: (CAP + 1n).toString(),
+      amount_out: "0",
+      swap_tx: "over-cap",
+    },
+    { intent_nonce: nonce2, token: "nep141:usdc.near", amount_in: "1", amount_out: "0", swap_tx: "wrong-token" },
+    {
+      intent_nonce: nonce,
+      token: "nep141:wrap.near",
+      amount_in: CAP.toString(),
+      amount_out: q.quote.amountOut,
+      swap_tx: "replay",
+    },
+  ],
+});
 line("settle rejected", over.tx, JSON.stringify(over.report));
 // revoke: the follower unfollows, and the very next fill is refused on chain
 line("unfollow enclave A", await call("unfollow", { agent_pk: teeA }));
-const revoked = await post("/settle_follow", { agent_pk: teeA, follower: FOLLOWER_ID, fills: [
-  { intent_nonce: nonce2, token: "nep141:wrap.near", amount_in: "1", amount_out: "0", swap_tx: "after-revoke" },
-] });
+const revoked = await post<Settled>("/settle_follow", {
+  agent_pk: teeA,
+  follower: FOLLOWER_ID,
+  fills: [
+    { intent_nonce: nonce2, token: "nep141:wrap.near", amount_in: "1", amount_out: "0", swap_tx: "after-revoke" },
+  ],
+});
 line("settle after revoke", revoked.tx, JSON.stringify(revoked.report));
-if (revoked.report.rejected?.[0]?.[1] !== "mandate revoked") throw new Error("fill after unfollow was not refused with 'mandate revoked'");
+if (revoked.report.rejected?.[0]?.[1] !== "mandate revoked")
+  throw new Error("fill after unfollow was not refused with 'mandate revoked'");
 const vault = await arenaView<string>("get_vault", { account: FOLLOWER_ID });
 const mandate = await arenaView<{ spent: string }>("get_follow", { agent_pk: teeA, follower: FOLLOWER_ID });
 console.log(`follower vault ${fmtNear(vault)} NEAR, mandate spent ${fmtNear(mandate.spent)} NEAR`);
@@ -119,14 +204,29 @@ console.log(`follower vault ${fmtNear(vault)} NEAR, mandate spent ${fmtNear(mand
 await new Promise((r) => setTimeout(r, Math.max(0, closeAt / 1_000_000 - Date.now() + 2_000)));
 const before = await arenaView<{ open_price: string | null }>("get_duel", { duel_id: duel.duel_id });
 const resolved = await post("/resolve", { duel_id: duel.duel_id });
-line("resolve duel", resolved.tx, `open price ${before.open_price ? (Number(before.open_price) / 1e8).toFixed(4) : "pending"} USD, oracle price-oracle.testnet`);
-type Outcome = { open_price: string; close_price: string; pnl_a: number; pnl_b: number; winner: string | null; slashed: string };
+line(
+  "resolve duel",
+  resolved.tx,
+  `open price ${before.open_price ? (Number(before.open_price) / 1e8).toFixed(4) : "pending"} USD, oracle price-oracle.testnet`,
+);
+type Outcome = {
+  open_price: string;
+  close_price: string;
+  pnl_a: number;
+  pnl_b: number;
+  winner: string | null;
+  slashed: string;
+};
 let outcome: Outcome | null = null;
 for (let i = 0; i < 20 && !outcome; i++) {
   await new Promise((r) => setTimeout(r, 3000));
   outcome = (await arenaView<{ outcome: Outcome | null }>("get_duel", { duel_id: duel.duel_id })).outcome;
 }
 if (!outcome) throw new Error("oracle callback did not land within 60 s; retry: POST /resolve");
-console.log(`outcome: ${(Number(outcome.open_price) / 1e8).toFixed(4)} -> ${(Number(outcome.close_price) / 1e8).toFixed(4)} USD  A ${outcome.pnl_a} bps  B ${outcome.pnl_b} bps  ${outcome.winner ? `winner ${outcome.winner === pkA ? "A" : "B"}, slashed ${fmtNear(outcome.slashed)} NEAR` : "tie"}`);
-const a = await arenaView<{ alpha_bps: number; shield: number; bond: string; tee: boolean }>("get_agent", { agent_pk: pkA });
+console.log(
+  `outcome: ${(Number(outcome.open_price) / 1e8).toFixed(4)} -> ${(Number(outcome.close_price) / 1e8).toFixed(4)} USD  A ${outcome.pnl_a} bps  B ${outcome.pnl_b} bps  ${outcome.winner ? `winner ${outcome.winner === pkA ? "A" : "B"}, slashed ${fmtNear(outcome.slashed)} NEAR` : "tie"}`,
+);
+const a = await arenaView<{ alpha_bps: number; shield: number; bond: string; tee: boolean }>("get_agent", {
+  agent_pk: pkA,
+});
 console.log(`agent A: alpha ${a.alpha_bps} bps, shield ${a.shield}, bond ${fmtNear(a.bond)} NEAR, tee ${a.tee}`);

@@ -5,19 +5,26 @@
 // Needs Sepolia ETH on the puller and the user wallet, and Sepolia USDC on the user wallet (see plan.md).
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createWalletClient, formatUnits, http, parseUnits, type Hex } from "viem";
+import { createWalletClient, formatUnits, type Hex, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
-import { CONTRACT, explorerTx, fmtNear, provider } from "../../protocol/src/chain.ts";
 import type { SignedCert } from "../../protocol/src/cert.ts";
-import { PULLER, SEPOLIA_RPC, USDC, erc20, evm } from "../../solver/src/pull.ts";
+import { CONTRACT, explorerTx, fmtNear, provider } from "../../protocol/src/chain.ts";
 import type { IssuerReserve, PullReport } from "../../solver/src/guarantor.ts";
+import { erc20, evm, PULLER, SEPOLIA_RPC, USDC } from "../../solver/src/pull.ts";
 
 const ISSUER = process.env.ISSUER_ID ?? "nearbuddy-api.testnet";
 const SOLVER_URL = "http://127.0.0.1:4020";
 const AMOUNT = parseUnits(process.env.PULL_USDC ?? "1", 6);
-const secrets = (f: string) => (JSON.parse(readFileSync(new URL(`../../../.secrets/${f}`, import.meta.url), "utf8")) as { address: Hex; private_key: Hex }[])[0]!;
-const user = secrets("user-wallet.json"), issuerEvm = secrets("issuer-wallet.json");
+const secrets = (f: string) =>
+  (
+    JSON.parse(readFileSync(new URL(`../../../.secrets/${f}`, import.meta.url), "utf8")) as {
+      address: Hex;
+      private_key: Hex;
+    }[]
+  )[0]!;
+const user = secrets("user-wallet.json"),
+  issuerEvm = secrets("issuer-wallet.json");
 const userAcc = privateKeyToAccount(user.private_key);
 const userWallet = createWalletClient({ account: userAcc, chain: sepolia, transport: http(SEPOLIA_RPC) });
 const sep = (h: string) => `https://sepolia.etherscan.io/tx/${h}`;
@@ -30,37 +37,68 @@ const box = (title: string, rows: string[]) => {
   console.log(`└${line()}┘`);
 };
 const step = (s: string) => console.log(`\n▶ ${s}`);
-const post = async <T>(path: string, body: unknown): Promise<T> => (await fetch(`${SOLVER_URL}${path}`, { method: "POST", body: JSON.stringify(body) })).json() as Promise<T>;
-const getIssuer = () => provider.callFunction({ contractId: CONTRACT, method: "get_issuer", args: { issuer: ISSUER } }) as Promise<IssuerReserve | null>;
+const post = async <T>(path: string, body: unknown): Promise<T> =>
+  (await fetch(`${SOLVER_URL}${path}`, { method: "POST", body: JSON.stringify(body) })).json() as Promise<T>;
+const getIssuer = () =>
+  provider.callFunction({
+    contractId: CONTRACT,
+    method: "get_issuer",
+    args: { issuer: ISSUER },
+  }) as Promise<IssuerReserve | null>;
 const usdc = (a: Hex) => evm.readContract({ address: USDC, abi: erc20, functionName: "balanceOf", args: [a] });
 const nearBal = async (id: string) => BigInt((await provider.viewAccount({ accountId: id })).amount);
 
 async function swipe(label: string, drainFirst: boolean) {
   step(`${label}: card swiped for ${formatUnits(AMOUNT, 6)} USDC. Issuer asks NearBuddy for a guarantee.`);
-  const g = await post<{ ok: true; signed: SignedCert; ms: number } | { ok: false; reason: string; ms: number }>("/guarantee", {
-    issuer: ISSUER, wallet: user.address, amount: AMOUNT.toString(), payout_to: issuerEvm.address,
-  });
+  const g = await post<{ ok: true; signed: SignedCert; ms: number } | { ok: false; reason: string; ms: number }>(
+    "/guarantee",
+    {
+      issuer: ISSUER,
+      wallet: user.address,
+      amount: AMOUNT.toString(),
+      payout_to: issuerEvm.address,
+    },
+  );
   if (!g.ok) throw new Error(`guarantee refused: ${g.reason}`);
   const c = g.signed.cert;
-  console.log(`  cert in ${g.ms} ms  nonce ${c.nonce}  payout-if-fail ${fmtNear(c.payout)} NEAR  sig ${g.signed.signature.slice(0, 16)}…`);
+  console.log(
+    `  cert in ${g.ms} ms  nonce ${c.nonce}  payout-if-fail ${fmtNear(c.payout)} NEAR  sig ${g.signed.signature.slice(0, 16)}…`,
+  );
   console.log(`  issuer approves the authorization. Card network answered. Now the slow part: the on-chain pull.`);
   if (drainFirst) {
     // Leave half a pull behind so the wallet is short but not empty (keeps testnet USDC for reruns).
     const bal = await usdc(user.address);
     const drain = bal - AMOUNT / 2n;
-    step(`${label}: user drains the wallet before the pull lands (${formatUnits(drain, 6)} of ${formatUnits(bal, 6)} USDC -> 0x…dEaD)`);
-    const h = await userWallet.writeContract({ address: USDC, abi: erc20, functionName: "transfer", args: ["0x000000000000000000000000000000000000dEaD", drain] });
+    step(
+      `${label}: user drains the wallet before the pull lands (${formatUnits(drain, 6)} of ${formatUnits(bal, 6)} USDC -> 0x…dEaD)`,
+    );
+    const h = await userWallet.writeContract({
+      address: USDC,
+      abi: erc20,
+      functionName: "transfer",
+      args: ["0x000000000000000000000000000000000000dEaD", drain],
+    });
     await evm.waitForTransactionReceipt({ hash: h });
     console.log(`  drain tx ${sep(h)}`);
   }
-  step(`${label}: NearBuddy pulls. NEAR contract -> Chain Signatures MPC -> signed Sepolia transferFrom from puller ${PULLER}`);
-  const p = await post<{ ok: boolean; txHash?: string; reason?: string; nearTx?: string; mpcMs?: number }>("/pull", { id: `${c.solver}:${c.nonce}` });
-  if (p.ok) console.log(`  pulled ✔  sepolia ${sep(p.txHash!)}\n  mpc sign ${p.mpcMs} ms  near ${explorerTx(p.nearTx!)}`);
-  else console.log(`  pull FAILED ✘  ${p.reason}${p.txHash ? `\n  sepolia ${sep(p.txHash)}` : ""}${p.nearTx ? `\n  near ${explorerTx(p.nearTx)}` : ""}`);
+  step(
+    `${label}: NearBuddy pulls. NEAR contract -> Chain Signatures MPC -> signed Sepolia transferFrom from puller ${PULLER}`,
+  );
+  const p = await post<{ ok: boolean; txHash?: string; reason?: string; nearTx?: string; mpcMs?: number }>("/pull", {
+    id: `${c.solver}:${c.nonce}`,
+  });
+  if (p.ok)
+    console.log(`  pulled ✔  sepolia ${sep(p.txHash!)}\n  mpc sign ${p.mpcMs} ms  near ${explorerTx(p.nearTx!)}`);
+  else
+    console.log(
+      `  pull FAILED ✘  ${p.reason}${p.txHash ? `\n  sepolia ${sep(p.txHash)}` : ""}${p.nearTx ? `\n  near ${explorerTx(p.nearTx)}` : ""}`,
+    );
   step(`${label}: solver settles the outcome on NEAR (settle_pull)`);
   const s = await post<{ txHash: string; report: PullReport; count: number } | { nothing: true }>("/settle_pulls", {});
   if ("nothing" in s) throw new Error("nothing to settle");
-  console.log(`  tx ${explorerTx(s.txHash)}  settled ${s.report.settled}  paid_out ${fmtNear(s.report.paid_out)} NEAR  fees_accrued ${fmtNear(s.report.fees_accrued)}  rejected ${s.report.rejected.length}`);
+  console.log(
+    `  tx ${explorerTx(s.txHash)}  settled ${s.report.settled}  paid_out ${fmtNear(s.report.paid_out)} NEAR  fees_accrued ${fmtNear(s.report.fees_accrued)}  rejected ${s.report.rejected.length}`,
+  );
   return { pulled: p.ok, settleTx: s.txHash, pullTx: p.txHash };
 }
 
@@ -71,30 +109,50 @@ async function main() {
     `user wallet ${user.address}   puller (MPC-derived from contract) ${PULLER}`,
   ]);
   const [uEth, uUsdc, pEth, allowance] = await Promise.all([
-    evm.getBalance({ address: user.address }), usdc(user.address), evm.getBalance({ address: PULLER }),
+    evm.getBalance({ address: user.address }),
+    usdc(user.address),
+    evm.getBalance({ address: PULLER }),
     evm.readContract({ address: USDC, abi: erc20, functionName: "allowance", args: [user.address, PULLER] }),
   ]);
-  console.log(`\nuser: ${formatUnits(uEth, 18)} ETH, ${formatUnits(uUsdc, 6)} USDC, allowance ${formatUnits(allowance, 6)}   puller: ${formatUnits(pEth, 18)} ETH`);
+  console.log(
+    `\nuser: ${formatUnits(uEth, 18)} ETH, ${formatUnits(uUsdc, 6)} USDC, allowance ${formatUnits(allowance, 6)}   puller: ${formatUnits(pEth, 18)} ETH`,
+  );
   if (uEth === 0n || pEth === 0n || uUsdc < AMOUNT * 2n) {
-    console.log(`\nFUND FIRST (testnet faucets):\n  Sepolia ETH  -> ${PULLER}  (puller gas)\n  Sepolia ETH  -> ${user.address}  (approve + drain gas)\n  Sepolia USDC -> ${user.address}  https://faucet.circle.com`);
+    console.log(
+      `\nFUND FIRST (testnet faucets):\n  Sepolia ETH  -> ${PULLER}  (puller gas)\n  Sepolia ETH  -> ${user.address}  (approve + drain gas)\n  Sepolia USDC -> ${user.address}  https://faucet.circle.com`,
+    );
     process.exit(1);
   }
 
   const solver = spawn("bun", ["packages/solver/src/index.ts"], { stdio: ["ignore", "pipe", "inherit"] });
   solver.stdout?.on("data", (d) => process.stdout.write(`    ${String(d).trim()}\n`));
   process.on("exit", () => solver.kill());
-  for (let i = 0; i < 50; i++) { try { await fetch(`${SOLVER_URL}/guarantor`); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }
+  for (let i = 0; i < 50; i++) {
+    try {
+      await fetch(`${SOLVER_URL}/guarantor`);
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
 
   if (allowance < AMOUNT * 2n) {
     step(`user approves the puller once (one approve, any number of cards; funds stay in the wallet)`);
-    const h = await userWallet.writeContract({ address: USDC, abi: erc20, functionName: "approve", args: [PULLER, 2n ** 128n] });
+    const h = await userWallet.writeContract({
+      address: USDC,
+      abi: erc20,
+      functionName: "approve",
+      args: [PULLER, 2n ** 128n],
+    });
     await evm.waitForTransactionReceipt({ hash: h });
     console.log(`  approve tx ${sep(h)}`);
   }
 
   const ir0 = (await getIssuer())!;
   const issuerNear0 = await nearBal(ISSUER);
-  console.log(`\nissuer reserve: ${fmtNear(ir0.reserved)} NEAR reserved, ${ir0.pulls_ok} ok / ${ir0.pulls_failed} failed so far`);
+  console.log(
+    `\nissuer reserve: ${fmtNear(ir0.reserved)} NEAR reserved, ${ir0.pulls_ok} ok / ${ir0.pulls_failed} failed so far`,
+  );
 
   const a = await swipe("RUN A", false);
   const b = await swipe("RUN B", true);
@@ -112,4 +170,7 @@ async function main() {
   ]);
   process.exit(0);
 }
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

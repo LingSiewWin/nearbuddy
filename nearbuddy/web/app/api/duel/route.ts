@@ -6,14 +6,16 @@ const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org";
 const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
 const ORACLE = process.env.ORACLE_ACCOUNT ?? "price-oracle.testnet";
 const provider = new JsonRpcProvider({ url: RPC });
-const view = (method: string, args: Record<string, unknown>) => provider.callFunction({ contractId: ARENA, method, args });
+const view = (method: string, args: Record<string, unknown>) =>
+  provider.callFunction({ contractId: ARENA, method, args });
 
 type Duel = { id: string; a: string; b: string; resolved: boolean };
 
 const cache = new Map<string, { at: number; body: string }>();
 const inflight = new Map<string, Promise<string>>();
 const ID_RE = /^\d{1,12}$/;
-const json = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+const json = (body: string, status = 200) =>
+  new Response(body, { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
 export async function GET(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
@@ -35,10 +37,11 @@ export async function GET(req: Request) {
 
 async function build(id: string): Promise<string> {
   const duel = (await view("get_duel", { duel_id: id })) as Duel | null;
-  const [a, b] = duel ? await Promise.all([view("get_agent", { agent_pk: duel.a }), view("get_agent", { agent_pk: duel.b })]) : [null, null];
-  const body = JSON.stringify(
-    { at: Date.now(), rpc: RPC, contract: ARENA, oracle: ORACLE, duel, a, b },
-    (_, v) => (typeof v === "bigint" ? v.toString() : v),
+  const [a, b] = duel
+    ? await Promise.all([view("get_agent", { agent_pk: duel.a }), view("get_agent", { agent_pk: duel.b })])
+    : [null, null];
+  const body = JSON.stringify({ at: Date.now(), rpc: RPC, contract: ARENA, oracle: ORACLE, duel, a, b }, (_, v) =>
+    typeof v === "bigint" ? v.toString() : v,
   );
   cache.set(id, { at: Date.now(), body });
   if (cache.size > 200) cache.delete(cache.keys().next().value as string);

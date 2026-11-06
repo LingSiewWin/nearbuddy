@@ -14,20 +14,62 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { teraToGas, type Account } from "near-api-js";
-import { b64 } from "../../protocol/src/index.ts";
-import { verifyIntent, verifyTeeProof, type SignedIntent, type TeeProof } from "../../protocol/src/intent.ts";
+import { type Account, teraToGas } from "near-api-js";
 import { ARENA, arenaView } from "../../protocol/src/chain.ts";
-import { quote, sellNearForUsdc, type Quote } from "./oneclick.ts";
+import { b64 } from "../../protocol/src/index.ts";
+import { type SignedIntent, type TeeProof, verifyIntent, verifyTeeProof } from "../../protocol/src/intent.ts";
+import { type Quote, quote, sellNearForUsdc } from "./oneclick.ts";
 
-export interface Mandate { allowance: string; spent: string; per_tx_cap: string; allowed_tokens: string[]; expires_at: string; revoked: boolean }
-export interface Fill { intent_nonce: string; token: string; amount_in: string; amount_out: string; swap_tx: string }
-export interface Injection { duel_id: string; target: string; kind: string; payload: string; payload_hash: string; block: string }
-export interface FollowerQuote { follower: string; amount: string; quote?: Quote; error?: string }
-interface IntentRecord { signed: SignedIntent; tx: string; quotes: FollowerQuote[]; at: number }
+export interface Mandate {
+  allowance: string;
+  spent: string;
+  per_tx_cap: string;
+  allowed_tokens: string[];
+  expires_at: string;
+  revoked: boolean;
+}
+export interface Fill {
+  intent_nonce: string;
+  token: string;
+  amount_in: string;
+  amount_out: string;
+  swap_tx: string;
+}
+export interface Injection {
+  duel_id: string;
+  target: string;
+  kind: string;
+  payload: string;
+  payload_hash: string;
+  block: string;
+}
+export interface FollowerQuote {
+  follower: string;
+  amount: string;
+  quote?: Quote;
+  error?: string;
+}
+interface IntentRecord {
+  signed: SignedIntent;
+  tx: string;
+  quotes: FollowerQuote[];
+  at: number;
+}
 /** `AgentView` from the contract (`leaderboard`, `get_agent`): the fields the pairing loop reads. */
-export interface AgentView { pk: string; model_id: string; bond: string; tee: boolean; in_duel: string | null }
-interface PairedDuel { at: number; duel_id: string; a: string; b: string; tx: string }
+export interface AgentView {
+  pk: string;
+  model_id: string;
+  bond: string;
+  tee: boolean;
+  in_duel: string | null;
+}
+interface PairedDuel {
+  at: number;
+  duel_id: string;
+  a: string;
+  b: string;
+  tx: string;
+}
 /** Duel length the pairing loop opens; must stay above the contract's `min_duel_s` (310 s). */
 const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330);
 /** Yocto bond an agent needs above to be paired; 0 = any funded agent. */
@@ -47,11 +89,14 @@ function writeAtomic(file: string, data: string) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(`${file}.tmp`, data);
     renameSync(`${file}.tmp`, file);
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 }
 function keyOk(h: string | string[] | undefined): boolean {
   if (!ARENA_SECRET || typeof h !== "string") return false;
-  const a = Buffer.from(h), b = Buffer.from(ARENA_SECRET);
+  const a = Buffer.from(h),
+    b = Buffer.from(ARENA_SECRET);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 const GAS = teraToGas("100");
@@ -71,6 +116,7 @@ async function oracleDeposit(): Promise<bigint> {
 export function quoteAmount(m: Mandate): bigint {
   const left = BigInt(m.allowance) - BigInt(m.spent);
   const cap = BigInt(m.per_tx_cap);
+  // biome-ignore lint/complexity/useMathMinMax: bigint, Math.min would throw
   return left < cap ? left : cap;
 }
 
@@ -81,7 +127,10 @@ export function mandateOpen(m: Mandate, nowNs: bigint): boolean {
 /** Idle enclave agents with bond above `minBond`, sorted by pk and paired with their neighbour. Deterministic:
  *  two solvers reading the same leaderboard propose the same pairs. An odd agent waits for the next tick. */
 export function pairIdle(agents: AgentView[], minBond = 0n): [string, string][] {
-  const idle = agents.filter((a) => a.tee && a.in_duel == null && BigInt(a.bond) > minBond).map((a) => a.pk).sort();
+  const idle = agents
+    .filter((a) => a.tee && a.in_duel == null && BigInt(a.bond) > minBond)
+    .map((a) => a.pk)
+    .sort();
   const pairs: [string, string][] = [];
   for (let i = 0; i + 1 < idle.length; i += 2) pairs.push([idle[i]!, idle[i + 1]!]);
   return pairs;
@@ -102,7 +151,10 @@ export class Arena {
     readonly solverId: string,
     private readonly deps: {
       listFollowers?: (agent_pk: string) => Promise<[string, Mandate][]>;
-      getDuel?: (duel_id: string) => Promise<{ injections: { kind: string; payload_hash: string; target: string; block: string }[]; resolved: boolean } | null>;
+      getDuel?: (duel_id: string) => Promise<{
+        injections: { kind: string; payload_hash: string; target: string; block: string }[];
+        resolved: boolean;
+      } | null>;
       getAgent?: (agent_pk: string) => Promise<AgentView | null>;
       leaderboard?: () => Promise<AgentView[]>;
       quote?: typeof quote;
@@ -139,9 +191,13 @@ export class Arena {
     setInterval(() => {
       this.pairing.next_at = Date.now() + everyS * 1000;
       if (this.pairingRun) return; // a tick still opening duels: skip, never overlap open_duel calls
-      this.pairingRun = this.pairOnce().catch((e) => console.log(`[arena] pairing tick failed: ${String(e).slice(0, 120)}`)).finally(() => (this.pairingRun = null));
+      this.pairingRun = this.pairOnce()
+        .catch((e) => console.log(`[arena] pairing tick failed: ${String(e).slice(0, 120)}`))
+        .finally(() => (this.pairingRun = null));
     }, everyS * 1000).unref();
-    console.log(`[arena] pairing idle enclave agents every ${everyS}s into ${DUEL_SECONDS}s duels (min bond ${PAIR_MIN_BOND} yocto)`);
+    console.log(
+      `[arena] pairing idle enclave agents every ${everyS}s into ${DUEL_SECONDS}s duels (min bond ${PAIR_MIN_BOND} yocto)`,
+    );
   }
 
   /** `call` with the on-chain oracle deposit; a stale memo after `set_oracle` is refreshed and the call retried once. */
@@ -155,7 +211,12 @@ export class Arena {
     }
   }
 
-  private async call(methodName: string, args: Record<string, unknown>, deposit = 0n, gas = GAS): Promise<{ tx: string; value: unknown }> {
+  private async call(
+    methodName: string,
+    args: Record<string, unknown>,
+    deposit = 0n,
+    gas = GAS,
+  ): Promise<{ tx: string; value: unknown }> {
     // Public RPCs rate-limit (-429); retry with backoff before failing the route.
     let r!: Awaited<ReturnType<Account["callFunctionRaw"]>>;
     for (let attempt = 0; ; attempt++) {
@@ -168,7 +229,8 @@ export class Arena {
       }
     }
     const st = r.status as { SuccessValue?: string; Failure?: unknown };
-    if (st.SuccessValue === undefined) throw new Error(`${methodName} failed: ${JSON.stringify(st.Failure ?? r.status).slice(0, 300)}`);
+    if (st.SuccessValue === undefined)
+      throw new Error(`${methodName} failed: ${JSON.stringify(st.Failure ?? r.status).slice(0, 300)}`);
     const raw = Buffer.from(st.SuccessValue, "base64").toString();
     return { tx: r.transaction.hash, value: raw ? JSON.parse(raw) : null };
   }
@@ -204,7 +266,9 @@ export class Arena {
       const cfg = await arenaView<{ next_duel: string }>("get_config", {});
       const n = Number(cfg.next_duel);
       for (let id = n - 1; id >= Math.max(0, n - 3); id--) {
-        const d = await arenaView<{ a: string; b: string; close_at: string; resolved: boolean } | null>("get_duel", { duel_id: String(id) });
+        const d = await arenaView<{ a: string; b: string; close_at: string; resolved: boolean } | null>("get_duel", {
+          duel_id: String(id),
+        });
         if (d && d.a === a && d.b === b && d.close_at === close_at && !d.resolved) return String(id);
       }
       await new Promise((res) => setTimeout(res, 3000));
@@ -231,18 +295,24 @@ export class Arena {
 
   /** One dry 1Click quote per open follower mandate, sized by the mandate. Never a real swap. */
   async quotesFor(agent_pk: string): Promise<FollowerQuote[]> {
-    const list = await (this.deps.listFollowers ?? ((pk) => arenaView<[string, Mandate][]>("list_followers", { agent_pk: pk })))(agent_pk);
+    const list = await (
+      this.deps.listFollowers ?? ((pk) => arenaView<[string, Mandate][]>("list_followers", { agent_pk: pk }))
+    )(agent_pk);
     const now = (this.deps.now ?? (() => BigInt(Date.now()) * 1_000_000n))();
     const q = this.deps.quote ?? quote;
     const account = this.solverId.replace(/\.testnet$/, ".near");
-    return Promise.all(list.filter(([, m]) => mandateOpen(m, now)).map(async ([follower, m]): Promise<FollowerQuote> => {
-      const amount = quoteAmount(m);
-      try {
-        return { follower, amount: amount.toString(), quote: await q(sellNearForUsdc(amount, account)) };
-      } catch (e) {
-        return { follower, amount: amount.toString(), error: String(e).slice(0, 200) };
-      }
-    }));
+    return Promise.all(
+      list
+        .filter(([, m]) => mandateOpen(m, now))
+        .map(async ([follower, m]): Promise<FollowerQuote> => {
+          const amount = quoteAmount(m);
+          try {
+            return { follower, amount: amount.toString(), quote: await q(sellNearForUsdc(amount, account)) };
+          } catch (e) {
+            return { follower, amount: amount.toString(), error: String(e).slice(0, 200) };
+          }
+        }),
+    );
   }
 
   /** Spectator path, no secret: store the payload and return its hash. The spectator then calls
@@ -270,20 +340,32 @@ export class Arena {
   async bootstrap() {
     // Local files first, each on its own: a corrupt file must never block the on-chain rebuild below.
     try {
-      if (existsSync(PAYLOAD_FILE)) for (const [h, p] of JSON.parse(readFileSync(PAYLOAD_FILE, "utf8")) as [string, string][]) this.payloads.set(h, p);
-    } catch (e) { console.log(`[arena] payload file ignored: ${String(e).slice(0, 80)}`); }
+      if (existsSync(PAYLOAD_FILE))
+        for (const [h, p] of JSON.parse(readFileSync(PAYLOAD_FILE, "utf8")) as [string, string][])
+          this.payloads.set(h, p);
+    } catch (e) {
+      console.log(`[arena] payload file ignored: ${String(e).slice(0, 80)}`);
+    }
     try {
       if (existsSync(HISTORY_FILE)) {
-        const h = JSON.parse(readFileSync(HISTORY_FILE, "utf8")) as { intents?: IntentRecord[]; fills?: Arena["fills"] } | null;
+        const h = JSON.parse(readFileSync(HISTORY_FILE, "utf8")) as {
+          intents?: IntentRecord[];
+          fills?: Arena["fills"];
+        } | null;
         this.intents.push(...(h?.intents ?? []));
         this.fills.push(...(h?.fills ?? []));
       }
-    } catch (e) { console.log(`[arena] history file ignored: ${String(e).slice(0, 80)}`); }
+    } catch (e) {
+      console.log(`[arena] history file ignored: ${String(e).slice(0, 80)}`);
+    }
     try {
       const cfg = await arenaView<{ next_duel: string }>("get_config", {});
       const n = Number(cfg.next_duel);
       for (let id = n - 1; id >= Math.max(0, n - 20); id--) {
-        const d = await (this.deps.getDuel ?? ((x: string) => arenaView<{ resolved: boolean; injections: never[] }>("get_duel", { duel_id: x })))(String(id));
+        const d = await (
+          this.deps.getDuel ??
+          ((x: string) => arenaView<{ resolved: boolean; injections: never[] }>("get_duel", { duel_id: x }))
+        )(String(id));
         if (d && !d.resolved) this.openDuels.add(String(id));
       }
       console.log(`[arena] bootstrap: ${this.openDuels.size} open duels, ${this.payloads.size} payloads`);
@@ -296,7 +378,8 @@ export class Arena {
    *  calls back; `pending()` drops the duel once `get_duel` reports it resolved. `sent: false` means the RPC
    *  dropped the wait and the caller should check `get_duel` and retry rather than wait. */
   async resolve(duel_id: string) {
-    let tx = "", sent = true;
+    let tx = "",
+      sent = true;
     try {
       tx = (await this.callWithOracleDeposit("resolve_duel", { duel_id })).tx;
     } catch (e) {
@@ -304,7 +387,9 @@ export class Arena {
       // resolve_duel is idempotent until the oracle answers, so the caller may simply retry.
       if (!/Internal server error|timeout|Timeout/i.test(String(e))) throw e;
       sent = false;
-      console.log(`[arena] resolve_duel rpc wait failed (${String(e).slice(0, 60)}); the oracle callback will finish duel ${duel_id} if the tx landed`);
+      console.log(
+        `[arena] resolve_duel rpc wait failed (${String(e).slice(0, 60)}); the oracle callback will finish duel ${duel_id} if the tx landed`,
+      );
     }
     for (const k of this.consumed) if (k.startsWith(`${duel_id}:`)) this.consumed.delete(k);
     return { tx, sent };
@@ -327,19 +412,43 @@ export class Arena {
    *  One view per open duel, in parallel, memoised for 3 s; an RPC error skips that duel for this call. */
   async pending(): Promise<Record<string, Injection[]>> {
     if (this.pendingMemo && Date.now() - this.pendingMemo.at < 3000) return this.pendingMemo.v;
-    const getDuel = this.deps.getDuel ?? ((id: string) => arenaView<{ injections: { kind: string; payload_hash: string; target: string; block: string }[]; resolved: boolean }>("get_duel", { duel_id: id }));
+    const getDuel =
+      this.deps.getDuel ??
+      ((id: string) =>
+        arenaView<{
+          injections: { kind: string; payload_hash: string; target: string; block: string }[];
+          resolved: boolean;
+        }>("get_duel", { duel_id: id }));
     const out: Record<string, Injection[]> = {};
-    await Promise.all([...this.openDuels].map(async (duel_id) => {
-      let d: Awaited<ReturnType<typeof getDuel>>;
-      try { d = await getDuel(duel_id); } catch { return; }
-      if (!d) return;
-      if (d.resolved) { this.openDuels.delete(duel_id); return; }
-      for (const j of d.injections) {
-        const payload = this.payloads.get(j.payload_hash);
-        if (payload === undefined || this.consumed.has(`${duel_id}:${j.target}:${j.block}`)) continue;
-        (out[j.target] ??= []).push({ duel_id, target: j.target, kind: j.kind, payload, payload_hash: j.payload_hash, block: j.block });
-      }
-    }));
+    await Promise.all(
+      [...this.openDuels].map(async (duel_id) => {
+        let d: Awaited<ReturnType<typeof getDuel>>;
+        try {
+          d = await getDuel(duel_id);
+        } catch {
+          return;
+        }
+        if (!d) return;
+        if (d.resolved) {
+          this.openDuels.delete(duel_id);
+          return;
+        }
+        for (const j of d.injections) {
+          const payload = this.payloads.get(j.payload_hash);
+          if (payload === undefined || this.consumed.has(`${duel_id}:${j.target}:${j.block}`)) continue;
+          const list = out[j.target] ?? [];
+          out[j.target] = list;
+          list.push({
+            duel_id,
+            target: j.target,
+            kind: j.kind,
+            payload,
+            payload_hash: j.payload_hash,
+            block: j.block,
+          });
+        }
+      }),
+    );
     this.pendingMemo = { at: Date.now(), v: out };
     return out;
   }
@@ -351,24 +460,36 @@ export class Arena {
 
   async snapshot() {
     return {
-      contract: ARENA, solver: this.solverId,
+      contract: ARENA,
+      solver: this.solverId,
       intents: this.intents.slice(-50).map((r) => ({ ...r.signed.intent, tx: r.tx, quotes: r.quotes, at: r.at })),
-      pending: await this.pending(), fills: this.fills.slice(-50),
+      pending: await this.pending(),
+      fills: this.fills.slice(-50),
     };
   }
 
-  async route(method: string | undefined, url: string | undefined, body: string, headers: Record<string, string | string[] | undefined> = {}): Promise<{ code: number; body: unknown } | null> {
+  async route(
+    method: string | undefined,
+    url: string | undefined,
+    body: string,
+    headers: Record<string, string | string[] | undefined> = {},
+  ): Promise<{ code: number; body: unknown } | null> {
     if (url === "/arena") return { code: 200, body: await this.snapshot() };
     if (url === "/pairing") return { code: 200, body: this.pairing };
     if (url?.startsWith("/agent_duel?")) {
       // base64 pks hold '+': a client that forgot to percent-encode it arrives as a space; base64 never has spaces
       const pk = new URLSearchParams(url.slice("/agent_duel?".length)).get("pk")?.replace(/ /g, "+");
       if (!pk) return { code: 400, body: { error: "pk required" } };
-      const agent = await (this.deps.getAgent ?? ((p: string) => arenaView<AgentView | null>("get_agent", { agent_pk: p })))(pk);
+      const agent = await (
+        this.deps.getAgent ?? ((p: string) => arenaView<AgentView | null>("get_agent", { agent_pk: p }))
+      )(pk);
       return { code: 200, body: { agent_pk: pk, registered: agent !== null, duel_id: agent?.in_duel ?? null } };
     }
-    if (method === "POST" && url === "/chaos") return { code: 200, body: this.stash((JSON.parse(body) as { payload: string }).payload) };
-    const mine = ["/duel", "/register", "/intent", "/resolve", "/open_price", "/settle_follow", "/consume"].includes(url ?? "");
+    if (method === "POST" && url === "/chaos")
+      return { code: 200, body: this.stash((JSON.parse(body) as { payload: string }).payload) };
+    const mine = ["/duel", "/register", "/intent", "/resolve", "/open_price", "/settle_follow", "/consume"].includes(
+      url ?? "",
+    );
     if (!mine) return null;
     if (method !== "POST") return { code: 405, body: { error: "POST only" } };
     if (!keyOk(headers["x-arena-key"])) return { code: 401, body: { error: "x-arena-key required" } };
@@ -377,7 +498,13 @@ export class Arena {
       return { code: 200, body: await this.openDuel(q.a, q.b, q.symbol, q.close_at) };
     }
     if (method === "POST" && url === "/register") {
-      const q = JSON.parse(body) as { agent_pk: string; model_id: string; bond: string; tee?: boolean; register_sig?: string };
+      const q = JSON.parse(body) as {
+        agent_pk: string;
+        model_id: string;
+        bond: string;
+        tee?: boolean;
+        register_sig?: string;
+      };
       return { code: 200, body: await this.register(q.agent_pk, q.model_id, q.bond, q.tee === true, q.register_sig) };
     }
     if (method === "POST" && url === "/intent") {

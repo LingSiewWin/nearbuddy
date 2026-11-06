@@ -3,7 +3,7 @@
 // contract verifies over `teeText(...)`; the intent's `proof_hash` is `proofHash(request, response)`.
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { serialize } from "borsh";
-import { KeyPair, KeyType, PublicKey } from "near-api-js";
+import { type KeyPair, KeyType, PublicKey } from "near-api-js";
 import { b64, hex } from "./index.ts";
 
 export const INTENT_DOMAIN = new TextEncoder().encode("nearbuddy-intent-v1");
@@ -12,29 +12,37 @@ export const ZERO_PROOF = b64.enc(new Uint8Array(32));
 
 export type Side = "Long" | "Short";
 export interface Intent {
-  agent_pk: string;    // base64, 32 bytes
-  duel_id: string;     // u64 decimal
+  agent_pk: string; // base64, 32 bytes
+  duel_id: string; // u64 decimal
   side: Side;
-  size_bps: number;    // u16, 1..=10000
-  nonce: string;       // u64 decimal
-  expires_at: string;  // unix ns decimal
-  proof_hash: string;  // base64, 32 bytes: sha256(request_hash || response_hash), or ZERO_PROOF
+  size_bps: number; // u16, 1..=10000
+  nonce: string; // u64 decimal
+  expires_at: string; // unix ns decimal
+  proof_hash: string; // base64, 32 bytes: sha256(request_hash || response_hash), or ZERO_PROOF
 }
-export interface SignedIntent { intent: Intent; signature: string }
+export interface SignedIntent {
+  intent: Intent;
+  signature: string;
+}
 
 /** NEAR AI Cloud signature record, re-encoded for the contract. kind 1 = gateway TEE, 2 = model TEE. */
 export interface TeeProof {
   kind: 1 | 2;
-  request_hash: string;   // base64, 32 bytes
-  response_hash: string;  // base64, 32 bytes
-  signer: string;         // base64, 32-byte ed25519 signing_address
-  signature: string;      // base64, 64 bytes
+  request_hash: string; // base64, 32 bytes
+  response_hash: string; // base64, 32 bytes
+  signer: string; // base64, 32-byte ed25519 signing_address
+  signature: string; // base64, 64 bytes
 }
 
 const INTENT_SCHEMA = {
   struct: {
-    agent_pk: { array: { type: "u8" } }, duel_id: "u64", side: "u8", size_bps: "u16",
-    nonce: "u64", expires_at: "u64", proof_hash: { array: { type: "u8" } },
+    agent_pk: { array: { type: "u8" } },
+    duel_id: "u64",
+    side: "u8",
+    size_bps: "u16",
+    nonce: "u64",
+    expires_at: "u64",
+    proof_hash: { array: { type: "u8" } },
   },
 } as const;
 
@@ -47,8 +55,13 @@ function withDomain(domain: Uint8Array, body: Uint8Array): Uint8Array {
 
 export function intentMessage(i: Intent): Uint8Array {
   const body = serialize(INTENT_SCHEMA, {
-    agent_pk: b64.dec(i.agent_pk), duel_id: BigInt(i.duel_id), side: i.side === "Long" ? 0 : 1,
-    size_bps: i.size_bps, nonce: BigInt(i.nonce), expires_at: BigInt(i.expires_at), proof_hash: b64.dec(i.proof_hash),
+    agent_pk: b64.dec(i.agent_pk),
+    duel_id: BigInt(i.duel_id),
+    side: i.side === "Long" ? 0 : 1,
+    size_bps: i.size_bps,
+    nonce: BigInt(i.nonce),
+    expires_at: BigInt(i.expires_at),
+    proof_hash: b64.dec(i.proof_hash),
   });
   return withDomain(INTENT_DOMAIN, body);
 }
@@ -72,10 +85,17 @@ function verify(pkB64: string, msg: Uint8Array, sigB64: string): boolean {
 
 // ed25519 from a 32-byte seed with node:crypto only (PKCS8 prefix + seed); pk = last 32 bytes of SPKI.
 const PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
-export const keyFromSeed = (hex: string) => createPrivateKey({ key: Buffer.concat([PKCS8, Buffer.from(hex, "hex")]), format: "der", type: "pkcs8" });
-export const pkOf = (k: ReturnType<typeof keyFromSeed>) => b64.enc(new Uint8Array(createPublicKey(k).export({ format: "der", type: "spki" }).subarray(-32)));
+export const keyFromSeed = (hex: string) =>
+  createPrivateKey({ key: Buffer.concat([PKCS8, Buffer.from(hex, "hex")]), format: "der", type: "pkcs8" });
+export const pkOf = (k: ReturnType<typeof keyFromSeed>) =>
+  b64.enc(new Uint8Array(createPublicKey(k).export({ format: "der", type: "spki" }).subarray(-32)));
 /** Seed of the enclave agent derived from a plain `AGENT_SEED_*`: sha256(seed || "tee"), as agents/runner.py `agent_key(tee=True)`. */
-export const teeSeed = (seedHex: string) => hex(createHash("sha256").update(Buffer.concat([Buffer.from(seedHex, "hex"), Buffer.from("tee")])).digest());
+export const teeSeed = (seedHex: string) =>
+  hex(
+    createHash("sha256")
+      .update(Buffer.concat([Buffer.from(seedHex, "hex"), Buffer.from("tee")]))
+      .digest(),
+  );
 
 export function signIntent(kp: KeyPair, intent: Intent): SignedIntent {
   return { intent, signature: b64.enc(kp.sign(intentMessage(intent)).signature) };
@@ -85,7 +105,8 @@ export function verifyIntent(s: SignedIntent): boolean {
 }
 /** Same check the contract runs: enclave signature over the rebuilt text, and the intent commits to it. */
 export function verifyTeeProof(p: TeeProof, modelId: string, intentProofHash: string): boolean {
-  const req = b64.dec(p.request_hash), res = b64.dec(p.response_hash);
+  const req = b64.dec(p.request_hash),
+    res = b64.dec(p.response_hash);
   if (req.length !== 32 || res.length !== 32) return false;
   return verify(p.signer, teeText(p.kind, modelId, req, res), p.signature) && proofHash(req, res) === intentProofHash;
 }

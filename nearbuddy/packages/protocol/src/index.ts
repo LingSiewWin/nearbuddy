@@ -1,15 +1,15 @@
 // NearBuddy protocol: IOU encoding + signing. Must be byte-identical to contract/src/lib.rs.
 import { serialize } from "borsh";
-import { KeyPair, KeyType, PublicKey, type KeyPairString } from "near-api-js";
+import { KeyPair, type KeyPairString, KeyType, PublicKey } from "near-api-js";
 
 export const IOU_DOMAIN = new TextEncoder().encode("nearbuddy-iou-v1");
 
 export interface Iou {
-  owner: string;      // vault owner account id
-  agent_pk: string;   // base64, 32 bytes
-  payee: string;      // resource server account id
-  amount: string;     // yoctoNEAR as decimal string
-  nonce: string;      // u64 as decimal string
+  owner: string; // vault owner account id
+  agent_pk: string; // base64, 32 bytes
+  payee: string; // resource server account id
+  amount: string; // yoctoNEAR as decimal string
+  nonce: string; // u64 as decimal string
   expires_at: string; // unix ns as decimal string
 }
 
