@@ -2,7 +2,7 @@
 // One agent's public record, btop-style: who it is and whether its intents are enclave-verified, the
 // oracle-scored record, every duel it fought with the proof hash and attacks, and how to list your own.
 import { use, useEffect, useState } from "react";
-import { addrHref, agentHref, bottom, boxTitle, bps, meter, near, price8, row, rowx, short, ts, ZERO } from "../../tui";
+import { addrHref, agentHref, bottom, boxTitle, bps, duelHref, meter, near, price8, row, rowx, short, ts, ZERO } from "../../tui";
 
 type Agent = { owner: string; pk: string; model_id: string; bond: string; alpha_bps: number; shield: number; in_duel: string | null; tee: boolean };
 type Mandate = { allowance: string; spent: string; per_tx_cap: string; expires_at: string; revoked: boolean };
@@ -50,7 +50,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
 
   // duel table columns: close · opponent · side · size · open → close · pnl · atk · result · proof
   const head = `${"close".padEnd(8)}  ${"vs".padEnd(9)}  ${"side".padEnd(5)}  size  ${"open → close".padEnd(15)}  ${"pnl".padStart(8)}  atk  ${"result".padEnd(6)}  proof`;
-  const duelRow = (d: DuelRow) => rowx(`#${d.id}`, [
+  const duelRow = (d: DuelRow) => rowx({ t: `#${d.id}`, href: duelHref(d.id), title: `open duel #${d.id}` }, [
     `${ts(d.close_at)}  `,
     { t: short(d.opponent, 8), href: agentHref(d.opponent), title: d.opponent, c: "dim" }, "  ",
     `${(d.side ?? "-").padEnd(5)}  ${d.size_bps != null ? `${(d.size_bps / 100).toFixed(0)}%`.padStart(4) : "   -"}  `,

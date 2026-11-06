@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { agentHref, bottom, linkRow, near, row, short, top, ts, ZERO } from "../tui";
+import { agentHref, bottom, duelHref, linkRow, near, row, short, top, ts, ZERO } from "../tui";
 
 type Intent = { agent_pk: string; duel_id: string; side: "Long" | "Short"; size_bps: number; nonce: string; expires_at: string; proof_hash: string };
 type Agent = { owner: string; pk: string; model_id: string; bond: string; alpha_bps: number; shield: number; in_duel: string | null; tee: boolean };
@@ -39,7 +39,7 @@ export default function Arena() {
       {bottom()}{"\n\n"}
       {(s?.duels ?? []).filter(Boolean).slice(0, 3).map((d) => d && (
         <span key={d.id}>
-          {top(`DUEL ${d.id}  ${d.symbol === "wrap.near" ? "NEAR/USD (wrap.near via price-oracle.testnet)" : d.symbol}  ${d.resolved ? "resolved" : "LIVE"}  ${ts(d.open_at)} → ${ts(d.close_at)}  pool ${near(d.pool)} NEAR`)}{"\n"}
+          {"┌─ "}<a className="hi" href={duelHref(d.id)}>{`DUEL ${d.id}`}</a>{top(`DUEL ${d.id}  ${d.symbol === "wrap.near" ? "NEAR/USD (wrap.near via price-oracle.testnet)" : d.symbol}  ${d.resolved ? "resolved" : "LIVE"}  ${ts(d.open_at)} → ${ts(d.close_at)}  pool ${near(d.pool)} NEAR`).slice(3 + `DUEL ${d.id}`.length)}{"\n"}
           {!d.resolved ? row("open price", d.open_price ? `${(Number(d.open_price) / 1e8).toFixed(4)} USD, snapshotted by the Outlayer TEE oracle at open` : "pending oracle callback") + "\n" : ""}
           {d.outcome ? row("outcome", `${(Number(d.outcome.open_price) / 1e8).toFixed(4)} → ${(Number(d.outcome.close_price) / 1e8).toFixed(4)}  A ${d.outcome.pnl_a >= 0 ? "+" : ""}${d.outcome.pnl_a} bps  B ${d.outcome.pnl_b >= 0 ? "+" : ""}${d.outcome.pnl_b} bps  ${d.outcome.winner ? `winner ${name(d.outcome.winner)}, loser slashed ${near(d.outcome.slashed)} NEAR` : "tie, pool split"}`) + "\n" : ""}
           {row("A", name(d.a))}{"\n"}{row("", intentLine(d.last_intent_a, "  "))}{"\n"}

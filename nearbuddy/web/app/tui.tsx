@@ -34,9 +34,12 @@ export const boxTitle = (n: number, name: string, extra = ""): ReactNode => {
 export type Cell = string | { t: string; c?: string; href?: string; title?: string };
 
 /** `row()` whose value is built from cells; padding and border stay exact, overflow is cut. */
-export const rowx = (k: string, cells: Cell[], kc?: string): ReactNode => {
+export const rowx = (k: string | Cell, cells: Cell[], kc?: string): ReactNode => {
   let left = VW;
   const out: ReactNode[] = [];
+  const ko = typeof k === "string" ? { t: k } : k;
+  const kt = ko.t.slice(0, KEY); const kpad = " ".repeat(KEY - kt.length);
+  const key = ko.href ? <><a className={ko.c ?? kc ?? "hi"} href={ko.href} title={ko.title}>{kt}</a>{kpad}</> : kc ? <span className={kc}>{label(ko.t)}</span> : label(ko.t);
   cells.forEach((cell, i) => {
     const o = typeof cell === "string" ? { t: cell } : cell;
     const t = o.t.slice(0, Math.max(0, left)); left -= t.length;
@@ -45,7 +48,7 @@ export const rowx = (k: string, cells: Cell[], kc?: string): ReactNode => {
     else if (o.c || o.title) out.push(<span key={i} className={o.c} title={o.title}>{t}</span>);
     else out.push(t);
   });
-  return <>{"│ "}{kc ? <span className={kc}>{label(k)}</span> : label(k)}{" "}{out}{" ".repeat(Math.max(0, left))}{" │"}</>;
+  return <>{"│ "}{key}{" "}{out}{" ".repeat(Math.max(0, left))}{" │"}</>;
 };
 
 /** A block-character bar: `frac` of `width` filled. */
@@ -73,6 +76,8 @@ export const explorer = (net: "testnet" | "mainnet" = "testnet") => (net === "te
 export const txHref = (tx: string, net?: "testnet" | "mainnet") => `${explorer(net)}/txns/${tx}`;
 export const addrHref = (acct: string, net?: "testnet" | "mainnet") => `${explorer(net)}/address/${acct}`;
 export const agentHref = (pk: string) => `/agent/${encodeURIComponent(pk)}`;
+export const duelHref = (id: string | number) => `/duel/${id}`;
+export const blockHref = (height: string, net?: "testnet" | "mainnet") => `${explorer(net)}/blocks/${height}`;
 
 /** `row()` with a tx hash rendered as a nearblocks link; padding and border stay intact. */
 export const linkRow = (k: string, before: string, tx: string, after: string, net: "testnet" | "mainnet" = "testnet"): ReactNode =>
