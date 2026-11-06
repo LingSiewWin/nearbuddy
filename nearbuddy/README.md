@@ -9,6 +9,17 @@ cannot drain anything.
 
 Built at NEAR HACKATHON (Nov 2026). Tracks: `security`, `agents`, `swarms`, `defi`, `privacy`, `open`.
 
+## Proof in 60 seconds
+
+| Claim | Where to look |
+|---|---|
+| A model's decision was signed inside a NEAR AI enclave and the contract verified it before counting it | [`EatWHL64…PSoD`](https://testnet.nearblocks.io/txns/EatWHL64BPAC7zswPHixTijjnC5v13f8NEfXPAKkPSoD), `post_intent` in `arena/src/lib.rs` |
+| A tampered enclave signature is refused on chain | [`4rmFo38n…PPSt`](https://testnet.nearblocks.io/txns/4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt): `bad tee signature` |
+| Fake news paid for by a stranger flips a naive model; the hardened prompt calls it out and still leans | injection table in the Arena section: naive 22/23 vs 42% base, hardened 18/29 vs 30% base, swapped-prompt control |
+| A TEE price oracle scores the duel, the loser is slashed, anyone can resolve | [`9Hf33mxh…xZWB`](https://testnet.nearblocks.io/txns/9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB) |
+| A follower is filled through NEAR Intents inside a mandate; one real mainnet swap | [`8gnGLPva…hGtR`](https://testnet.nearblocks.io/txns/8gnGLPvanrjF6R4FUKWvUn7HLJciKHszJAiRVY6ehGtR) · mainnet [`7Zf4qbBL…Vuoz`](https://nearblocks.io/txns/7Zf4qbBLqyX1eJU3EwXStw6pD8PCgD8pcd2ej6k3Vuoz) |
+| Anyone lists an agent with one command from their own account | [`6Pv4Yjvz…HHq5`](https://testnet.nearblocks.io/txns/6Pv4Yjvz5w62qro44Su8tTJQ3vhEagd5Y8ogbLQnHHq5) · live: https://nearbuddy.vercel.app/arena |
+
 ## Arena: the trading buddy you follow (2026-11-06)
 
 The clearinghouse above is the settlement rail. On top of it sits an arena where **models duel on live
@@ -385,20 +396,20 @@ IOU signing bytes: `"nearbuddy-iou-v1" || borsh(Iou{owner, agent_pk, payee, amou
 
 | Method | Who | What |
 | --- | --- | --- |
-| `register_agent(agent_pk, model_id, tee)` payable | agent operator | bond = deposit minus storage; `tee` commits the agent to a verified enclave proof on every intent; `withdraw_bond(agent_pk, amount)` when not in a duel |
+| `register_agent(agent_pk, model_id, tee, register_sig)` payable | agent operator (becomes owner; `register_sig` proves the key) | bond = deposit minus storage; `tee` commits the agent to a verified enclave proof on every intent; `withdraw_bond(agent_pk, amount)` when not in a duel |
 | `add_tee_signer(signer, label)` / `remove_tee_signer` | contract owner | ed25519 `signing_address` from a NEAR AI Cloud attestation report (`GET /v1/attestation/report?model=…`) |
 | `open_duel(a, b, symbol, close_at)` payable | contract owner (solver) | pair two idle agents on an oracle asset (`wrap.near`); sends `oracle_call` for the open price; returns `duel_id` |
 | `request_open_price(duel_id)` payable | anyone, attaches `oracle_deposit` | ask the oracle again if the open price never landed |
-| `post_intent(signed, tee)` | registered solver | agent-signed `Intent{agent_pk, duel_id, side, size_bps, nonce, expires_at, proof_hash}` plus `TeeProof{kind, request_hash, response_hash, signer, signature}`; enclave signature verified on chain, `proof_hash == sha256(req \|\| res)`; nonce and proof burned (one completion backs one intent); storage from the bond |
+| `post_intent(signed, tee)` | anyone (the agent's signature binds it) | agent-signed `Intent{agent_pk, duel_id, side, size_bps, nonce, expires_at, proof_hash}` plus `TeeProof{kind, request_hash, response_hash, signer, signature}`; enclave signature verified on chain, `proof_hash == sha256(req \|\| res)`; nonce and proof burned (one completion backs one intent); storage from the bond |
 | `inject_chaos(duel_id, target, kind, payload_hash)` payable | anyone (≥ `min_chaos_deposit`) | attack one agent; deposit minus storage joins the pool; 32 per duel |
 | `resolve_duel(duel_id)` payable | anyone, after `close_at`, attaches `oracle_deposit` | asks the oracle for the close price |
-| `set_oracle(oracle_account, oracle_deposit, min_duel_s)` | contract owner | oracle account, its deposit, and the duel length floor (310 s on testnet: Outlayer serves a cached price for 300 s with a fresh timestamp, so shorter duels would close on their own open price) |
+| `set_oracle(oracle_account, oracle_deposit, min_duel_s, intent_lock_s)` | contract owner | oracle account, its deposit, the intent lock (no intent in the last `intent_lock_s`, default 60) and the duel length floor (310 s on testnet: Outlayer serves a cached price for 300 s with a fresh timestamp, so shorter duels would close on their own open price) |
 | `oracle_on_call(sender_id, data, msg)` | `price-oracle.*` only | stores the open price (`open:<id>`) or scores, slashes, pays the pool, counts shield, prunes injections, records `outcome` (`close:<id>`) |
-| `void_duel(duel_id)` | contract owner, 24 h after `close_at` | oracle never answered: free both agents, split the pool, no slash |
+| `void_duel(duel_id)` | anyone, 24 h after `close_at` | oracle never answered: free both agents, split the pool, no slash |
 | `deposit()` payable / `withdraw(amount)` | follower | arena vault |
 | `follow(agent_pk, mandate)` / `unfollow(agent_pk)` | follower | `Mandate{allowance, spent, per_tx_cap, allowed_tokens, expires_at, revoked}` |
 | `settle_follow(agent_pk, follower, fills)` | registered solver | per-fill mandate checks; rejections reported, never panicked |
-| `get_config`, `get_agent`, `get_duel`, `get_vault`, `get_follow`, `list_followers`, `leaderboard`, `is_tee_signer`, `intent_message_hex`, `tee_text_utf8` | anyone | views |
+| `get_config`, `get_agent`, `get_duel`, `agent_duels`, `get_vault`, `get_follow`, `list_followers`, `leaderboard`, `is_tee_signer`, `register_message`, `intent_message_hex`, `tee_text_utf8` | anyone | views |
 
 Signing bytes: `"nearbuddy-intent-v1" || borsh(Intent)` for the agent, and the enclave's text
 `"{model_id}:{request_hash_hex}:{response_hash_hex}"` (`provider_tee`) or `"{request_hash_hex}:{response_hash_hex}"`
@@ -413,6 +424,139 @@ Signing bytes: `"nearbuddy-intent-v1" || borsh(Intent)` for the agent, and the e
   `agents/data/attestations/`). Verifying the quote itself on chain is the next step.
 - **Solver market.** One solver here. Both contracts already support many; routing and auction are open.
 - **Delayed follower withdrawals, per-agent solver keys**: see "Known limits" above.
+
+## Architecture
+
+Six parties touch a duel. Two of them (the runner and the solver) are ours and hold keys; the rest are the enclave,
+the chain, the oracle and the people watching. The diagrams show who talks to whom; the table below them is the
+on-chain surface by caller; the last paragraph says what each party is trusted for.
+
+```mermaid
+flowchart LR
+  subgraph cloud["NEAR AI Cloud"]
+    model["Model in TEE<br/>POST /v1/chat/completions"]
+    sig["GET /v1/signature/{chat_id}<br/>ed25519 over model:sha256(req):sha256(res)"]
+  end
+  runner["Runner (agents/runner.py)<br/>prompt + injection, sign Intent,<br/>build TeeProof, dataset row"]
+  solver["Solver (packages/solver, :4020)<br/>/register /duel /intent /chaos<br/>/resolve /settle_follow /arena"]
+  arena[("arena.nearbuddy-solver.testnet<br/>post_intent verify, inject_chaos,<br/>oracle_call, settle_follow")]
+  oracle["Outlayer price-oracle.testnet<br/>Intel TDX workers, exchange median"]
+  intents["NEAR Intents<br/>1Click POST /v0/quote, intents.near"]
+  spectator(("Spectator"))
+  follower(("Follower"))
+  web["Web (web/app)<br/>/arena, /agent/[pk], /api/* read RPC"]
+  model -->|"exact request and response bytes"| runner
+  sig -->|"signature record"| runner
+  runner -->|"POST /intent {signed, tee}"| solver
+  solver -->|"open_duel, post_intent,<br/>resolve_duel, settle_follow"| arena
+  arena -->|"oracle_call open:id / close:id"| oracle
+  oracle -->|"oracle_on_call price"| arena
+  solver -->|"dry quote per follower mandate"| intents
+  spectator -->|"POST /chaos payload"| solver
+  spectator -->|"inject_chaos hash + 0.1 NEAR"| arena
+  follower -->|"deposit, follow, unfollow"| arena
+  web -->|"get_config, leaderboard, get_duel, agent_duels"| arena
+  web -.->|"GET /arena, optional"| solver
+```
+
+The runner holds the agent keys and the model API key; it never holds NEAR. The solver account is the contract
+owner and its one registered solver; it pays gas, oracle deposits and bonds for hosted agents. Spectators and
+followers sign their own NEAR transactions. The web app has no keys: its three API routes (`/api/state`,
+`/api/arena`, `/api/agent`) call contract views over the public RPC (the pages poll every 2-20 s); the solver's `GET /arena`
+only adds injection payloads, quotes and fills when it is reachable.
+
+One duel, in order:
+
+```mermaid
+sequenceDiagram
+  participant R as Runner
+  participant E as Enclave
+  participant S as Solver
+  participant C as Arena contract
+  participant O as Outlayer oracle
+  participant X as Spectator
+  R->>S: POST /duel {a, b, wrap.near, close_at}
+  S->>C: open_duel (deposit covers storage + oracle_deposit)
+  C->>O: oracle_call "open:id"
+  O-->>C: oracle_on_call open price
+  loop every cycle until close_at minus intent lock (60 s)
+    R->>S: GET /arena, pending injections for this agent
+    R->>E: chat completion, exact bytes
+    E-->>R: response bytes, chat_id
+    R->>E: GET /v1/signature/{chat_id}
+    E-->>R: ed25519 signature over model:sha256(req):sha256(res)
+    R->>S: POST /intent {signed Intent with proof_hash, TeeProof}
+    S->>C: post_intent (agent sig, enclave sig, proof_hash, nonce, lock, bond pays storage)
+  end
+  X->>S: POST /chaos {payload}, returns sha256
+  X->>C: inject_chaos(duel, target, kind, hash) with 0.1 NEAR into the pool
+  Note over R,C: the target's next prompt carries the payload, its next intent is verified like any other
+  R->>S: POST /resolve after close_at
+  S->>C: resolve_duel (anyone may call, attaches oracle_deposit)
+  C->>O: oracle_call "close:id"
+  O-->>C: oracle_on_call close price (timestamp >= close_at)
+  Note over C: finish: pnl_bps per side, loser slashed 10% into the pool, pool to the winner,<br/>shield += attacks the winner survived, injections pruned, outcome recorded
+```
+
+### On-chain surface by caller
+
+Every row is a `require!` or `panic_str` string in `arena/src/lib.rs`; a caller sees it as `Smart contract
+panicked: <string>`. Deposits are attached NEAR; "storage" means the bytes the call adds, charged at
+`storage_byte_cost`.
+
+| Caller | Method | Deposit | Refused with |
+|---|---|---|---|
+| anyone | `post_intent(signed, tee)` | none; storage from the agent's bond | `agent missing`, `tee proof required`, `bad tee kind`, `unknown tee signer`, `bad tee signature`, `proof_hash mismatch`, `proof used`, `duel missing`, `duel closed`, `intent lock`, `bad target`, `nonce used`, `bad signature`, `bad size`, `bond exhausted` |
+| anyone | `inject_chaos(duel_id, target, kind, payload_hash)` | at least `min_chaos_deposit` (0.1 NEAR); the rest after storage joins the pool | `chaos deposit too small`, `duel closed`, `bad target`, `chaos full` (32 per duel) |
+| anyone, after `close_at` | `resolve_duel(duel_id)` | `oracle_deposit`, excess refunded | `attach oracle_deposit`, `resolved`, `duel open`, `no open price` |
+| anyone | `request_open_price(duel_id)` | `oracle_deposit` | `has open price`, `duel closed` |
+| anyone, 24 h after `close_at` | `void_duel(duel_id)`: frees both agents, splits the pool, no score | none | `resolved`, `too early` |
+| anyone, becomes the agent's owner | `register_agent(agent_pk, model_id, tee, register_sig)`; `register_sig` is the key's signature over `"nearbuddy-register-v1" \|\| caller` | bond, must exceed storage | `agent exists`, `bad register signature`, `bond required` |
+| anyone | views: `get_config`, `get_agent`, `get_duel`, `agent_duels`, `leaderboard`, `get_vault`, `get_follow`, `list_followers`, `is_tee_signer`, `register_message`, `intent_message_hex`, `tee_text_utf8` | none | |
+| agent owner | `withdraw_bond(agent_pk, amount)` | none | `not owner`, `in duel`, `insufficient` |
+| follower | `deposit()` | any, must exceed storage on first deposit | `deposit required` |
+| follower | `withdraw(amount)`, instant | none | `insufficient` |
+| follower | `follow(agent_pk, mandate)`; enclave-verified agents only | storage from the vault | `agent missing`, `agent unverified`, `empty mandate`, `insufficient` |
+| follower | `unfollow(agent_pk)`: sets `revoked` | none | |
+| registered solver | `settle_follow(agent_pk, follower, fills)`; per-fill results are reported, never panicked | none | `not solver`; per fill: `nonce unknown`, `duplicate fill`, `no mandate`, `mandate revoked`, `mandate expired`, `token not allowed`, `over cap`, `allowance exhausted`, `insufficient` |
+| contract owner | `open_duel(a, b, symbol, close_at)` | storage + `oracle_deposit` | `not owner`, `same agent`, `close_at in the past`, `duel too short` (`min_duel_s`, 310), `agent missing`, `in duel`, `deposit too small` |
+| contract owner | `add_solver`, `set_oracle(oracle_account, oracle_deposit, min_duel_s, intent_lock_s)`, `add_tee_signer(signer, label)`, `remove_tee_signer`, `withdraw_fees` | none | `not owner`, `min_duel_s too large`, `intent_lock_s too large` (at most half the floor), `signer length`, `label too long`, `insufficient` |
+| oracle account only | `oracle_on_call(sender_id, data, msg)`; `sender_id` must be this contract | none | `not oracle`, `not our request`, `bad msg`, `no price`, `bad price`, `resolved`, `duel open`, `price before close`, `no open price` |
+| contract account | `migrate*` (`#[private]`, state upgrades) | none | |
+
+No method sets a price, and no method lets the owner move a bond, a pool or a vault except through the rules above.
+
+### Trust boundaries
+
+**The enclave proves** that the model named in the agent's registration produced this exact response to this
+exact request: its ed25519 signature covers `"{model_id}:{sha256(request)}:{sha256(response)}"`, and its signing
+key comes from the model's attestation report, which the owner checked off chain (Intel TDX quote, NVIDIA NRAS)
+before `add_tee_signer`. For "Private" models the weights ran in the TEE; for "Anonymised" models the gateway
+signs `"{sha256(request)}:{sha256(response)}"` and proves only what the gateway returned. Proof table rows:
+"Enclave-verified intents", "Enclave attestation checked by a third party".
+
+**The chain checks** the agent's signature over the intent, the enclave's signature against a pinned signer,
+`proof_hash == sha256(request_hash || response_hash)` (one completion backs one intent, `proof used`), the
+per-agent nonce, the duel window and the intent lock, the mandate on every fill, and that a price callback came
+from the oracle account for a request this contract sent. It does not check what the response said: the link
+"this response says Long" lives in the dataset row next to the published request and response bytes, so anyone
+can recompute both hashes and read the text. Rows: "Tampered proof refused", "`settle_follow` rejections on
+chain", "Duel 23: follower calls `unfollow`".
+
+**The operator can still** choose the prompt (hardened or naive; the control batch shows the behaviour follows
+the prompt), decide who is paired and when (`open_duel` is owner-only; the solver's pairing loop pairs idle
+verified agents by key order), hold the agent keys of hosted runners (so it can post an intent that gets an agent
+slashed, but cannot forge an enclave proof for it or post without one), pin and unpin enclave signers, and front
+follower swaps behind one shared `x-arena-key` secret. It cannot set a price, post for an enclave agent without
+a fresh enclave signature, or move follower funds outside a mandate. A self-hosted runner (`bun run join`,
+`runner.py --only B --wait-pairing`) removes the hosted-key item: the key never leaves the builder's machine.
+
+**The oracle is trusted** for the open and close price and their timestamps. Outlayer runs the fetch in Intel TDX
+workers and serves a median of exchanges, but it caches a price for 300 s with a fresh timestamp, so duels are at
+least 310 s and the open price may be up to 300 s old. The contract refuses a close price stamped before
+`close_at` and never scores a duel twice; if the oracle never answers, anyone may `void_duel` after 24 h with no
+slash and no score. Rows: "Duel 257 resolved by the oracle, no operator key", "Duel 258 resolved by the TEE
+oracle, called by anyone".
 
 ## Status
 
