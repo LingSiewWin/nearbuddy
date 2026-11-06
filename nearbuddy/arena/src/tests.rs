@@ -1029,6 +1029,88 @@ fn owner_withdraws_fees() {
     assert_eq!(c.get_config().owner_fees.0, 0);
 }
 
+/// fee 1 %: the follower pays amount + fee, the solver is repaid the amount only, the fee accrues to the
+/// owner, and the mandate's `spent` counts the amount without the fee.
+#[test]
+fn fee_is_debited_from_follower_and_accrues_to_owner_not_solver() {
+    let mut c = fresh(100);
+    register(&mut c, 1, MODEL_A, true);
+    register(&mut c, 2, "m", false);
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    post_a(&mut c, &key(1).0, &tee, d, Side::Long, 1);
+    ctx(FOLLOWER, VAULT);
+    c.deposit();
+    ctx(FOLLOWER, 0);
+    c.follow(Base64VecU8(key(1).1), mandate(NEAR, NEAR, vec![]));
+    let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
+    ctx(SOLVER, 0);
+    let r = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", NEAR)]);
+    let fee = NEAR / 100;
+    assert_eq!((r.settled, r.debited.0), (1, NEAR + fee));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - NEAR - fee);
+    assert_eq!(c.get_vault(SOLVER.parse().unwrap()).0, NEAR);
+    assert_eq!(c.get_config().owner_fees.0, fee);
+    let m = c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap()).unwrap();
+    assert_eq!(m.spent.0, NEAR, "the allowance is spent by the amount, not the fee");
+}
+
+#[test]
+#[should_panic(expected = "not owner")]
+fn withdraw_fees_by_stranger_panics() {
+    let mut c = fresh(100);
+    ctx(OPERATOR, 0);
+    let _ = c.withdraw_fees();
+}
+
+#[test]
+#[should_panic(expected = "insufficient")]
+fn withdraw_fees_with_nothing_accrued_panics() {
+    let mut c = fresh(100);
+    ctx(OWNER, 0);
+    let _ = c.withdraw_fees();
+}
+
+#[test]
+#[should_panic(expected = "resolved")]
+fn void_duel_twice_panics() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    ctx_at(FOLLOWER, 0, CLOSE + VOID_AFTER_NS);
+    c.void_duel(U64(d));
+    c.void_duel(U64(d));
+}
+
+#[test]
+fn register_model_id_of_exactly_64_bytes_ok() {
+    let mut c = fresh(0);
+    let model = "m".repeat(64);
+    let a = register(&mut c, 1, &model, false);
+    assert_eq!(a.model_id, model);
+    assert_eq!(c.get_agent(Base64VecU8(key(1).1)).unwrap().model_id.len(), 64);
+}
+
+/// A relayer (anyone may relay) cannot forge an intent for B with another key's signature.
+#[test]
+#[should_panic(expected = "bad signature")]
+fn relayed_intent_signed_by_another_key_panics() {
+    let (mut c, ska, _) = setup();
+    let d = open(&mut c);
+    ctx(OPERATOR, 0);
+    c.post_intent(sign(&ska, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+}
+
+/// A registered agent that is not in the duel cannot post into it, even with a valid signature.
+#[test]
+#[should_panic(expected = "bad target")]
+fn relayed_intent_from_agent_outside_the_duel_panics() {
+    let (mut c, ..) = setup();
+    register(&mut c, 3, "m", false);
+    let d = open(&mut c);
+    ctx(OPERATOR, 0);
+    c.post_intent(sign(&key(3).0, &intent(&key(3).1, d, Side::Long, 5_000, 1)), None);
+}
+
 fn duel_key(d: u64) -> Vec<u8> {
     let mut key = near_sdk::borsh::to_vec(&StorageKey::Duels).unwrap();
     key.extend_from_slice(&d.to_le_bytes());
