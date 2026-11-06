@@ -399,7 +399,7 @@ function Proof({ d }: { d: DuelData }) {
   return (
     <>
       <h2>Check it yourself</h2>
-      <p className="lede">Every number on this page comes from these transactions on NEAR testnet.</p>
+      <p className="lede">The result and every call on this page come from these transactions on NEAR testnet.</p>
       <ul className="proof">
         <li>
           <b>Opening price {usd(d.open)}</b>
