@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { agentHref, bottom, linkRow, near, row, short, top, ts, ZERO } from "../tui";
 
 type Intent = { agent_pk: string; duel_id: string; side: "Long" | "Short"; size_bps: number; nonce: string; expires_at: string; proof_hash: string };
 type Agent = { owner: string; pk: string; model_id: string; bond: string; alpha_bps: number; shield: number; in_duel: string | null; tee: boolean };
@@ -12,27 +13,6 @@ type Snap = {
   leaderboard: Agent[]; duels: (Duel | null)[]; followers: Record<string, [string, Mandate][]>;
   solver: null | { intents: (Intent & { tx: string; quotes: { follower: string; amount: string; quote?: { quote: { amountOutFormatted: string } } }[] })[]; pending: Record<string, { kind: string; payload: string }[]>; fills: { follower: string; tx: string; report: { settled: number; rejected: [number, string][] } }[] };
 };
-
-const NEAR = 10n ** 24n;
-const near = (y: string | null | undefined, d = 3) => {
-  if (!y) return "-";
-  const v = BigInt(y); const f = ((v % NEAR) * 10n ** BigInt(d)) / NEAR;
-  return `${v / NEAR}.${f.toString().padStart(d, "0")}`;
-};
-const short = (s: string | null | undefined, n = 10) => (s ? `${s.slice(0, n)}…` : "-");
-const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-const W = 112;
-const row = (k: string, v: string) => `│ ${k.padEnd(16)} ${v.padEnd(W - 20).slice(0, W - 20)} │`;
-const top = (t: string) => `┌─ ${t} ${"─".repeat(Math.max(0, W - t.length - 5))}┐`;
-const bottom = () => `└${"─".repeat(W - 2)}┘`;
-/** `row()` with the tx hash rendered as a nearblocks link; padding and border stay intact. */
-const linkRow = (k: string, before: string, tx: string, after: string) => {
-  const label = short(tx, 10);
-  const line = row(k, `${before}${label}${after}`);
-  const i = line.indexOf(label);
-  return i < 0 ? <>{line}</> : <>{line.slice(0, i)}<a className="hi" href={`https://testnet.nearblocks.io/txns/${tx}`} target="_blank" rel="noreferrer">{label}</a>{line.slice(i + label.length)}</>;
-};
-const ts = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(11, 19);
 
 export default function Arena() {
   const [s, setS] = useState<Snap | null>(null);
@@ -55,7 +35,7 @@ export default function Arena() {
       <span className="dim">{s ? `snapshot ${new Date(s.at).toISOString()}  contract ${s.contract}  rpc ${s.rpc}` : "connecting"}</span><span className="cursor" />{"\n\n"}
       {top("STANDINGS")}{"\n"}
       {row("", "model                                 alpha bps   shield   bond NEAR   tee   status")}{"\n"}
-      {(s?.leaderboard ?? []).map((a) => row(short(a.pk, 8), `${a.model_id.padEnd(36)}  ${String(a.alpha_bps).padStart(8)}   ${String(a.shield).padStart(6)}   ${near(a.bond).padStart(9)}   ${a.tee ? "yes" : "no "}   ${a.in_duel !== null ? `in duel ${a.in_duel}` : "idle"}`)).join("\n")}{"\n"}
+      {(s?.leaderboard ?? []).map((a) => { const line = row(short(a.pk, 8), `${a.model_id.padEnd(36)}  ${String(a.alpha_bps).padStart(8)}   ${String(a.shield).padStart(6)}   ${near(a.bond).padStart(9)}   ${a.tee ? "yes" : "no "}   ${a.in_duel !== null ? `in duel ${a.in_duel}` : "idle"}`); const k = short(a.pk, 8); const i = line.indexOf(k); return <span key={a.pk}>{line.slice(0, i)}<a className="hi" href={agentHref(a.pk)}>{k}</a>{line.slice(i + k.length)}{"\n"}</span>; })}
       {bottom()}{"\n\n"}
       {(s?.duels ?? []).filter(Boolean).slice(0, 3).map((d) => d && (
         <span key={d.id}>
