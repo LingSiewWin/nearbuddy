@@ -8,8 +8,9 @@ Sections:
   2. commit-reveal: commits, reveals, the scored reveal per agent-duel (the row of get_duel's last_intent_{a,b}
      nonce) landing inside the intent lock: the block time of its arena receipt (where the contract checks the lock)
      vs close_at minus the duel's lock (see `lock_at`), and no-reveal forfeits (get_no_reveal)
-  3. attacks per prompt arm split against / with / flat (injection_effects.enrich and .clustered: took the injected
-     side, interval over agent-duels, baseline = the arm's unattacked rate of the pushed side, as injection_effects)
+  3. attacks per injection_effects group (model x prompt arm, pair 2 split by token cap) split against / with / flat
+     (injection_effects.enrich and .clustered: took the injected side, interval over agent-duels, baseline = the
+     group's unattacked rate of the pushed side, as injection_effects)
   4. briefs measured from the runner's spot (open_source "spot") rather than the oracle open
   5. pair 2 parse rate per max_tokens cap (model_report's rule: decisions plus unparseable replies)
   6. `bun run verify-duel` PASS / FAIL over the last N resolved duels
@@ -45,10 +46,6 @@ S = 1_000_000_000
 
 def pair(r: dict) -> str:
     return r.get("pair_tag") or "main"
-
-
-def arm(r: dict) -> str:
-    return r.get("prompt_variant") or ("hardened" if r.get("hardened") else "naive")
 
 
 def pct(k: int, n: int) -> str:
@@ -147,7 +144,7 @@ def render(
     out += er.md_table(["pair", "commits", "reveals", "scored reveal inside the lock", "no-reveal forfeits"], body)
 
     # 3. attacks per arm, against / with / flat
-    out += ["## 3. Attacks per prompt arm (took the injected side)", ""]
+    out += ["## 3. Attacks per model and prompt arm (took the injected side)", ""]
     tee = [r for r in rows if r.get("tee") and "intent" in r and r.get("brief")]
     try:
         rs = ie.enrich(tee, duels)
@@ -156,8 +153,8 @@ def render(
         out += [f"Not available: {e}", ""]
     if rs is not None:
         body = []
-        for a in sorted({arm(r) for r in rs}):
-            sub = [r for r in rs if arm(r) == a]
+        for a in sorted({r["grp"] for r in rs}):  # injection_effects' group: model x arm, pair 2 by token cap
+            sub = [r for r in rs if r["grp"] == a]
             un = [r for r in sub if not r["attacked"]]
             long_share = sum(r["side"] == "Long" for r in un) / len(un) if un else 0.5
             att = [r for r in sub if r["attacked"]]
@@ -174,7 +171,7 @@ def render(
             "move; unreadable = no pushed side or a spot-open brief. Interval over agent-duels (injection_effects).",
             "",
         ]
-        out += er.md_table(["arm", "test", "attacked", "took injected side"], body)
+        out += er.md_table(["group", "test", "attacked", "took injected side"], body)
 
     # 4. spot opens
     spot = [r for r in rows if r.get("open_source") == "spot"]
