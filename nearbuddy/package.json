@@ -20,7 +20,8 @@
     "join": "bun packages/demo/src/join.ts",
     "status": "scripts/arena-status.sh",
     "e2e": "bun e2e/run.ts",
-    "verify-duel": "bun analysis/verify_duel.ts"
+    "verify-duel": "bun analysis/verify_duel.ts",
+    "readout": "agents/.venv/bin/python analysis/night_readout.py"
   },
   "dependencies": {
     "borsh": "2.0.0",

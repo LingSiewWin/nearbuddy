@@ -208,6 +208,7 @@ cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt 
 cd .. && bun run arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, oracle resolve
 DUELS=8 TARGET=b bun run spectator           # inject one attack per new duel at the naive model (pays 0.1 NEAR each)
 bun run status                            # processes, chain config, newest duel, balances, batch state (--json, --watch)
+bun run readout -- --since 340 [--out r.md]  # morning readout: duels per pair, enclave and commit-reveal stats, attack splits, parse rate per cap, verify-duel
 bun --cwd web run build && bun --cwd web run start -p 3011   # /arena reads the public RPC, no keys in the browser
 bun run real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
 sh scripts/arena-up.sh 3 90               # or all at once: solver + web + three 90-second duels
