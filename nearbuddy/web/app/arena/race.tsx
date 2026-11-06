@@ -43,8 +43,8 @@ export function Headline({
     h1 = "Waiting for the bell's price.";
     sub = (
       <>
-        Duel {f.duel} closed {Math.round((now - f.closes) / 60_000)} min ago. It is scored once someone calls{" "}
-        <b>resolve_duel</b>: the call is open to anyone, and the TEE oracle supplies the close price. At the last trade,{" "}
+        Duel {f.duel} closed {Math.round((now - f.closes) / 60_000)} min ago and is waiting to be scored. Anyone can
+        trigger that on chain; the TEE oracle supplies the closing price. At the last trade,{" "}
         {lead ? <>{lead === "a" ? A : B} was ahead</> : "the two sides were level"}.
       </>
     );
@@ -91,10 +91,10 @@ export function Headline({
     sub = w ? (
       <>
         {w === "a" ? B : A} paid <b>{near(f.slashed)}</b> of its bond. NEAR moved <b>{pct(move)}</b> between the
-        oracle&apos;s open and close. The next duel opens within a minute.
+        oracle&apos;s open and close. The next duel usually opens within a minute.
       </>
     ) : (
-      <>Both ended with the same score, so nobody paid. The next duel opens within a minute.</>
+      <>Both ended with the same score, so nobody paid. The next duel usually opens within a minute.</>
     );
   }
   return (
