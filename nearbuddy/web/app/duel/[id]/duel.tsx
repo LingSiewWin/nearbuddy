@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { type Intent, isCall, markPct, openOf } from "../../arena/model";
 import { type Tick, useNow, usePrice } from "../../lib/live";
+import { NET } from "../../network";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
 import {
   ARENA_ID,
@@ -27,6 +28,8 @@ import { Machine } from "../../ui/machine";
 import { type DuelData, type DuelSide, loadDuel } from "./data";
 import { Race, tones } from "./race";
 import { type Story, stories, Trail, verdictOf } from "./trail";
+
+const TX_HOST = new URL(NET.txApi).host;
 
 const TRADES_MS = 60 * 60_000; // Coinbase's trade history reaches about this far back; older duels use minute prices
 const CANDLES = "https://api.exchange.coinbase.com/products/NEAR-USD/candles?granularity=60";
@@ -497,8 +500,8 @@ function ProofMachine({ d }: { d: DuelData }) {
         <span>the transactions behind this page</span>
       </div>
       <p className="mdesc">
-        Read from FastNEAR&apos;s transaction API (tx.test.fastnear.com) and decoded from each call&apos;s arguments and
-        the contract&apos;s EVENT_JSON logs. at_ms is the block timestamp.
+        Read from FastNEAR&apos;s transaction API ({TX_HOST}) and decoded from each call&apos;s arguments and the
+        contract&apos;s EVENT_JSON logs. at_ms is the block timestamp.
       </p>
       <pre className="json">{JSON.stringify(out, null, 2)}</pre>
     </div>
