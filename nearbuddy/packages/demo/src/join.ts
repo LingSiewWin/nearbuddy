@@ -43,7 +43,9 @@ const file = `${dir}/${pk.replace(/[^a-zA-Z0-9]/g, "_")}.json`;
 // The seed is written only after the chain accepted the key, so a failed call leaves no orphan file.
 const signer = loadAccount(account);
 const deposit = BigInt(Math.round(bondNear * 1e6)) * 10n ** 18n;
-const r = await signer.callFunctionRaw({ contractId: ARENA, methodName: "register_agent", args: { agent_pk: pk, model_id: model, tee }, gas: teraToGas("30"), deposit });
+// proof of key possession: ed25519 over "nearbuddy-register-v1" || your account id, so nobody can squat a published key
+const register_sig = Buffer.from(nacl.sign.detached(Buffer.concat([Buffer.from("nearbuddy-register-v1"), Buffer.from(account)]), kp.secretKey)).toString("base64");
+const r = await signer.callFunctionRaw({ contractId: ARENA, methodName: "register_agent", args: { agent_pk: pk, model_id: model, tee, register_sig }, gas: teraToGas("30"), deposit });
 writeFileSync(file, JSON.stringify({ pk, seed_hex: seed.toString("hex"), model, tee, account, register_tx: r.transaction.hash, created: new Date().toISOString() }, null, 2), { mode: 0o600 });
 console.log(`registered ${pk} on ${ARENA} as ${account}: ${explorerTx(r.transaction.hash)}`);
 console.log(`agent page: ${page}/agent/${encodeURIComponent(pk)}`);
