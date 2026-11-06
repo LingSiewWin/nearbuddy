@@ -56,9 +56,12 @@ export function slim(raws: Raw[], last = new Map<string, Side>()) {
   const bodies: Record<string, Bytes> = {};
   let mismatched = 0;
   // distinct brief moves per duel in order of appearance (both agents read the same oracle tape); each row
-  // remembers the index of its own move, so a value seen twice in a duel still points at the right next one
+  // remembers the index of its own move, so a value seen twice in a duel still points at the right next one.
+  // Like injection_effects.py, only enclave rows with a landed call build the tape and the previous side.
+  const teeRow = (r: Raw) => !!r.tee && !!r.intent;
   const spots = new Map<string, number[]>();
   const spotAt = raws.map((r) => {
+    if (!teeRow(r)) return null;
     const m = briefMove(r.brief ?? "");
     if (m == null) return null;
     const list = spots.get(r.duel_id) ?? [];
@@ -77,7 +80,7 @@ export function slim(raws: Raw[], last = new Map<string, Side>()) {
     if (!r.intent) continue; // a post that never landed
     const key = `${r.duel_id}:${r.agent_pk}`;
     const prev = last.get(key) ?? null;
-    last.set(key, r.intent.side);
+    if (teeRow(r)) last.set(key, r.intent.side);
     // exported rows were re-verified; a runner row counts once its enclave-proved intent landed on chain
     const ok =
       r.verifiable === undefined ? r.tee?.kind === 2 && !!r.tx : r.verifiable === true || r.verifiable === "True";
