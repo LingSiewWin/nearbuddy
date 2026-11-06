@@ -2,7 +2,7 @@
 // The race card for one duel: the reference price over the duel window between the oracle's open and close
 // lines, each model's calls as a lane (filled = Long, outlined = Short) and attacks as hatched flags. Same
 // classes as the arena's race card; this one also draws the close and says how each side finished.
-import { duelEvents, markPct, openOf } from "../../arena/model";
+import { duelEvents, markPct, openOf, sealedIn } from "../../arena/model";
 import type { Tick } from "../../lib/live";
 import { agentHref, pct, stake, tone, usd, who } from "../../ui/format";
 import type { DuelData, DuelSide } from "./data";
@@ -45,9 +45,12 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
     const other = s === d.a ? d.b : d.a;
     const mark = d.live ? markPct(s, open, price) : (s.score ?? 0);
     const vs = d.live ? markPct(other, open, price) : (other.score ?? 0);
+    const sealed = d.live && sealedIn(d.events, d.duel, s.agent);
     const state = d.live
       ? !s.side && !other.side
-        ? "no call yet"
+        ? sealed
+          ? "hidden until revealed"
+          : "no call yet"
         : Math.abs(mark - vs) < 0.005
           ? "tied"
           : mark > vs
@@ -64,7 +67,9 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
           <a className="n who" href={agentHref(s.agent)}>
             {who(s.model)}
           </a>
-          <span className="s">{s.side ? `${s.side}, ${stake(s.size_pct)}` : d.live ? "No call yet" : "No call"}</span>
+          <span className="s">
+            {s.side ? `${s.side}, ${stake(s.size_pct)}` : sealed ? "Sealed call" : d.live ? "No call yet" : "No call"}
+          </span>
           <span className="st">{state}</span>
         </div>
         <div className={`trk lane ${k}`}>

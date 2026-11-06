@@ -20,6 +20,19 @@ export const fixedAt = (c: Intent, events: ArenaEvent[]): number | null => {
   // no commit in view: it is older than everything here (the window is contiguous), so not after any attack in it
   return commits.length ? Math.max(...commits) : null;
 };
+/** Commit-reveal: the agent's newest commit in this duel is newer than its newest call, so a call is on chain that
+ *  nobody can read yet. Order-agnostic: works on the tape (newest first) and a duel's events (oldest first). */
+export const sealedIn = (events: ArenaEvent[], duel: number, agent: string) => {
+  const last = (k: (e: ArenaEvent) => boolean) =>
+    Math.max(
+      0,
+      ...events
+        .filter((e) => k(e) && e.ok && "duel" in e && e.duel === duel && "agent" in e && e.agent === agent)
+        .map((e) => e.at),
+    );
+  const c = last((e) => e.kind === "commit");
+  return c > 0 && c > last(isCall);
+};
 /** The target's first call fixed after an attack: the call that could have read the lie. */
 export const replyTo = (a: Attack, events: ArenaEvent[]): Intent | null =>
   events

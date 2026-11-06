@@ -4,7 +4,7 @@
 // trail in the rail. Agent view swaps each panel for its endpoint. While the duel is open the data is
 // re-read every 10 s; once it is scored, never again.
 import { useEffect, useState } from "react";
-import { type Attack, type Intent, isCall, markPct, openOf, replyTo } from "../../arena/model";
+import { type Attack, type Intent, isCall, markPct, openOf, replyTo, sealedIn } from "../../arena/model";
 import { type Tick, useNow, usePrice } from "../../lib/live";
 import { NET } from "../../network";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
@@ -314,12 +314,29 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
         `Both bet ${d.a.side === "Long" ? "up" : "down"}.`
       ) : d.a.side || d.b.side ? (
         "Dead heat."
+      ) : sealedIn(d.events, d.duel, d.a.agent) && sealedIn(d.events, d.duel, d.b.agent) ? (
+        // commit-reveal: both have called, and nobody can read either call until the last minute
+        "Both calls are sealed."
       ) : (
         `Duel ${d.duel}: no call revealed yet.`
       );
+      const doing = (s: DuelSide) =>
+        s.side ? (
+          <>
+            is <b>{sideWord(s.side)}</b>
+          </>
+        ) : sealedIn(d.events, d.duel, s.agent) ? (
+          <>
+            has <b>sealed a call</b>
+          </>
+        ) : (
+          <>
+            is <b>yet to make a call</b>
+          </>
+        );
       sub = (
         <>
-          {nm(d.a)} is <b>{sideWord(d.a.side)}</b>, {nm(d.b)} is <b>{sideWord(d.b.side)}</b>
+          {nm(d.a)} {doing(d.a)}, {nm(d.b)} {doing(d.b)}
           {move == null
             ? ". "
             : `, and ${moved.replace("rose", "is up").replace("fell", "is down")} since the duel opened. `}

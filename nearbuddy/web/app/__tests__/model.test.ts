@@ -14,6 +14,7 @@ import {
   priceAt,
   replyTo,
   type Side,
+  sealedIn,
   withTape,
 } from "../arena/model";
 import type { Tick } from "../lib/live";
@@ -417,4 +418,22 @@ describe("replyTo: the call fixed after the attack, not the first reveal after i
     };
     expect(replyTo(atk, [plain])?.tx).toBe("i1");
   });
+});
+
+test("sealedIn: a commit newer than the newest call, in either event order", () => {
+  const base = { tx: "t", block: 1, ok: true, signer: "s", duel: 9, agent: "a" };
+  const commit = (at: number): ArenaEvent => ({ ...base, at, kind: "commit", commitment: "c" });
+  const reveal = (at: number): ArenaEvent => ({
+    ...base,
+    at,
+    kind: "reveal",
+    side: "Long",
+    size: 5000,
+    nonce: "1",
+    tee: 2,
+  });
+  expect(sealedIn([commit(10), reveal(20), commit(30)], 9, "a")).toBe(true);
+  expect(sealedIn([commit(30), reveal(20), commit(10)], 9, "a")).toBe(true);
+  expect(sealedIn([commit(10), reveal(20)], 9, "a")).toBe(false);
+  expect(sealedIn([commit(10)], 8, "a")).toBe(false); // another duel
 });
