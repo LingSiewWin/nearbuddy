@@ -49,18 +49,23 @@ export type Fill = {
   quote_out: string; // USDC base units, 6 decimals
   oracle_mid: string; // USD price x 1e8, as the oracle reports it
   quoted_at: number; // ms since epoch
-  bps_vs_oracle: number; // quote vs oracle mid; positive = the follower got more than mid
+  bps_vs_oracle: number | null; // quote vs oracle mid; positive = the follower got more than mid; null in old rows
 };
 
 export const usdc = (base: string | null | undefined) => (base ? (Number(base) / 1e6).toFixed(4) : "-");
-/** Signed bps with one decimal: "+3.2", "-0.5", "0.0". */
-export const sbps = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(1)}`;
-/** Price vs oracle mid, coloured: better for the follower is a win, worse a loss. */
-export const vsCell = (n: number, width = 0): Cell => ({
-  t: `${sbps(n)} bps`.padStart(width),
-  c: n > 0 ? "win" : n < 0 ? "loss" : "tie",
-  title: n > 0 ? "better than the oracle mid" : n < 0 ? "worse than the oracle mid" : "at the oracle mid",
-});
+/** A usable bps figure: old persisted rows may carry null (or junk) instead of a number. */
+const priced = (n: number | null | undefined): n is number => typeof n === "number" && Number.isFinite(n);
+/** Signed bps with one decimal: "+3.2", "-0.5", "0.0"; "-" when unpriced. */
+export const sbps = (n: number | null | undefined) => (priced(n) ? `${n > 0 ? "+" : ""}${n.toFixed(1)}` : "-");
+/** Price vs oracle mid, coloured: better for the follower is a win, worse a loss; unpriced is a dim "-". */
+export const vsCell = (n: number | null | undefined, width = 0): Cell =>
+  priced(n)
+    ? {
+        t: `${sbps(n)} bps`.padStart(width),
+        c: n > 0 ? "win" : n < 0 ? "loss" : "tie",
+        title: n > 0 ? "better than the oracle mid" : n < 0 ? "worse than the oracle mid" : "at the oracle mid",
+      }
+    : { t: "-".padStart(width), c: "dim", title: "not priced against the oracle mid" };
 /** Compact age: 42s, 7m, 3h, 2d. */
 export const age = (ms: number, nowMs: number) => {
   const s = Math.max(0, Math.floor((nowMs - ms) / 1000));
@@ -86,19 +91,20 @@ export const fillCells = (f: Fill, nowMs: number): Cell[] => [
   `  ${age(f.quoted_at, nowMs).padStart(4)} ago`,
 ];
 
-/** Per-follower execution summary for the given followers, in their order; followers without fills are left out. */
+/** Per-follower execution summary for the given followers, in their order; followers without fills are left out.
+ *  `n` counts every fill; avg/best/worst cover the priced ones and are null when none is priced. */
 export const followerQuality = (q: Fill[] | null | undefined, followers: string[]) =>
   followers.flatMap((follower) => {
     const mine = (q ?? []).filter((f) => f.follower === follower);
     if (!mine.length) return [];
-    const b = mine.map((f) => f.bps_vs_oracle);
+    const b = mine.map((f) => f.bps_vs_oracle).filter(priced);
     return [
       {
         follower,
         n: mine.length,
-        avg: b.reduce((x, y) => x + y, 0) / b.length,
-        best: Math.max(...b),
-        worst: Math.min(...b),
+        avg: b.length ? b.reduce((x, y) => x + y, 0) / b.length : null,
+        best: b.length ? Math.max(...b) : null,
+        worst: b.length ? Math.min(...b) : null,
         last: Math.max(...mine.map((f) => f.quoted_at)),
       },
     ];

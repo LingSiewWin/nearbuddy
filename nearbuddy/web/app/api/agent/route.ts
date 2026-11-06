@@ -70,7 +70,7 @@ async function build(pk: string): Promise<string> {
     view("list_followers", { agent_pk: pk }) as Promise<[string, unknown][]>,
     fetch(`${SOLVER_URL}/execution`, { cache: "no-store", signal: AbortSignal.timeout(3000) })
       .then((r) => r.json())
-      .then((j) => (Array.isArray(j) ? (j as Fill[]) : null))
+      .then((j: { quality?: Fill[] }) => (Array.isArray(j?.quality) ? j.quality : null))
       .catch(() => null), // solver offline or before batched RFQ
   ]);
   const mine = new Set(followers.map(([w]) => w));
