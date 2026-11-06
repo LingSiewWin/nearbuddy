@@ -1513,7 +1513,7 @@ dialog .lie {
   .p-board th {
     white-space: normal;
   }
-  /* Follow only explains the testnet calls today; the agent link carries the same */
+  /* the Follow column gives way to a smaller button under the agent's name */
   .hide-xs {
     display: none;
   }
@@ -1549,6 +1549,28 @@ a.row {
 }
 .fr {
   white-space: pre-wrap;
+}
+
+.show-xs {
+  display: none;
+}
+@media (max-width: 600px) {
+  .show-xs {
+    display: inline-flex;
+  }
+  /* the name, then the Follow button on its own line, so the row stays inside the phone */
+  .agent {
+    flex-wrap: wrap;
+  }
+  .agent a {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+.btn.tiny {
+  margin-top: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
 }
 
 /* the follow drawer's caution for an agent that took the side of most lies that tested it */

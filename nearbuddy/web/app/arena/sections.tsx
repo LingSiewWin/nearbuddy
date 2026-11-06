@@ -173,6 +173,15 @@ export function Standings({ s }: { s: Summary }) {
     // (one imagined fall and one imagined hold), so "held on all 1" no longer outranks "held on all 22"; naming a
     // lie and taking its side anyway counts against it. Untested agents sort last.
     a.attacks.faced ? 1 - fooled(a) / 100 : -1;
+  const follow = (a: Summary["standings"][number]) =>
+    open({
+      kind: "follow",
+      model: a.model,
+      agent: a.agent,
+      owner: a.owner,
+      prompt: a.prompt,
+      lies: { took: a.attacks.fell + a.attacks.named, faced: a.attacks.faced },
+    });
   const rows = [...s.standings].sort((x, y) =>
     sort === "fool"
       ? resist(y) - resist(x) || y.attacks.resisted - x.attacks.resisted || ret(y) - ret(x)
@@ -240,6 +249,10 @@ export function Standings({ s }: { s: Summary }) {
                       · {a.owner.replace(/\.(testnet|near)$/, "")}
                     </small>
                   </a>
+                  {/* phones hide the Follow column; the same button sits under the name instead */}
+                  <button type="button" className="btn tiny show-xs" onClick={() => follow(a)}>
+                    Follow
+                  </button>
                 </div>
               </td>
               <td
@@ -282,20 +295,7 @@ export function Standings({ s }: { s: Summary }) {
                 )}
               </td>
               <td className="r hide-xs">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() =>
-                    open({
-                      kind: "follow",
-                      model: a.model,
-                      agent: a.agent,
-                      owner: a.owner,
-                      prompt: a.prompt,
-                      lies: { took: a.attacks.fell + a.attacks.named, faced: a.attacks.faced },
-                    })
-                  }
-                >
+                <button type="button" className="btn" onClick={() => follow(a)}>
                   Follow
                 </button>
               </td>
