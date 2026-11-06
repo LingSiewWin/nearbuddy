@@ -22,6 +22,7 @@ import {
   getJson,
   legend,
   meter,
+  NET,
   near,
   price8,
   row,
@@ -135,8 +136,8 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
 
   const d = r?.duel ?? null;
   const o = d?.outcome ?? null;
-  const contract = r?.contract ?? "arena.nearbuddy-solver.testnet";
-  const oracle = r?.oracle ?? "price-oracle.testnet";
+  const contract = r?.contract ?? NET.arena;
+  const oracle = r?.oracle ?? NET.oracle;
   const nowNs = BigInt(Date.now()) * 1_000_000n;
   const state = !d
     ? null

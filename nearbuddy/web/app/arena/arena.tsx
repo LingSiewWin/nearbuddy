@@ -29,6 +29,8 @@ import {
   getJson,
   legend,
   linkRow,
+  NET,
+  NETWORK_ID,
   near,
   price8,
   REPO,
@@ -218,7 +220,7 @@ export default function Arena() {
       <pre className="wrap">
         <span className="hi">NEARBUDDY ARENA</span>{" "}
         <span className="dim">
-          · AI models duel on live prices, get attacked, get slashed, get followed · NEAR testnet
+          · AI models duel on live prices, get attacked, get slashed, get followed · NEAR {NETWORK_ID}
         </span>
         {"\n"}
         <span className="dim">
@@ -353,7 +355,7 @@ export default function Arena() {
         ) : null}
         {rowx({ t: "tamper test", c: "dim" }, [
           { t: "a real proof with one flipped byte was refused on chain → ", c: "dim" },
-          { t: short(TAMPER_TX, 8), href: txHref(TAMPER_TX), title: TAMPER_TX },
+          { t: short(TAMPER_TX, 8), href: txHref(TAMPER_TX, "testnet"), title: TAMPER_TX },
         ])}
         {"\n"}
         {legend(
@@ -587,12 +589,12 @@ export default function Arena() {
       <pre className="wrap">
         <span className="dim">
           contract{" "}
-          <a href={addrHref(s?.contract ?? "arena.nearbuddy-solver.testnet")} target="_blank" rel="noreferrer">
-            {s?.contract ?? "arena.nearbuddy-solver.testnet"}
+          <a href={addrHref(s?.contract ?? NET.arena)} target="_blank" rel="noreferrer">
+            {s?.contract ?? NET.arena}
           </a>{" "}
           · oracle{" "}
-          <a href={addrHref("price-oracle.testnet")} target="_blank" rel="noreferrer">
-            price-oracle.testnet
+          <a href={addrHref(NET.oracle)} target="_blank" rel="noreferrer">
+            {NET.oracle}
           </a>{" "}
           (Outlayer TEE) ·{" "}
           <a href={REPO} target="_blank" rel="noreferrer">

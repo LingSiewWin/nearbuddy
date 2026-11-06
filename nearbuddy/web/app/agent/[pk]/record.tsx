@@ -15,6 +15,8 @@ import {
   getJson,
   legend,
   meter,
+  NET,
+  NETWORK_ID,
   near,
   price8,
   REPO,
@@ -146,7 +148,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
     r?.execution,
     (r?.followers ?? []).map(([w]) => w),
   );
-  const contract = r?.contract ?? "arena.nearbuddy-solver.testnet";
+  const contract = r?.contract ?? NET.arena;
   const slashPct = r?.slash_bps != null ? `${r.slash_bps / 100} %` : "slash_bps";
   const attackCost = r?.min_chaos_deposit ? `${near(r.min_chaos_deposit, 1)} NEAR` : "the minimum deposit";
   const scope = !r
@@ -194,7 +196,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
         </a>
         {"  "}
         <span className="hi">NEARBUDDY AGENT</span>{" "}
-        <span className="dim">· one agent&apos;s record, read from the contract · NEAR testnet</span>
+        <span className="dim">· one agent&apos;s record, read from the contract · NEAR {NETWORK_ID}</span>
         {"\n"}
         {a ? (
           <>
@@ -438,8 +440,8 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
             {contract}
           </a>{" "}
           · oracle{" "}
-          <a href={addrHref("price-oracle.testnet")} target="_blank" rel="noreferrer">
-            price-oracle.testnet
+          <a href={addrHref(NET.oracle)} target="_blank" rel="noreferrer">
+            {NET.oracle}
           </a>{" "}
           (Outlayer TEE) · decisions dataset: agents/data/export in the{" "}
           <a href={REPO} target="_blank" rel="noreferrer">
