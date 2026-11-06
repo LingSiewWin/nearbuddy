@@ -73,6 +73,16 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
   const now = useNow(d.live ? 500 : 30_000);
   const list = stories(d);
   const day = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  // one polite line for screen readers: the newest attack while the duel runs, then the result
+  const won = d.winner === d.a.agent ? d.a : d.winner === d.b.agent ? d.b : null;
+  const hit = list.findLast((s) => s.e);
+  const say = !d.live
+    ? won
+      ? `${who(won.model)} won duel ${d.duel}.`
+      : `Duel ${d.duel} ended level, nobody paid.`
+    : hit
+      ? `Attack on ${who(hit.target === d.a.agent ? d.a.model : d.b.model)}: ${hit.text ?? "a custom headline"}`
+      : "";
   return (
     <DrawerProvider>
       <div className="abanner m">
@@ -100,6 +110,9 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
         </div>
       </div>
       <main className="page duel">
+        <p className="sr" aria-live="polite">
+          {say}
+        </p>
         <section className="p-story">
           <div className="h">
             <p className="crumb">
