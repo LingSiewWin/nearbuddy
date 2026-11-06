@@ -49,14 +49,18 @@ type Check = { label: string; ok: boolean | null; detail: string };
 async function recheck(ev: Intent): Promise<Check[]> {
   const tx = ev.tx;
   const out: Check[] = [];
-  const pub = await fetch(`/api/v1/decisions/${tx}`).then((r) => (r.ok ? r.json() : null));
-  if (!pub) return [{ label: "Published bytes", ok: null, detail: "not in the published dataset yet" }];
-  const [reqHash, resHash] = await Promise.all([sha256(pub.request), sha256(pub.response)]);
-  const t = await fetch(FASTNEAR, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tx_hashes: [tx] }),
-  }).then((r) => r.json());
+  // the chain checks need only FastNEAR; the byte checks also need the published request and response
+  const [pub, t] = await Promise.all([
+    fetch(`/api/v1/decisions/${tx}`).then((r) => (r.ok ? r.json() : null)) as Promise<{
+      request: string;
+      response: string;
+    } | null>,
+    fetch(FASTNEAR, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tx_hashes: [tx] }),
+    }).then((r) => r.json()),
+  ]);
   const txd = t.transactions?.[0];
   const fc = txd?.transaction?.actions?.find((a: { FunctionCall?: unknown }) => a.FunctionCall)?.FunctionCall;
   const args = fc ? JSON.parse(atob(fc.args)) : null;
@@ -91,6 +95,15 @@ async function recheck(ev: Intent): Promise<Check[]> {
       ? `refused on chain${why ? `: ${why}` : ""} (read from ${TX_HOST})`
       : `read from ${TX_HOST}, not from this site`,
   });
+  if (!pub) {
+    out.push({
+      label: "The model's request and response bytes",
+      ok: null,
+      detail: "not published yet (the dataset is exported in batches); the chain checks above stand on their own",
+    });
+    return out;
+  }
+  const [reqHash, resHash] = await Promise.all([sha256(pub.request), sha256(pub.response)]);
   out.push({
     label: "Request bytes hash to the chain's request_hash",
     ok: !!args?.tee && b64hex(args.tee.request_hash) === reqHash,
