@@ -1,5 +1,6 @@
 //! Sandbox run of the real wasm: a TEE-backed agent posts enclave-proved intents (and one tampered
-//! proof is refused), the duel takes the maximum 32 injections, a follower settles 10 fills, and
+//! proof is refused), the duel takes the maximum 32 injections, a follower follows the TEE agent
+//! (the plain one is refused) and settles 10 fills, and
 //! the duel is resolved through the oracle callback with the oracle account playing Outlayer.
 //! Prints gas burnt per call so the README can quote it.
 //!   cargo test --test test_arena_sandbox -- --ignored --nocapture
@@ -133,7 +134,13 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
 
     // follower deposits and follows A; settle 10 fills against 10 distinct intents
     call("deposit", json!({}), &follower, NearToken::from_near(5)).await?.assert_success();
-    call("follow", json!({"agent_pk": b64(&pka), "mandate": {"allowance": NearToken::from_near(5).as_yoctonear().to_string(), "spent": "0", "per_tx_cap": NearToken::from_millinear(200).as_yoctonear().to_string(), "allowed_tokens": [], "expires_at": (close_at + 10_000_000_000_000).to_string(), "revoked": false}}), &follower, zero).await?.assert_success();
+    let mandate = json!({"allowance": NearToken::from_near(5).as_yoctonear().to_string(), "spent": "0", "per_tx_cap": NearToken::from_millinear(200).as_yoctonear().to_string(), "allowed_tokens": [], "expires_at": (close_at + 10_000_000_000_000).to_string(), "revoked": false});
+    call("follow", json!({"agent_pk": b64(&pkb), "mandate": mandate}), &follower, zero).await?.assert_failure();
+    println!("follow on an agent without TEE proofs: refused");
+    let r = call("follow", json!({"agent_pk": b64(&pka), "mandate": mandate}), &follower, zero).await?.assert_success();
+    println!("GAS follow (TEE agent) {:.2} TGas", gas_of(&r) as f64 / 1e12);
+    let duels: Vec<U64> = contract.call_function("agent_duels", json!({"agent_pk": b64(&pka), "from": 0, "limit": 10})).read_only().fetch_from(&net).await?.data;
+    assert_eq!(duels, vec![U64(duel_id)], "per-agent duel index");
     for n in 3..=11u64 {
         call("post_intent", mk_a(n, Side::Long, [n as u8; 32], [0xbb; 32], false), &solver, zero).await?.assert_success();
     }

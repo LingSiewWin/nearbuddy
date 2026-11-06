@@ -442,16 +442,18 @@ pub fn fill(nonce: u64, token: &str, amount: u128) -> Fill {
 
 const VAULT: u128 = 10 * NEAR;
 
-/// setup + duel + B posts nonce 1 + follower deposits 10 NEAR and follows B with the given mandate.
+/// setup + TEE signer + duel + A posts nonce 1 through its proof + follower deposits 10 NEAR and
+/// follows A (TEE-backed; plain B cannot be followed) with the given mandate.
 /// Returns the vault balance after deposit and follow (storage was charged from it).
 pub fn setup_follow(m: Mandate) -> (Contract, u64, u128) {
-    let (mut c, _, skb) = setup();
+    let (mut c, ska, _) = setup();
+    let tee = tee_signer(&mut c);
     let d = open(&mut c);
-    post_b(&mut c, &skb, d, Side::Long, 1);
+    post_a(&mut c, &ska, &tee, d, Side::Long, 1);
     ctx(FOLLOWER, VAULT);
     c.deposit();
     ctx(FOLLOWER, 0);
-    c.follow(Base64VecU8(key(2).1), m);
+    c.follow(Base64VecU8(key(1).1), m);
     ctx(SOLVER, 0);
     let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
     (c, d, v)
@@ -459,7 +461,28 @@ pub fn setup_follow(m: Mandate) -> (Contract, u64, u128) {
 
 fn settle(c: &mut Contract, fills: Vec<Fill>) -> SettleReport {
     ctx(SOLVER, 0);
-    c.settle_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap(), fills)
+    c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), fills)
+}
+
+#[test]
+#[should_panic(expected = "agent unverified")]
+fn follow_plain_agent_refused() {
+    let (mut c, ..) = setup();
+    ctx(FOLLOWER, VAULT);
+    c.deposit();
+    ctx(FOLLOWER, 0);
+    c.follow(Base64VecU8(key(2).1), mandate(NEAR, VAULT, vec![]));
+}
+
+#[test]
+fn follow_tee_agent_ok() {
+    let (mut c, ..) = setup();
+    ctx(FOLLOWER, VAULT);
+    c.deposit();
+    ctx(FOLLOWER, 0);
+    c.follow(Base64VecU8(key(1).1), mandate(NEAR, VAULT, vec![]));
+    assert!(c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap()).is_some());
+    assert!(c.get_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap()).is_none());
 }
 
 #[test]
@@ -500,7 +523,7 @@ fn fill_wrong_token_rejected() {
 fn fill_after_expiry_rejected() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
     ctx_at(SOLVER, 0, NOW + 1_000_000);
-    let r = c.settle_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+    let r = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
     assert_eq!(r.rejected[0].1, "mandate expired");
 }
 
@@ -508,7 +531,7 @@ fn fill_after_expiry_rejected() {
 fn fill_after_revoke_rejected() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
     ctx(FOLLOWER, 0);
-    c.unfollow(Base64VecU8(key(2).1));
+    c.unfollow(Base64VecU8(key(1).1));
     let r = settle(&mut c, vec![fill(1, "usdc", 50)]);
     assert_eq!(r.rejected[0].1, "mandate revoked");
 }
@@ -534,7 +557,7 @@ fn foreign_nonce_rejected() {
 fn non_solver_cannot_settle() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
     ctx(OPERATOR, 0);
-    c.settle_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
+    c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![fill(1, "usdc", 50)]);
 }
 
 #[test]
@@ -549,17 +572,17 @@ fn insufficient_vault_rejected() {
 fn allowance_exhausted_rejected() {
     let (mut c, d, _) = setup_follow(mandate(NEAR, NEAR + NEAR / 2, vec![]));
     settle(&mut c, vec![fill(1, "usdc", NEAR)]);
-    // B posts a second intent (nonce 2), then a fill against it exceeds the remaining allowance
-    post_b(&mut c, &key(2).0, d, Side::Short, 2);
+    // A posts a second intent (nonce 2), then a fill against it exceeds the remaining allowance
+    post_a(&mut c, &key(1).0, &key(7).0, d, Side::Short, 2);
     let r = settle(&mut c, vec![fill(2, "usdc", NEAR * 6 / 10)]);
     assert_eq!(r.rejected[0].1, "allowance exhausted");
-    assert_eq!(c.get_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap()).unwrap().spent.0, NEAR);
+    assert_eq!(c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap()).unwrap().spent.0, NEAR);
 }
 
 #[test]
 fn list_followers_and_withdraw() {
     let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    assert_eq!(c.list_followers(Base64VecU8(key(2).1)).len(), 1);
+    assert_eq!(c.list_followers(Base64VecU8(key(1).1)).len(), 1);
     ctx(FOLLOWER, 0);
     let _ = c.withdraw(U128(4 * NEAR));
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - 4 * NEAR);
@@ -567,13 +590,20 @@ fn list_followers_and_withdraw() {
 
 // ---------------------------------------------------------------- chaos and resolve
 
-/// A posts through its TEE proof (A is TEE-backed in `setup`).
-fn post_a(c: &mut Contract, ska: &SigningKey, tee: &SigningKey, d: u64, side: Side, nonce: u64) {
-    let (req, res) = ([nonce as u8; 32], [0xbb; 32]);
-    let mut i = intent(&key(1).1, d, side, 5_000, nonce);
+/// A TEE-backed agent posts through its enclave proof. The proof is unique per (agent, nonce):
+/// request hash = agent pk, response hash = nonce.
+fn post_tee(c: &mut Contract, sk: &SigningKey, model: &str, tee: &SigningKey, d: u64, side: Side, nonce: u64) {
+    let pk = sk.verifying_key().to_bytes();
+    let (req, res) = (pk, [nonce as u8; 32]);
+    let mut i = intent(&pk, d, side, 5_000, nonce);
     i.proof_hash = Base64VecU8(proof_hash(&req, &res));
     ctx(SOLVER, 0);
-    c.post_intent(sign(ska, &i), Some(tee_proof(tee, 2, MODEL_A, req, res)));
+    c.post_intent(sign(sk, &i), Some(tee_proof(tee, 2, model, req, res)));
+}
+
+/// A posts through its TEE proof (A is TEE-backed in `setup`).
+fn post_a(c: &mut Contract, ska: &SigningKey, tee: &SigningKey, d: u64, side: Side, nonce: u64) {
+    post_tee(c, ska, MODEL_A, tee, d, side, nonce)
 }
 
 fn inject(c: &mut Contract, d: u64, target: &[u8], deposit: u128) {
@@ -844,12 +874,21 @@ fn withdraw_bond_after_resolve_ok() {
 
 #[test]
 fn same_nonce_on_two_agents_settles_both() {
-    // follower follows A and B; both post nonce 1; both fills settle (fill key is agent-scoped)
-    let (mut c, ska, skb) = setup();
+    // follower follows A and B (both TEE-backed here); both post nonce 1; both fills settle
+    // (fill key is agent-scoped)
+    let (ska, pka) = key(1);
+    let (skb, pkb) = key(2);
+    ctx(OWNER, 0);
+    let mut c = Contract::init(OWNER.parse().unwrap(), ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 1_000, 0, U128(MIN_CHAOS));
+    c.add_solver(SOLVER.parse().unwrap());
+    ctx(OPERATOR, BOND);
+    c.register_agent(Base64VecU8(pka), MODEL_A.into(), true);
+    ctx(OPERATOR, BOND);
+    c.register_agent(Base64VecU8(pkb), MODEL_B.into(), true);
     let tee = tee_signer(&mut c);
     let d = open(&mut c);
     post_a(&mut c, &ska, &tee, d, Side::Long, 1);
-    post_b(&mut c, &skb, d, Side::Short, 1);
+    post_tee(&mut c, &skb, MODEL_B, &tee, d, Side::Short, 1);
     ctx(FOLLOWER, VAULT);
     c.deposit();
     ctx(FOLLOWER, 0);
@@ -869,12 +908,12 @@ fn owner_withdraws_fees() {
     let mut c = Contract::init(OWNER.parse().unwrap(), ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 1_000, 100, U128(MIN_CHAOS)); // fee 1%
     c.add_solver(SOLVER.parse().unwrap());
     ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(key(1).1), "m".into(), false);
+    c.register_agent(Base64VecU8(key(1).1), MODEL_A.into(), true);
     ctx(OPERATOR, BOND);
     c.register_agent(Base64VecU8(key(2).1), "m".into(), false);
+    let tee = tee_signer(&mut c);
     let d = open(&mut c);
-    ctx(SOLVER, 0);
-    c.post_intent(sign(&key(1).0, &intent(&key(1).1, d, Side::Long, 5_000, 1)), None);
+    post_a(&mut c, &key(1).0, &tee, d, Side::Long, 1);
     ctx(FOLLOWER, VAULT);
     c.deposit();
     ctx(FOLLOWER, 0);
@@ -931,4 +970,57 @@ fn migrate_duels_rewrites_v2_layout_keeping_outcome() {
     assert_eq!((o.pnl_a, o.pnl_b, o.slashed.0, o.injections), (25, -25, 7, 1));
     assert_eq!(m.open_price.unwrap().0, OPEN);
     assert!(m.resolved);
+}
+
+// ---------------------------------------------------------------- per-agent duel index
+
+fn ids(v: Vec<U64>) -> Vec<u64> {
+    v.into_iter().map(|x| x.0).collect()
+}
+
+#[test]
+fn agent_duels_index_grows_and_pages_newest_first() {
+    let (mut c, ..) = setup();
+    let a = Base64VecU8(key(1).1);
+    assert!(c.agent_duels(a.clone(), 0, 10).is_empty(), "no duels yet");
+    let d0 = open(&mut c);
+    assert_eq!(ids(c.agent_duels(a.clone(), 0, 10)), vec![d0]);
+    resolve_at_close(&mut c, d0, UP);
+    let d1 = open(&mut c);
+    resolve_at_close(&mut c, d1, UP);
+    let d2 = open(&mut c);
+    assert_eq!(ids(c.agent_duels(a.clone(), 0, 10)), vec![d2, d1, d0]);
+    assert_eq!(ids(c.agent_duels(Base64VecU8(key(2).1), 0, 2)), vec![d2, d1], "both sides indexed, limit honoured");
+    assert_eq!(ids(c.agent_duels(a.clone(), 1, 1)), vec![d1]);
+    assert_eq!(ids(c.agent_duels(a.clone(), 2, 5)), vec![d0]);
+    assert!(c.agent_duels(a, 3, 5).is_empty(), "offset past the end");
+    assert!(c.agent_duels(Base64VecU8(key(9).1), 0, 10).is_empty(), "unknown agent");
+}
+
+#[test]
+fn migrate_v10_adds_empty_index_and_keeps_state() {
+    let (mut c, ..) = setup();
+    let d0 = open(&mut c);
+    resolve_at_close(&mut c, d0, UP);
+    // Flush cached writes (the real wrapper does this when the call ends), then write deploy-9 state:
+    // the current layout minus the trailing `agent_duels` prefix (borsh Vec<u8>: len 1 + key byte).
+    c.duels.flush();
+    c.agents.flush();
+    // deploy 9 had no index entries: drop the ones this test's open_duel wrote
+    for seed in [1, 2] {
+        c.agent_duels.remove(&key(seed).1);
+    }
+    c.agent_duels.flush();
+    let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
+    let tail = raw.split_off(raw.len() - 5);
+    assert_eq!(tail, near_sdk::borsh::to_vec(&near_sdk::borsh::to_vec(&StorageKey::AgentDuels).unwrap()).unwrap());
+    env::storage_write(b"STATE", &raw);
+    ctx(CONTRACT, 0);
+    let mut m = Contract::migrate_v10();
+    assert_eq!(m.get_config().next_duel.0, 1);
+    assert!(m.get_agent(Base64VecU8(key(1).1)).unwrap().tee);
+    assert!(m.get_duel(U64(d0)).unwrap().resolved);
+    assert!(m.agent_duels(Base64VecU8(key(1).1), 0, 10).is_empty(), "old duels are not back-filled");
+    let d1 = open(&mut m);
+    assert_eq!(ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)), vec![d1]);
 }

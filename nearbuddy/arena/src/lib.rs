@@ -48,6 +48,7 @@ enum StorageKey {
     TeeSigners,
     TeeAgents,
     UsedProofs,
+    AgentDuels,
 }
 
 #[ext_contract(ext_oracle)]
@@ -87,6 +88,37 @@ pub struct Contract {
     used_proofs: LookupSet<Vec<u8>>,
     /// `close_at - now` floor for `open_duel`. Outlayer serves a cached price for `recency_duration_sec`
     /// (300 s on testnet) with a fresh timestamp, so a shorter duel would close on its own open price.
+    min_duel_ns: u64,
+    /// Duel ids per agent, oldest first, appended by `open_duel`. Only duels opened from deploy 10
+    /// on are here (`migrate_v10` does not back-fill). ponytail: one Vec per agent, read and
+    /// rewritten whole on every open_duel; a `Vector` per agent when an agent has more duels than
+    /// fit in one read.
+    agent_duels: LookupMap<Vec<u8>, Vec<u64>>,
+}
+
+/// State layout of deploys 8-9 (before `agent_duels`). Read once by `migrate_v10`.
+#[allow(dead_code)]
+#[derive(near_sdk::borsh::BorshDeserialize)]
+#[borsh(crate = "near_sdk::borsh")]
+pub struct ContractV9 {
+    owner: AccountId,
+    oracle_account: AccountId,
+    oracle_deposit: u128,
+    slash_bps: u16,
+    fee_bps: u16,
+    min_chaos_deposit: u128,
+    agents: IterableMap<Vec<u8>, Agent>,
+    duels: LookupMap<u64, Duel>,
+    next_duel: u64,
+    used_nonces: LookupSet<Vec<u8>>,
+    solvers: LookupSet<AccountId>,
+    vaults: LookupMap<AccountId, u128>,
+    follows: LookupMap<Vec<u8>, Vec<(AccountId, Mandate)>>,
+    settled_fills: LookupSet<Vec<u8>>,
+    owner_fees: u128,
+    tee_signers: LookupSet<Vec<u8>>,
+    tee_agents: LookupSet<Vec<u8>>,
+    used_proofs: LookupSet<Vec<u8>>,
     min_duel_ns: u64,
 }
 
@@ -246,10 +278,41 @@ impl Contract {
             tee_agents: LookupSet::new(StorageKey::TeeAgents),
             used_proofs: LookupSet::new(StorageKey::UsedProofs),
             min_duel_ns: 0,
+            agent_duels: LookupMap::new(StorageKey::AgentDuels),
         }
     }
 
     // ---------------------------------------------------------------- migration
+
+    /// Deploy 9 → 10: add `agent_duels`. Duels opened before this deploy are not back-filled;
+    /// `agent_duels` lists only duels opened from deploy 10 on. Collections keep their prefixes.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate_v10() -> Self {
+        let old: ContractV9 = env::state_read().expect("no state");
+        Self {
+            owner: old.owner,
+            oracle_account: old.oracle_account,
+            oracle_deposit: old.oracle_deposit,
+            slash_bps: old.slash_bps,
+            fee_bps: old.fee_bps,
+            min_chaos_deposit: old.min_chaos_deposit,
+            agents: old.agents,
+            duels: old.duels,
+            next_duel: old.next_duel,
+            used_nonces: old.used_nonces,
+            solvers: old.solvers,
+            vaults: old.vaults,
+            follows: old.follows,
+            settled_fills: old.settled_fills,
+            owner_fees: old.owner_fees,
+            tee_signers: old.tee_signers,
+            tee_agents: old.tee_agents,
+            used_proofs: old.used_proofs,
+            min_duel_ns: old.min_duel_ns,
+            agent_duels: LookupMap::new(StorageKey::AgentDuels),
+        }
+    }
 
     /// Deploy 7 → 8: add `used_proofs` and `min_duel_ns`.
     #[private]
@@ -276,6 +339,7 @@ impl Contract {
             tee_agents: old.tee_agents,
             used_proofs: LookupSet::new(StorageKey::UsedProofs),
             min_duel_ns: duel_floor_ns(min_duel_s),
+            agent_duels: LookupMap::new(StorageKey::AgentDuels),
         }
     }
 
@@ -305,6 +369,7 @@ impl Contract {
             tee_agents: LookupSet::new(StorageKey::TeeAgents),
             used_proofs: LookupSet::new(StorageKey::UsedProofs),
             min_duel_ns: 0,
+            agent_duels: LookupMap::new(StorageKey::AgentDuels),
         }
     }
 
@@ -455,6 +520,7 @@ impl Contract {
             let agent = self.agents.get_mut(pk).expect("agent missing");
             require!(agent.in_duel.is_none(), "in duel");
             agent.in_duel = Some(U64(id));
+            self.agent_duels.entry(pk.clone()).or_default().push(id);
         }
         self.duels.insert(
             id,
@@ -477,6 +543,7 @@ impl Contract {
         self.next_duel += 1;
         self.duels.flush();
         self.agents.flush();
+        self.agent_duels.flush();
         let cost = storage_cost_since(before) + self.oracle_deposit;
         require!(env::attached_deposit().as_yoctonear() >= cost, "deposit too small");
         let _ = self.ask_oracle(&symbol, format!("open:{id}"));
@@ -737,9 +804,11 @@ impl Contract {
         Promise::new(who).transfer(NearToken::from_yoctonear(amount.0))
     }
 
-    /// Attach (or replace) the caller's mandate for an agent. Storage is paid from the vault.
+    /// Attach (or replace) the caller's mandate for an agent. Only enclave-verified agents (TEE
+    /// proof on every intent) can be followed. Storage is paid from the vault.
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
         require!(self.agents.contains_key(&agent_pk.0), "agent missing");
+        require!(self.tee_agents.contains(&agent_pk.0), "agent unverified");
         require!(mandate.per_tx_cap.0 > 0 && mandate.allowance.0 > 0, "empty mandate");
         let before = env::storage_usage();
         let who = env::predecessor_account_id();
@@ -876,6 +945,13 @@ impl Contract {
 
     pub fn get_duel(&self, duel_id: U64) -> Option<Duel> {
         self.duels.get(&duel_id.0).cloned()
+    }
+
+    /// Duel ids an agent took part in, newest first, `limit` entries from offset `from`. Only duels
+    /// opened from deploy 10 on are indexed; unknown agents return an empty list.
+    pub fn agent_duels(&self, agent_pk: Base64VecU8, from: u64, limit: u64) -> Vec<U64> {
+        let Some(list) = self.agent_duels.get(&agent_pk.0) else { return vec![] };
+        list.iter().rev().skip(from as usize).take(limit as usize).map(|d| U64(*d)).collect()
     }
 
     /// Agents sorted by alpha, then shield, descending.
