@@ -36,6 +36,13 @@ class Completion:
         return hashlib.sha256(self.response_bytes).digest()
 
 
+def message_text(response: dict[str, Any]) -> str:
+    """The text the duelist parses from a chat completion response. Reasoning models may spend the budget thinking
+    and leave `content` empty; the JSON decision is then usually at the end of the reasoning text."""
+    msg = response["choices"][0]["message"]
+    return msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
+
+
 class StubClient:
     """Deterministic: direction follows the last digit of sha256(user prompt)."""
 
@@ -88,11 +95,7 @@ class NearAiClient:
         r = requests.post(f"{self._base}/chat/completions", headers=self._headers, data=body, timeout=180)
         r.raise_for_status()
         j = r.json()
-        msg = j["choices"][0]["message"]
-        # reasoning models may spend the budget thinking and leave `content` empty; the JSON decision is
-        # then usually at the end of the reasoning text, which parse_decision scans for
-        text = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
-        return Completion(text, j.get("id"), j.get("model", self.model_id), body, r.content)
+        return Completion(message_text(j), j.get("id"), j.get("model", self.model_id), body, r.content)
 
     def signature(self, chat_id: str, attempts: int = 6) -> dict[str, Any] | None:
         """The enclave signature record. A model runs on several TEE nodes and the record lives on the one

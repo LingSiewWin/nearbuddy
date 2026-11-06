@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import sys
 from collections import Counter
@@ -25,6 +26,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import ATTEST_DIR, DATA, network_file  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
+from nearai import message_text  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SRC = DATA
@@ -121,50 +123,133 @@ FIELDS: list[tuple[str, str, str]] = [
 # Runs as-is in tests/test_export_dataset.py against real rows; keep it equivalent to check_row.
 VERIFY_SNIPPET = '''import base64
 import hashlib
+import json
+import re
 
 from nacl.signing import VerifyKey  # pip install pynacl
 
+# arm D's size call quotes the side it sizes and sha256 of the side call's output, in this block of its request
+POSITION = re.compile(r"\\[POSITION\\](?:\\\\n|\\n)side: (LONG|SHORT)(?:\\\\n|\\n)full_size_bps: \\d+(?:\\\\n|\\n)"
+                      r"side_call_sha256: ([0-9a-f]{64})")
 
-def verify(row: dict) -> str:
-    """'ok' when the bytes, the enclave signature and the on-chain proof_hash agree; else the failed check."""
-    if not row.get("request_body") or not row.get("response_body"):
+
+def verify_call(call: dict, model: str) -> str:
+    """'ok' when one completion's bytes, stored hashes and enclave signature agree; else the failed check."""
+    if not call.get("request_body") or not call.get("response_body"):
         return "no tee bytes"
-    req = hashlib.sha256(row["request_body"].encode()).digest()
-    res = hashlib.sha256(row["response_body"].encode()).digest()
-    if (req.hex(), res.hex()) != (row["request_hash"], row["response_hash"]):
+    req = hashlib.sha256(call["request_body"].encode()).hexdigest()
+    res = hashlib.sha256(call["response_body"].encode()).hexdigest()
+    if (req, res) != (call["request_hash"], call["response_hash"]):
         return "stored hash differs from bytes"
-    rec = row.get("signature_record")
+    rec = call.get("signature_record")
     if not rec:
         return "no signature record"
-    body = f"{req.hex()}:{res.hex()}"
-    text = body if rec["signature_kind"] == "gateway" else f"{row['model']}:{body}"
+    text = f"{req}:{res}" if rec["signature_kind"] == "gateway" else f"{model}:{req}:{res}"
     if rec["text"] != text:
         return "record text differs from bytes"
     signer = bytes.fromhex(rec["signing_address"].removeprefix("0x"))
     VerifyKey(signer).verify(text.encode(), bytes.fromhex(rec["signature"].removeprefix("0x")))  # raises if forged
+    return "ok"
+
+
+def verify(row: dict) -> str:
+    """'ok' when the bytes, the enclave signature and the on-chain proof_hash agree (for arm D also the side call
+    and its link to the posted intent); else the failed check."""
+    note = verify_call(row, row["model"])
+    if note != "ok":
+        return note
+    req, res = bytes.fromhex(row["request_hash"]), bytes.fromhex(row["response_hash"])
     if row["intent"]["proof_hash"] != base64.b64encode(hashlib.sha256(req + res).digest()).decode():
         return "proof_hash differs"
+    d = row.get("arm_d")
+    if not d:
+        return "ok"
+    side = d["side_call"]
+    note = verify_call(side, row["model"])
+    if note != "ok":
+        return f"arm_d side call: {note}"
+    if side["signature_record"]["signing_address"] != row["signature_record"]["signing_address"]:
+        return "arm_d signer differs"
+    msg = json.loads(side["response_body"])["choices"][0]["message"]
+    if side["text"] != (msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""):
+        return "arm_d side text differs from bytes"
+    proof = side if d["proof_call"] == "side" else d["size_call"]
+    if (proof["request_hash"], proof["response_hash"]) != (row["request_hash"], row["response_hash"]):
+        return "arm_d proof call differs"
+    if d["proof_call"] == "size":
+        quoted = POSITION.search(row["request_body"])
+        if not quoted or quoted.group(2) != hashlib.sha256(side["text"].encode()).hexdigest():
+            return "arm_d digest differs"
+        if quoted.group(1) != row["intent"]["side"].upper():
+            return "arm_d side differs"
     return "ok"
 '''
+
+# arm D's size call quotes the side it sizes and sha256 of the side call's output, in this block of its request (raw
+# newlines or JSON-escaped `\n`, depending on how the body was serialised)
+POSITION = re.compile(
+    r"\[POSITION\](?:\\n|\n)side: (LONG|SHORT)(?:\\n|\n)full_size_bps: \d+(?:\\n|\n)side_call_sha256: ([0-9a-f]{64})"
+)
+
+
+def _check_call(c: dict, model: str) -> str:
+    """'ok' when one completion's bytes, stored hashes and enclave record agree; else the first failed check."""
+    if not c.get("request_body") or not c.get("response_body"):
+        return "no tee bytes"
+    req = hashlib.sha256(c["request_body"].encode()).digest()
+    res = hashlib.sha256(c["response_body"].encode()).digest()
+    if req.hex() != c.get("request_hash") or res.hex() != c.get("response_hash"):
+        return "stored hash differs from bytes"
+    rec = c.get("signature_record")
+    if not rec:
+        return "no signature record"
+    try:
+        tee_proof(rec, model, req, res)  # text, kind, ed25519 signature under signing_address
+    except (TeeProofError, KeyError, ValueError, TypeError) as exc:
+        return f"enclave record: {type(exc).__name__}: {str(exc)[:80]}"
+    return "ok"
+
+
+def _check_arm_d(r: dict) -> str:
+    """Arm D: the side call verifies under the same enclave signer, its stored text is what its signed response
+    says, the proof call is the row's top-level call, and the size call's signed request quotes sha256 of the side
+    call's text and the side that was posted."""
+    d = r["arm_d"]
+    side = d.get("side_call") or {}
+    note = _check_call(side, r["model"])
+    if note != "ok":
+        return f"arm_d side call: {note}"
+    if side["signature_record"].get("signing_address") != r["signature_record"].get("signing_address"):
+        return "arm_d signer differs"
+    try:
+        if side.get("text") != message_text(json.loads(side["response_body"])):
+            return "arm_d side text differs from bytes"
+    except (ValueError, KeyError, IndexError, TypeError):
+        return "arm_d side text differs from bytes"
+    proof = side if d.get("proof_call") == "side" else d.get("size_call") or {}
+    if (proof.get("request_hash"), proof.get("response_hash")) != (r["request_hash"], r["response_hash"]):
+        return "arm_d proof call differs"
+    if d.get("proof_call") == "size":
+        quoted = POSITION.search(r["request_body"])
+        if not quoted or quoted.group(2) != hashlib.sha256(side["text"].encode()).hexdigest():
+            return "arm_d digest differs"
+        if quoted.group(1) != str(r.get("intent", {}).get("side", "")).upper():
+            return "arm_d side differs"
+    return "ok"
 
 
 def check_row(r: dict) -> tuple[bool, str]:
     """Recompute every hash the row claims with the same code the runner used. Returns (verifiable, note)."""
-    if not r.get("request_body") or not r.get("response_body"):
-        return False, "no tee bytes"
-    req = hashlib.sha256(r["request_body"].encode()).digest()
-    res = hashlib.sha256(r["response_body"].encode()).digest()
-    if req.hex() != r.get("request_hash") or res.hex() != r.get("response_hash"):
-        return False, "stored hash differs from bytes"
-    rec = r.get("signature_record")
-    if not rec:
-        return False, "no signature record"
-    try:
-        tee_proof(rec, r["model"], req, res)  # text, kind, ed25519 signature under signing_address
-    except (TeeProofError, KeyError, ValueError, TypeError) as exc:
-        return False, f"enclave record: {type(exc).__name__}: {str(exc)[:80]}"
+    note = _check_call(r, r.get("model", ""))
+    if note != "ok":
+        return False, note
+    req, res = bytes.fromhex(r["request_hash"]), bytes.fromhex(r["response_hash"])
     if r.get("intent", {}).get("proof_hash") != proof_hash(req, res):
         return False, "proof_hash differs"
+    if r.get("arm_d"):
+        note = _check_arm_d(r)
+        if note != "ok":
+            return False, note
     return True, "ok"
 
 
@@ -273,7 +358,10 @@ the same rows for the viewer, with absent keys as null.
 
 The enclave signs `"{{model}}:{{sha256(request)}}:{{sha256(response)}}"` (`provider_tee`; a `gateway` record signs
 only `"{{sha256(request)}}:{{sha256(response)}}"`). The contract accepted the intent only if that signature verified
-under a signer it pins and `intent.proof_hash == sha256(request_hash || response_hash)`. Recompute it offline:
+under a signer it pins and `intent.proof_hash == sha256(request_hash || response_hash)`. Arm D rows carry two
+calls: the contract verified the top-level one (the size call when the decision was attacked), and the snippet also
+checks `arm_d.side_call` under the same signer, that its `text` is what its signed response says, and that the size
+call's signed request quotes `sha256(side_call.text)` and the side that was posted. Recompute it offline:
 
 ```python
 {VERIFY_SNIPPET}```

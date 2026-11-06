@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import runner  # noqa: E402
 from config import ENV  # noqa: E402
 from duelist import FULL_SIZE_BPS, Duelist  # noqa: E402
-from export_dataset import check_row  # noqa: E402
+from export_dataset import VERIFY_SNIPPET, check_row  # noqa: E402
 from intent_client import Solver, proof_hash, tee_proof  # noqa: E402
 from keys import pk_b64  # noqa: E402
 from nearai import Completion  # noqa: E402
@@ -231,3 +231,88 @@ def test_other_arms_still_post_the_full_size_from_one_call(enclave_agent):
     assert post(enclave_agent, {})[1] == "posted"
     (r,) = rows()
     assert r["intent"]["size_bps"] == FULL_SIZE_BPS and "arm_d" not in r and len(model.users) == 1
+
+
+def snippet_verify(row: dict) -> str:
+    scope: dict = {}
+    exec(VERIFY_SNIPPET, scope)  # the dataset card's snippet, run as a reader would
+    try:
+        return scope["verify"](row)
+    except Exception as e:  # a forged signature raises inside the snippet
+        return f"raised {type(e).__name__}"
+
+
+def attacked_row(enclave_agent) -> dict:
+    d, sk, comp, model = enclave_agent
+    assert post(enclave_agent, {pk_b64(sk): [{"duel_id": "5", "payload": ATTACK, "block": "9"}]})[1] == "posted"
+    return rows()[-1]
+
+
+def copy(row: dict) -> dict:
+    return json.loads(json.dumps(row))
+
+
+def resign(model: Enclave, text: str) -> dict:
+    """Another genuine side call from the same enclave, answering `text`: consistent bytes, hashes and signature."""
+    c = model.complete("You are an autonomous trading agent", "[ORACLE]\nother brief\n[/ORACLE]")
+    body = json.dumps({"id": c.chat_id, "choices": [{"message": {"content": text}}]}).encode()
+    req, res = hashlib.sha256(c.request_bytes).hexdigest(), hashlib.sha256(body).hexdigest()
+    msg = f"{model.model_id}:{req}:{res}"
+    rec = {**model.records[c.chat_id], "text": msg, "signature": model.sk.sign(msg.encode()).signature.hex()}
+    return {
+        "text": text,
+        "chat_id": c.chat_id,
+        "request_body": c.request_bytes.decode(),
+        "response_body": body.decode(),
+        "request_hash": req,
+        "response_hash": res,
+        "signature_record": rec,
+    }
+
+
+def test_check_row_and_the_card_snippet_verify_both_arm_d_calls(enclave_agent):
+    r = attacked_row(enclave_agent)
+    assert check_row(r) == (True, "ok") and snippet_verify(r) == "ok"
+    assert post(enclave_agent, {})[1] == "posted"  # unattacked: the side call is the proof call
+    u = rows()[-1]
+    assert u["arm_d"]["proof_call"] == "side" and check_row(u) == (True, "ok") and snippet_verify(u) == "ok"
+
+
+def test_tampered_side_call_fails_verification(enclave_agent):
+    r = attacked_row(enclave_agent)
+    cases = {}
+    t = copy(r)
+    t["arm_d"]["side_call"]["response_body"] = t["arm_d"]["side_call"]["response_body"].replace("long", "short")
+    cases["arm_d side call: stored hash differs from bytes"] = t
+    t = copy(r)
+    t["arm_d"]["side_call"]["text"] = '{"direction": "short"}'
+    cases["arm_d side text differs from bytes"] = t
+    t = copy(r)
+    other = SigningKey.generate()  # the same bytes, validly signed by a key that did not sign the proof call
+    rec = t["arm_d"]["side_call"]["signature_record"]
+    rec["signing_address"] = other.verify_key.encode().hex()
+    rec["signature"] = other.sign(rec["text"].encode()).signature.hex()
+    cases["arm_d signer differs"] = t
+    t = copy(r)
+    t["arm_d"]["size_call"]["request_hash"] = t["arm_d"]["side_call"]["request_hash"]
+    cases["arm_d proof call differs"] = t
+    for note, row in cases.items():
+        assert check_row(row) == (False, note)
+        assert snippet_verify(row) == note
+    t = copy(r)
+    t["arm_d"]["side_call"]["signature_record"]["signature"] = "00" * 64  # forged
+    ok, note = check_row(t)
+    assert not ok and note.startswith("arm_d side call: enclave record") and snippet_verify(t) != "ok"
+
+
+def test_mismatched_digest_or_side_fails_verification(enclave_agent):
+    d, sk, comp, model = enclave_agent
+    r = attacked_row(enclave_agent)
+    # a different, validly signed side call from the same enclave: not the output the size call quoted
+    t = copy(r)
+    t["arm_d"]["side_call"] = resign(model, '{"direction": "long", "reasoning": "another call"}')
+    assert check_row(t) == (False, "arm_d digest differs") and snippet_verify(t) == "arm_d digest differs"
+    # the posted side is not the side the size call was told about (`side` is outside the proof hash)
+    t = copy(r)
+    t["intent"]["side"] = "Short"
+    assert check_row(t) == (False, "arm_d side differs") and snippet_verify(t) == "arm_d side differs"
