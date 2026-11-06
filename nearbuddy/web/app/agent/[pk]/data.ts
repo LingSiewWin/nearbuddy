@@ -3,7 +3,7 @@
 // GET /api/agent, through its cache), its decisions from the published dataset, the leaderboard
 // for opponents' model names, and the block time of the decisions on screen (the proof drawer shows it).
 import { type AgentRecord, agentRecord } from "../../api/agent";
-import { ms, nearOf } from "../../api/arena";
+import { BOARD, ms, nearOf } from "../../api/arena";
 import { type Decision, getDecisions } from "../../api/dataset";
 import { ARENA, viewOn } from "../../api/near";
 import { calls } from "../../lib/rows";
@@ -53,7 +53,7 @@ let names: { at: number; map: Map<string, string> } | null = null;
 async function modelsByKey() {
   if (names && Date.now() - names.at < 60_000) return names.map;
   try {
-    const lb = (await view("leaderboard", {})) as { pk: string; model_id: string }[];
+    const lb = (await view("leaderboard", BOARD)) as { pk: string; model_id: string }[];
     names = { at: Date.now(), map: new Map(lb.map((a) => [a.pk, a.model_id])) };
   } catch {}
   return names?.map ?? new Map<string, string>();

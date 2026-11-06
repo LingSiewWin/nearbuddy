@@ -2,7 +2,7 @@
 // as the arena's "Who falls for fake news" squares: model family and prompt), the foot from the chain's live
 // duel. The record is a local file and the chain may be slow or down, so the chain gets a short deadline
 // and every part has a static stand-in: the card always renders.
-import { type Agent, type Config, type Duel, type Summary, summary } from "../api/arena";
+import { type Agent, BOARD, type Config, type Duel, type Summary, summary } from "../api/arena";
 import { type Decision, getDecisions } from "../api/dataset";
 import { ARENA, RPC, viewOn } from "../api/near";
 import { shown } from "../lib/verdict";
@@ -80,7 +80,7 @@ async function read(): Promise<Summary> {
   const config = (await view("get_config", {})) as Config;
   const n = Number(config.next_duel);
   const [leaderboard, duel] = await Promise.all([
-    view("leaderboard", {}) as Promise<Agent[]>,
+    view("leaderboard", BOARD) as Promise<Agent[]>,
     n ? (view("get_duel", { duel_id: String(n - 1) }) as Promise<Duel | null>) : null,
   ]);
   const duels = duel ? [duel] : [];

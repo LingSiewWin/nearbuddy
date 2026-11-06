@@ -106,12 +106,16 @@ async function duel(id: string): Promise<Duel | null> {
   return d;
 }
 
+/** `leaderboard` args: deploy 15 pages the board ({from, limit} required, limit <= 100); deploy 14 ignores them.
+ *  ponytail: one page (11 agents today); page through when the arena passes 100 agents. */
+export const BOARD = { from: 0, limit: 100 };
+
 async function build(): Promise<Snap> {
   const config = (await view("get_config", {})) as Config;
   const n = Number(config.next_duel);
   const ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => String(n - 1 - i));
   const [leaderboard, solver] = await Promise.all([
-    view("leaderboard", {}) as Promise<Agent[]>,
+    view("leaderboard", BOARD) as Promise<Agent[]>,
     fetch(`${SOLVER_URL}/arena`, { cache: "no-store", signal: AbortSignal.timeout(2_000) })
       .then((r) => r.json())
       .catch(() => null),

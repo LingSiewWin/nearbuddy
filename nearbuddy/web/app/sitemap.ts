@@ -2,7 +2,7 @@
 // request. Two views and a short deadline; when the chain is slow or down, the fixed pages alone.
 import type { MetadataRoute } from "next";
 import { connection } from "next/server";
-import type { Agent, Config } from "./api/arena";
+import { type Agent, BOARD, type Config } from "./api/arena";
 import { ARENA, viewOn } from "./api/near";
 import { agentHref, duelHref } from "./ui/format";
 
@@ -15,7 +15,7 @@ const view = viewOn(ARENA);
 async function fromChain(): Promise<MetadataRoute.Sitemap> {
   const [config, board] = await Promise.all([
     view("get_config", {}) as Promise<Config>,
-    view("leaderboard", {}) as Promise<Agent[]>,
+    view("leaderboard", BOARD) as Promise<Agent[]>,
   ]);
   const n = Number(config.next_duel);
   const duels = Array.from({ length: Math.min(DUELS, n) }, (_, i) => ({ url: SITE + duelHref(n - 1 - i) }));
