@@ -20,8 +20,10 @@ Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this 
 
 Commit-reveal (`--commit-reveal`, or on by itself when get_config says `commit_reveal: true`): each cycle an agent
 reveals its previous call (POST /reveal: intent, salt, tee; followers are quoted then) and commits the new one
-(POST /commit: sha256(intent bytes || salt) signed over commit_message). Commits stop at the intent lock; the last
-commitment is revealed before close_at, and on Ctrl-C too, since an unrevealed commitment is slashed. Rows gain
+(POST /commit: sha256(intent bytes || salt) signed over commit_message). Commits stop before the intent lock; the
+last commitment (the scored call) is held until the chain clock is inside the lock, where nobody can commit a
+counter-call, and revealed before close_at. Ctrl-C and SIGTERM reveal at once, since an unrevealed commitment is
+slashed. Rows gain
 `commitment`, `committed_tx`, `revealed_tx`. `--consent` (two-sided runs only) has both agents sign the duel terms
 so the solver opens it with open_duel_consented; a self-hosted `--only` runner holds one key, so it gets
 commit-reveal but never consent.
@@ -55,7 +57,7 @@ from typing import Any
 import requests
 from nacl.signing import SigningKey
 
-from chain import ARENA, ASSETS, agent_tier_on_chain, view, wait_outcome, warn_if_arena_missing
+from chain import ARENA, ASSETS, agent_tier_on_chain, chain_now_ns, view, wait_outcome, warn_if_arena_missing
 from config import ATTEST_DIR, DATA, ENV, NET
 from duelist import Duelist, DuelistError
 from intent_client import (
@@ -514,6 +516,25 @@ def reveal_all(solver: Solver, held: dict[str, Commitment]) -> None:
 Player = tuple[str, Duelist, SigningKey, Tracked, ModelClient]
 
 
+def hold_until_lock(lock_at_ns: int, close_at_ns: int) -> None:
+    """Wait until the chain clock reaches `lock_at_ns` (close_at minus the intent lock). From there no agent can
+    commit again, so revealing the scored call cannot be answered by a counter-call; reveals stay open up to
+    close_at. Reads the latest final block's time, which trails the head by a block or two, so the reveal always
+    lands inside the lock. If the chain cannot be read until the local clock is halfway through the lock, reveal
+    anyway: an unrevealed commitment is slashed, an early reveal only leaks the call."""
+    give_up = lock_at_ns + (close_at_ns - lock_at_ns) // 2
+    while True:
+        try:
+            if chain_now_ns() >= lock_at_ns:
+                return
+        except RuntimeError as e:
+            print(f"  chain clock unreadable ({str(e)[:80]}); retrying")
+        if time.time_ns() >= give_up:
+            print("  chain clock not past the intent lock by the local deadline; revealing now")
+            return
+        time.sleep(0.5)
+
+
 def play_duel(
     solver: Solver,
     duel_id: str,
@@ -526,11 +547,15 @@ def play_duel(
     cycle_seconds: int,
     attestations: dict[str, str | None],
     commit_reveal: bool = False,
+    lock_s: int = 0,
 ) -> int:
-    """Every `cycle_seconds` until `stop_ns` (the intent lock plus a margin) each player decides once. Plain mode
-    posts the intent. Commit-reveal mode first reveals the player's previous commitment, then commits the new call;
-    the last commitments are revealed after `stop_ns` (reveals are allowed up to close_at) and also on any exit,
-    Ctrl-C included, so no commitment is left to be slashed. Returns the last nonce used."""
+    """Every `cycle_seconds` until `stop_ns` (the intent lock plus a margin for model, signature and chain) each
+    player decides once. Plain mode posts the intent. Commit-reveal mode first reveals the player's previous
+    commitment, then commits the new call. The last commitment per player is the scored call: it is held until the
+    chain clock enters the contract's intent lock (`close_at - lock_s`, see `hold_until_lock`), where nobody can
+    commit a counter-call, and revealed before close_at. Earlier reveals only open calls that a later one replaces.
+    On any other exit (Ctrl-C, SIGTERM, an error) held commitments are revealed at once, lock or not: a late
+    shutdown must not leave a commitment to be slashed. Returns the last nonce used."""
     held: dict[str, Commitment] = {}
     closed = False
     try:
@@ -553,6 +578,8 @@ def play_duel(
                     break
             if not closed:
                 time.sleep(cycle_seconds)
+        if held and lock_s > 0:
+            hold_until_lock(close_at_ns - lock_s * 1_000_000_000, close_at_ns)
     finally:
         reveal_all(solver, held)
     return nonce
@@ -653,6 +680,7 @@ def run_single(
             cycle_seconds,
             attestations,
             commit_reveal or bool(cfg.get("commit_reveal")),
+            lock_s,
         )
         while time.time_ns() < close_at_ns + 2_000_000_000:
             time.sleep(1)
@@ -788,6 +816,7 @@ def run(
             cycle_seconds,
             attestations,
             commit_reveal,
+            lock_s,
         )
         while time.time_ns() < close_at_ns + 2_000_000_000:
             time.sleep(1)

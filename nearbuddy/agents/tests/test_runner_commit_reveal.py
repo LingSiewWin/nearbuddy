@@ -1,6 +1,7 @@
-"""`runner.play_duel` in commit-reveal mode, offline: the stub model decides, a fake clock drives the cycles and a
-scripted solver takes /commit and /reveal. Covers the commit->reveal cycle, the reveal after the lock boundary, no
-dangling commitment on Ctrl-C or a late commit, and the consent signatures on POST /duel."""
+"""`runner.play_duel` in commit-reveal mode, offline: the stub model decides, a fake clock (local and chain) drives the
+cycles and a scripted solver takes /commit and /reveal. Covers the commit->reveal cycle, the final reveal held until
+the chain clock is inside the contract's intent lock, no dangling commitment on Ctrl-C or a late commit, and the
+consent signatures on POST /duel."""
 
 import base64
 import hashlib
@@ -25,7 +26,9 @@ from nearai import StubClient  # noqa: E402
 
 S = 1_000_000_000
 CLOSE_NS = 100 * S
-STOP_NS = 60 * S  # close_at - (intent lock + margin)
+LOCK_S = 10
+LOCK_AT = CLOSE_NS - LOCK_S * S  # the contract refuses commits from here on; reveals stay open until CLOSE_NS
+STOP_NS = 60 * S  # the runner's last commit cycle: close_at - (intent lock + margin), well before LOCK_AT
 
 
 class Clock:
@@ -77,6 +80,7 @@ def env(tmp_path, monkeypatch):
     clock = Clock()
     monkeypatch.setattr(time, "time_ns", lambda: clock.ns)
     monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(runner, "chain_now_ns", lambda: clock.ns)
     players = []
     for name in ("Y", "Z"):
         monkeypatch.delitem(ENV, f"AGENT_KEY_{name}", raising=False)
@@ -87,19 +91,21 @@ def env(tmp_path, monkeypatch):
     return clock, players
 
 
-def play(solver, players, commit_reveal=True):
-    return runner.play_duel(solver, "5", "NEAR/USD", 365_000_000, CLOSE_NS, STOP_NS, players, 10, 20, {}, commit_reveal)
+def play(solver, players, commit_reveal=True, lock_s=LOCK_S):
+    return runner.play_duel(
+        solver, "5", "NEAR/USD", 365_000_000, CLOSE_NS, STOP_NS, players, 10, 20, {}, commit_reveal, lock_s
+    )
 
 
 def rows():
     return [json.loads(line) for line in DATA_FILE[0].read_text().splitlines()]
 
 
-def test_each_cycle_reveals_the_previous_commitment_then_commits_and_the_last_is_revealed_after_the_lock(env):
+def test_each_cycle_reveals_the_previous_commitment_then_commits_and_the_last_is_revealed_inside_the_lock(env):
     clock, players = env
     (_, _, sk, _, _) = players[0]
     solver = FakeSolver(clock)
-    assert play(solver, players[:1]) == 13  # cycles at t=0, 20, 40; t=60 is the lock boundary
+    assert play(solver, players[:1]) == 13  # cycles at t=0, 20, 40; t=60 is STOP_NS, the lock opens at t=90
     assert solver.paths() == ["/commit", "/reveal", "/commit", "/reveal", "/commit", "/reveal"]
     commits = [(b, t) for p, b, t in solver.posts if p == "/commit"]
     reveals = [(b, t) for p, b, t in solver.posts if p == "/reveal"]
@@ -114,7 +120,8 @@ def test_each_cycle_reveals_the_previous_commitment_then_commits_and_the_last_is
         assert c["duel_id"] == "5" and c["agent_pk"] == pk_b64(sk) and r["tee"] is None
         assert rt > ct, "never revealed in the cycle it was committed"
     assert [t for _, t in commits] == [0, 20 * S, 40 * S]
-    assert STOP_NS <= reveals[-1][1] < CLOSE_NS, "the last call is revealed after the lock boundary, before close_at"
+    assert all(t < STOP_NS for _, t in reveals[:-1]), "earlier calls open in the next cycle"
+    assert LOCK_AT <= reveals[-1][1] < CLOSE_NS, "the scored call opens inside the intent lock, before close_at"
     assert len({b["salt"] for b, _ in reveals}) == 3, "a fresh salt per commitment"
     rs = rows()
     assert [r["intent"]["nonce"] for r in rs] == ["11", "12", "13"]
@@ -197,6 +204,53 @@ def test_a_transport_error_on_one_final_reveal_does_not_skip_the_next(env):
     failed = [r for r in rows() if r.get("error")]
     assert len(failed) == 1 and "connection reset" in failed[0]["error"]
     assert failed[0]["agent_pk"] == pk_b64(players[0][2])
+
+
+def test_the_final_reveal_waits_for_the_chain_clock_not_the_local_one(env, monkeypatch):
+    clock, players = env
+    lag = 4 * S  # the chain's final block trails the local clock
+    monkeypatch.setattr(runner, "chain_now_ns", lambda: clock.ns - lag)
+    solver = FakeSolver(clock)
+    play(solver, players)
+    final = [t for p, _, t in solver.posts if p == "/reveal"][-2:]
+    assert all(LOCK_AT + lag <= t < CLOSE_NS for t in final), final
+
+
+def test_an_unreadable_chain_clock_still_reveals_halfway_through_the_lock(env, monkeypatch):
+    clock, players = env
+
+    def down():
+        raise RuntimeError("after 5 attempts: rpc down")
+
+    monkeypatch.setattr(runner, "chain_now_ns", down)
+    solver = FakeSolver(clock)
+    play(solver, players[:1])
+    last = [t for p, _, t in solver.posts if p == "/reveal"][-1]
+    assert LOCK_AT + LOCK_S * S // 2 <= last < CLOSE_NS
+
+
+def test_ctrl_c_while_holding_for_the_lock_reveals_at_once(env, monkeypatch):
+    clock, players = env
+    solver = FakeSolver(clock)
+
+    def chain_now():
+        if clock.ns >= 70 * S:  # past STOP_NS, waiting for the lock
+            raise KeyboardInterrupt
+        return clock.ns
+
+    monkeypatch.setattr(runner, "chain_now_ns", chain_now)
+    with pytest.raises(KeyboardInterrupt):
+        play(solver, players)
+    final = [t for p, _, t in solver.posts if p == "/reveal"][-2:]
+    assert len(final) == 2 and all(STOP_NS <= t < LOCK_AT for t in final)
+    assert all(r["revealed_tx"] for r in rows())
+
+
+def test_without_a_lock_the_last_call_is_revealed_when_commits_stop(env):
+    clock, players = env
+    solver = FakeSolver(clock)
+    play(solver, players[:1], lock_s=0)
+    assert STOP_NS <= [t for p, _, t in solver.posts if p == "/reveal"][-1] < LOCK_AT
 
 
 SIGTERM_CHILD = """

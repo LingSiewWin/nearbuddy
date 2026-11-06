@@ -42,3 +42,15 @@ def test_view_raises_contract_errors_immediately(monkeypatch):
     with pytest.raises(RuntimeError, match="agent missing"):
         chain.view("get_agent", {"agent_pk": "x"})
     assert len(calls) == 1
+
+
+def test_chain_now_reads_the_final_block_time_as_an_exact_int(monkeypatch):
+    bodies: list[dict] = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        bodies.append(json)
+        return _Resp({"result": {"header": {"timestamp": 1.7e18, "timestamp_nanosec": "1793976786174123457"}}})
+
+    monkeypatch.setattr(chain.requests, "post", fake_post)
+    assert chain.chain_now_ns() == 1793976786174123457  # the float field would lose the low digits
+    assert bodies[0]["method"] == "block" and bodies[0]["params"] == {"finality": "final"}

@@ -20,19 +20,10 @@ ARENA = ENV.get("ARENA_CONTRACT", NET["arena"])
 ASSETS = {"NEAR/USD": "wrap.near"}
 
 
-def view(method: str, args: dict[str, Any]) -> Any:
-    body: dict[str, Any] = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "query",
-        "params": {
-            "request_type": "call_function",
-            "finality": "final",
-            "account_id": ARENA,
-            "method_name": method,
-            "args_base64": base64.b64encode(json.dumps(args).encode()).decode(),
-        },
-    }
+def rpc(method: str, params: dict[str, Any], what: str = "") -> Any:
+    """One JSON-RPC call with retries; rate limits and internal errors back off and alternate endpoints."""
+    body: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    what = what or method
     endpoints = [RPC, RPC_FALLBACK] if RPC_FALLBACK and RPC_FALLBACK != RPC else [RPC]
     last = ""
     for attempt in range(RETRIES):
@@ -41,19 +32,40 @@ def view(method: str, args: dict[str, Any]) -> Any:
             resp = requests.post(url, json=body, headers={"User-Agent": "nearbuddy/1"}, timeout=30)
             r = resp.json()
         except (requests.RequestException, ValueError) as exc:
-            last = f"{url} {method}: {exc}"
+            last = f"{url} {what}: {exc}"
             time.sleep(2**attempt)
             continue
         if "error" in r:
             msg = str(r["error"].get("message", r["error"]))
-            last = f"{url} {method}: {msg}"
+            last = f"{url} {what}: {msg}"
             transient = resp.status_code == 429 or "rate limit" in msg.lower() or "internal" in msg.lower()
             if not transient:
                 raise RuntimeError(last)
             time.sleep(2**attempt)
             continue
-        return json.loads(bytes(r["result"]["result"]).decode())
+        return r["result"]
     raise RuntimeError(f"after {RETRIES} attempts: {last}")
+
+
+def view(method: str, args: dict[str, Any]) -> Any:
+    result = rpc(
+        "query",
+        {
+            "request_type": "call_function",
+            "finality": "final",
+            "account_id": ARENA,
+            "method_name": method,
+            "args_base64": base64.b64encode(json.dumps(args).encode()).decode(),
+        },
+        method,
+    )
+    return json.loads(bytes(result["result"]).decode())
+
+
+def chain_now_ns() -> int:
+    """Timestamp of the latest final block. The contract's `env::block_timestamp()` is at least this for any
+    transaction sent now, so a check against it never runs ahead of the chain."""
+    return int(rpc("block", {"finality": "final"})["header"]["timestamp_nanosec"])
 
 
 def warn_if_arena_missing(network: str = NETWORK, arena: str = ARENA, rpc: str = RPC) -> bool:
