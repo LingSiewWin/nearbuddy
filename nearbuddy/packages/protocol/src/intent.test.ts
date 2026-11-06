@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { KeyPair } from "near-api-js";
+import nacl from "tweetnacl";
 import {
-  INTENT_DOMAIN, ZERO_PROOF, intentMessage, proofHash, signIntent, teeText, verifyIntent, verifyTeeProof,
+  INTENT_DOMAIN, ZERO_PROOF, intentMessage, keyFromSeed, pkOf, proofHash, signIntent, teeSeed, teeText, verifyIntent, verifyTeeProof,
   type Intent, type TeeProof,
 } from "./intent.ts";
 import { b64, hex } from "./index.ts";
@@ -74,4 +75,13 @@ test("intent bytes and tee text match the deployed arena contract", { skip: !pro
   assert.equal(onChain, hex(intentMessage(fixture)));
   const onChainText = await arenaView<string>("tee_text_utf8", { kind: 2, model_id: REAL.model, request_hash: realProof.request_hash, response_hash: realProof.response_hash });
   assert.equal(onChainText, new TextDecoder().decode(teeText(2, REAL.model, fromHex(REAL.request_hash), fromHex(REAL.response_hash))));
+});
+
+// Reference values from agents/.venv python: hashlib.sha256(bytes.fromhex(seed)+b"tee").hexdigest() and
+// base64(nacl.signing.SigningKey(that digest).verify_key) for seed 01*32.
+test("enclave agent key derivation matches agents/runner.py agent_key(tee=True)", () => {
+  const s = teeSeed("01".repeat(32));
+  assert.equal(s, "db11b0255edc79eeb163a3884a834c1dfc9d1102fb649958b1b65f9ea767c642");
+  assert.equal(pkOf(keyFromSeed(s)), "l/QvOd9Z/vnZQaWWwf1rGQ2WBxADm8xSbImPfNfmtp0=");
+  assert.equal(pkOf(keyFromSeed(s)), b64.enc(nacl.sign.keyPair.fromSeed(Buffer.from(s, "hex")).publicKey));
 });

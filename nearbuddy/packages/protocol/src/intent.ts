@@ -1,7 +1,7 @@
 // Arena intents and TEE proofs. `Intent` is byte-identical to arena/src/types.rs (borsh, prefixed by
 // the domain); an agent signs intents. `TeeProof` carries the NEAR AI Cloud enclave signature the
 // contract verifies over `teeText(...)`; the intent's `proof_hash` is `proofHash(request, response)`.
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { serialize } from "borsh";
 import { KeyPair, KeyType, PublicKey } from "near-api-js";
 import { b64, hex } from "./index.ts";
@@ -69,6 +69,13 @@ function verify(pkB64: string, msg: Uint8Array, sigB64: string): boolean {
   if (pk.length !== 32) return false;
   return new PublicKey({ keyType: KeyType.ED25519, data: pk }).verify(msg, b64.dec(sigB64));
 }
+
+// ed25519 from a 32-byte seed with node:crypto only (PKCS8 prefix + seed); pk = last 32 bytes of SPKI.
+const PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
+export const keyFromSeed = (hex: string) => createPrivateKey({ key: Buffer.concat([PKCS8, Buffer.from(hex, "hex")]), format: "der", type: "pkcs8" });
+export const pkOf = (k: ReturnType<typeof keyFromSeed>) => b64.enc(new Uint8Array(createPublicKey(k).export({ format: "der", type: "spki" }).subarray(-32)));
+/** Seed of the enclave agent derived from a plain `AGENT_SEED_*`: sha256(seed || "tee"), as agents/runner.py `agent_key(tee=True)`. */
+export const teeSeed = (seedHex: string) => hex(createHash("sha256").update(Buffer.concat([Buffer.from(seedHex, "hex"), Buffer.from("tee")])).digest());
 
 export function signIntent(kp: KeyPair, intent: Intent): SignedIntent {
   return { intent, signature: b64.enc(kp.sign(intentMessage(intent)).signature) };
