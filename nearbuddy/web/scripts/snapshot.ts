@@ -22,15 +22,23 @@ const raws = existsSync(src)
   : [];
 if (!raws.length) console.warn(`snapshot: no rows at ${src}; the pages show live chain data only`);
 const { rows, attacks, bodies, mismatched } = slim(raws);
-// the spectator bot's list too, so a live attack shows its words before the dataset is re-exported
-const spectator = join(root, "../packages/demo/src/spectator.ts");
-const list = existsSync(spectator) ? readFileSync(spectator, "utf8").match(/const PAYLOADS = \[([\s\S]*?)\];/) : null;
-for (const lit of list?.[1]?.match(/"(?:[^"\\]|\\.)*"/g) ?? []) {
-  const t = JSON.parse(lit) as string;
-  attacks[sha(t).toString("base64")] = t;
+// the spectator bot's lists too, so a live attack shows its words before the dataset is re-exported: every
+// top-level `const NAME = [ "..." | '...', ... ];` in spectator.ts (PAYLOADS before the holdout split, TRAIN
+// and HOLDOUT after it), the same lists analysis/experiment_report.py reads
+const spectator = process.env.SPECTATOR ?? join(root, "../packages/demo/src/spectator.ts");
+const lists = existsSync(spectator) ? readFileSync(spectator, "utf8") : "";
+let texts = 0;
+for (const [, body] of lists.matchAll(/^const [A-Z_]+ = \[([\s\S]*?)\n\];/gm)) {
+  const code = body!.replace(/^\s*\/\/.*$/gm, ""); // a comment's apostrophe would open a bogus literal
+  for (const [, dq, sq] of code.matchAll(/"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g)) {
+    const t = JSON.parse(`"${dq ?? sq!.replace(/\\'/g, "'").replace(/\\?"/g, '\\"')}"`) as string;
+    attacks[sha(t).toString("base64")] = t;
+    texts++;
+  }
 }
+if (lists && !texts) console.warn(`snapshot: no attack lists found in ${spectator}; live attacks show only a hash`);
 writeFileSync(join(out, "decisions.json"), JSON.stringify({ rows, attacks, built: Date.now() }));
 writeFileSync(join(out, "bodies.json"), JSON.stringify(bodies));
 console.log(
-  `snapshot: ${rows.length} verified decisions, ${rows.filter((r) => r.attack).length} attacked, ${Object.keys(attacks).length} attack texts, ${Object.keys(bodies).length} byte pairs, ${mismatched} hash mismatches dropped`,
+  `snapshot: ${rows.length} verified decisions, ${rows.filter((r) => r.attack).length} attacked, ${Object.keys(attacks).length} attack texts (${texts} from the spectator), ${Object.keys(bodies).length} byte pairs, ${mismatched} hash mismatches dropped`,
 );
