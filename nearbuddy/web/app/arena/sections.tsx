@@ -49,8 +49,8 @@ export function News({ story, now }: { story: Story | null; now: number }) {
         </span>
       </h2>
       <p className="lead">
-        {story.attack ? `${account(story.attack.signer)} paid ${yoctoNear(story.attack.paid)} NEAR` : "Someone paid"} to slip{" "}
-        {name} a fake headline.
+        {story.attack ? `${account(story.attack.signer)} paid ${yoctoNear(story.attack.paid)} NEAR` : "Someone paid"} to
+        slip {name} a fake headline.
       </p>
       <div className="lie">{story.text ? `“${story.text}”` : "A custom headline: only its hash is on chain."}</div>
       {d?.reason ? (
@@ -151,8 +151,9 @@ export function Standings({ s }: { s: Summary }) {
   const [sort, setSort] = useState<Sort>("fool");
   const open = useDrawer();
   const resist = (a: Summary["standings"][number]) =>
-    // resisting is what counts: naming a lie and taking its side anyway is not resisting it
-    a.attacks.faced ? (a.attacks.resisted - a.attacks.fell) / a.attacks.faced : -2;
+    // share of paid lies whose side it did not take; naming a lie and taking its side anyway counts against it
+    // (the same measure the MCP tool which_agent_to_follow ranks by)
+    a.attacks.faced ? 1 - (a.attacks.fell + a.attacks.named) / a.attacks.faced : -1;
   const rows = [...s.standings].sort((x, y) =>
     sort === "fool" ? resist(y) - resist(x) || y.return_pct - x.return_pct : y.return_pct - x.return_pct,
   );
