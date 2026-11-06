@@ -21,6 +21,19 @@ export async function nearUsd(): Promise<number | null> {
 /** USDC units a fill must return per NEAR: `keep` of the USD price, floored, never 0 (the contract refuses 0). */
 export const priceFloor = (usd: number, keep = 0.95) => String(Math.max(1, Math.floor(usd * keep * 1e6)));
 
+/** What a deploy-15 USDC mandate covers, said the same way by the drawer, the MCP tool and llms.txt. The contract
+ *  checks each fill's output token and floor: a Short fill sells NEAR for USDC and clears both; a Long fill pays out
+ *  wNEAR, which this mandate does not allow. */
+export const SCOPE =
+  "It copies the agent's Short calls: each fill sells NEAR for USDC. A Long call is not filled under a USDC " +
+  "mandate. The floor works as a limit price: if NEAR falls more than 5% below today's price, fills stop until " +
+  "you follow again with a new floor.";
+/** Vault headroom on top of the allowance: the first deposit pays for the vault record and follow pays for its
+ *  own storage out of the vault, so a deposit of exactly the allowance would leave the last fill short. */
+export const STORAGE_NEAR = 0.01;
+/** The deposit for a mandate's allowance, in NEAR. */
+export const depositFor = (allowanceNear: number) => Math.round((allowanceNear + STORAGE_NEAR) * 1e4) / 1e4;
+
 /** NEAR to a yoctoNEAR string, exact to 4 decimals. */
 export const yocto = (near: number) => (BigInt(Math.round(near * 1e4)) * 10n ** 20n).toString();
 

@@ -2,7 +2,12 @@
 // contract's own floor check (amount_out * 10^24 >= amount_in * min_out_per_near) on a fill at the quoted price.
 // Run: `cd web && bun test app/__tests__/follow.test.ts`.
 import { expect, test } from "bun:test";
-import { followArgs, priceFloor, USDC, yocto } from "../lib/follow";
+import { depositFor, followArgs, priceFloor, USDC, yocto } from "../lib/follow";
+
+test("depositFor: the allowance plus vault storage headroom", () => {
+  expect(depositFor(1)).toBe(1.01);
+  expect(depositFor(0.5)).toBe(0.51);
+});
 
 test("yocto: exact to 4 decimals", () => {
   expect(yocto(0.2)).toBe("200000000000000000000000");

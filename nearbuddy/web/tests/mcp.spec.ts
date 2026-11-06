@@ -127,7 +127,8 @@ test("follow_transaction builds deposit + follow with a positive USDC price floo
   expect(r.isError, r.content[0]?.text).toBeFalsy();
   const f = r.structuredContent;
   expect(f.calls.map((c: { method: string }) => c.method)).toEqual(["deposit", "follow"]);
-  expect(f.calls[0].attach_near).toBe(0.5);
+  expect(f.calls[0].attach_near).toBe(0.51); // the allowance plus storage headroom
+  expect(f.scope).toContain("Short");
   const m = f.calls[1].args.mandate;
   expect(f.calls[1].args.agent_pk).toBe(pk);
   expect(m.per_tx_cap).toBe("100000000000000000000000");

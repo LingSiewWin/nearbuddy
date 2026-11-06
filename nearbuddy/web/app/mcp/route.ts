@@ -10,7 +10,7 @@ import { datasetBuilt, decisionBytes, getDecisions } from "../api/dataset";
 import { duelSummary } from "../api/duel";
 import { ARENA, json, jsonBody } from "../api/near";
 import { tape } from "../api/tape";
-import { followArgs, nearUsd, priceFloor } from "../lib/follow";
+import { depositFor, followArgs, nearUsd, priceFloor, SCOPE, STORAGE_NEAR } from "../lib/follow";
 import { NET, NETWORK_ID } from "../network";
 import { CHAIN } from "../ui/format";
 
@@ -94,6 +94,7 @@ async function followTransaction(a: Args) {
   const capNear = (a.cap_near as number | undefined) ?? 0.2;
   const allowanceNear = (a.allowance_near as number | undefined) ?? 1;
   const days = (a.days as number | undefined) ?? 7;
+  const deposit = depositFor(allowanceNear);
   if (capNear > allowanceNear) fail("cap_near must not exceed allowance_near");
   const price = (await nearUsd()) ?? fail("Coinbase did not answer, so there is no price floor yet; try again shortly");
   const floor = priceFloor(price);
@@ -114,13 +115,14 @@ async function followTransaction(a: Args) {
       min_out_per_near: floor,
       unit: "USDC units (6 decimals) a fill must return per NEAR sold; the contract refuses 0",
     },
+    scope: SCOPE,
     calls: [
       {
         step: 1,
         method: "deposit",
         args: {},
-        attach_near: allowanceNear,
-        why: "funds your vault; withdraw returns it",
+        attach_near: deposit,
+        why: `funds your vault: the allowance plus ${STORAGE_NEAR} NEAR for storage; withdraw returns what is left`,
       },
       {
         step: 2,
@@ -130,7 +132,7 @@ async function followTransaction(a: Args) {
         why: "a spending limit, not a transfer: each fill stays under the cap, the allowance, the expiry and the floor",
       },
     ],
-    near_cli: [cli("deposit", null, allowanceNear), cli("follow", args, 0)],
+    near_cli: [cli("deposit", null, deposit), cli("follow", args, 0)],
     stop: { method: "unfollow", args: { agent_pk: pk }, attach_near: 0 },
   };
 }
@@ -334,13 +336,19 @@ const TOOLS: Tool[] = [
       "The deposit and follow calls (contract, method, JSON args, NEAR to attach, and near-cli-rs commands) that make " +
       "your account follow one enclave-verified agent under a spending limit: a per-fill cap, a total allowance, " +
       "an expiry and the price floor the contract requires (95% of NEAR's Coinbase price now, in USDC units per " +
-      "NEAR). Read-only: nothing is signed or sent; you sign both calls with your own key.",
+      "NEAR). The mandate copies the agent's Short calls (fills sell NEAR for USDC); Long calls are not filled. " +
+      "Read-only: nothing is signed or sent; you sign both calls with your own key.",
     inputSchema: obj(
       {
         pk: PK,
         cap_near: { type: "number", minimum: 0.0001, maximum: 1000, description: "NEAR per fill, default 0.2" },
-        allowance_near: { type: "number", minimum: 0.0001, maximum: 10000, description: "NEAR in total, default 1" },
-        days: { type: "integer", minimum: 1, maximum: 365, description: "days until the mandate expires, default 7" },
+        allowance_near: { type: "number", minimum: 0.01, maximum: 10000, description: "NEAR in total, default 1" },
+        days: {
+          type: "integer",
+          minimum: 1,
+          maximum: 30,
+          description: "days until the mandate expires, 1 to 30 (the price floor is fixed), default 7",
+        },
       },
       ["pk"],
     ),

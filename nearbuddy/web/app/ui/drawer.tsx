@@ -5,7 +5,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
-import { followArgs, nearUsd, priceFloor } from "../lib/follow";
+import { depositFor, followArgs, nearUsd, priceFloor, SCOPE, STORAGE_NEAR } from "../lib/follow";
 import { SHOWN_WORD, shown } from "../lib/verdict";
 import { NET } from "../network";
 import { Cmd } from "./cmd";
@@ -298,13 +298,14 @@ function Follow({ item }: { item: Extract<DrawerItem, { kind: "follow" }> }) {
       </ol>
       <p className="cap">With near-cli-rs, from your own account on {CHAIN} (amounts in yoctoNEAR, expiry in ns):</p>
       <Cmd
-        text={`near contract call-function as-transaction ${ARENA_ID} deposit empty-args prepaid-gas '30 Tgas' attached-deposit '1 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
+        text={`near contract call-function as-transaction ${ARENA_ID} deposit empty-args prepaid-gas '30 Tgas' attached-deposit '${depositFor(1)} NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
       />
       <Cmd
         text={`near contract call-function as-transaction ${ARENA_ID} follow json-args '${JSON.stringify(followArgs(item.agent, { capNear: 0.2, allowanceNear: 1, days: 7, floor, now: Date.now() }))}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
       />
       <p className="meta">
-        That follows with a 0.2 NEAR cap per fill, 1 NEAR in total, for a week, filled in USDC.{" "}
+        That follows with a 0.2 NEAR cap per fill, 1 NEAR in total, for a week (the deposit adds {STORAGE_NEAR} NEAR for
+        storage). {SCOPE}{" "}
         {price
           ? `A fill must return at least 95% of NEAR's price now ($${price.toFixed(4)} on Coinbase), so min_out_per_near is ${floor} USDC units (6 decimals) per NEAR.`
           : "Set min_out_per_near to 95% of NEAR's USD price times 1,000,000 (USDC has 6 decimals); the contract refuses a follow without a price floor."}{" "}
