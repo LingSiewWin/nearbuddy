@@ -11,7 +11,7 @@ import { acctUrl, clock, mmss, near, pct, sideWord, stake, TAMPER_TX, txUrl, usd
 import { Machine } from "../../ui/machine";
 import { type DuelData, type DuelSide, loadDuel } from "./data";
 import { Race, tones } from "./race";
-import { type Story, stories, Trail, verdictLine } from "./trail";
+import { type Story, stories, Trail, verdictOf } from "./trail";
 
 const TRADES_MS = 60 * 60_000; // Coinbase's trade history reaches about this far back; older duels use minute prices
 const CANDLES = "https://api.exchange.coinbase.com/products/NEAR-USD/candles?granularity=60";
@@ -138,7 +138,7 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
           <Machine
             path={`/api/v1/decisions?duel=${d.duel}`}
             note="JSON, newest first"
-            desc="Each model's published call in this duel: side, size in basis points, its own reasoning, the attack text it was shown and a verdict (spotted, fell, unmoved), joined to the chain by tx. GET /api/v1/decisions/<tx> returns the exact bytes the model's enclave signed, so the hashes in the transaction can be re-checked."
+            desc="Each model's published call in this duel: side, size in basis points, its own reasoning, the attack text it was shown and a verdict on how it answered an attack, joined to the chain by tx. GET /api/v1/decisions/<tx> returns the exact bytes the model's enclave signed, so the hashes in the transaction can be re-checked."
           />
         </aside>
         <footer className="foot">
@@ -304,7 +304,7 @@ function Attacks({ d, list }: { d: DuelData; list: Story[] }) {
         const size = s.reply ? s.reply.size / 100 : s.d ? s.d.size / 100 : null;
         const paid = s.e ? Number((Number(BigInt(s.e.paid) / 10n ** 20n) / 1e4).toFixed(4)) : null;
         const later = s.e && s.reply ? Math.max(0, Math.round((s.reply.at - s.e.at) / 1000)) : null;
-        const v = s.d?.verdict ?? null;
+        const v = verdictOf(s.d?.verdict);
         return (
           <article key={s.e?.tx ?? s.d?.tx ?? s.text} className={`story ${k}`}>
             <p className="lead">
@@ -324,16 +324,8 @@ function Attacks({ d, list }: { d: DuelData; list: Story[] }) {
             {s.d?.reason ? <blockquote className="reply">“{s.d.reason}”</blockquote> : null}
             {callSide && (v || s.reply) ? (
               <div className="verdict">
-                {v ? <strong className={v === "fell" ? "fell" : ""}>{verdictLine[v]}</strong> : null}
-                {v ? (
-                  <span>
-                    {v === "spotted"
-                      ? `Named the lie and went ${callSide === "Long" ? "long" : "short"}.`
-                      : v === "fell"
-                        ? `Took the side the lie pushed: ${callSide === "Long" ? "long" : "short"}.`
-                        : `Went ${callSide === "Long" ? "long" : "short"}, not the way the lie pushed.`}
-                  </span>
-                ) : null}
+                {v ? <strong className={v.bad ? "fell" : ""}>{v.word}</strong> : null}
+                {v ? <span>{v.why(callSide === "Long" ? "long" : "short")}</span> : null}
                 {s.reply ? (
                   <button
                     type="button"

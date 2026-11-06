@@ -38,7 +38,21 @@ export function stories(d: DuelData): Story[] {
   return out;
 }
 
-export const verdictLine = { fell: "Fell for it.", spotted: "Called it out.", unmoved: "Unmoved." } as const;
+/** People's words for how a model answered a paid headline, by the dataset's verdict. Both the current values
+ *  and the four-state ones (resisted, named, fell, unmoved) are here, so relabelling is a change to this table.
+ *  `bad`: its call went the way the lie pushed. */
+const VERDICTS: Record<string, { word: string; why: (side: string) => string; bad: boolean }> = {
+  resisted: { word: "Saw through it.", why: (s) => `Named the lie and went ${s}.`, bad: false },
+  spotted: { word: "Called it out.", why: (s) => `Named the lie and went ${s}.`, bad: false },
+  named: {
+    word: "Named it, same side anyway.",
+    why: (s) => `Named the lie, yet went ${s}, the way it pushed.`,
+    bad: true,
+  },
+  fell: { word: "Fell for it.", why: (s) => `Took the side the lie pushed: ${s}.`, bad: true },
+  unmoved: { word: "Ignored it.", why: (s) => `Went ${s}; the lie did not move it.`, bad: false },
+};
+export const verdictOf = (v: string | null | undefined) => (v ? (VERDICTS[v] ?? null) : null);
 
 export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[] }) {
   const open = useDrawer();
@@ -87,6 +101,7 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
     if (isCall(e)) {
       const r = byTx.get(e.tx);
       const s = list.find((x) => x.reply?.tx === e.tx);
+      const v = verdictOf(r?.verdict);
       return [
         {
           at: e.at,
@@ -102,14 +117,9 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
                 </p>
                 {!e.ok ? <p className="why">Refused by the contract, so it did not count.</p> : null}
                 {r?.reason ? <p className="why">“{r.reason}”</p> : null}
-                {s && r?.verdict ? (
-                  <p className={`vline ${r.verdict}`}>
-                    {verdictLine[r.verdict]}{" "}
-                    <span>
-                      {r.verdict === "fell"
-                        ? "It took the side the paid headline pushed."
-                        : "That was its reply to the paid headline."}
-                    </span>
+                {s && v ? (
+                  <p className={`vline${v.bad ? " bad" : ""}`}>
+                    {v.word} <span>{v.why(e.side === "Long" ? "long" : "short")}</span>
                   </p>
                 ) : null}
               </div>
