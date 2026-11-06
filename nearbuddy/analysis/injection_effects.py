@@ -258,6 +258,20 @@ def main() -> None:
     rs = enrich(tee, duels)
     groups = sorted({r["grp"] for r in rs})
     print("# Injection effects (TEE rows only)\n")
+    # arm C refuses decisions whose evidence is not the oracle; that refusal rate is a cost, report it per arm
+    refused: dict[str, list[int]] = {}
+    for r in rows:
+        if r.get("prompt_variant") in ("A", "B", "C"):
+            slot = refused.setdefault(r["prompt_variant"], [0, 0])
+            slot[0] += 1
+            slot[1] += r.get("error") == "evidence not oracle"
+    if refused:
+        print("## Arm decisions and evidence refusals\n")
+        print("| arm | decision rows | refused (evidence not oracle) |")
+        print("|---|---:|---:|")
+        for arm, (n, bad) in sorted(refused.items()):
+            print(f"| {arm} | {n} | {bad} ({bad / n:.0%}) |")
+        print()
     print(
         f"{len(rows)} rows in the dataset, {len(tee)} TEE rows with an intent across "
         f"{len({r['duel_id'] for r in tee})} duels, {sum(1 for r in rs if r['attacked'])} attacked, "
