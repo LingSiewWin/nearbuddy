@@ -78,6 +78,23 @@ const quality = [
   quoted_at: now - Number(ago),
   bps_vs_oracle: bps,
 }));
+// the oracle era reverses the lifetime order: B leads from duel 257 on, A's lead came from the operator era
+const tallyOf = (alpha_bps: number, wins: number, ties: number, losses: number) => ({
+  alpha_bps,
+  wins,
+  ties,
+  losses,
+  duels: wins + ties + losses,
+});
+const eras = {
+  from: 257,
+  operator_duels: 257,
+  oracle_duels: 155,
+  by_agent: {
+    [PK_A]: { oracle: tallyOf(-20, 3, 1, 5), operator_alpha_bps: 160 },
+    [PK_B]: { oracle: tallyOf(35, 5, 1, 3), operator_alpha_bps: -95 },
+  },
+};
 const commitOn = { commit_reveal: true, no_reveal_bps: 500, require_consent: true };
 const arena = (deploy13: boolean) => ({
   at: now,
@@ -87,6 +104,7 @@ const arena = (deploy13: boolean) => ({
   leaderboard: [agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140), agent(PK_B, "Qwen/Qwen3-30B-A3B", -60)],
   duels: [duel],
   stats: { scanned: 40, verified_decisions: 71, attacks: 9 },
+  ...(deploy13 ? {} : { eras }),
   followers: { [PK_A]: [["alice.testnet", mandate], ["bob.testnet", mandate]] },
   solver: deploy13 ? null : { intents: solverIntents, pending: {}, fills: [], quality },
 });
@@ -317,4 +335,89 @@ test("agent: execution summary for this agent's followers", async ({ page }) => 
   await expect(body).toContainText("bob.testnet  2 fills  avg +0.3 bps vs oracle mid  best +1.4  worst -0.8");
   await expect(body).not.toContainText("carol.testnet");
   await shot(page, "agent");
+});
+
+test("arena: standings rank by alpha from duel 257 on, lifetime one click away", async ({ page }) => {
+  await stub(page, "arena", arena(false));
+  await page.goto("/arena");
+  const body = page.locator("body");
+  await expect(body).toContainText("ranked by alpha from duel 257 on, then shield");
+  await expect(body).toContainText("alpha from duel 257 on (TEE oracle), 257 operator-scored duels excluded · show lifetime");
+  const rows = page.locator("pre a[href^='/agent/']");
+  await expect(rows.first()).toHaveAttribute("href", `/agent/${encodeURIComponent(PK_B)}`); // +35 beats -20
+  await expect(page.locator("span.win", { hasText: "+35 bps" })).toHaveAttribute(
+    "title",
+    "duels 257+ +35 bps · operator era -95 bps · lifetime -60 bps",
+  );
+  await page.getByRole("button", { name: "show lifetime" }).click();
+  await expect(body).toContainText("ranked by lifetime alpha, then shield");
+  await expect(body).toContainText("lifetime alpha, incl. 257 operator-scored duels (#0-256)");
+  await expect(rows.first()).toHaveAttribute("href", `/agent/${encodeURIComponent(PK_A)}`); // +140 lifetime
+  await expect(page.locator("span.win", { hasText: "+140 bps" })).toBeVisible();
+  await shot(page, "arena-eras");
+});
+
+test("agent: record from duel 257 on, operator era behind a toggle", async ({ page }) => {
+  const row = (id: string, result: string, pnl: number) => ({
+    id,
+    opponent: PK_B,
+    symbol: "wrap.near",
+    open_at: NS(now - 600_000),
+    close_at: NS(now - 300_000),
+    resolved: true,
+    result,
+    pnl,
+    side: "Long",
+    size_bps: 5000,
+    proof_hash: PROOF,
+    open_price: "256100000",
+    close_price: "257400000",
+    slashed: "0",
+    attacks: 0,
+    attacks_on_me: null,
+  });
+  const base = {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    indexed: true,
+    next_duel: 412,
+    slash_bps: 1000,
+    min_chaos_deposit: "10000000000000000000000",
+    agent: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+    followers: [],
+    execution: null,
+    eras: { from: 257, oracle: tallyOf(-20, 1, 0, 1), operator: { alpha_bps: 160, duels: 257, mine: null } },
+  };
+  await page.route("**/api/agent**", (r) =>
+    r.fulfill({
+      json: r.request().url().includes("era=operator")
+        ? {
+            ...base,
+            eras: { ...base.eras, operator: { alpha_bps: 160, duels: 257, mine: 2 } },
+            era: "operator",
+            scanned: 257,
+            duels: [row("201", "win", 90), row("200", "win", 70)],
+          }
+        : { ...base, era: "oracle", scanned: 155, duels: [row("300", "loss", -45), row("299", "win", 25)] },
+      headers: { "cache-control": "no-store" },
+    }),
+  );
+  await page.goto(`/agent/${encodeURIComponent(PK_A)}`);
+  const body = page.locator("body");
+  await expect(body).toContainText(
+    "alpha from duel 257 on (TEE oracle) -20 bps · operator era (#0-256, 257 duels) excluded: +160 bps of the lifetime alpha · lifetime +140 bps",
+  );
+  await expect(body).toContainText("oracle-scored, duels 257+ · 2 duels");
+  await expect(body).toContainText("1 win  0 tie  1 loss   net -20 bps");
+  await expect(page.getByRole("link", { name: "#300" })).toBeVisible();
+  await page.getByRole("button", { name: "show operator era (#0-256, excluded above)" }).click();
+  await expect(body).toContainText("operator era (#0-256, 257 duels, 2 of them this agent's) excluded: +160 bps of the lifetime alpha");
+  await expect(body).toContainText("operator-scored, duels 0-256 · 2 duels");
+  await expect(body).toContainText("2 win  0 tie  0 loss   net +160 bps");
+  await expect(page.getByRole("link", { name: "#201" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "#300" })).toHaveCount(0);
+  await page.getByRole("button", { name: "back to the oracle era" }).click();
+  await expect(page.getByRole("link", { name: "#300" })).toBeVisible();
+  await shot(page, "agent-eras");
 });
