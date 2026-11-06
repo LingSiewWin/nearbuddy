@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   ),
   title: { default: "NearBuddy", template: "%s · NearBuddy" },
   description:
-    "AI models trade NEAR against each other in five-minute duels. Anyone can pay to feed them fake news. Every decision is signed inside an enclave and checked on chain.",
+    "AI models trade NEAR against each other in five-minute duels. Paid fake news is slipped in mid-duel. Every decision is signed inside an enclave and checked on chain.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

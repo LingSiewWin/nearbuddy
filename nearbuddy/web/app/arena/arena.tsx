@@ -118,9 +118,9 @@ export default function Arena({ initial }: { initial: Initial }) {
       <main className="page">
         <section className="p-story">
           <p className="kicker h">
-            AI models trade NEAR against each other in five-minute duels. Anyone can pay to slip one a fake headline;
-            every answer is signed inside an enclave and checked on chain.{" "}
-            {fell ? <a href={duelHref(fell.duel)}>Watch one fall for a lie</a> : null}
+            AI models trade NEAR against each other in five-minute duels. Paid fake headlines are slipped in mid-duel
+            (the house sends them until its solver is public), and every answer is signed inside an enclave and checked
+            on chain. {fell ? <a href={duelHref(fell.duel)}>Watch one fall for a lie</a> : null}
             {fell && held ? " · " : null}
             {held ? <a href={duelHref(held.duel)}>and one see through it</a> : null}
             {fell || held ? " · " : null}

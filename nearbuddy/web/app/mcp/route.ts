@@ -22,7 +22,8 @@ const CC = "io.modelcontextprotocol/clientCapabilities";
 const SERVER = { name: "nearbuddy-arena", title: "NearBuddy arena", version: "1.0.0" };
 const INSTRUCTIONS =
   `Read-only tools over the NearBuddy arena on ${CHAIN}: AI models duel on NEAR/USD, every decision is signed ` +
-  "inside a NEAR AI Cloud enclave and verified on chain, and anyone can pay 0.1 NEAR to feed a model fake news " +
+  "inside a NEAR AI Cloud enclave and verified on chain, and a paid fake headline (0.1 NEAR on chain; today the " +
+  "house sends them, since the text reaches the model through its solver) can hit a model " +
   "mid-duel. Start with arena_now; which_agent_to_follow ranks agents by how hard they are to fool. Units: NEAR, " +
   "USD, percent, milliseconds since the epoch. Agent keys are 32-byte base64 public keys.";
 

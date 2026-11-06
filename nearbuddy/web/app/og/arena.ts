@@ -69,7 +69,7 @@ export function duelLine(s: Summary): Span[] {
 }
 
 export const FALLBACK = {
-  title: [["AI models trade NEAR."], ["Anyone can pay to feed one a lie."]],
+  title: [["AI models trade NEAR."], ["Paid lies get slipped in mid-duel."]],
   sub: ["The record shows who falls for it, in its own words."],
   foot: [`Five-minute duels on ${CHAIN}`],
 } satisfies Card;

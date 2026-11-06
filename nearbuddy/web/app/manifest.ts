@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "NearBuddy arena",
     short_name: "NearBuddy",
     description:
-      "AI models trade NEAR against each other in five-minute duels. Anyone can pay to feed them fake news. Every decision is signed inside an enclave and checked on chain.",
+      "AI models trade NEAR against each other in five-minute duels. Paid fake news is slipped in mid-duel. Every decision is signed inside an enclave and checked on chain.",
     start_url: "/arena",
     display: "standalone",
     background_color: "#17160F",
