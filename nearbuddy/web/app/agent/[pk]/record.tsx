@@ -10,7 +10,7 @@ type DuelRow = {
   id: string; opponent: string; symbol: string; open_at: string; close_at: string; resolved: boolean; result: "open" | "tie" | "win" | "loss"; pnl: number | null;
   side: "Long" | "Short" | null; size_bps: number | null; proof_hash: string | null; open_price: string | null; close_price: string | null; slashed: string; attacks: number; attacks_on_me: number | null;
 };
-type Rec = { at: number; rpc: string; contract: string; scanned: number; next_duel: number; agent: Agent | null; followers: [string, Mandate][]; duels: DuelRow[] };
+type Rec = { at: number; rpc: string; contract: string; scanned: number; indexed?: boolean; next_duel: number; agent: Agent | null; followers: [string, Mandate][]; duels: DuelRow[] };
 
 const glyph = { win: "█", tie: "▄", loss: "▁", open: "▒" } as const;
 const proven = (d: DuelRow) => !!d.proof_hash && d.proof_hash !== ZERO;
@@ -65,7 +65,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
     <>
       <pre className="wrap">
         <a href="/arena" className="dim">← arena</a>{"  "}<span className="hi">NEARBUDDY AGENT</span> <span className="dim">· one agent's record, read from the contract · NEAR testnet</span>{"\n"}
-        <span className="dim">{r ? `snapshot ${new Date(r.at).toISOString()}  contract ${r.contract}  scanned last ${r.scanned} duels` : err ? `error: ${err}` : "connecting"}</span><span className="cursor" />
+        <span className="dim">{r ? `snapshot ${new Date(r.at).toISOString()}  contract ${r.contract}  ${r.indexed ? `${r.scanned} duels from the on-chain index` : `scanned last ${r.scanned} duels`}` : err ? `error: ${err}` : "connecting"}</span><span className="cursor" />
       </pre>
       <pre>
         {boxTitle(1, "agent", a ? a.model_id : short(pk))}{"\n"}

@@ -50,7 +50,14 @@ async function build(pk: string): Promise<string> {
     view("list_followers", { agent_pk: pk }),
   ]);
   const n = Number(config.next_duel);
-  const ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => String(n - 1 - i));
+  // deploy 10 keeps a per-agent duel index (newest first); agents whose index is empty (duels before the
+  // index existed) fall back to scanning the tail of all duels.
+  let ids: string[] = [];
+  try {
+    ids = ((await view("agent_duels", { agent_pk: pk, from: 0, limit: SCAN })) as string[]).map(String);
+  } catch { /* view missing before deploy 10 */ }
+  const indexed = ids.length > 0;
+  if (!indexed) ids = Array.from({ length: Math.min(SCAN, n) }, (_, i) => String(n - 1 - i));
   const all = (await chunked(ids, 8, (id) => view("get_duel", { duel_id: id }))) as (Duel | null)[];
   const duels = all.filter((d): d is Duel => !!d && (d.a === pk || d.b === pk)).map((d) => {
     const isA = d.a === pk;
@@ -67,7 +74,7 @@ async function build(pk: string): Promise<string> {
     };
   });
   const body = JSON.stringify(
-    { at: Date.now(), rpc: RPC, contract: ARENA, scanned: ids.length, next_duel: n, agent, followers, duels },
+    { at: Date.now(), rpc: RPC, contract: ARENA, scanned: ids.length, indexed, next_duel: n, agent, followers, duels },
     (_, v) => (typeof v === "bigint" ? v.toString() : v),
   );
   cache.set(pk, { at: Date.now(), body });
