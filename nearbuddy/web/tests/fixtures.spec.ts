@@ -252,6 +252,27 @@ test("duel: commit and reveal times per side from the contract's events", async 
   await shot(page, "duel-commits");
 });
 
+test("duel: a record without open_at still renders, with no window note", async ({ page }) => {
+  await stub(page, "events", events(null));
+  const { open_at: _, ...noOpen } = duel;
+  await stub(page, "duel", {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    oracle: "price-oracle.testnet",
+    config: { next_duel: "412", ...commitOn },
+    no_reveal: [false, false],
+    duel: noOpen,
+    a: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+    b: agent(PK_B, "Qwen/Qwen3-30B-A3B", -60),
+  });
+  await page.goto("/duel/411");
+  await expect(page.locator(box("sides"))).toBeVisible();
+  await expect(page.locator("pre.wrap").first()).toContainText("· - →");
+  await expect(page.locator("body")).toContainText("A commit         no commit seen");
+  await expect(page.locator("body")).not.toContainText("earlier events not shown");
+});
+
 test("duel: open tx outside the scanned window falls back to today's require_consent, labelled", async ({ page }) => {
   await stub(page, "events", events(null));
   await stub(page, "duel", {

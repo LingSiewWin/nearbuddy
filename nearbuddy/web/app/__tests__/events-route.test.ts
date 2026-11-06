@@ -2,6 +2,7 @@
 // serves what it parsed (`partial: true`), backs off instead of rescanning per poll, and the next scan
 // fetches only the hashes it is missing. Run: `cd web && bun test app`.
 import { afterAll, describe, expect, setSystemTime, test } from "bun:test";
+import { fastnearTxApi } from "../api/events/chain";
 
 const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
 const T0 = new Date("2026-11-06T12:00:00Z");
@@ -68,6 +69,7 @@ describe("/api/events under FastNEAR rate limits", () => {
     const { status, body } = await get();
     expect(status).toBe(200);
     expect(body.partial).toBe(true);
+    expect(body.source).toBe(process.env.FASTNEAR_TX_API ?? fastnearTxApi(process.env.NEAR_NETWORK));
     expect(body.window).toBe(40);
     expect(body.events).toHaveLength(40);
     expect(body.events[0].at_ms).toBeLessThan(body.events[39].at_ms); // chain order

@@ -7,9 +7,9 @@
 // costs one attempt per 10 s, not one per poll. Older duels fall outside the window (`oldest_ms`).
 import type { ChainEvent, Opened } from "../../cells";
 import { ARENA, json } from "../near";
-import { eventsOf, opensOf, type Tx } from "./chain";
+import { eventsOf, fastnearTxApi, opensOf, type Tx } from "./chain";
 
-const TX_API = process.env.FASTNEAR_TX_API ?? "https://tx.test.fastnear.com/v0";
+const TX_API = process.env.FASTNEAR_TX_API ?? fastnearTxApi(process.env.NEAR_NETWORK);
 const TTL = 20_000;
 const BACKOFF = TTL / 2;
 const ID_RE = /^\d{1,12}$/;

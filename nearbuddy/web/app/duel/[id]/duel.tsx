@@ -65,7 +65,7 @@ type Duel = {
   a: string;
   b: string;
   symbol: string;
-  open_at: string;
+  open_at?: string | null; // absent in some older record shapes
   close_at: string;
   pool: string;
   injections: Injection[];
@@ -96,6 +96,9 @@ type Rec = {
 };
 
 const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
+/** open_at in ms, or null when the record lacks it or holds no ns integer (BigInt would throw). */
+const openMs = (d: { open_at?: string | null }) =>
+  d.open_at && /^\d+$/.test(d.open_at) ? Number(BigInt(d.open_at) / 1_000_000n) : null;
 const when = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(0, 19).replace("T", " ");
 const proven = (i: Intent | null) => hasProof(i, ZERO);
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
@@ -197,7 +200,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
             {" "}
             <span className="dim">· {symbol(d.symbol)} ·</span> <span className={state!.c}>{state!.t}</span>{" "}
             <span className="dim">
-              · {when(d.open_at)} → {ts(d.close_at)} UTC · pool {near(d.pool)} NEAR
+              · {openMs(d) != null ? when(d.open_at!) : "-"} → {ts(d.close_at)} UTC · pool {near(d.pool)} NEAR
             </span>
           </>
         ) : null}
@@ -241,7 +244,7 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                       </span>
                     ))
                   : null}
-                {ev?.oldest_ms != null && Number(BigInt(d.open_at) / 1_000_000n) < ev.oldest_ms ? (
+                {ev?.oldest_ms != null && openMs(d) != null && openMs(d)! < ev.oldest_ms ? (
                   <>
                     {rowx("", [
                       {

@@ -18,6 +18,10 @@ export type Tx = {
   }[];
 };
 
+/** FastNEAR tx API host for a NEAR_NETWORK value: mainnet or, by default, testnet. */
+export const fastnearTxApi = (network: string | undefined) =>
+  `https://tx.${network === "mainnet" ? "main" : "test"}.fastnear.com/v0`;
+
 const OPEN_METHODS = new Set(["open_duel", "open_duel_consented"]);
 /** The receipt's own outcome succeeded. The tx-level status is never read: FastNEAR reports SuccessReceiptId
  *  there even when the arena receipt panicked (tx 4rmFo38n, "bad tee signature"). */

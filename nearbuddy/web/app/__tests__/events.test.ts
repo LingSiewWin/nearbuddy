@@ -1,7 +1,15 @@
 // FastNEAR tx readers behind GET /api/events, on fixture txs shaped like POST /v0/transactions bodies
 // (values from testnet duel 340, opened by open_duel). Run: `cd web && bun test app`.
 import { describe, expect, test } from "bun:test";
-import { eventsOf, opensOf, type Tx } from "../api/events/chain";
+import { eventsOf, fastnearTxApi, opensOf, type Tx } from "../api/events/chain";
+
+describe("fastnearTxApi", () => {
+  test("NEAR_NETWORK picks the host: mainnet, else testnet", () => {
+    expect(fastnearTxApi("mainnet")).toBe("https://tx.main.fastnear.com/v0");
+    expect(fastnearTxApi("testnet")).toBe("https://tx.test.fastnear.com/v0");
+    expect(fastnearTxApi(undefined)).toBe("https://tx.test.fastnear.com/v0");
+  });
+});
 
 const ARENA = "arena.nearbuddy-solver.testnet";
 type R = Tx["receipts"][number];
