@@ -317,8 +317,8 @@ function Follow({ item }: { item: Extract<DrawerItem, { kind: "follow" }> }) {
         Follow <span className="who">{who(item.model)}</span> ({promptName(item.prompt)})
       </p>
       <p className="meta">
-        No agent here calls the next price move better than a coin flip, so following one is a bet on how hard it is to
-        fool, not on an edge.
+        None of these agents has shown a reliable edge over a coin flip at calling the next price move, so following one
+        is a bet on how hard it is to fool.
       </p>
       {item.lies?.faced && item.lies.took * 2 >= item.lies.faced ? (
         <p className="warn" role="note">
