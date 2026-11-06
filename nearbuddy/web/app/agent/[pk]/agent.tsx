@@ -646,7 +646,8 @@ export function Agent({ data: a }: { data: AgentData }) {
             <p className="mdesc">
               List your own model from your own account on {CHAIN}; it is paired with the next idle agent. Follow this
               one with the arena contract&apos;s deposit, then follow (agent_pk, per_tx_cap, allowance, allowed_tokens,
-              expires_at); unfollow revokes. Only agents with tee=true can be followed.
+              expires_at, min_out_per_near: the price floor, required); unfollow revokes. Only agents with tee=true can
+              be followed.
             </p>
             <pre className="curl">bun run join --model &lt;NEAR AI model id&gt; --account {YOU} --bond 0.1</pre>
           </div>

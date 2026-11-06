@@ -11,6 +11,7 @@ import { tally } from "../lib/verdict";
 import { NET, NETWORK_ID } from "../network";
 import { type Agent, type Duel, type Mandate, ms, nearOf, snapshot } from "./arena";
 import { getDecisions } from "./dataset";
+import { followersOf as solverFollowers } from "./followers";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
 
 const SCAN = Number(process.env.AGENT_SCAN ?? 40);
@@ -38,18 +39,26 @@ async function chunked<T>(items: string[], size: number, f: (id: string) => Prom
   return out;
 }
 
-/** Followers and their mandates. Deploy 15 dropped `list_followers` and reads one (agent, follower) pair with
- *  `get_follow`, so there the known house followers are asked by name.
- *  ponytail: strangers' follows are invisible on deploy 15; index `follow` calls from FastNEAR to list them. */
+/** Followers and their mandates. Deploy 15 dropped `list_followers` ("method is not found") and reads one (agent,
+ *  follower) pair with `get_follow`: there the solver's GET /followers answers when reachable (./followers.ts, as on
+ *  /terminal), and the house followers are asked by name on the chain, so a host without the solver still sees them.
+ *  Any other error (a throttled RPC) is thrown, not mistaken for a missing view.
+ *  ponytail: other strangers' follows are invisible on deploy 15; index `follow` calls from FastNEAR to list them. */
 async function followersOf(pk: string): Promise<{ list: [string, Mandate][]; listed: boolean }> {
   try {
     return { list: (await view("list_followers", { agent_pk: pk })) as [string, Mandate][], listed: true };
-  } catch {
-    const who = [...new Set([NET.owner, process.env.FOLLOWER_ID].filter((x): x is string => !!x))];
+  } catch (e) {
+    if (!/MethodNotFound|method is not found/i.test(String(e))) throw e; // raw RPC text, or near-api-js wording
+    const known = (await solverFollowers(view, pk)) as [string, Mandate][];
+    const have = new Set(known.map(([f]) => f));
+    const who = [...new Set([NET.owner, process.env.FOLLOWER_ID])].filter((x): x is string => !!x && !have.has(x));
     const got = await Promise.all(
       who.map((f) => (view("get_follow", { agent_pk: pk, follower: f }) as Promise<Mandate | null>).catch(() => null)),
     );
-    return { list: who.flatMap((f, i): [string, Mandate][] => (got[i] ? [[f, got[i]]] : [])), listed: false };
+    return {
+      list: [...known, ...who.flatMap((f, i): [string, Mandate][] => (got[i] ? [[f, got[i]]] : []))],
+      listed: false,
+    };
   }
 }
 
