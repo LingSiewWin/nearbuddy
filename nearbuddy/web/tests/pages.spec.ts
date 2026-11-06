@@ -18,6 +18,7 @@ async function ids(request: APIRequestContext) {
     resolved: resolved as number,
     agent: arena.standings[0]?.agent as string,
     recent,
+    standings: arena.standings as { agent: string }[],
   };
 }
 
@@ -43,8 +44,10 @@ test("duel pages fit a phone: live, resolved and one from the published record",
 });
 
 test("agent pages fit a phone: the top agent and a test bot", async ({ page, request }) => {
-  const { agent, recent } = await ids(request);
-  const bot = recent.flatMap((d) => [d.a, d.b]).find((s) => !s.verified)?.agent; // none when no bot dueled lately
+  const { agent, recent, standings } = await ids(request);
+  // a test bot: an agent that dueled lately but is not in the standings (enclave-verified models only)
+  const ranked = new Set(standings.map((s) => s.agent));
+  const bot = recent.flatMap((d) => [d.a, d.b]).find((s) => !ranked.has(s.agent))?.agent;
   for (const pk of [agent, bot].filter(Boolean) as string[]) await check(page, `/agent/${encodeURIComponent(pk)}`);
 });
 

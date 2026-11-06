@@ -31,8 +31,9 @@ test("/agent/<pk>: identity, the two numbers, its record, its calls and the agen
   await expect(page.locator("body")).toContainText(pk.slice(0, 10));
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await expect(page.locator(".ag-hero .m .ep code")).toHaveText(`/api/agent?pk=${encodeURIComponent(pk)}`);
-  await page.goto("/agent/not-a-key");
-  await expect(page.locator("body")).toContainText("Nothing here.", { timeout: 30_000 });
+  // every page's RSC payload carries the not-found text, so check the rendered heading and the status
+  expect((await page.goto("/agent/not-a-key"))?.status()).toBe(404);
+  await expect(page.locator("main h1")).toHaveText("Nothing here.");
 });
 
 test("/duel/<newest> renders the result and links both agents", async ({ page, request }) => {
@@ -57,7 +58,7 @@ test("a duel id or agent key that cannot exist is a real 404; its markdown twin 
   for (const path of ["/duel/abc", "/duel/-1", "/agent/not-a-key", "/agent/%E0%A4%A"]) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(404);
-    expect(await res.text(), path).toContain("Nothing here.");
+    expect(await res.text(), path).toMatch(/<h1[^>]*>Nothing here\.<\/h1>/); // the payload alone carries it as JSON
   }
   expect((await request.get("/duel/abc?format=md")).status()).toBe(400);
 });
