@@ -9,8 +9,7 @@ import type { Agent, Config, Duel } from "../../api/arena";
 import { ms, nearOf, usd, ZERO } from "../../api/arena";
 import { attackText, type Decision, getDecisions } from "../../api/dataset";
 import { ARENA, viewOn } from "../../api/near";
-import { type ArenaEvent, decode } from "../../api/tape";
-import { tape } from "../../api/tape";
+import { type ArenaEvent, decode, tape } from "../../api/tape";
 import type { Focus } from "../../arena/model";
 
 export type DuelSide = Focus["a"] & { score: number | null };
@@ -144,7 +143,8 @@ async function eventsOf(id: number, d: Duel, opened: number, closes: number, dec
 
 let config: { at: number; c: Config } | null = null;
 const getConfig = async () => {
-  if (!config || Date.now() - config.at > 300_000) config = { at: Date.now(), c: (await view("get_config", {})) as Config };
+  if (!config || Date.now() - config.at > 300_000)
+    config = { at: Date.now(), c: (await view("get_config", {})) as Config };
   return config.c;
 };
 

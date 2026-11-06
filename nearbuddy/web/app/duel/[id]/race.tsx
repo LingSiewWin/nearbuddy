@@ -14,17 +14,7 @@ export const tones = (d: DuelData) => {
   return { a, b: b === a ? "k-alt" : b };
 };
 
-export function Race({
-  d,
-  ticks,
-  now,
-  src,
-}: {
-  d: DuelData;
-  ticks: Tick[];
-  now: number;
-  src: "trades" | "minutes";
-}) {
+export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: number; src: "trades" | "minutes" }) {
   const t0 = d.opened;
   const t1 = d.closes;
   const end = d.live ? Math.min(now || t0, t1) : t1;
@@ -65,9 +55,7 @@ export function Race({
           <a className="n who" href={agentHref(s.agent)}>
             {who(s.model)}
           </a>
-          <span className="s">
-            {s.side ? `${s.side}, ${stake(s.size_pct)}` : d.live ? "No call yet" : "No call"}
-          </span>
+          <span className="s">{s.side ? `${s.side}, ${stake(s.size_pct)}` : d.live ? "No call yet" : "No call"}</span>
           <span className="st">{state}</span>
         </div>
         <div className={`trk lane ${k}`}>

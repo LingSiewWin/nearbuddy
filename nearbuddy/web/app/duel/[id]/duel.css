@@ -40,51 +40,6 @@
   margin-top: 14px;
 }
 
-/* proof */
-.proof {
-  list-style: none;
-  margin-top: 14px;
-  max-width: 88ch;
-}
-.proof li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 24px;
-  padding: 12px 0;
-  border-top: 1px solid var(--line);
-  font-size: 15px;
-}
-.proof li b {
-  font-weight: 650;
-}
-.proof li > span {
-  grid-column: 1;
-  color: var(--dim);
-  font-size: 14px;
-}
-.proof li > a,
-.proof li > i {
-  grid-column: 2;
-  grid-row: 1 / 3;
-  align-self: center;
-  white-space: nowrap;
-  font-size: 14px;
-}
-.proof li > i {
-  font-style: normal;
-  color: var(--faint);
-}
-.proof .links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  margin-top: 6px;
-}
-.proof .links a {
-  color: var(--ink);
-  white-space: nowrap;
-}
-
 /* the trail: the duel's rail, oldest first */
 .trail {
   flex: 1;
@@ -107,14 +62,14 @@
   text-align: left;
   color: inherit;
 }
-.tr .tm b {
+.tm b {
   display: block;
   font-weight: 650;
   font-size: 15px;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
 }
-.tr .tm small {
+.tm small {
   display: block;
   font-size: 11.5px;
   color: var(--faint);
@@ -167,7 +122,7 @@
   background: rgba(238, 233, 216, 0.04);
   color: var(--dim);
 }
-.t-mark b {
+.t-mark p b {
   color: var(--ink);
   font-weight: 600;
 }
@@ -190,11 +145,56 @@
 .t-attack:hover {
   background: rgba(255, 75, 75, 0.13);
 }
-.t-attack b {
+.t-attack p b {
   color: var(--alarm);
 }
 .tr .seal {
   margin-top: 1px;
+}
+
+/* proof */
+.proof {
+  list-style: none;
+  margin-top: 14px;
+  max-width: 88ch;
+}
+.proof li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 24px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  font-size: 15px;
+}
+.proof li b {
+  font-weight: 650;
+}
+.proof li > span {
+  grid-column: 1;
+  color: var(--dim);
+  font-size: 14px;
+}
+.proof li > a,
+.proof li > i {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.proof li > i {
+  font-style: normal;
+  color: var(--faint);
+}
+.proof .links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 6px;
+}
+.proof .links a {
+  color: var(--ink);
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {

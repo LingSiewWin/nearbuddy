@@ -25,7 +25,9 @@ export function stories(d: DuelData): Story[] {
         (r) => r.agent === a.target && r.attack && (!a.text || r.attack === a.text) && !used.has(r.tx ?? ""),
       );
       const reply =
-        (shown && calls.find((c) => c.tx === shown.tx)) ?? calls.find((c) => c.agent === a.target && c.at > a.at) ?? null;
+        (shown && calls.find((c) => c.tx === shown.tx)) ??
+        calls.find((c) => c.agent === a.target && c.at > a.at) ??
+        null;
       const dd = shown ?? d.decisions.find((r) => r.tx === reply?.tx) ?? null;
       if (dd?.tx) used.add(dd.tx);
       return { e: a, text: a.text ?? dd?.attack ?? null, target: a.target, reply, d: dd };
@@ -69,7 +71,14 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
             <div className="tr t-mark">
               {when(e.at)}
               <p>
-                The bell. {d.open ? <>The price oracle opened NEAR at <b>{usd(d.open)}</b>.</> : "Waiting for the oracle's opening price."}
+                The bell.{" "}
+                {d.open ? (
+                  <>
+                    The price oracle opened NEAR at <b>{usd(d.open)}</b>.
+                  </>
+                ) : (
+                  "Waiting for the oracle's opening price."
+                )}
               </p>
             </div>
           ),
@@ -96,7 +105,11 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
                 {s && r?.verdict ? (
                   <p className={`vline ${r.verdict}`}>
                     {verdictLine[r.verdict]}{" "}
-                    <span>{r.verdict === "fell" ? "It took the side the paid headline pushed." : "That was its reply to the paid headline."}</span>
+                    <span>
+                      {r.verdict === "fell"
+                        ? "It took the side the paid headline pushed."
+                        : "That was its reply to the paid headline."}
+                    </span>
                   </p>
                 ) : null}
               </div>
@@ -124,9 +137,7 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
           node: (
             <div className={`tr t-call t-sealed ${k(e.agent)}`}>
               {when(e.at)}
-              <p className="call">
-                {name(e.agent)} sealed its next call. The side stays hidden until it is revealed.
-              </p>
+              <p className="call">{name(e.agent)} sealed its next call. The side stays hidden until it is revealed.</p>
               <span />
             </div>
           ),

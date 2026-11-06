@@ -163,7 +163,7 @@ const nearAmt = (n: number) => `${Number(n.toFixed(4))} NEAR`;
 
 function Head({ d, price, now }: { d: DuelData; price: number | null; now: number }) {
   const t = tones(d);
-  const N = (s: DuelSide) => <span className={`who ${s === d.a ? t.a : t.b}`}>{who(s.model)}</span>;
+  const nm = (s: DuelSide) => <span className={`who ${s === d.a ? t.a : t.b}`}>{who(s.model)}</span>;
   const open = d.open;
   const move = open && price ? ((price - open) / open) * 100 : null;
   const moved =
@@ -182,14 +182,14 @@ function Head({ d, price, now }: { d: DuelData; price: number | null; now: numbe
     if (w) {
       h1 = (
         <>
-          {N(w)} won duel {d.duel}. {N(l)} paid {nearAmt(d.slashed)}.
+          {nm(w)} won duel {d.duel}. {nm(l)} paid {nearAmt(d.slashed)}.
         </>
       );
       sub = (
         <>
-          {N(w)} {callOf(w)} and {N(l)} {callOf(l)}. {moved} between the oracle&apos;s open and close, so {N(w)} scored{" "}
-          <b>{pct(w.score ?? 0)}</b> and {N(l)} <b>{pct(l.score ?? 0)}</b>. The loser pays {d.slashPct}% of its bond to
-          the winner.
+          {nm(w)} {callOf(w)} and {nm(l)} {callOf(l)}. {moved} between the oracle&apos;s open and close, so {nm(w)}{" "}
+          scored <b>{pct(w.score ?? 0)}</b> and {nm(l)} <b>{pct(l.score ?? 0)}</b>. The loser pays {d.slashPct}% of its
+          bond to the winner.
         </>
       );
     } else {
@@ -205,7 +205,7 @@ function Head({ d, price, now }: { d: DuelData; price: number | null; now: numbe
             <>Both {callOf(d.a).replace("its", "their")}. </>
           ) : (
             <>
-              {N(d.a)} {callOf(d.a)} and {N(d.b)} {callOf(d.b)}.{" "}
+              {nm(d.a)} {callOf(d.a)} and {nm(d.b)} {callOf(d.b)}.{" "}
             </>
           )}
           {moved} between the oracle&apos;s open and close, so both scored <b>{pct(d.a.score ?? 0)}</b>. Equal scores
@@ -225,18 +225,19 @@ function Head({ d, price, now }: { d: DuelData; price: number | null; now: numbe
       sub = (
         <>
           Duel {d.duel} ended {Math.round((now - d.closes) / 60_000)} min ago. It is scored as soon as anyone asks the
-          price oracle for the close. At the last trade, {lead ? <>{N(lead)} was ahead</> : "the two sides were level"}.
+          price oracle for the close. At the last trade, {lead ? <>{nm(lead)} was ahead</> : "the two sides were level"}
+          .
         </>
       );
     } else {
-      h1 = lead ? <>{N(lead)} is winning.</> : "Dead heat.";
+      h1 = lead ? <>{nm(lead)} is winning.</> : "Dead heat.";
       sub = (
         <>
-          {N(d.a)} is <b>{sideWord(d.a.side)}</b>, {N(d.b)} is <b>{sideWord(d.b.side)}</b>
+          {nm(d.a)} is <b>{sideWord(d.a.side)}</b>, {nm(d.b)} is <b>{sideWord(d.b.side)}</b>
           {move == null ? ". " : `, and ${moved.replace("rose", "is up").replace("fell", "is down")} since the bell. `}
           {lead ? (
             <>
-              If it ends now, {N(lag)} pays {N(lead)} <b>{pay != null ? near(pay) : `${d.slashPct}% of its bond`}</b>.
+              If it ends now, {nm(lag)} pays {nm(lead)} <b>{pay != null ? near(pay) : `${d.slashPct}% of its bond`}</b>.
             </>
           ) : d.a.side && d.a.side === d.b.side ? (
             "Same call on both sides: if it ends like this, nobody pays."
@@ -356,7 +357,9 @@ function Attacks({ d, list }: { d: DuelData; list: Story[] }) {
         </p>
       ) : null}
       {list.some((s) => !s.e) ? (
-        <p className="note">An attack without a time comes from the published dataset; its transaction is out of reach.</p>
+        <p className="note">
+          An attack without a time comes from the published dataset; its transaction is out of reach.
+        </p>
       ) : null}
     </>
   );
