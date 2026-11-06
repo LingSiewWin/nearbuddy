@@ -41,10 +41,6 @@ def key_from_near_secret(secret: str) -> SigningKey:
     return SigningKey(raw[:32])
 
 
-def pk_b64(sk: SigningKey) -> str:
-    return base64.b64encode(bytes(sk.verify_key)).decode()
-
-
 def _vec(b: bytes) -> bytes:
     return struct.pack("<I", len(b)) + b
 

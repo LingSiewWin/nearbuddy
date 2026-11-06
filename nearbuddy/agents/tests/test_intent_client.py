@@ -130,22 +130,23 @@ def test_price_retries_transient_errors(monkeypatch):
     assert calls["n"] == 3
 
 
-def test_runner_agent_key_uses_a_raw_builder_key(monkeypatch):
-    import runner
+def test_agent_key_uses_a_raw_builder_key(monkeypatch):
+    from config import ENV
+    from keys import agent_key
 
     seed = bytes([9] * 32)
-    monkeypatch.setitem(runner.ENV, "AGENT_KEY_B", seed.hex())
-    monkeypatch.setitem(runner.ENV, "AGENT_SEED_B", bytes([1] * 32).hex())
-    assert bytes(runner.agent_key("B", True)) == seed  # raw seed wins, no sha256(seed||"tee") derivation
-    monkeypatch.delitem(runner.ENV, "AGENT_KEY_B")
-    assert bytes(runner.agent_key("B", True)) != seed
+    monkeypatch.setitem(ENV, "AGENT_KEY_B", seed.hex())
+    monkeypatch.setitem(ENV, "AGENT_SEED_B", bytes([1] * 32).hex())
+    assert bytes(agent_key("B", True)) == seed  # raw seed wins, no sha256(seed||"tee") derivation
+    monkeypatch.delitem(ENV, "AGENT_KEY_B")
+    assert bytes(agent_key("B", True)) != seed
 
 
 def test_register_sig_covers_domain_and_owner():
-    import runner
+    from keys import register_sig
 
     sk = SigningKey(bytes([3] * 32))
-    sig = base64.b64decode(runner.register_sig(sk, "someone.testnet"))
+    sig = base64.b64decode(register_sig(sk, "someone.testnet"))
     sk.verify_key.verify(b"nearbuddy-register-v1" + b"someone.testnet", sig)
     with pytest.raises(BadSignatureError):
         sk.verify_key.verify(b"nearbuddy-register-v1" + b"other.testnet", sig)

@@ -18,10 +18,7 @@ agents are registered as TEE-backed and the contract refuses any intent without 
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
 import json
-import os
 import re
 import sys
 import time
@@ -31,57 +28,15 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # run from any cwd: `python agents/runner.py`
 from typing import Any
 
-import requests
-from dotenv import dotenv_values
 from nacl.signing import SigningKey
 
+from chain import ASSETS, agent_tier_on_chain, view, wait_outcome
+from config import ATTEST_DIR, DATA, ENV
 from duelist import Duelist, DuelistError
-from intent_client import Solver, TeeProofError, pk_b64, proof_hash, sign_intent, tee_proof
+from intent_client import Solver, TeeProofError, proof_hash, sign_intent, tee_proof
+from keys import agent_key, pk_b64, register_sig
 from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
-
-# a bare `KEY` line in .env reads as None; drop it so every value is a str
-ENV: dict[str, str] = {
-    **{k: v for k, v in dotenv_values(Path(__file__).resolve().parents[1] / ".env").items() if v is not None},
-    **os.environ,
-}
-DATA = Path(__file__).resolve().parent / "data" / "decisions.jsonl"
-ATTEST_DIR = Path(__file__).resolve().parent / "data" / "attestations"
-RPC = ENV.get("NEAR_RPC", "https://near-testnet.drpc.org")
-ARENA = ENV.get("ARENA_CONTRACT", "arena.nearbuddy-solver.testnet")
-# display symbol -> Outlayer asset id priced by price-oracle.testnet (only wrap.near is served on testnet)
-ASSETS = {"NEAR/USD": "wrap.near"}
-
-
-def agent_key(name: str, tee: bool, tag: str = "") -> SigningKey:
-    """`AGENT_KEY_*` is a raw seed handed over by a builder; otherwise demo keys come straight from AGENT_SEED_*;
-    TEE-backed duelists use a key derived from the same seed, so the plain demo agents and the enclave-proved
-    agents are distinct registrations on chain. `tag` derives one more key per seed (the swapped-prompt control
-    registers the other model under it)."""
-    key = ENV.get(f"AGENT_KEY_{name}", "")
-    if key:  # an outside builder's agent (from `bun run join`): the hex is the ed25519 seed itself, no derivation
-        return SigningKey(bytes.fromhex(key))
-    seed = ENV.get(f"AGENT_SEED_{name}", "")
-    if not seed:
-        return SigningKey.generate()
-    raw = bytes.fromhex(seed)
-    if not tee and not tag:
-        return SigningKey(raw)
-    return SigningKey(hashlib.sha256(raw + (b"tee" if tee else b"") + tag.encode()).digest())
-
-
-REGISTER_DOMAIN = b"nearbuddy-register-v1"
-
-
-def register_sig(sk: SigningKey, owner: str) -> str:
-    """Proof of key possession for `register_agent`: ed25519 over `"nearbuddy-register-v1" || owner`."""
-    return base64.b64encode(sk.sign(REGISTER_DOMAIN + owner.encode()).signature).decode()
-
-
-def agent_tier_on_chain(pk: str) -> bool | None:
-    """`get_agent(pk).tee`, or None when the agent is not registered yet."""
-    a = view("get_agent", {"agent_pk": pk})
-    return None if a is None else bool(a.get("tee"))
 
 
 class Tracked:
@@ -117,25 +72,6 @@ def record(row: dict[str, Any]) -> None:
         f.write(json.dumps(row) + "\n")
 
 
-def view(method: str, args: dict[str, Any]) -> Any:
-    body: dict[str, Any] = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "query",
-        "params": {
-            "request_type": "call_function",
-            "finality": "final",
-            "account_id": ARENA,
-            "method_name": method,
-            "args_base64": base64.b64encode(json.dumps(args).encode()).decode(),
-        },
-    }
-    r = requests.post(RPC, json=body, headers={"User-Agent": "nearbuddy/1"}, timeout=30).json()
-    if "error" in r:
-        raise RuntimeError(f"{RPC} {method}: {r['error'].get('message', r['error'])}")
-    return json.loads(bytes(r["result"]["result"]).decode())
-
-
 def save_attestation(model_client: ModelClient) -> str | None:
     """Fetch and keep the enclave attestation once per model per run; the file is the raw material a third
     party feeds to NVIDIA NRAS and dcap-qvl to check the signer we trust on chain."""
@@ -149,16 +85,6 @@ def save_attestation(model_client: ModelClient) -> str | None:
     signers = [m.get("signing_address") for m in report.get("model_attestations", [])]
     print(f"attestation {model_client.model_id}: status {att.get('status')} signers {signers} -> {name}")
     return name
-
-
-def wait_outcome(duel_id: str, timeout_s: int = 90) -> dict[str, Any] | None:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        d = view("get_duel", {"duel_id": duel_id})
-        if d and d.get("outcome"):
-            return d["outcome"]
-        time.sleep(4)
-    return None
 
 
 def resolve_duel(solver: Solver, duel_id: str, attempts: int = 4) -> dict[str, Any]:
