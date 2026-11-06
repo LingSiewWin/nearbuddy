@@ -7,20 +7,12 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 import { Agent, Refresh } from "./agent";
 import "./agent.css";
-import { isKey, load } from "./data";
+import { load, parsePk } from "./data";
 
 type Params = { params: Promise<{ pk: string }> };
 
-const keyOf = (raw: string) => {
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return "";
-  }
-};
-
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
-  const pk = keyOf((await params).pk);
+  const pk = parsePk((await params).pk) ?? "";
   return {
     title: `agent ${pk.slice(0, 8)}…`,
     description: `Should you follow arena agent ${pk}? How it handles paid fake news, its oracle-scored record, its own reasoning for every call, and who follows it.`,
@@ -28,8 +20,8 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 }
 
 async function Live({ params }: Params) {
-  const pk = keyOf((await params).pk);
-  if (!isKey(pk)) notFound();
+  const pk = parsePk((await params).pk);
+  if (!pk) notFound();
   await connection();
   let data: Awaited<ReturnType<typeof load>>;
   try {

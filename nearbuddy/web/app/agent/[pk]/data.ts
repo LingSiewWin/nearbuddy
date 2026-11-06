@@ -1,46 +1,20 @@
 // Everything the agent page reads, in one server-side module, so the source can be swapped for a per-agent
 // v1 route without touching the page: the agent's record from the arena contract (the same body as
-// GET /api/agent, through its handler and cache), its decisions from the published dataset, the leaderboard
+// GET /api/agent, through its cache), its decisions from the published dataset, the leaderboard
 // for opponents' model names, and the block time of the decisions on screen (the proof drawer shows it).
-import { GET as agentRoute } from "../../api/agent/route";
+import { type AgentRecord, agentRecord } from "../../api/agent";
 import { ms, nearOf } from "../../api/arena";
 import { type Decision, getDecisions } from "../../api/dataset";
 import { ARENA, viewOn } from "../../api/near";
 
 type Side = Decision["side"];
-type RawMandate = { allowance: string; spent: string; per_tx_cap: string; expires_at: string; revoked: boolean };
-type RawDuel = {
-  id: string;
-  opponent: string;
-  result: "open" | "tie" | "win" | "loss";
-  pnl: number | null;
-  side: Side | null;
-  size_bps: number | null;
-  attacks: number;
-};
-type Raw = {
-  scanned: number;
-  indexed?: boolean;
-  slash_bps: number;
-  min_chaos_deposit: string;
-  agent: {
-    owner: string;
-    model_id: string;
-    bond: string;
-    alpha_bps: number;
-    in_duel: string | null;
-    tee: boolean;
-  } | null;
-  followers: [string, RawMandate][];
-  duels: RawDuel[];
-};
 
 export type Follower = { account: string; cap: number; spent: number; total: number; until: number; revoked: boolean };
 export type DuelRow = {
   id: number;
   opponent: string;
   opponentModel: string | null;
-  result: RawDuel["result"];
+  result: AgentRecord["duels"][number]["result"];
   returnPct: number | null;
   side: Side | null;
   sizePct: number | null;
@@ -68,8 +42,8 @@ export type AgentData = {
   stamps: Record<string, number>; // decision tx -> block time (ms)
 };
 
-const KEY = /^[A-Za-z0-9+/]{43}=$/; // 32 bytes, standard base64, as the contract stores agent keys
-export const isKey = (pk: string) => KEY.test(pk);
+/** A key from the URL segment (percent-encoded or not), or null when it is not a 32-byte base64 key. */
+export { parsePk } from "../../api/agent";
 
 const view = viewOn(ARENA);
 let names: { at: number; map: Map<string, string> } | null = null;
@@ -109,13 +83,7 @@ async function stamps(txs: string[]): Promise<Record<string, number>> {
 
 /** The agent page's data; null for a key the contract does not know. Throws when the chain read fails. */
 export async function load(pk: string): Promise<AgentData | null> {
-  const [res, all, models] = await Promise.all([
-    agentRoute(new Request(`http://local/api/agent?pk=${encodeURIComponent(pk)}`)),
-    getDecisions(),
-    modelsByKey(),
-  ]);
-  const raw = (await res.json()) as Raw | { error: string };
-  if ("error" in raw) throw new Error(raw.error);
+  const [raw, all, models] = await Promise.all([agentRecord(pk), getDecisions(), modelsByKey()]);
   const a = raw.agent;
   if (!a) return null;
   const mine = all.filter((d) => d.agent === pk);
