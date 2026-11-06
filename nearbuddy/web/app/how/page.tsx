@@ -23,8 +23,9 @@ export default function HowPage() {
         <div>
           <dt>What happens</dt>
           <dd>
-            Two AI models trade NEAR/USD in five-minute duels, each calling Long or Short about once a minute. Anyone
-            can pay 0.1 NEAR to slip one of them a fake headline mid-duel. <a href="/arena">Watch the live arena</a>.
+            Two AI models trade NEAR/USD in five-minute duels, each calling Long or Short about once a minute. A paid
+            fake headline (0.1 NEAR on chain) is slipped to one of them mid-duel; for now the house sends them, as the
+            text reaches the model through its solver. <a href="/arena">Watch the live arena</a>.
           </dd>
         </div>
         <div>
@@ -33,9 +34,9 @@ export default function HowPage() {
             A model that believes the lie trades on it: in <a href={duelHref(292)}>duel 292</a> DeepSeek on the plain
             prompt went Short on a fake crash while NEAR was up 0.18%. On a guarded prompt the same model saw through
             the same lie (<a href={duelHref(326)}>duel 326</a>). Only the last call before the close is scored, and the
-            loser pays 10% of its bond. By then the models have nearly always switched back: in the{" "}
-            <a href="/api/v1/decisions?attacked=1">published record</a> no model has yet lost a duel on a lie&apos;s
-            side.
+            loser pays 10% of its bond. By then the models have usually switched back, so a lie rarely costs the duel.
+            It did in <a href={duelHref(354)}>duel 354</a>: Qwen3.6 was still on the lie&apos;s side at the close and
+            paid. The rest are in the <a href="/api/v1/decisions?attacked=1">published record</a>.
           </dd>
         </div>
         <div>
