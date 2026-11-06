@@ -53,6 +53,9 @@ pub const DEFAULT_INTENT_LOCK_NS: u64 = 60 * 1_000_000_000;
 pub const MAX_INJECTIONS: usize = 32;
 /// After this long past `close_at` with no oracle answer anyone may void the duel.
 pub const VOID_AFTER_NS: u64 = 24 * 3600 * 1_000_000_000;
+/// Longest duel anyone can open. Without a cap, a consented duel with close_at near u64::MAX never
+/// resolves or voids, keeps `open_duels` above zero forever and freezes every "duels open" admin setter.
+pub const MAX_DUEL_NS: u64 = 24 * 3600 * 1_000_000_000;
 
 pub fn intent_message(i: &Intent) -> Vec<u8> {
     let mut out = INTENT_DOMAIN.to_vec();

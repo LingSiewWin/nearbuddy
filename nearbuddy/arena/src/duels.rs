@@ -4,8 +4,8 @@ use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::{AccountId, Gas, NearToken, Promise, env, ext_contract, near, require};
 
 use crate::{
-    Contract, ContractExt, Duel, Injection, Intent, MAX_INJECTIONS, OraclePrice, Outcome,
-    PriceData, Side, SignedIntent, TeeProof, VOID_AFTER_NS, commit_bytes, commit_key,
+    Contract, ContractExt, Duel, Injection, Intent, MAX_DUEL_NS, MAX_INJECTIONS, OraclePrice,
+    Outcome, PriceData, Side, SignedIntent, TeeProof, VOID_AFTER_NS, commit_bytes, commit_key,
     consent_bytes, intent_message, nonce_key, proof_hash, set_entry_cost, storage_cost_since,
     tee_text, verify,
 };
@@ -64,7 +64,7 @@ impl Contract {
     /// and lands through `oracle_on_call`. Returns the duel id.
     /// Caller: owner. Deposit: the duel record's storage plus `oracle_deposit`. Panics:
     /// "not owner", "consent required", "same agent", "symbol too long", "close_at in the past",
-    /// "duel too short", "agent missing", "in duel", "deposit too small".
+    /// "duel too short", "duel too long", "agent missing", "in duel", "deposit too small".
     #[payable]
     pub fn open_duel(
         &mut self,
@@ -115,6 +115,10 @@ impl Contract {
         require!(
             close_at.0 - env::block_timestamp() >= self.min_duel_ns,
             "duel too short"
+        );
+        require!(
+            close_at.0 - env::block_timestamp() <= MAX_DUEL_NS,
+            "duel too long"
         );
         let before = env::storage_usage();
         let id = self.next_duel;
@@ -508,7 +512,7 @@ impl Contract {
         let d = self.duels.get_mut(&duel_id.0).expect("duel missing");
         require!(!d.resolved, "resolved");
         require!(
-            env::block_timestamp() >= d.close_at.0 + VOID_AFTER_NS,
+            env::block_timestamp() >= d.close_at.0.saturating_add(VOID_AFTER_NS),
             "too early"
         );
         let (pk_a, pk_b, pool, n) = (
