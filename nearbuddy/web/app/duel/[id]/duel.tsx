@@ -268,7 +268,7 @@ function Head({ d, price, now }: { d: DuelData; price: number | null; now: numbe
           </div>
         ) : (
           <div className="clock">
-            <span className="cd">{move == null ? "–" : pct(move)}</span>
+            <span className="cd">{move == null ? "–" : pct(Number(move.toFixed(2)))}</span>
             <small>
               NEAR from {usd(d.open)} to {usd(d.close)}, the oracle&apos;s open and close
             </small>

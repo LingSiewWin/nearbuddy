@@ -7,6 +7,9 @@ import type { Tick } from "../../lib/live";
 import { agentHref, pct, stake, tone, usd, who } from "../../ui/format";
 import type { DuelData, DuelSide } from "./data";
 
+const moved = (m: number) =>
+  Math.abs(m) < 0.005 ? "unchanged" : `${m > 0 ? "up" : "down"} ${Math.abs(m).toFixed(2)}%`;
+
 /** Identity colour per side; two of the same family get ink for the second. */
 export const tones = (d: DuelData) => {
   const a = tone(d.a.model);
@@ -98,8 +101,8 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
               ? "waiting for trades"
               : "price history not available"
             : d.live
-              ? `${move >= 0 ? "up" : "down"} ${Math.abs(move).toFixed(2)}% since the bell`
-              : `${move >= 0 ? "up" : "down"} ${Math.abs(move).toFixed(2)}% at the oracle's close`}
+              ? `${moved(move)} since the bell`
+              : `${moved(move)} at the oracle's close`}
         </div>
       </div>
       <div className="trk chart">
