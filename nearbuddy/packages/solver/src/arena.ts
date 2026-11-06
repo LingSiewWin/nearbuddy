@@ -105,9 +105,33 @@ export class Arena {
   /** `symbol` is the oracle asset id (`wrap.near` = NEAR/USD on Outlayer). The open price arrives a few
    *  seconds later through the oracle callback. */
   async openDuel(a: string, b: string, symbol: string, close_at: string) {
-    const r = await this.call("open_duel", { a, b, symbol, close_at }, OPEN_DUEL_DEPOSIT, OPEN_DUEL_GAS);
+    let r: { tx: string; value: unknown };
+    try {
+      r = await this.call("open_duel", { a, b, symbol, close_at }, OPEN_DUEL_DEPOSIT, OPEN_DUEL_GAS);
+    } catch (e) {
+      // the oracle yield inside open_duel makes the tx take several seconds; public RPCs sometimes drop the wait
+      // with "Internal server error" after the tx landed. Never resend (the agents would be "in duel"): look it up.
+      const found = await this.findDuel(a, b, close_at);
+      if (!found) throw e;
+      console.log(`[arena] open_duel rpc wait failed (${String(e).slice(0, 60)}); recovered duel ${found} from chain`);
+      r = { tx: "", value: found };
+    }
     this.openDuels.add(String(r.value));
     return { duel_id: String(r.value), tx: r.tx };
+  }
+
+  /** The newest unresolved duel pairing `a` and `b` at `close_at`, or null. Polls briefly: the tx may still be landing. */
+  private async findDuel(a: string, b: string, close_at: string): Promise<string | null> {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const cfg = await arenaView<{ next_duel: string }>("get_config", {});
+      const n = Number(cfg.next_duel);
+      for (let id = n - 1; id >= Math.max(0, n - 3); id--) {
+        const d = await arenaView<{ a: string; b: string; close_at: string; resolved: boolean } | null>("get_duel", { duel_id: String(id) });
+        if (d && d.a === a && d.b === b && d.close_at === close_at && !d.resolved) return String(id);
+      }
+      await new Promise((res) => setTimeout(res, 3000));
+    }
+    return null;
   }
 
   async postIntent(signed: SignedIntent, tee?: TeeProof) {
@@ -193,7 +217,15 @@ export class Arena {
   /** Ask the oracle for the close price. The contract finishes the duel when the oracle calls back;
    *  `pending()` drops the duel once `get_duel` reports it resolved. */
   async resolve(duel_id: string) {
-    const tx = (await this.call("resolve_duel", { duel_id }, 0n, OPEN_DUEL_GAS)).tx;
+    let tx = "";
+    try {
+      tx = (await this.call("resolve_duel", { duel_id }, 0n, OPEN_DUEL_GAS)).tx;
+    } catch (e) {
+      // same RPC wait issue as open_duel; the request is detached on chain, so a landed tx has done its job.
+      // resolve_duel is idempotent until the oracle answers, so the caller may simply retry.
+      if (!/Internal server error|timeout|Timeout/i.test(String(e))) throw e;
+      console.log(`[arena] resolve_duel rpc wait failed (${String(e).slice(0, 60)}); the oracle callback will finish duel ${duel_id} if the tx landed`);
+    }
     for (const k of this.consumed) if (k.startsWith(`${duel_id}:`)) this.consumed.delete(k);
     return { tx };
   }

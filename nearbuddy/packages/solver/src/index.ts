@@ -171,6 +171,7 @@ if (process.argv[1]?.endsWith("solver/src/index.ts")) {
       if (a) return json(res, a.code, a.body);
       json(res, 404, { error: "not found" });
     } catch (e) {
+      console.error(`[solver] ${req.method} ${req.url} failed:`, String(e).slice(0, 300));
       json(res, 500, { error: String(e) });
     }
   }).listen(PORT, () => console.log(`[solver] ${SOLVER_ID} facilitator on :${PORT}, contract ${CONTRACT}, auto-settle at ${AUTO_BATCH} IOUs or ${AUTO_AGE_MS / 1000}s`));

@@ -6,6 +6,10 @@ import type { Iou } from "./index.ts";
 export const RPC = process.env.NEAR_RPC ?? "https://near-testnet.drpc.org"; // one default everywhere; see .env.example
 export const CONTRACT = process.env.NEARBUDDY_CONTRACT ?? "nearbuddy-vault.testnet";
 export const provider = new JsonRpcProvider({ url: RPC });
+/** Transactions whose receipts take seconds (an oracle yield inside open_duel) are dropped by some public RPCs
+ *  with "Internal server error" while waiting; sends may use a different endpoint than views. */
+export const SEND_RPC = process.env.NEAR_SEND_RPC ?? RPC;
+const sendProvider = SEND_RPC === RPC ? provider : new JsonRpcProvider({ url: SEND_RPC });
 
 export function loadAccount(accountId: string): Account {
   const envKey = process.env[`NEAR_KEY_${accountId.replace(/[.-]/g, "_").toUpperCase()}`];
@@ -14,7 +18,7 @@ export function loadAccount(accountId: string): Account {
     (JSON.parse(
       readFileSync(`${process.env.HOME}/.near-credentials/testnet/${accountId}.json`, "utf8"),
     ).private_key as string);
-  return new Account(accountId, provider, key as KeyPairString);
+  return new Account(accountId, sendProvider, key as KeyPairString);
 }
 
 export async function view<T>(method: string, args: Record<string, unknown>): Promise<T> {
