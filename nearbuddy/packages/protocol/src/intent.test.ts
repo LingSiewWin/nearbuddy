@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
 import nacl from "tweetnacl";
 import { b64, hex } from "./index.ts";
 import {
+  COMMIT_DOMAIN,
+  CONSENT_DOMAIN,
+  commitMessage,
+  commitment,
+  consentMessage,
   INTENT_DOMAIN,
   type Intent,
   intentMessage,
@@ -97,8 +103,53 @@ test("a real NEAR AI Cloud enclave signature verifies, a flipped byte does not",
   );
 });
 
+// Commit-reveal and consent vectors; agents/tests/test_intent_client.py pins the same hex strings.
+const CONTRACT = "arena.nearbuddy-solver.testnet";
+const SALT = new Uint8Array(32).fill(2);
+const PK_A = b64.enc(new Uint8Array(32).fill(1)),
+  PK_B = b64.enc(new Uint8Array(32).fill(3));
+const COMMITMENT_HEX = "77b102ffbab3f871bf96bf1306405e68db6968a26d3814d27146cbd641cb25d8";
+const COMMIT_MSG_HEX =
+  "6e65617262756464792d636f6d6d69742d76316172656e612e6e65617262756464792d736f6c7665722e746573746e6574070000000000000077b102ffbab3f871bf96bf1306405e68db6968a26d3814d27146cbd641cb25d8";
+const CONSENT_MSG_HEX =
+  "6e65617262756464792d6475656c2d76316172656e612e6e65617262756464792d736f6c7665722e746573746e657401010101010101010101010101010101010101010101010101010101010101010303030303030303030303030303030303030303030303030303030303030303777261702e6e65617200002a36fe9c9717";
+
+test("commitment = sha256(intent bytes || salt), bound to every intent field and the salt", () => {
+  const c = commitment(fixture, SALT);
+  assert.equal(hex(c), COMMITMENT_HEX);
+  assert.equal(hex(c), createHash("sha256").update(intentMessage(fixture)).update(SALT).digest("hex"));
+  assert.notEqual(hex(commitment({ ...fixture, side: "Long" }, SALT)), COMMITMENT_HEX);
+  assert.notEqual(hex(commitment(fixture, new Uint8Array(32).fill(9))), COMMITMENT_HEX);
+});
+
+test("commit message: domain || contract || duel_id u64 LE || commitment", () => {
+  const c = commitment(fixture, SALT);
+  const m = commitMessage(CONTRACT, "7", c);
+  assert.equal(hex(m), COMMIT_MSG_HEX);
+  assert.equal(m.length, COMMIT_DOMAIN.length + CONTRACT.length + 8 + 32);
+  assert.notEqual(hex(commitMessage("other.testnet", "7", c)), COMMIT_MSG_HEX);
+  assert.notEqual(hex(commitMessage(CONTRACT, "8", c)), COMMIT_MSG_HEX);
+});
+
+test("consent message: domain || contract || a || b || symbol || close_at u64 LE", () => {
+  const m = consentMessage(CONTRACT, PK_A, PK_B, "wrap.near", "1700000000000000000");
+  assert.equal(hex(m), CONSENT_MSG_HEX);
+  assert.equal(m.length, CONSENT_DOMAIN.length + CONTRACT.length + 32 + 32 + "wrap.near".length + 8);
+  assert.notEqual(hex(consentMessage(CONTRACT, PK_B, PK_A, "wrap.near", "1700000000000000000")), CONSENT_MSG_HEX);
+});
+
+/** A contract view returning bytes: JSON array of u8, hex string or base64 string. */
+const asHex = (v: unknown): string =>
+  Array.isArray(v)
+    ? hex(Uint8Array.from(v as number[]))
+    : /^[0-9a-f]*$/.test(String(v))
+      ? String(v)
+      : hex(b64.dec(String(v)));
+
 // On-chain parity: the deployed arena contract must produce the same bytes. Set ARENA_DEPLOYED=1.
-test("intent bytes and tee text match the deployed arena contract", { skip: !process.env.ARENA_DEPLOYED }, async () => {
+// bun's node:test ignores `{ skip }` in the options object, so the gate picks test or test.skip.
+const onChain = process.env.ARENA_DEPLOYED ? test : test.skip;
+onChain("intent bytes and tee text match the deployed arena contract", async () => {
   const { arenaView } = await import("./chain.ts");
   const onChain = await arenaView<string>("intent_message_hex", { intent: fixture });
   assert.equal(onChain, hex(intentMessage(fixture)));
@@ -112,6 +163,20 @@ test("intent bytes and tee text match the deployed arena contract", { skip: !pro
     onChainText,
     new TextDecoder().decode(teeText(2, REAL.model, fromHex(REAL.request_hash), fromHex(REAL.response_hash))),
   );
+});
+
+onChain("commit and consent bytes match the deployed arena contract", async () => {
+  const { ARENA, arenaView } = await import("./chain.ts");
+  const c = commitment(fixture, SALT);
+  const onCommit = await arenaView<unknown>("commit_message", { duel_id: "7", commitment: b64.enc(c) });
+  assert.equal(asHex(onCommit), hex(commitMessage(ARENA, "7", c)));
+  const onConsent = await arenaView<unknown>("consent_message", {
+    a: PK_A,
+    b: PK_B,
+    symbol: "wrap.near",
+    close_at: "1700000000000000000",
+  });
+  assert.equal(asHex(onConsent), hex(consentMessage(ARENA, PK_A, PK_B, "wrap.near", "1700000000000000000")));
 });
 
 // Reference values from agents/.venv python: hashlib.sha256(bytes.fromhex(seed)+b"tee").hexdigest() and

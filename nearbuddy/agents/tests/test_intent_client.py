@@ -14,6 +14,9 @@ from intent_client import (  # noqa: E402
     INTENT_DOMAIN,
     ZERO_PROOF,
     TeeProofError,
+    commit_message,
+    commitment,
+    consent_message,
     intent_message,
     proof_hash,
     sign_intent,
@@ -55,6 +58,33 @@ def test_intent_bytes_match_rust_and_ts():
     assert m[: len(INTENT_DOMAIN)] == INTENT_DOMAIN
     assert len(m) == 19 + 36 + 8 + 1 + 2 + 8 + 8 + 36
     assert m.hex() == RUST_HEX
+
+
+# Same vectors as packages/protocol/src/intent.test.ts (COMMITMENT_HEX, COMMIT_MSG_HEX, CONSENT_MSG_HEX).
+CONTRACT = "arena.nearbuddy-solver.testnet"
+SALT = bytes([2] * 32)
+COMMITMENT_HEX = "77b102ffbab3f871bf96bf1306405e68db6968a26d3814d27146cbd641cb25d8"
+COMMIT_MSG_HEX = (
+    "6e65617262756464792d636f6d6d69742d76316172656e612e6e65617262756464792d736f6c7665722e746573746e6574"
+    "070000000000000077b102ffbab3f871bf96bf1306405e68db6968a26d3814d27146cbd641cb25d8"
+)
+CONSENT_MSG_HEX = (
+    "6e65617262756464792d6475656c2d76316172656e612e6e65617262756464792d736f6c7665722e746573746e6574"
+    "0101010101010101010101010101010101010101010101010101010101010101"
+    "0303030303030303030303030303030303030303030303030303030303030303"
+    "777261702e6e65617200002a36fe9c9717"
+)
+
+
+def test_commit_and_consent_bytes_match_ts():
+    c = commitment(FIXTURE, SALT)
+    assert c.hex() == COMMITMENT_HEX
+    assert c == hashlib.sha256(bytes.fromhex(RUST_HEX) + SALT).digest()
+    assert commit_message(CONTRACT, "7", c).hex() == COMMIT_MSG_HEX
+    assert commit_message(CONTRACT, 7, c) == commit_message(CONTRACT, "7", c)
+    pk_a, pk_b = base64.b64encode(bytes([1] * 32)).decode(), base64.b64encode(bytes([3] * 32)).decode()
+    assert consent_message(CONTRACT, pk_a, pk_b, "wrap.near", "1700000000000000000").hex() == CONSENT_MSG_HEX
+    assert consent_message(CONTRACT, pk_b, pk_a, "wrap.near", "1700000000000000000").hex() != CONSENT_MSG_HEX
 
 
 def test_sign_verify_roundtrip():

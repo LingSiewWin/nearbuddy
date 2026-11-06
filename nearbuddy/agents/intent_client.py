@@ -21,6 +21,8 @@ from nacl.signing import SigningKey, VerifyKey
 from keys import pk_b64  # noqa: F401  (moved to keys.py; re-exported for older imports)
 
 INTENT_DOMAIN = b"nearbuddy-intent-v1"
+COMMIT_DOMAIN = b"nearbuddy-commit-v1"
+CONSENT_DOMAIN = b"nearbuddy-duel-v1"
 ZERO_PROOF = bytes(32)
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 TEE_KIND = {"gateway": 1, "provider_tee": 2}
@@ -64,6 +66,32 @@ def intent_message(i: dict[str, Any]) -> bytes:
 def sign_intent(sk: SigningKey, intent: dict[str, Any]) -> dict[str, Any]:
     sig = sk.sign(intent_message(intent)).signature
     return {"intent": intent, "signature": base64.b64encode(sig).decode()}
+
+
+def commitment(intent: dict[str, Any], salt: bytes) -> bytes:
+    """Commit-reveal: sha256(intent_message(intent) || salt), the 32 bytes `commit_intent` stores."""
+    return hashlib.sha256(intent_message(intent) + salt).digest()
+
+
+def commit_message(contract_id: str, duel_id: str | int, commitment: bytes) -> bytes:
+    """Bytes the agent signs for `commit_intent`: domain || contract id || duel_id u64 LE || commitment."""
+    return COMMIT_DOMAIN + contract_id.encode() + struct.pack("<Q", int(duel_id)) + commitment
+
+
+def consent_message(contract_id: str, a: str, b: str, symbol: str, close_at: str | int) -> bytes:
+    """Bytes each agent signs for `open_duel_consented`: domain || contract id || a || b || symbol || close_at LE."""
+    return (
+        CONSENT_DOMAIN
+        + contract_id.encode()
+        + base64.b64decode(a)
+        + base64.b64decode(b)
+        + symbol.encode()
+        + struct.pack("<Q", int(close_at))
+    )
+
+
+def sign_b64(sk: SigningKey, msg: bytes) -> str:
+    return base64.b64encode(sk.sign(msg).signature).decode()
 
 
 def proof_hash(request_hash: bytes | None, response_hash: bytes | None = None) -> str:

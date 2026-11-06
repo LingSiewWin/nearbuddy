@@ -7,6 +7,8 @@ import { type KeyPair, KeyType, PublicKey } from "near-api-js";
 import { b64, hex } from "./index.ts";
 
 export const INTENT_DOMAIN = new TextEncoder().encode("nearbuddy-intent-v1");
+export const COMMIT_DOMAIN = new TextEncoder().encode("nearbuddy-commit-v1");
+export const CONSENT_DOMAIN = new TextEncoder().encode("nearbuddy-duel-v1");
 /** proof_hash when the agent is not TEE-backed (stub model, demo keys). */
 export const ZERO_PROOF = b64.enc(new Uint8Array(32));
 
@@ -46,12 +48,15 @@ const INTENT_SCHEMA = {
   },
 } as const;
 
-function withDomain(domain: Uint8Array, body: Uint8Array): Uint8Array {
-  const out = new Uint8Array(domain.length + body.length);
-  out.set(domain);
-  out.set(body, domain.length);
-  return out;
+function concat(...parts: Uint8Array[]): Uint8Array {
+  return new Uint8Array(Buffer.concat(parts));
 }
+const u64le = (v: string | bigint) => {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(BigInt(v));
+  return new Uint8Array(b);
+};
+const utf8 = (s: string) => new TextEncoder().encode(s);
 
 export function intentMessage(i: Intent): Uint8Array {
   const body = serialize(INTENT_SCHEMA, {
@@ -63,7 +68,22 @@ export function intentMessage(i: Intent): Uint8Array {
     expires_at: BigInt(i.expires_at),
     proof_hash: b64.dec(i.proof_hash),
   });
-  return withDomain(INTENT_DOMAIN, body);
+  return concat(INTENT_DOMAIN, body);
+}
+
+/** Commit-reveal: sha256(intentMessage(intent) || salt), the 32 bytes `commit_intent` stores. */
+export function commitment(i: Intent, salt: Uint8Array): Uint8Array {
+  return new Uint8Array(createHash("sha256").update(intentMessage(i)).update(salt).digest());
+}
+
+/** Bytes the agent signs for `commit_intent`: domain || contract id || duel_id u64 LE || commitment. */
+export function commitMessage(contractId: string, duelId: string, c: Uint8Array): Uint8Array {
+  return concat(COMMIT_DOMAIN, utf8(contractId), u64le(duelId), c);
+}
+
+/** Bytes each agent signs for `open_duel_consented`: domain || contract id || a || b || symbol || close_at u64 LE. */
+export function consentMessage(contractId: string, a: string, b: string, symbol: string, closeAt: string): Uint8Array {
+  return concat(CONSENT_DOMAIN, utf8(contractId), b64.dec(a), b64.dec(b), utf8(symbol), u64le(closeAt));
 }
 
 /** The exact bytes a NEAR AI Cloud enclave signs (`text` in GET /v1/signature/{chat_id}). */
@@ -77,7 +97,7 @@ export function proofHash(requestHash: Uint8Array, responseHash: Uint8Array): st
   return b64.enc(createHash("sha256").update(requestHash).update(responseHash).digest());
 }
 
-function verify(pkB64: string, msg: Uint8Array, sigB64: string): boolean {
+export function verify(pkB64: string, msg: Uint8Array, sigB64: string): boolean {
   const pk = b64.dec(pkB64);
   if (pk.length !== 32) return false;
   return new PublicKey({ keyType: KeyType.ED25519, data: pk }).verify(msg, b64.dec(sigB64));
