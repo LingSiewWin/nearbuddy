@@ -4,10 +4,15 @@
 //   DUELS=8 TARGET=b bun run spectator     (solver must be running; pays min_chaos_deposit per duel from SPECTATOR_ID)
 //   PAYLOAD_SET=holdout ...                (the 8 held-out payloads; default "train", the 8 the defenses were written against)
 //   AGENTS=<pk,pk> ...                     (only duels with one of these agents; default: the newest duel, whoever plays)
+// Each injection pushes AGAINST the duel's move since open, the number the agents' brief shows (oracle open price vs
+// the spot they read: Pyth Hermes with PYTH_API_KEY, else Coinbase). When the brief would show ±0.0 bps, or the
+// oracle open price has not landed, any payload goes and the log says "flat". The move and the mode ride on chain in
+// the injection's `kind` (the contract keeps it, 32 chars max), e.g. "fake_news/against/+12.3" or "fake_news/flat/no_open".
 import "../../protocol/src/env.ts";
 import { teraToGas } from "near-api-js";
 import { ARENA, arenaView, explorerTx, fmtNear, loadAccount } from "../../protocol/src/chain.ts";
 import { NET } from "../../protocol/src/network.ts";
+import { fmtMove, moveBps, pickPayload, spot8 } from "./against.ts";
 import { parseAgents, pickDuel } from "./pick-duel.ts";
 
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
@@ -62,6 +67,8 @@ while (done.size < DUELS) {
       arenaView<{
         a: string;
         b: string;
+        symbol: string;
+        open_price: string | null;
         close_at: string;
         resolved: boolean;
         injections: unknown[];
@@ -78,7 +85,11 @@ while (done.size < DUELS) {
     const leftS = d ? (Number(BigInt(d.close_at) / 1_000_000n) - Date.now()) / 1000 : 0;
     if (d && !d.resolved && !done.has(id) && leftS > MIN_LEFT_S) {
       const target = TARGET === "a" ? d.a : TARGET === "b" ? d.b : k % 2 ? d.a : d.b;
-      const idx = k % PAYLOADS.length;
+      // no oracle open price yet: the runner briefs on its own spot as the open, a move of ~0, so flat
+      const move = d.open_price ? moveBps(Number(d.open_price), await spot8(d.symbol)) : null;
+      const { idx, mode, push } = pickPayload(PAYLOADS, move, k);
+      const moveTxt = move === null ? "no_open" : fmtMove(move);
+      const kind = `fake_news/${mode}/${moveTxt}`;
       const payload = PAYLOADS[idx]!;
       const r = await fetch(`${SOLVER_URL}/chaos`, {
         method: "POST",
@@ -91,13 +102,13 @@ while (done.size < DUELS) {
       const tx = await spectator.callFunctionRaw({
         contractId: ARENA,
         methodName: "inject_chaos",
-        args: { duel_id: id, target, kind: "fake_news", payload_hash },
+        args: { duel_id: id, target, kind, payload_hash },
         gas: teraToGas("60"),
         deposit: minChaos,
       });
       done.add(id);
       console.log(
-        `duel ${id} ${Math.round(leftS)}s left: injected at ${target === d.a ? "A" : "B"} ${target.slice(0, 8)}… ${PAYLOAD_SET} #${idx + 1} hash ${payload_hash.slice(0, 12)} "${payload.slice(0, 50)}…" ${explorerTx(tx.transaction.hash)}`,
+        `duel ${id} ${Math.round(leftS)}s left: move ${moveTxt} bps ${mode === "flat" ? "flat" : `against (push ${push})`}, injected at ${target === d.a ? "A" : "B"} ${target.slice(0, 8)}… ${PAYLOAD_SET} #${idx + 1} hash ${payload_hash.slice(0, 12)} "${payload.slice(0, 50)}…" ${explorerTx(tx.transaction.hash)}`,
       );
     }
   } catch (e) {
