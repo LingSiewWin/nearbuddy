@@ -1,0 +1,3 @@
+# bun test covers the unit tests in app/; tests/ holds the Playwright specs (bun x playwright test)
+[test]
+root = "app"
