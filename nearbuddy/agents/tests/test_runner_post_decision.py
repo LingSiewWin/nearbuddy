@@ -126,6 +126,14 @@ def test_other_solver_errors_propagate(duelist):
     assert not runner.DATA.exists(), "nothing recorded for an error the runner does not own"
 
 
+def test_rpc_throttle_behind_the_solver_skips_the_cycle_instead_of_crashing(duelist):
+    msg = '{"error":"You reached Public endpoint rate limit, please upgrade to paid plan","code":15}'
+    nonce, status = decide(FakeSolver(fail_intent=msg), duelist)
+    assert status == "skipped"
+    (r,) = rows()
+    assert r["tx"] is None and r["error"].startswith("transient:")
+
+
 def test_tee_agent_without_a_verifiable_record_posts_nothing(duelist):  # fixture: temp DATA, no env keys
     class TeeModelNoRecord(StubClient):
         model_id = "test/enclave"

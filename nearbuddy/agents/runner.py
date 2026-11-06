@@ -242,6 +242,14 @@ def _late(e: RuntimeError) -> str | None:
     return next((w for w in ("duel closed", "intent lock") if w in str(e)), None)
 
 
+TRANSIENT = ("rate limit", "Internal server error", "timed out", "Timeout", "ECONNRESET", "503", "502")
+
+
+def _transient(e: Exception) -> bool:
+    """RPC throttling or a dropped connection behind the solver: skip this cycle, the next one retries."""
+    return any(w in str(e) for w in TRANSIENT)
+
+
 def _quotes(posted: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {
@@ -286,7 +294,12 @@ def post_decision(
     except RuntimeError as e:
         late = _late(e)
         if late is None:
-            raise
+            if not _transient(e):
+                raise
+            # the nonce was not used on chain; keep the paid decision and try again next cycle
+            record({**row, "tx": None, "error": f"transient: {str(e)[:120]}"})
+            print(f"  {label} intent not posted (transient: {str(e)[:80]}); next cycle retries")
+            return nonce, "skipped"
         # chain clock passed close_at or entered the intent lock: keep the paid decision, stop prompting this duel
         record({**row, "tx": None, "error": late})
         print(f"  late intent for {pk[:8]} not posted ({late})")
