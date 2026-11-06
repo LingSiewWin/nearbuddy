@@ -50,3 +50,8 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* the kit's URL bar text (#7d7866 on #28271f, 3.4:1) is below WCAG AA for its 12px size; the page's dim ink is 5.9:1 */
+.how .ss-window__url {
+  color: var(--dim);
+}
