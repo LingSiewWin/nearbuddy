@@ -26,6 +26,7 @@
 mod agents;
 mod duels;
 mod follow;
+mod invariants;
 mod state;
 mod types;
 mod views;
