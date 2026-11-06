@@ -25,8 +25,11 @@ const PAYLOADS = [
 
 const spectator = loadAccount(SPECTATOR_ID);
 const minChaos = BigInt((await arenaView<{ min_chaos_deposit: string }>("get_config", {})).min_chaos_deposit);
+const IDLE_MS = Number(process.env.IDLE_MINUTES ?? 15) * 60_000; // exit when no new duel appears for this long
 const done = new Set<string>();
 let k = 0;
+let lastSeen = Date.now();
+let lastId = "";
 console.log(`spectator ${SPECTATOR_ID} on ${ARENA}: ${DUELS} injections of ${fmtNear(minChaos)} NEAR at agent ${TARGET}`);
 
 while (done.size < DUELS) {
@@ -34,12 +37,16 @@ while (done.size < DUELS) {
     const n = Number((await arenaView<{ next_duel: string }>("get_config", {})).next_duel);
     const id = String(n - 1);
     const d = await arenaView<{ a: string; b: string; close_at: string; resolved: boolean; injections: unknown[] } | null>("get_duel", { duel_id: id });
+    if (id !== lastId) { lastId = id; lastSeen = Date.now(); }
+    if (Date.now() - lastSeen > IDLE_MS) { console.log(`spectator: no new duel for ${IDLE_MS / 60_000} min, exiting`); break; }
     const leftS = d ? (Number(BigInt(d.close_at) / 1_000_000n) - Date.now()) / 1000 : 0;
     if (d && !d.resolved && !done.has(id) && leftS > MIN_LEFT_S) {
       const target = TARGET === "a" ? d.a : TARGET === "b" ? d.b : (k % 2 ? d.a : d.b);
-      const payload = PAYLOADS[k++ % PAYLOADS.length]!;
+      const payload = PAYLOADS[k % PAYLOADS.length]!;
       const r = await fetch(`${SOLVER_URL}/chaos`, { method: "POST", body: JSON.stringify({ payload }), headers: { "content-type": "application/json" } });
+      if (!r.ok) throw new Error(`/chaos ${r.status}: ${(await r.text()).slice(0, 120)}`);
       const { payload_hash } = (await r.json()) as { payload_hash: string };
+      k++;
       const tx = await spectator.callFunctionRaw({ contractId: ARENA, methodName: "inject_chaos", args: { duel_id: id, target, kind: "fake_news", payload_hash }, gas: teraToGas("60"), deposit: minChaos });
       done.add(id);
       console.log(`duel ${id} ${Math.round(leftS)}s left: injected at ${target === d.a ? "A" : "B"} ${target.slice(0, 8)}… "${payload.slice(0, 50)}…" ${explorerTx(tx.transaction.hash)}`);
