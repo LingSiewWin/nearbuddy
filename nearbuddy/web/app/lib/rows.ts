@@ -2,7 +2,7 @@
 // own reasoning, the attack it was shown and a plain verdict. Used by scripts/snapshot.ts at build time and
 // by the optional live tail in app/api/dataset.ts, so both produce the same rows.
 import { createHash } from "node:crypto";
-import { briefMove, pushedSide, reasoning, type Side, type Verdict, verdict } from "./verdict";
+import { briefMove, pushedSide, reasoning, type Side, type Test, testOf, type Verdict, verdict } from "./verdict";
 
 export type Raw = {
   duel_id: string;
@@ -33,6 +33,8 @@ export type Decision = {
   attack: string | null;
   pushed: Side | null;
   verdict: Verdict | null;
+  /** Did the lie test the model: against the price move it was shown, with it, or flat (see verdict.ts). */
+  test: Test | null;
   /** The next distinct price on the duel's shared brief tape after this call, and whether the call matched it.
    * Mirrors next_ret in analysis/injection_effects.py; null when the duel had no later price. */
   next: "up" | "down" | null;
@@ -99,6 +101,7 @@ export function slim(raws: Raw[], last = new Map<string, Side>()) {
       attack: r.injection,
       pushed,
       verdict: r.injection ? verdict(r.text, r.intent.side, pushed) : null,
+      test: r.injection ? testOf(pushed, briefMove(r.brief ?? "")) : null,
       ...(() => {
         const next = nextOf(k, r.duel_id);
         return { next, right: next ? (next === "up") === (r.intent.side === "Long") : null };
