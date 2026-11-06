@@ -40,7 +40,7 @@ snapshot() {
 
   SOLVER_OK=$solver_ok WEB_OK=$web_ok \
   PID_SOLVER="$(first_pid 'packages/solver/src/index.ts')" PID_WEB="$(first_pid 'bun run start -p 3011')" \
-  PID_DRIVER="$(first_pid 'nearbuddy-night')" PID_RUNNER="$(first_pid 'runner.py|-m runner')" \
+  PID_DRIVER="$(first_pid 'nearbuddy-night|night-loop\.sh|/night\.sh')" PID_RUNNER="$(first_pid 'runner.py|-m runner')" \
   PID_COPIER="$(first_pid 'copier_bot')" \
   BATCH="${batch:-0}" ROUND="${round:-0}" RESOLVE="$resolve" INJECT="$inject" SPEC_LOG="${spec_log:-}" \
   DEC_ROWS="$dec_rows" SIG_ROWS="$sig_rows" COPIER_ROWS="$copier_rows" \

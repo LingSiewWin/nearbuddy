@@ -351,6 +351,22 @@ def free_agents(solver: Solver, pks: list[str]) -> None:
         resolve_duel(solver, duel_id)
 
 
+def arena_pks() -> list[str]:
+    """Every key `run` can register: A and B, plain or TEE, with or without the `--swap-prompts` tag. A name with
+    no AGENT_KEY_*/AGENT_SEED_* gets a random key per run, so there is nothing on chain to free for it."""
+    names = [n for n in ("A", "B") if ENV.get(f"AGENT_KEY_{n}") or ENV.get(f"AGENT_SEED_{n}")]
+    keys = (pk_b64(agent_key(n, tee, tag)) for n in names for tee in (True, False) for tag in ("", "swap"))
+    return list(dict.fromkeys(keys))  # AGENT_KEY_* ignores tee/tag: one key, not four
+
+
+def resolve_stuck(solver: Solver) -> list[str]:
+    """Free this runner's agents after a crash (wait for each stuck duel to close, resolve it); returns the keys
+    still `in_duel` afterwards, e.g. when the oracle callback has not landed yet."""
+    pks = arena_pks()
+    free_agents(solver, pks)
+    return [pk for pk in pks if (view("get_agent", {"agent_pk": pk}) or {}).get("in_duel") is not None]
+
+
 def run(
     rounds: int,
     duel_seconds: int,
@@ -469,6 +485,11 @@ if __name__ == "__main__":
     p.add_argument("--bond", default="100000000000000000000000")  # 0.1 NEAR
     p.add_argument("--resolve", help="ask the oracle to resolve a closed duel id")
     p.add_argument(
+        "--resolve-stuck",
+        action="store_true",
+        help="resolve any duel this runner's agents are still in (after a crash), then exit; exit 1 if still stuck",
+    )
+    p.add_argument(
         "--swap-prompts", action="store_true", help="control run: hardened prompt on model B, naive on model A"
     )
     p.add_argument(
@@ -502,6 +523,10 @@ if __name__ == "__main__":
             )
         )
         raise SystemExit(0)
+    if args.resolve_stuck:
+        stuck = resolve_stuck(Solver(ENV.get("SOLVER_URL", "http://127.0.0.1:4020"), ENV.get("ARENA_SECRET", "")))
+        print(json.dumps({"still_in_duel": stuck}))
+        raise SystemExit(1 if stuck else 0)
     if args.only:
         if not args.wait_pairing:
             p.error("--only needs --wait-pairing: the solver opens the duel, this process only plays one side")
