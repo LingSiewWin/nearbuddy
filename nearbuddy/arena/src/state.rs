@@ -38,6 +38,24 @@ pub(crate) enum StorageKey {
 /// Most accounts one `reconcile_vault_total` reads, so the call stays inside one transaction's gas.
 pub const MAX_RECONCILE: usize = 100;
 
+/// Raw storage key of a paged vault reconcile in progress: borsh `Reconcile`. Kept outside
+/// `Contract`, so the paged reconcile changed no state layout (no migration).
+const RECONCILE_KEY: &[u8] = b"reconcile";
+/// `(sum of the vaults counted so far, last account counted)`; pages go in ascending account order.
+type Reconcile = (u128, Option<AccountId>);
+
+fn reconcile_state() -> Option<Reconcile> {
+    env::storage_read(RECONCILE_KEY)
+        .map(|b| near_sdk::borsh::from_slice(&b).expect("reconcile state"))
+}
+
+fn write_reconcile(r: &Reconcile) {
+    env::storage_write(
+        RECONCILE_KEY,
+        &near_sdk::borsh::to_vec(r).expect("reconcile state"),
+    );
+}
+
 /// Default `withdraw_delay_ns`: twice a generous settle lag. `set_withdraw_delay` changes it.
 pub const DEFAULT_WITHDRAW_DELAY_NS: u64 = 900 * 1_000_000_000;
 
@@ -243,6 +261,19 @@ impl Contract {
             .get(key)
             .copied()
             .or_else(|| self.used_nonces.contains(key).then_some(0))
+    }
+
+    /// Every vault write goes through here. While a paged reconcile runs, an account it already
+    /// counted (at or below its cursor) moves the pending sum with it, so the total it finishes
+    /// with is the sum at finish time however many transactions the pages span.
+    pub(crate) fn set_vault(&mut self, who: &AccountId, bal: u128) {
+        let old = self.vaults.insert(who.clone(), bal).unwrap_or(0);
+        if let Some((sum, Some(last))) = reconcile_state()
+            && who <= &last
+        {
+            // `sum` includes `old`: it counted `who` (or a later write kept it current)
+            write_reconcile(&((sum + bal).saturating_sub(old), Some(last)));
+        }
     }
 
     pub(crate) fn not_migrating(&self) {
@@ -515,8 +546,9 @@ impl Contract {
     /// owner supplies every vault holder (from deposit events); this clears the drift deploys 15 and
     /// earlier left (follow storage not subtracted, pre-15 vaults not counted). Omitting a holder
     /// only undercounts, which loosens the cap the owner can set anyway; no NEAR moves. Returns the
-    /// new total. Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "too many accounts"
-    /// (over `MAX_RECONCILE`), "duplicate account".
+    /// new total. For more than `MAX_RECONCILE` holders use `begin_reconcile`. Caller: owner.
+    /// Deposit: 1 yoctoNEAR. Panics: "not owner", "too many accounts" (over `MAX_RECONCILE`),
+    /// "duplicate account".
     #[payable]
     pub fn reconcile_vault_total(&mut self, accounts: Vec<AccountId>) -> U128 {
         self.only_owner_yocto();
@@ -530,6 +562,48 @@ impl Contract {
             .map(|a| self.vaults.get(a).copied().unwrap_or(0))
             .sum();
         U128(self.vault_total)
+    }
+
+    /// Start a paged reconcile of `vault_total` for more holders than one call can read: then
+    /// `reconcile_page` (any number of times) and `finish_reconcile`. Restarts one in progress.
+    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner".
+    #[payable]
+    pub fn begin_reconcile(&mut self) {
+        self.only_owner_yocto();
+        write_reconcile(&(0, None));
+    }
+
+    /// Add `accounts`' vaults to the pending sum. Accounts must be strictly ascending, within the
+    /// page and across pages (each above the last account counted), so none is counted twice; list
+    /// every holder in sorted order. Returns the pending sum. Caller: owner. Deposit: 1 yoctoNEAR.
+    /// Panics: "not owner", "no reconcile", "too many accounts", "accounts not ascending".
+    #[payable]
+    pub fn reconcile_page(&mut self, accounts: Vec<AccountId>) -> U128 {
+        self.only_owner_yocto();
+        let (mut sum, mut last) =
+            reconcile_state().unwrap_or_else(|| env::panic_str("no reconcile"));
+        require!(accounts.len() <= MAX_RECONCILE, "too many accounts");
+        for a in accounts {
+            require!(
+                last.as_ref().is_none_or(|l| &a > l),
+                "accounts not ascending"
+            );
+            sum += self.vaults.get(&a).copied().unwrap_or(0);
+            last = Some(a);
+        }
+        write_reconcile(&(sum, last));
+        U128(sum)
+    }
+
+    /// Set `vault_total` to the pending sum and end the reconcile. Returns the new total.
+    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "no reconcile".
+    #[payable]
+    pub fn finish_reconcile(&mut self) -> U128 {
+        self.only_owner_yocto();
+        let (sum, _) = reconcile_state().unwrap_or_else(|| env::panic_str("no reconcile"));
+        env::storage_remove(RECONCILE_KEY);
+        self.vault_total = sum;
+        U128(sum)
     }
 
     /// How long `withdraw` waits after `request_withdraw`; at least twice the solver's settle lag.

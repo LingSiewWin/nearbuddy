@@ -4,8 +4,8 @@
 //! `withdraw_token` (debit first, exact re-credit on a failed transfer), the vault delay (never paid
 //! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted);
 //! from deploy 16 `vault_total == sum(vaults)`, no deposit past `max_vault_per_account`, and no fill
-//! settled for an intent accepted at or after its mandate's revoke or expiry, or before its
-//! latest (re)follow.
+//! settled for an intent accepted at or after its mandate's revoke or expiry, or while the follower
+//! was not following (a mandate update keeps the window; a closed window keeps its grace).
 //!
 //! Every operation runs like a transaction on chain: the contract is read from the mocked trie,
 //! the method runs, and on success the struct is written back and the collections flushed. A
@@ -179,6 +179,17 @@ enum Op {
         milli: u64,
     },
     WithdrawFees,
+    /// Owner `begin_reconcile`.
+    ReconcileBegin,
+    /// Owner `reconcile_page` of the next `n` vault holders in account order; `repeat` re-lists the
+    /// last one counted (refused: a holder is never counted twice).
+    ReconcilePage {
+        n: usize,
+        repeat: bool,
+    },
+    /// Owner pages the holders left, then `finish_reconcile`: `vault_total` must equal the sum of
+    /// vaults whatever moved between the pages.
+    ReconcileFinish,
     Advance {
         secs: u64,
     },
@@ -284,6 +295,32 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                     units: 5_000_000,
                 },
             ];
+            // follower 0 settles agent 0's intents once inside the closed window's grace and once past
+            // it (round 3: the window before the unfollow is honoured for the grace, then refused)
+            let spec = |nonce| FillSpec {
+                nonce,
+                milli: 10,
+                wrap: true,
+                out: 1_000,
+            };
+            let late_fills = vec![
+                Op::Settle {
+                    who: 0,
+                    agent: 0,
+                    fills: vec![spec(0)],
+                },
+                Op::Settle {
+                    who: 1,
+                    agent: 0,
+                    fills: (0..6).map(spec).collect(),
+                },
+                Op::Advance { secs: DELAY / SEC },
+                Op::Settle {
+                    who: 0,
+                    agent: 0,
+                    fills: (1..6).map(spec).collect(),
+                },
+            ];
             // follower 0 drops agent 0 a second in and follows it again a second later, between the
             // posts: agent 0's intents fall before, inside and after the unfollowed window, so the
             // deploy-16 accept-time rules (revoke, re-follow) are reached in every case
@@ -291,32 +328,85 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
             let (p0, rest) = p.split_at(third);
             let (p1, p2) = rest.split_at(third);
             let revoke = vec![Op::Advance { secs: 1 }, Op::Unfollow { who: 0, agent: 0 }];
+            let refollow_op = Op::Follow {
+                who: 0,
+                agent: 0,
+                allowance: 2_000,
+                cap: 1_000,
+                spent_pct: 0,
+                only_wrap: false,
+                ttl_s: 7_200,
+                revoked: false,
+                floor: 1,
+            };
+            // follower 1 follows agent 0 from the start and updates its mandate mid-way: a live update
+            // keeps the window, so its earlier intents still settle (round 3)
+            let follow1 = |op: &Op| match op.clone() {
+                Op::Follow {
+                    allowance,
+                    cap,
+                    spent_pct,
+                    only_wrap,
+                    ttl_s,
+                    revoked,
+                    floor,
+                    ..
+                } => Op::Follow {
+                    who: 1,
+                    agent: 0,
+                    allowance,
+                    cap,
+                    spent_pct,
+                    only_wrap,
+                    ttl_s,
+                    revoked,
+                    floor,
+                },
+                other => other,
+            };
+            let first1 = vec![follow1(&refollow_op)];
+            let update1 = vec![follow1(&refollow_op)];
+            // a second unfollow and re-follow inside the first gap's grace is refused (two windows fit)
+            let cycle = vec![
+                Op::Advance { secs: 1 },
+                Op::Unfollow { who: 0, agent: 0 },
+                Op::Advance { secs: 1 },
+                refollow_op.clone(),
+            ];
+            // the same follow again a second later is a mandate update while following (round 3)
             let refollow = vec![
                 Op::Advance { secs: 1 },
-                Op::Follow {
-                    who: 0,
-                    agent: 0,
-                    allowance: 2_000,
-                    cap: 1_000,
-                    spent_pct: 0,
-                    only_wrap: false,
-                    ttl_s: 7_200,
-                    revoked: false,
-                    floor: 1,
-                },
+                refollow_op.clone(),
+                Op::Advance { secs: 1 },
+                refollow_op,
             ];
             [
                 r,
                 d,
                 f,
                 o,
+                first1,
                 p0.to_vec(),
                 revoke,
                 p1.to_vec(),
                 refollow,
+                update1,
                 p2.to_vec(),
+                cycle,
                 v,
                 deliver,
+                // a paged reconcile spans the late fills: f0 is counted, then its vault moves
+                vec![
+                    Op::ReconcileBegin,
+                    Op::ReconcilePage {
+                        n: 1,
+                        repeat: false,
+                    },
+                    Op::Deposit { who: 0, milli: 1 },
+                    Op::ReconcilePage { n: 1, repeat: true },
+                ],
+                late_fills,
+                vec![Op::ReconcileFinish],
             ]
             .concat()
         })
@@ -379,7 +469,12 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (0..8usize).prop_map(|duel| Op::Void { duel }),
         1 => (ag, 0u64..3_000).prop_map(|(agent, milli)| Op::WithdrawBond { agent, milli }),
         1 => Just(Op::WithdrawFees),
+        1 => Just(Op::ReconcileBegin),
+        2 => (1usize..3, prop::bool::weighted(0.2)).prop_map(|(n, repeat)| Op::ReconcilePage { n, repeat }),
+        1 => Just(Op::ReconcileFinish),
         2 => (1u64..400).prop_map(|secs| Op::Advance { secs }),
+        // past a closed window's grace in one step, so its fronted intents are seen to expire
+        1 => Just(Op::Advance { secs: DELAY / SEC }),
     ]
 }
 
@@ -493,6 +588,9 @@ struct Cfg {
     account_cap: u128,
 }
 
+/// A follow window `(start, end)`; `end` is `None` while it is the current one.
+type Window = (u64, Option<u64>);
+
 /// Intent, salt and TEE proof behind one unrevealed commitment.
 type Pending = (Intent, Vec<u8>, Option<TeeProof>);
 
@@ -518,8 +616,9 @@ struct World {
     posted: [Vec<u64>; AGENTS],
     /// Block time each (agent, nonce) was accepted at (deploy 16 `nonce_times`).
     accepted_at: HashMap<(usize, u64), u64>,
-    /// Block time of each (agent, follower) mandate's latest (re)follow (deploy 16 `V3`).
-    followed: HashMap<(usize, usize), u64>,
+    /// Per (agent, follower): the windows the follower was following, `(start, end)`, end `None`
+    /// for the current one (closed by the unfollow or expiry a re-follow found).
+    windows: HashMap<(usize, usize), Vec<Window>>,
     settled: HashSet<(usize, usize, u64)>,
     proofs: u64,
     /// The arena's balance on the intents stub per token (0 wrap.near, 1 usdc.near).
@@ -528,6 +627,9 @@ struct World {
     results: Vec<Option<Vec<u8>>>,
     /// Queued vault withdrawals: (amount, ready_at).
     requests: [Option<(u128, u64)>; 4],
+    /// Paged reconcile in progress: how many holders of `ACCOUNTS` (already in account order) it
+    /// counted.
+    reconcile: Option<usize>,
     /// Per token, holdings debited by `withdraw_token` whose transfer has not confirmed yet.
     in_flight: [u128; 2],
 }
@@ -552,12 +654,13 @@ impl World {
             next_nonce: [1; AGENTS],
             posted: Default::default(),
             accepted_at: HashMap::new(),
-            followed: HashMap::new(),
+            windows: HashMap::new(),
             settled: HashSet::new(),
             proofs: 0,
             intents_bal: [0; 2],
             results: vec![],
             requests: [None; 4],
+            reconcile: None,
             in_flight: [0; 2],
         };
         w.env(OWNER, 0);
@@ -913,12 +1016,42 @@ impl World {
                     revoked_at: U64(12_345), // ignored on input: `follow` stores 0
                 };
                 let pk = Base64VecU8(self.pks[agent].clone());
+                // model: a live mandate keeps its windows; a closed one ends its window at the revoke
+                // (or expiry) and a new one opens now, unless an older window is still in its grace
+                let now = self.now;
+                let mut wins = self.windows.get(&(agent, who)).cloned().unwrap_or_default();
+                let closed = pre.mandate(agent, who).and_then(|m| {
+                    if m.revoked {
+                        Some(m.revoked_at.0)
+                    } else {
+                        (now >= m.expires_at.0).then_some(m.expires_at.0)
+                    }
+                });
+                let mut too_soon = false;
+                if pre.mandate(agent, who).is_none() {
+                    wins = vec![(now, None)];
+                } else if let Some(c) = closed {
+                    wins.last_mut().expect("a window per mandate").1 = Some(c);
+                    too_soon = wins
+                        .iter()
+                        .rev()
+                        .skip(1)
+                        .any(|(_, e)| e.is_some_and(|e| now < e + DELAY));
+                    wins.push((now, None));
+                }
                 let r = self.call(ACCOUNTS[who], 0, |c| c.follow(pk, m));
                 if floor == 0 {
                     assert!(r.is_err(), "a follow without a price floor was accepted");
                 }
+                if let Err(e) = &r {
+                    assert!(
+                        e != "refollow too soon" || too_soon,
+                        "refused a re-follow it could keep"
+                    );
+                }
                 if r.is_ok() {
-                    self.followed.insert((agent, who), self.now);
+                    assert!(!too_soon, "a re-follow dropped a window still in its grace");
+                    self.windows.insert((agent, who), wins);
                     let m = self.snap().mandate(agent, who).cloned().expect("stored");
                     assert_eq!(m.revoked_at.0, 0, "follow resets revoked_at");
                 }
@@ -1167,9 +1300,72 @@ impl World {
                 let ok = self.call(OWNER, 1, |c| drop(c.withdraw_fees())).is_ok();
                 kind = Kind::Exact(ok as i128);
             }
+            Op::ReconcileBegin => {
+                self.call(OWNER, 1, |c| c.begin_reconcile()).expect("begin");
+                self.reconcile = Some(0);
+                kind = Kind::Exact(1);
+            }
+            Op::ReconcilePage { n, repeat } => {
+                let r = self.reconcile_page(n, repeat);
+                kind = Kind::Exact(r.is_ok() as i128);
+            }
+            Op::ReconcileFinish => {
+                // the holders not counted yet first, a page per transaction
+                if self.reconcile.is_some_and(|i| i < ACCOUNTS.len()) {
+                    self.reconcile_page(2, false).expect("page");
+                    self.check_money(&pre, bal0, &trie0, Kind::Exact(1));
+                    return self.step(&Op::ReconcileFinish);
+                }
+                let r = self.call(OWNER, 1, |c| c.finish_reconcile().0);
+                kind = Kind::Exact(r.is_ok() as i128);
+                match self.reconcile.take() {
+                    Some(_) => {
+                        let total = r.expect("finish");
+                        let post = self.snap();
+                        assert_eq!(
+                            total,
+                            post.vaults.iter().sum::<u128>(),
+                            "a paged reconcile missed a vault change between its pages"
+                        );
+                    }
+                    None => assert_eq!(r.unwrap_err(), "no reconcile"),
+                }
+            }
             Op::Advance { secs } => self.now += secs * SEC,
         }
         self.check_money(&pre, bal0, &trie0, kind);
+    }
+
+    /// `reconcile_page` of the next `n` holders (or the last counted again with `repeat`).
+    fn reconcile_page(&mut self, n: usize, repeat: bool) -> Result<u128, String> {
+        let from = self.reconcile.unwrap_or(0);
+        let from = if repeat { from.saturating_sub(1) } else { from };
+        let to = (from + n).min(ACCOUNTS.len());
+        let accounts: Vec<AccountId> = ACCOUNTS[from..to]
+            .iter()
+            .map(|a| a.parse().unwrap())
+            .collect();
+        let r = self.call(OWNER, 1, |c| c.reconcile_page(accounts).0);
+        match self.reconcile {
+            None => assert_eq!(r.as_ref().unwrap_err(), "no reconcile"),
+            Some(i) if repeat && i > 0 => {
+                assert_eq!(r.as_ref().unwrap_err(), "accounts not ascending")
+            }
+            Some(_) => {
+                r.as_ref().expect("an ascending page is accepted");
+                self.reconcile = Some(to);
+            }
+        }
+        r
+    }
+
+    /// Was `who` following agent `ag` when an intent was accepted at `at`, with that window still
+    /// in its grace now if it has closed.
+    fn following(&self, ag: usize, who: usize, at: u64) -> bool {
+        self.windows.get(&(ag, who)).is_some_and(|w| {
+            w.iter()
+                .any(|(s, e)| at >= *s && e.is_none_or(|e| at < e && self.now < e + DELAY))
+        })
     }
 
     /// Records an accepted intent (posted or revealed) of agent `ag`.
@@ -1321,6 +1517,26 @@ impl World {
             .collect();
         let pk = Base64VecU8(self.pks[agent].clone());
         let follower: AccountId = ACCOUNTS[who].parse().unwrap();
+        // the views a solver checks before fronting agree with the model (round 3, R4)
+        self.env(OWNER, 0);
+        let c: Contract = env::state_read().expect("state");
+        for f in &fills {
+            let n = f.intent_nonce.0;
+            assert_eq!(
+                c.intent_accepted_at(pk.clone(), U64(n)).map(|t| t.0),
+                self.accepted_at.get(&(agent, n)).copied(),
+                "intent_accepted_at"
+            );
+        }
+        assert_eq!(
+            c.get_follow_time(pk.clone(), follower.clone()).map(|t| t.0),
+            self.windows
+                .get(&(agent, who))
+                .and_then(|w| w.last())
+                .map(|(s, _)| *s),
+            "get_follow_time"
+        );
+        drop(c);
         let sent = self.call(SOLVER, 0, |c| {
             drop(c.settle_follow(pk.clone(), follower.clone(), fills.clone()))
         });
@@ -1355,7 +1571,7 @@ impl World {
             } else if let Some(m) = m.as_mut() {
                 // deploy 16: the grace never covers an intent accepted at or after the revoke / expiry
                 let at = self.accepted_at[&(agent, n)];
-                if self.followed.get(&(agent, who)).is_some_and(|t| at < *t) {
+                if !self.following(agent, who, at) {
                     Err("intent before follow")
                 } else if m.revoked && (self.now >= m.revoked_at.0 + DELAY || at >= m.revoked_at.0)
                 {
@@ -1485,8 +1701,8 @@ impl World {
                 "settled an intent accepted after its mandate closed"
             );
             assert!(
-                at >= self.followed[&(agent, who)],
-                "settled an intent accepted before the (re)follow"
+                self.following(agent, who, at),
+                "settled an intent accepted while not following, or past its window's grace"
             );
             self.settled.insert((agent, who, n));
         }

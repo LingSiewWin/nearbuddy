@@ -106,13 +106,13 @@ impl Contract {
             "vault cap"
         );
         let bal = self.vaults.get(&who).copied().unwrap_or(0) + amt;
-        self.vaults.insert(who.clone(), bal);
+        self.set_vault(&who, bal);
         self.vaults.flush();
         let cost = storage_cost_since(before);
         require!(amt > cost, "deposit required");
         let bal = bal - cost;
         require!(bal <= self.max_vault_per_account, "account cap");
-        self.vaults.insert(who, bal);
+        self.set_vault(&who, bal);
         self.vault_total += amt - cost;
         U128(bal)
     }
@@ -160,7 +160,7 @@ impl Contract {
         );
         let bal = self.vaults.get(&who).copied().unwrap_or(0);
         let pay = amount.min(bal);
-        self.vaults.insert(who.clone(), bal - pay);
+        self.set_vault(&who, bal - pay);
         self.vault_total = self.vault_total.saturating_sub(pay);
         Promise::new(who.clone())
             .transfer(NearToken::from_yoctonear(pay))
@@ -181,7 +181,7 @@ impl Contract {
             return true;
         }
         let bal = self.vaults.get(&who).copied().unwrap_or(0);
-        self.vaults.insert(who.clone(), bal.saturating_add(pay.0));
+        self.set_vault(&who, bal.saturating_add(pay.0));
         self.vault_total = self.vault_total.saturating_add(pay.0);
         if !self.pending_withdrawals.contains_key(&who) {
             self.pending_withdrawals.insert(who, (amount.0, ready_at.0));
@@ -195,8 +195,10 @@ impl Contract {
     /// vault. `min_out_per_near` must be set (clients derive it from the oracle mid less slippage), so
     /// a solver can never settle a fill for a token amount of output. `revoked_at` is reset to 0.
     /// Panics: "paused", "migrating", "agent missing", "agent unverified", "empty mandate",
-    /// "price floor required", "insufficient". The mandate records the follow time: only intents
-    /// accepted from then on settle against it (deploy 16).
+    /// "price floor required", "refollow too soon", "insufficient". The record keeps when the
+    /// follower followed: an update while the mandate is live keeps the window (fronted fills stay
+    /// settleable); a re-follow after an unfollow or the expiry refuses only intents of the gap
+    /// (see `VersionedMandate::refollowed`).
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
         self.not_paused();
         self.not_migrating();
@@ -211,18 +213,21 @@ impl Contract {
             revoked_at: U64(0),
             ..mandate
         };
-        let before = env::storage_usage();
         let who = env::predecessor_account_id();
-        self.follows.insert(
-            follow_key(&agent_pk.0, &who),
-            VersionedMandate::V3(mandate, env::block_timestamp()),
-        );
+        let key = follow_key(&agent_pk.0, &who);
+        let now = env::block_timestamp();
+        let rec = match self.follows.get(&key) {
+            Some(old) => old.refollowed(mandate, now, self.withdraw_delay_ns),
+            None => VersionedMandate::V3(mandate, now),
+        };
+        let before = env::storage_usage();
+        self.follows.insert(key, rec);
         self.follows.flush();
         let cost = storage_cost_since(before);
         if cost > 0 {
             let bal = self.vaults.get(&who).copied().unwrap_or(0);
             require!(bal >= cost, "insufficient");
-            self.vaults.insert(who.clone(), bal - cost);
+            self.set_vault(&who, bal - cost);
             // the storage NEAR left the vault, so it leaves the counted total too (deploy 16)
             self.vault_total = self.vault_total.saturating_sub(cost);
         }
@@ -383,10 +388,11 @@ impl Contract {
             .follows
             .get_mut(&follow_key(agent_pk, follower))
             .ok_or("no mandate")?;
-        // a follower copies only intents accepted from its latest (re)follow on: one accepted while
-        // it was not following (before the first follow, or between an unfollow and a re-follow,
-        // which resets `revoked`) never settles. Same block counts as after. Pre-16 mandates: no time.
-        if v.followed_at().is_some_and(|t| at < t) {
+        // a follower copies only intents accepted while it was following: never one from before the
+        // first follow or from a gap between an unfollow (or expiry) and a re-follow, and one from a
+        // closed window only within its grace (see `VersionedMandate::refollowed`). Same block counts
+        // as following. Pre-16 mandates (`V2`) have no follow time.
+        if !v.covers(at, now, grace) {
             return Err("intent before follow");
         }
         let m = v.current_mut();
@@ -436,9 +442,9 @@ impl Contract {
             return Err("insufficient");
         }
         m.spent = U128(spent);
-        self.vaults.insert(follower.clone(), bal - debit);
+        self.set_vault(follower, bal - debit);
         let sbal = self.vaults.get(solver).copied().unwrap_or(0);
-        self.vaults.insert(solver.clone(), sbal + f.amount_in.0);
+        self.set_vault(solver, sbal + f.amount_in.0);
         self.owner_fees += fee;
         self.vault_total = self.vault_total.saturating_sub(fee);
         self.settled_fills.insert(fkey);
