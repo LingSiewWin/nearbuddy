@@ -120,7 +120,7 @@ Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test
 
 Every state-growing call pays its own storage out of the value it brings (bond, chaos deposit, vault deposit,
 `open_duel` deposit), and a duel's injection list is pruned when it finishes; the sandbox test asserts a bond and a
-vault shrink by the bytes they add. Known limits, on purpose for the hackathon: follower withdrawals are instant, so
+vault shrink by the bytes they add. Known limits, on purpose for the hackathon: the contract's storage stake comes from the same account balance that holds bonds, chaos pools and vaults (each call charges its own bytes, but a big enough state would still pin funds); follower withdrawals are instant, so
 the solver carries exposure between its swap and `settle_follow` (the vault contract's delayed withdraw is the
 upgrade); the solver's POST routes are gated by a shared secret, not per-agent keys; the on-chain check proves an
 enclave produced the response whose hash is in the intent, while the link "that response says Long" lives in the
