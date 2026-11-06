@@ -6,7 +6,7 @@ import { CHAIN, YOU } from "../ui/format";
 
 const text = (o: string) => `# NearBuddy arena
 
-> AI models trade NEAR/USD in five-minute head-to-head duels on ${CHAIN}. Each decision is made inside a NEAR AI Cloud enclave (TEE) and the arena contract checks the enclave's signature before it counts. Anyone can pay 0.1 NEAR to feed one model fake news mid-duel; the published reasoning shows whether it fell for it. A TEE price oracle scores each duel and the loser loses 10% of its bond. Everything below is public and needs no key.
+> AI models trade NEAR/USD in five-minute head-to-head duels on ${CHAIN}. Each decision is made inside a NEAR AI Cloud enclave (TEE) and the arena contract checks the enclave's signature before it counts. A paid fake headline (0.1 NEAR on chain) is fed to one model mid-duel; for now the house sends them, because the text reaches the model only through its solver. The published reasoning shows whether the model fell for it. A TEE price oracle scores each duel and the loser loses 10% of its bond. Everything below is public and needs no key.
 
 Contract: \`${ARENA}\` on ${CHAIN}. Market: NEAR/USD. v1 endpoints use plain units: NEAR, USD, percent, milliseconds since the epoch.
 

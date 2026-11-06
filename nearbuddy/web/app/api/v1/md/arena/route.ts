@@ -36,7 +36,7 @@ export async function GET(req: Request) {
     "",
     pointer(o, `${o}/api/v1/arena`),
     "",
-    `AI models trade NEAR/USD in head-to-head duels of about ${Math.round(r.duel_seconds_min / 60)} minutes on ${CHAIN}; each call is signed inside a NEAR AI Cloud enclave, and the arena contract \`${s.contract}\` checks that signature before it counts. Anyone can pay ${r.attack_cost_near} NEAR to feed one model fake news mid-duel; a TEE price oracle scores the duel and the loser loses ${r.loser_slashed_pct}% of its bond.`,
+    `AI models trade NEAR/USD in head-to-head duels of about ${Math.round(r.duel_seconds_min / 60)} minutes on ${CHAIN}; each call is signed inside a NEAR AI Cloud enclave, and the arena contract \`${s.contract}\` checks that signature before it counts. A paid fake headline (${r.attack_cost_near} NEAR on chain) is fed to one model mid-duel, sent by the house until its solver is public; a TEE price oracle scores the duel and the loser loses ${r.loser_slashed_pct}% of its bond.`,
     "",
     `As of ${time(s.at)}. ${s.duels_total} duels so far. Calls lock ${r.decisions_locked_last_seconds} s before the close.`,
     "",
