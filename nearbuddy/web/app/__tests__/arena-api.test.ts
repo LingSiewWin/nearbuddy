@@ -70,7 +70,8 @@ describe("summary: records", () => {
       NOW,
     );
     const rec = Object.fromEntries(s.standings.map((x) => [x.agent, x.record]));
-    expect(rec[A]).toEqual({ won: 2, lost: 1, tied: 1, window: 4 });
+    // A's own side each time: +9 (10), +9 (9, as b), -9 (8), -9 (7, as b): reading pnl_a for both sides gives -0.18
+    expect(rec[A]).toEqual({ won: 2, lost: 1, tied: 1, window: 4, return_pct: 0 });
     expect(rec[B]).toBeUndefined(); // no enclave proof: not in the standings
   });
 

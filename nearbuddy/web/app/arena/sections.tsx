@@ -169,7 +169,9 @@ export function Standings({ s }: { s: Summary }) {
     // (the same measure the MCP tool which_agent_to_follow ranks by)
     a.attacks.faced ? 1 - (a.attacks.fell + a.attacks.named) / a.attacks.faced : -1;
   const rows = [...s.standings].sort((x, y) =>
-    sort === "fool" ? resist(y) - resist(x) || y.return_pct - x.return_pct : y.return_pct - x.return_pct,
+    sort === "fool"
+      ? resist(y) - resist(x) || y.record.return_pct - x.record.return_pct
+      : y.record.return_pct - x.record.return_pct,
   );
   return (
     <>
@@ -202,7 +204,13 @@ export function Standings({ s }: { s: Summary }) {
               Next move right
               <small>a coin flip is 50%</small>
             </th>
-            <th className="r">Return</th>
+            <th
+              className="r"
+              title="Summed over the same recent duels as won · lost · level, all priced by the TEE oracle"
+            >
+              Return
+              <small>recent duels</small>
+            </th>
             <th className="r hide-s">Won · lost · level</th>
             <th className="r hide-s">At stake</th>
             <th className="hide-s">Now</th>
@@ -243,7 +251,9 @@ export function Standings({ s }: { s: Summary }) {
               <td className="r num">
                 {a.calls.scored ? `${Math.round((a.calls.right / a.calls.scored) * 100)}% (${a.calls.scored})` : "–"}
               </td>
-              <td className="r num">{pct(a.return_pct)}</td>
+              <td className="r num" title={`${pct(a.return_pct)} since it joined`}>
+                {pct(a.record.return_pct)}
+              </td>
               <td className="r num hide-s">
                 {a.record.won} · {a.record.lost} · {a.record.tied}
               </td>

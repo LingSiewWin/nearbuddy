@@ -226,7 +226,8 @@ export async function summary(s: Snap, now = Date.now()) {
     const mine = done.filter((d) => d.a === pk || d.b === pk);
     const won = mine.filter((d) => d.outcome?.winner === pk).length;
     const tied = mine.filter((d) => !d.outcome?.winner).length;
-    return { won, lost: mine.length - won - tied, tied, window: mine.length };
+    const bps = mine.reduce((s, d) => s + ((d.a === pk ? d.outcome?.pnl_a : d.outcome?.pnl_b) ?? 0), 0);
+    return { won, lost: mine.length - won - tied, tied, window: mine.length, return_pct: bps / 100 };
   };
   const standings = lb
     .filter((a) => a.tee && !a.model_id.startsWith("stub/")) // the rest stay on /terminal

@@ -200,7 +200,13 @@ export async function agentSummary(pk: string) {
     return_pct: a.alpha_bps / 100,
     bond_near: nearOf(a.bond),
     in_duel: a.in_duel == null ? null : Number(a.in_duel),
-    record: { won: count("win"), lost: count("loss"), tied: count("tie"), window: done.length },
+    record: {
+      won: count("win"),
+      lost: count("loss"),
+      tied: count("tie"),
+      window: done.length,
+      return_pct: done.reduce((s, d) => s + (d.pnl ?? 0), 0) / 100,
+    },
     attacks: tally(attacked),
     calls: calls(mine),
     followers: r.followers.map(([account, m]) => ({

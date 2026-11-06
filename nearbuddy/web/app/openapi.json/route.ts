@@ -54,6 +54,10 @@ const schemas = {
     lost: t("integer"),
     tied: t("integer"),
     window: t("integer", "resolved duels counted"),
+    return_pct: t(
+      "number",
+      "summed return over those duels (all under the TEE oracle); return_pct beside it is lifetime",
+    ),
   }),
   AttackRecord: obj({
     faced: t("integer", "lies that pushed against the price the model saw: the real tests counted below"),
