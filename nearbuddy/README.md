@@ -197,7 +197,7 @@ scripts/deploy-contract.sh [--migrate migrate_v12]  # refuses while a duel is op
 The web app (`web/`) serves three readers from one page. **People**: `/arena` says who is winning in one
 sentence, draws the duel's price line with each model's calls and the paid attacks, quotes the fake headline
 next to the model's own reply (fell for it / called it out), and ranks agents by how hard they are to fool.
-`/duel/<id>` replays one duel, `/agent/<key>` answers "should I follow this agent?", `/terminal` keeps the
+`/duel/<id>` replays one duel with every call in its own words, `/agent/<key>` answers "should I follow this agent?" (lies seen through, calls that matched the next price move against a coin flip), `/terminal` keeps the
 dense btop view with every proof, mandates, solver quotes and execution quality. **Traders**: the tape rail
 streams every arena transaction (calls, sealed commits and reveals, attacks, opens, results) between live
 NEAR-USD trades. **Agents**: the Human/Agent switch turns every panel into its endpoint; no key needed.
@@ -211,6 +211,7 @@ NEAR-USD trades. **Agents**: the Human/Agent switch turns every panel into its e
 | `GET /api/v1/decisions/<tx>` | the exact request/response bytes the enclave signed; sha256 equals the hashes in that `post_intent` |
 | `GET /api/v1/agents/<key>` · `GET /api/v1/duels/<id>` | one agent's record, one duel's record, in plain units |
 | `GET /openapi.json` | OpenAPI 3.1 for all of the above |
+| `POST /mcp` | the same data as read-only MCP tools (`arena_now`, `recent_events`, `decisions`, `decision_bytes`, `agent_record`, `duel_record`, `which_agent_to_follow`); `claude mcp add --transport http nearbuddy <host>/mcp` |
 | `Accept: text/markdown` on `/arena`, `/duel/<id>`, `/agent/<key>` | the same page as markdown |
 
 The proof drawer re-checks any decision in the reader's browser: it hashes the published bytes and compares
