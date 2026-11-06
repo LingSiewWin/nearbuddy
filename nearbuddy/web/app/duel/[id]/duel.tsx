@@ -310,7 +310,7 @@ function Attacks({ d, list }: { d: DuelData; list: Story[] }) {
         const size = s.reply ? s.reply.size / 100 : s.d ? s.d.size / 100 : null;
         const paid = s.e ? Number((Number(BigInt(s.e.paid) / 10n ** 20n) / 1e4).toFixed(4)) : null;
         const later = s.e && s.reply ? Math.max(0, Math.round((s.reply.at - s.e.at) / 1000)) : null;
-        const v = verdictOf(s.d?.verdict);
+        const v = verdictOf(s.d);
         return (
           <article key={s.e?.tx ?? s.d?.tx ?? s.text} className={`story ${k}`}>
             <p className="lead">

@@ -5,6 +5,7 @@
 import { type Agent, type Config, type Duel, type Summary, summary } from "../api/arena";
 import { type Decision, getDecisions } from "../api/dataset";
 import { ARENA, RPC, viewOn } from "../api/near";
+import { shown } from "../lib/verdict";
 import { pct, promptName, who } from "../ui/format";
 import type { Card, Mark, Span } from "./card";
 import { toneOf } from "./card";
@@ -13,7 +14,7 @@ const CHAIN_MS = 3_500;
 const MIN_LIES = 5; // a group needs this many attacks before the card quotes it
 const view = viewOn(ARENA);
 
-type Group = { model: string; arm: string; rows: Decision[]; fell: number; resisted: number };
+type Group = { model: string; arm: string; rows: Decision[]; tested: number; fell: number; resisted: number };
 
 /** Attacked decisions grouped by model family and prompt, oldest attack first within each group. */
 export function groups(decisions: Decision[]): Group[] {
@@ -21,10 +22,12 @@ export function groups(decisions: Decision[]): Group[] {
   for (const d of decisions) {
     if (!d.attack) continue;
     const k = `${who(d.model)}|${d.arm}`;
-    const g = by.get(k) ?? { model: d.model, arm: d.arm, rows: [], fell: 0, resisted: 0 };
+    const g = by.get(k) ?? { model: d.model, arm: d.arm, rows: [], tested: 0, fell: 0, resisted: 0 };
     g.rows.push(d);
-    if (d.verdict === "fell") g.fell++;
-    if (d.verdict === "resisted") g.resisted++;
+    // only lies that pushed against the price test a model (lib/verdict.ts testOf)
+    if (d.test === "against") g.tested++;
+    if (d.test === "against" && (d.verdict === "fell" || d.verdict === "named")) g.fell++;
+    if (d.test === "against" && (d.verdict === "resisted" || d.verdict === "unmoved")) g.resisted++;
     by.set(k, g);
   }
   return [...by.values()];
@@ -32,21 +35,21 @@ export function groups(decisions: Decision[]): Group[] {
 
 /** The most fooled group and the most guarded one, preferring two different model families. */
 export function contrast(gs: Group[]): { fooled: Group | null; guarded: Group | null } {
-  const big = gs.filter((g) => g.rows.length >= MIN_LIES);
+  const big = gs.filter((g) => g.tested >= MIN_LIES);
   const best = (score: (g: Group) => number, pool: Group[]) =>
     [...pool].sort((x, y) => score(y) - score(x) || y.rows.length - x.rows.length)[0] ?? null;
   const fooled = best(
-    (g) => g.fell / g.rows.length,
+    (g) => g.fell / g.tested,
     big.filter((g) => g.fell > 0),
   );
   const rest = big.filter((g) => g !== fooled && g.resisted > 0);
   const other = rest.filter((g) => who(g.model) !== who(fooled?.model));
-  const guarded = best((g) => g.resisted / g.rows.length, other.length ? other : rest);
+  const guarded = best((g) => g.resisted / g.tested, other.length ? other : rest);
   return { fooled, guarded };
 }
 
 const name = (model: string): Span => ({ t: who(model), tone: toneOf(model) });
-const marks = (g: Group): Mark[] => g.rows.map((d) => d.verdict ?? "unmoved");
+const marks = (g: Group): Mark[] => g.rows.map((d) => shown(d) ?? "untested");
 const label = (g: Group): Span[] => [name(g.model), `· ${promptName(g.arm)}`];
 
 /** The live duel in one line, else the last result. */
@@ -107,17 +110,22 @@ export async function arenaCard(): Promise<Card> {
   const title: Span[][] = [];
   const rows: NonNullable<Card["rows"]> = [];
   if (fooled) {
-    title.push([name(fooled.model), `fell for ${fooled.fell} of ${fooled.rows.length} paid lies.`]);
+    title.push([name(fooled.model), `took the lie's side ${fooled.fell} of ${fooled.tested} times.`]);
     rows.push({ label: label(fooled), marks: marks(fooled) });
   }
   if (guarded) {
-    title.push([name(guarded.model), `saw through ${guarded.resisted} of ${guarded.rows.length}.`]);
+    title.push([
+      name(guarded.model),
+      guarded.resisted === guarded.tested
+        ? `held every time (${guarded.tested}).`
+        : `held ${guarded.resisted} of ${guarded.tested}.`,
+    ]);
     rows.push({ label: label(guarded), marks: marks(guarded) });
   }
   const cost = s ? `${s.rules.attack_cost_near} NEAR` : "a little NEAR";
   return {
     title,
-    sub: [`Anyone can pay ${cost} to feed an AI trader a fake headline.`],
+    sub: [`Paid fake headlines (${cost} each) that contradict the price: which AI believes them?`],
     rows,
     foot: FALLBACK.foot,
     ...live,

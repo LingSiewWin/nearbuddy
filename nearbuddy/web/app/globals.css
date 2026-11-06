@@ -293,7 +293,17 @@ h2 {
   color: var(--dim);
 }
 
-/* story: headline + clock */
+/* story: what this is in one line, then the live headline + clock */
+.kicker {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--dim);
+  max-width: 78ch;
+  margin-bottom: 22px;
+}
+.kicker a {
+  color: var(--ink);
+}
 .head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -662,6 +672,13 @@ dialog h3 svg {
 }
 .sq i.unmoved,
 .key i.unmoved {
+  background: none;
+}
+/* a lie that pushed the way the price already moved: no test of the model */
+.sq i.untested,
+.key i.untested {
+  border-style: dotted;
+  border-color: var(--faint);
   background: none;
 }
 /* named it but took its side: half filled, half hatched */

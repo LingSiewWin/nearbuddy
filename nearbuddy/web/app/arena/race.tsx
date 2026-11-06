@@ -40,7 +40,7 @@ export function Headline({
   let sub: React.ReactNode;
   if (f.live && now && now > f.closes + 60_000) {
     // the bell rang a while ago and nobody has called resolve_duel yet
-    h1 = "Waiting for the bell's price.";
+    h1 = "Waiting for the closing price.";
     sub = (
       <>
         Duel {f.duel} closed {Math.round((now - f.closes) / 60_000)} min ago and is waiting to be scored. Anyone can
@@ -65,7 +65,7 @@ export function Headline({
         <b>
           {move >= 0 ? "up" : "down"} {Math.abs(move).toFixed(2)}%
         </b>{" "}
-        since the bell.{" "}
+        since the duel opened.{" "}
         {lead && loser ? (
           <>
             If it ends now, {lead === "a" ? B : A} pays {lead === "a" ? A : B}{" "}
@@ -104,7 +104,8 @@ export function Headline({
         <p className="sub">{sub}</p>
         {f.live ? (
           <p className="fine">
-            Live line: Coinbase NEAR-USD trades. The score is set by the TEE price oracle at the open and the bell.
+            Live line: Coinbase NEAR-USD trades. The score is set by the TEE price oracle at the open and the close; its
+            prices can be up to five minutes old, so the final score can differ from the live line.
             {f.sealed
               ? ` Calls are sealed until revealed, so nobody can copy them in time; a side that never reveals forfeits ${f.forfeitPct}% of its bond.`
               : ""}
@@ -136,7 +137,8 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
   const x = (t: number) => Math.max(0, Math.min(1, (t - t0) / (t1 - t0))) * 100;
   const win = ticks.filter((k) => k.t >= t0 - 2_000 && k.t <= end);
   const open = openOf(f, ticks);
-  const vals = win.map((k) => k.p).concat(open ? [open] : []);
+  const oracleOpen = f.open ?? open; // the dashed line is the oracle's open when it has one
+  const vals = win.map((k) => k.p).concat(open ? [open] : [], oracleOpen ? [oracleOpen] : []);
   const lo = Math.min(...vals);
   const hi = Math.max(...vals);
   const pad = Math.max((hi - lo) * 0.15, (open ?? 1) * 0.0004);
@@ -206,7 +208,7 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
         <div className="d">
           {move == null
             ? "waiting for trades"
-            : `${move >= 0 ? "up" : "down"} ${Math.abs(move).toFixed(2)}% since the bell`}
+            : `${move >= 0 ? "up" : "down"} ${Math.abs(move).toFixed(2)}% since the duel opened`}
         </div>
       </div>
       <div className="trk chart">
@@ -222,8 +224,8 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
               <line
                 x1="0"
                 x2="1000"
-                y1={y(open)}
-                y2={y(open)}
+                y1={y(oracleOpen ?? open)}
+                y2={y(oracleOpen ?? open)}
                 stroke="var(--faint)"
                 strokeDasharray="4 5"
                 vectorEffect="non-scaling-stroke"
@@ -239,8 +241,8 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
             />
           </svg>
           {open ? (
-            <span className="openlab" style={{ top: `${y(open)}%` }}>
-              {f.open ? "oracle open" : "open"} {usd(open)}
+            <span className="openlab" style={{ top: `${y(oracleOpen ?? open)}%` }}>
+              {f.open ? "oracle open" : "open"} {usd(oracleOpen ?? open)}
             </span>
           ) : null}
           {last ? <i className="dot" style={{ left: `${x(last.t)}%`, top: `${y(last.p)}%` }} /> : null}

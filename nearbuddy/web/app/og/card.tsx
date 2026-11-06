@@ -26,7 +26,7 @@ export type Tone = keyof typeof C;
 /** A run of text; a bare string is ink. */
 export type Span = string | { t: string; tone: Tone };
 /** One paid lie as the arena's squares show it. */
-export type Mark = "resisted" | "named" | "fell" | "unmoved";
+export type Mark = "resisted" | "named" | "fell" | "unmoved" | "untested";
 export type Card = {
   /** The headline, one line per sentence where the width allows. */
   title: Span[][];
@@ -104,6 +104,7 @@ function Square({ m }: { m: Mark }) {
         }}
       />
     );
+  if (m === "untested") return <div style={{ ...s, borderColor: C.dim, borderStyle: "dotted", opacity: 0.6 }} />;
   return <div style={{ ...s, background: m === "resisted" ? C.ink : "transparent" }} />;
 }
 

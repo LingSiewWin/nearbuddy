@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import type { Decision } from "../../api/dataset";
 import type { Intent } from "../../arena/model";
 import { useNow } from "../../lib/live";
-import { type Tally, tally, VERDICT_WORD } from "../../lib/verdict";
+import { SHOWN_WORD, shown, type Tally, tally, UNTESTED_WHY } from "../../lib/verdict";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
 import { acctUrl, agentHref, duelHref, modelName, pct, promptName, stake, tone, txUrl, who } from "../../ui/format";
 import { Machine } from "../../ui/machine";
@@ -68,6 +68,7 @@ const rest = (t: Tally) =>
 /** What one call did with the lie it was shown, in words. */
 const verdictLine = (d: Decision) => {
   const call = `${d.side === "Long" ? "long" : "short"} with ${stake(d.size / 100)}`;
+  if (shown(d) === "untested") return `${UNTESTED_WHY} It went ${call}.`;
   return d.verdict === "resisted"
     ? `Named the lie and bet against it: ${call}.`
     : d.verdict === "named"
@@ -128,7 +129,7 @@ function Hero({ a }: { a: AgentData }) {
   const done = a.duels.filter((d) => d.result !== "open");
   const won = done.filter((d) => d.result === "win").length;
   const lost = done.filter((d) => d.result === "loss").length;
-  const fooled = lies.fell + lies.named > lies.resisted;
+  const fooled = (lies.fell + lies.named) * 2 > lies.faced; // took the lie's side on most real tests
   const hit = a.calls.scored ? Math.round((a.calls.right / a.calls.scored) * 100) : null;
   return (
     <>
@@ -182,22 +183,26 @@ function Hero({ a }: { a: AgentData }) {
       <div className="ag-nums">
         <div>
           <span className={`ag-num${fooled ? " fell" : ""}`}>
-            {lies.faced ? `${lies.resisted}/${lies.faced}` : "0"}
+            {lies.faced ? `${lies.faced - lies.fell - lies.named}/${lies.faced}` : "–"}
           </span>
           <p className="sub">
             {lies.faced ? (
               <>
                 <b>
-                  Saw through {lies.resisted} of {plural(lies.faced, "paid lie")}.
+                  Held its call on {lies.faced - lies.fell - lies.named} of {plural(lies.faced, "lie")} that went
+                  against the price.
                 </b>{" "}
-                {lies.resisted === lies.faced
-                  ? "Every time, it named the made-up headline as a lie and bet against it."
-                  : `Strangers paid to slip it made-up headlines; it ${rest(lies)}.`}
+                {lies.fell + lies.named === 0
+                  ? "When a made-up headline contradicted the price it could see, it never took the headline's side."
+                  : `The house paid to slip it made-up headlines; it ${rest(lies)}.`}
+                {lies.untested
+                  ? ` ${plural(lies.untested, "other lie")} pushed the way the price was already moving, so they do not test it.`
+                  : ""}
               </>
             ) : (
               <>
-                <b>Not attacked yet.</b> Nobody has paid to slip it a fake headline in the published record. One attack
-                costs {a.attackCost} NEAR.
+                <b>No test yet.</b> No paid headline in the published record has pushed against the price it could see.
+                One attack costs {a.attackCost} NEAR.
               </>
             )}
           </p>
@@ -242,28 +247,27 @@ function Lies({ a, now }: { a: AgentData; now: number }) {
                 <div key={arm} className="model">
                   {groups.size > 1 ? (
                     <p>
-                      With {promptPhrase(arm)}: saw through {t.resisted} of {t.faced}
-                      {t.named ? `, named ${t.named} but took their side anyway` : ""}
-                      {t.fell ? `, fell for ${t.fell}` : ""}.
+                      With {promptPhrase(arm)}: took the lie's side on {t.fell + t.named} of {t.faced} lies that went
+                      against the price{t.untested ? ` (${t.untested} more were no test)` : ""}.
                     </p>
                   ) : null}
                   <div
                     className="sq ag-sq"
                     role="img"
-                    aria-label={`${t.resisted} saw through, ${t.named} named but took the side, ${t.fell} fell for, ${t.unmoved} ignored`}
+                    aria-label={`${t.fell + t.named} of ${t.faced} tests failed, ${t.untested} lies were no test`}
                   >
                     {rows.map((d, i) => (
-                      <i key={d.tx ?? i} className={d.verdict ?? ""} title={`duel ${d.duel}: ${d.attack ?? ""}`} />
+                      <i key={d.tx ?? i} className={shown(d) ?? ""} title={`duel ${d.duel}: ${d.attack ?? ""}`} />
                     ))}
                   </div>
                 </div>
               );
             })}
             <div className="key">
-              {(["resisted", "named", "fell", "unmoved"] as const).map((v) => (
+              {(["resisted", "unmoved", "named", "fell", "untested"] as const).map((v) => (
                 <span key={v}>
                   <i className={v} />
-                  {VERDICT_WORD[v].toLowerCase()}
+                  {SHOWN_WORD[v].toLowerCase()}
                 </span>
               ))}
             </div>
@@ -300,7 +304,7 @@ function Story({ d, at, now }: { d: Decision; at: number | undefined; now: numbe
         <p className="cap">Its own reasoning, signed inside its enclave:</p>
         <blockquote className="reply">“{d.reason}”</blockquote>
         <div className="verdict">
-          {d.verdict ? <strong className={d.verdict}>{VERDICT_WORD[d.verdict]}.</strong> : null}
+          {shown(d) ? <strong className={shown(d) ?? ""}>{SHOWN_WORD[shown(d) ?? "untested"]}.</strong> : null}
           <span>
             {verdictLine(d)} {nextLine(d)}
           </span>
@@ -446,9 +450,9 @@ function Calls({ a, now }: { a: AgentData; now: number }) {
               </div>
               <p className="ag-c2">
                 <Side side={d.side} /> with {stake(d.size / 100)}
-                {d.attack && d.verdict ? (
-                  <span className={`ag-tag${d.verdict === "fell" || d.verdict === "named" ? " fell" : ""}`}>
-                    after a paid lie: {VERDICT_WORD[d.verdict].toLowerCase()}
+                {d.attack && shown(d) ? (
+                  <span className={`ag-tag${shown(d) === "fell" || shown(d) === "named" ? " fell" : ""}`}>
+                    after a paid lie: {SHOWN_WORD[shown(d) ?? "untested"].toLowerCase()}
                   </span>
                 ) : null}
               </p>
@@ -512,7 +516,7 @@ function Follow({ a }: { a: AgentData }) {
         <h2>Put your own model in the ring</h2>
         <p>
           One command lists any NEAR AI Cloud model from your own testnet account. You own the agent and its bond; it
-          gets paired, decides inside its own enclave, and strangers can attack it.
+          gets paired, decides inside its own enclave, and anyone can pay to attack it.
         </p>
         <div className="cmd">
           <code>{cmd}</code>

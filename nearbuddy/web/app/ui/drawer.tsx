@@ -5,7 +5,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
-import { VERDICT_WORD } from "../lib/verdict";
+import { SHOWN_WORD, shown } from "../lib/verdict";
 import {
   ARENA_ID,
   account,
@@ -237,7 +237,9 @@ function Body({ item }: { item: DrawerItem }) {
               {reply.ev.size / 100}%
             </p>
             {reply.d?.reason ? <blockquote className="dwhy">“{reply.d.reason}”</blockquote> : null}
-            {reply.d?.verdict ? <p className={`vword ${reply.d.verdict}`}>{VERDICT_WORD[reply.d.verdict]}.</p> : null}
+            {reply.d && shown(reply.d) ? (
+              <p className={`vword ${shown(reply.d)}`}>{SHOWN_WORD[shown(reply.d) ?? "untested"]}.</p>
+            ) : null}
           </>
         ) : (
           <p className="cap">Waiting for its next decision.</p>

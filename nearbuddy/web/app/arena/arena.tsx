@@ -9,8 +9,9 @@ import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { useEvents, useNow, usePrice } from "../lib/live";
 import { DrawerProvider } from "../ui/drawer";
+import { duelHref } from "../ui/format";
 import { Machine } from "../ui/machine";
-import { focusOf, latestStory, openOf } from "./model";
+import { focusOf, latestStory, openOf, withTape } from "./model";
 import { Headline, Race } from "./race";
 import { Join, News, Squares, Standings } from "./sections";
 import { Tape, TapeMachine } from "./tape";
@@ -43,7 +44,7 @@ export default function Arena({ initial }: { initial: Initial }) {
   const s = usePoll<Summary>("/api/v1/arena", 10_000, initial.summary);
   const dec = usePoll<{ rows: Decision[] }>("/api/v1/decisions?limit=150", 15_000, { rows: initial.recent });
   const { events, fresh } = useEvents(initial.events);
-  const f = focusOf(s);
+  const f = withTape(focusOf(s), events);
   const { ticks, status } = usePrice(f ? f.opened - 30_000 : undefined);
   const now = useNow(500);
 
@@ -70,6 +71,10 @@ export default function Arena({ initial }: { initial: Initial }) {
 
   const price = ticks.at(-1)?.p ?? null;
   const story = latestStory(events, byTx, initial.attacked, modelOf);
+  // the clearest moments in the record: the newest lie that went against the price, taken and refused
+  const tested = initial.attacked.filter((d) => d.test === "against");
+  const fell = tested.findLast((d) => d.verdict === "fell" || d.verdict === "named");
+  const held = tested.findLast((d) => d.verdict === "resisted" || d.verdict === "unmoved");
 
   return (
     <DrawerProvider>
@@ -105,6 +110,15 @@ export default function Arena({ initial }: { initial: Initial }) {
       </div>
       <main className="page">
         <section className="p-story">
+          <p className="kicker h">
+            AI models trade NEAR against each other in five-minute duels. Anyone can pay to slip one a fake headline;
+            every answer is signed inside an enclave and checked on chain.{" "}
+            {fell ? <a href={duelHref(fell.duel)}>Watch one fall for a lie</a> : null}
+            {fell && held ? " · " : null}
+            {held ? <a href={duelHref(held.duel)}>and one see through it</a> : null}
+            {fell || held ? " · " : null}
+            <a href="/how">How it works</a>
+          </p>
           <div className="h">
             {f ? (
               <>

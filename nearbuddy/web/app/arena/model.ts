@@ -82,6 +82,19 @@ export function focusOf(s: Summary): Focus | null {
   };
 }
 
+/** A live duel's sides with their newest call from the tape: the contract view behind the summary is cached
+ *  for seconds, the tape is fresher, and the headline must not say "yet to make a call" beside a call. */
+export function withTape(f: Focus | null, events: ArenaEvent[]): Focus | null {
+  if (!f?.live) return f;
+  const latest = (pk: string) =>
+    events.find((e): e is Intent => isCall(e) && e.ok && e.duel === f.duel && e.agent === pk);
+  const patch = (s: Side): Side => {
+    const e = latest(s.agent);
+    return e ? { ...s, side: e.side, size_pct: e.size / 100, verified: e.tee === 2 } : s;
+  };
+  return { ...f, a: patch(f.a), b: patch(f.b) };
+}
+
 /** Return in % for one side if the duel were scored at `price`, by the contract's own rule: its last call,
  *  integer basis points truncated toward zero on prices x1e8 (pnl_bps = sign * (close - open) * size_bps / open),
  *  so a move too small to score shows as 0, the way the contract will count it. */
@@ -94,7 +107,12 @@ export const markPct = (side: Side, open: number | null, price: number | null) =
 };
 
 /** The price the race is measured against: the oracle's open, else the first trade after the duel opened. */
-export const openOf = (f: Focus, ticks: Tick[]) => f.open ?? ticks.find((t) => t.t >= f.opened)?.p ?? null;
+export const openOf = (f: Focus, ticks: Tick[]) => {
+  // live: compare Coinbase with Coinbase (the oracle's open can be up to 300 s old, so mixing the two invents
+  // a move); scored: the oracle's own open, the price the contract used
+  const first = ticks.find((t) => t.t >= f.opened)?.p ?? null;
+  return f.live ? (first ?? f.open) : (f.open ?? first);
+};
 
 /** Last trade at or before `t` (ticks are oldest first). */
 export function priceAt(ticks: Tick[], t: number): number | null {

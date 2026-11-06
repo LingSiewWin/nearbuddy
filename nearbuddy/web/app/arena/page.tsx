@@ -21,6 +21,7 @@ const waiting = (): Summary => ({
   network: "testnet",
   contract: ARENA,
   duels_total: 0,
+  live_duels: [],
   rules: {
     duel_seconds_min: 310,
     decisions_locked_last_seconds: 60,

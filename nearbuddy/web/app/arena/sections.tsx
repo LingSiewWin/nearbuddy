@@ -5,7 +5,7 @@
 import { useState } from "react";
 import type { Summary } from "../api/arena";
 import type { Decision } from "../api/dataset";
-import { tally, VERDICT_WORD } from "../lib/verdict";
+import { SHOWN_WORD, shown, tally, UNTESTED_WHY } from "../lib/verdict";
 import { Seal, useDrawer } from "../ui/drawer";
 import {
   account,
@@ -39,7 +39,7 @@ export function News({ story, now }: { story: Story | null; now: number }) {
   const d = story.d;
   const side = story.reply?.side ?? d?.side;
   const size = story.reply ? story.reply.size / 100 : d ? d.size / 100 : null;
-  const verdict = d?.verdict;
+  const verdict = d ? shown(d) : null;
   return (
     <div className={k}>
       <h2>
@@ -68,7 +68,7 @@ export function News({ story, now }: { story: Story | null; now: number }) {
       )}
       {side ? (
         <div className="verdict">
-          {verdict ? <strong className={verdict}>{VERDICT_WORD[verdict]}.</strong> : null}
+          {verdict ? <strong className={verdict}>{SHOWN_WORD[verdict]}.</strong> : null}
           <span>
             {verdict === "resisted"
               ? `Named the lie and bet against it: ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
@@ -76,7 +76,9 @@ export function News({ story, now }: { story: Story | null; now: number }) {
                 ? `Named the lie, but its call matched the side the lie pushed: ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
                 : verdict === "fell"
                   ? `Took the side the lie pushed: ${side === "Long" ? "long" : "short"} with ${stake(size)}.`
-                  : `Went ${side === "Long" ? "long" : "short"} with ${stake(size)}.`}
+                  : verdict === "untested"
+                    ? `${UNTESTED_WHY} It went ${side === "Long" ? "long" : "short"}.`
+                    : `Went ${side === "Long" ? "long" : "short"} with ${stake(size)}.`}
           </span>
           {story.reply ? (
             <button
@@ -107,7 +109,10 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
   return (
     <div className="rec">
       <h2>Who falls for fake news</h2>
-      <p className="lede">Every paid lie in the published record, one square each, in the order they landed.</p>
+      <p className="lede">
+        Every paid lie in the published record, one square each. A lie only tests a model when it pushes against the
+        price move the model can see; the rest are marked no test.
+      </p>
       {list.map(([k, rows]) => {
         const first = rows[0] as Decision;
         const t = tally(rows);
@@ -115,27 +120,27 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
           <div key={k} className={`model ${tone(first.model)}`}>
             <p>
               <span className="who">{who(first.model)}</span> with the {promptName(first.arm)}{" "}
-              {t.fell === t.faced
-                ? `fell for all ${t.faced}.`
-                : `saw through ${t.resisted} of ${t.faced}${t.named ? `, named ${t.named} but took their side anyway` : ""}${t.fell ? `, fell for ${t.fell}` : ""}.`}
+              {t.faced
+                ? `took the lie's side on ${t.fell + t.named} of ${t.faced} lies that went against the price.`
+                : "has not met a lie that went against the price yet."}
             </p>
             <div
               className="sq"
               role="img"
-              aria-label={`${t.resisted} saw through, ${t.named} named but took the side, ${t.fell} fell for, ${t.unmoved} ignored`}
+              aria-label={`${t.fell + t.named} of ${t.faced} tests failed, ${t.untested} lies were no test`}
             >
               {rows.map((d, i) => (
-                <i key={d.tx ?? i} className={d.verdict ?? ""} title={`duel ${d.duel}: ${d.attack ?? ""}`} />
+                <i key={d.tx ?? i} className={shown(d) ?? ""} title={`duel ${d.duel}: ${d.attack ?? ""}`} />
               ))}
             </div>
           </div>
         );
       })}
       <div className="key">
-        {(["resisted", "named", "fell", "unmoved"] as const).map((v) => (
+        {(["resisted", "unmoved", "named", "fell", "untested"] as const).map((v) => (
           <span key={v}>
             <i className={v} />
-            {VERDICT_WORD[v].toLowerCase()}
+            {SHOWN_WORD[v].toLowerCase()}
           </span>
         ))}
       </div>
@@ -177,7 +182,9 @@ export function Standings({ s }: { s: Summary }) {
           <tr>
             <th className="rank">#</th>
             <th>Agent</th>
-            <th>Paid lies</th>
+            <th title="Lies that pushed against the price the model could see; the only ones that test it">
+              Lies that tested it
+            </th>
             <th
               className="r"
               title="Its call matched the next price move on the duel's oracle tape; a coin flip is 50%"
@@ -209,16 +216,15 @@ export function Standings({ s }: { s: Summary }) {
               </td>
               <td>
                 {a.attacks.faced ? (
-                  <>
-                    saw through {`${a.attacks.resisted}\u00a0of\u00a0${a.attacks.faced}`}
-                    {a.attacks.fell ? (
-                      <>
-                        , <span className="fellc">fell for {a.attacks.fell}</span>
-                      </>
-                    ) : null}
-                  </>
+                  a.attacks.fell + a.attacks.named ? (
+                    <span className="fellc">
+                      took its side {`${a.attacks.fell + a.attacks.named}\u00a0of\u00a0${a.attacks.faced}`}
+                    </span>
+                  ) : (
+                    `held on all ${a.attacks.faced}`
+                  )
                 ) : (
-                  <span className="rest">not attacked yet</span>
+                  <span className="rest">no test yet</span>
                 )}
               </td>
               <td className="r num">

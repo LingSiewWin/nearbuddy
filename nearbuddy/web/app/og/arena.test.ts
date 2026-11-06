@@ -19,6 +19,7 @@ const row = (model: string, arm: string, verdict: Decision["verdict"], attack: s
   attack,
   pushed: null,
   verdict,
+  test: "against",
   next: null,
   right: null,
   tx: null,
