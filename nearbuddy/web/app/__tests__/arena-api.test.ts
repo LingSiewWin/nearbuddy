@@ -192,3 +192,17 @@ describe("summary: rules", () => {
     expect(s.rules).toMatchObject({ sealed_calls: true, no_reveal_forfeit_pct: 5, pairing_needs_consent: true });
   });
 });
+
+describe("summary: the team's test agents stay off the standings", () => {
+  test("a red-team registration with an enclave key is not ranked", async () => {
+    const R = "redteam-agent";
+    const s = await summary(
+      snap({
+        leaderboard: [agent(A, "Qwen/Qwen3.8-27B", { tee: true }), agent(R, "redteam/tee", { tee: true })],
+        duels: [won("10", A, R, A)],
+      }),
+      NOW,
+    );
+    expect(s.standings.map((x) => x.agent)).toEqual([A]);
+  });
+});

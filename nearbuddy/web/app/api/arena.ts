@@ -9,6 +9,7 @@ import { proven } from "../cells";
 import { calls } from "../lib/rows";
 import { tally } from "../lib/verdict";
 import { NETWORK_ID } from "../network";
+import { isTestAgent } from "../ui/format";
 import { attackText, type Decision, getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
 
@@ -210,7 +211,7 @@ export async function summary(s: Snap, now = Date.now()) {
   const open = s.duels.filter((d) => !d.resolved);
   const trusted = (pk: string) => {
     const a = lb.find((x) => x.pk === pk);
-    return !!a?.tee && !a.model_id.startsWith("stub/");
+    return !!a?.tee && !isTestAgent(a.model_id);
   };
   // the hero is the newest open duel between enclave-verified models; red-team or test duels never take it
   const live = open.find((d) => trusted(d.a) && trusted(d.b)) ?? open[0]; // live_duels lists every open one
@@ -230,7 +231,7 @@ export async function summary(s: Snap, now = Date.now()) {
     return { won, lost: mine.length - won - tied, tied, window: mine.length, return_pct: bps / 100 };
   };
   const standings = lb
-    .filter((a) => a.tee && !a.model_id.startsWith("stub/")) // the rest stay on /terminal
+    .filter((a) => a.tee && !isTestAgent(a.model_id)) // the rest stay on /terminal
     .map((a) => {
       const atk = ATTACKS.get(a.pk);
       return {

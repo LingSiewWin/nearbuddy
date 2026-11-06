@@ -4,7 +4,7 @@ import type { MetadataRoute } from "next";
 import { connection } from "next/server";
 import { type Agent, BOARD, type Config } from "./api/arena";
 import { ARENA, viewOn } from "./api/near";
-import { agentHref, duelHref } from "./ui/format";
+import { agentHref, duelHref, isTestAgent } from "./ui/format";
 
 /** Canonical origin: the production domain on Vercel, else the public deployment. */
 export const SITE = `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL ?? "nearbuddy.vercel.app"}`;
@@ -20,7 +20,7 @@ async function fromChain(): Promise<MetadataRoute.Sitemap> {
   const n = Number(config.next_duel);
   const duels = Array.from({ length: Math.min(DUELS, n) }, (_, i) => ({ url: SITE + duelHref(n - 1 - i) }));
   // test bots without an enclave are hidden from the standings, so not listed either
-  const agents = board.filter((a) => !a.model_id.startsWith("stub/")).map((a) => ({ url: SITE + agentHref(a.pk) }));
+  const agents = board.filter((a) => !isTestAgent(a.model_id)).map((a) => ({ url: SITE + agentHref(a.pk) }));
   return [...duels, ...agents];
 }
 

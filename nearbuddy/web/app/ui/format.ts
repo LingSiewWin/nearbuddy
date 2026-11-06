@@ -72,6 +72,11 @@ export const account = (a: string) => (a.length > 40 ? `${a.slice(0, 8)}…${a.s
 export const yoctoNear = (y: string) => Number((Number(BigInt(y) / 10n ** 20n) / 1e4).toFixed(4));
 export const agentHref = (pk: string) => `/agent/${encodeURIComponent(pk)}`;
 export const duelHref = (id: number | string) => `/duel/${id}`;
+/** The team's own test agents: stubs ("stub/…", "redteam/stub", the rule in cells.ts) and red-team registrations
+ *  ("redteam/…", some with an enclave key). Kept off the standings, the hero and the sitemap; /terminal lists them. */
+/** "stub" as a whole model-id segment: isStubModel in cells.ts, kept here so pages do not pull in the terminal UI. */
+export const isStubModel = (model: string) => /(^|\/)stub(\/|$)/.test(model);
+export const isTestAgent = (model: string) => isStubModel(model) || model.startsWith("redteam/");
 export const ARENA_ID = NET.arena;
 export const ORACLE_ID = NET.oracle;
 /** A flipped-byte proof the arena refused on testnet (README): link it with txUrl(TAMPER_TX, "testnet"). */

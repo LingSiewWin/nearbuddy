@@ -15,6 +15,8 @@ import {
   agentHref,
   CHAIN,
   duelHref,
+  isStubModel,
+  isTestAgent,
   modelName,
   ORACLE_ID,
   pct,
@@ -49,8 +51,6 @@ const PROMPTS: Record<string, string> = {
   C: "It runs guard C, which must name the oracle price as its only evidence or its call is thrown away.",
 };
 
-// house stubs are "stub/…"; the red team registers "redteam/stub"
-const isStub = (model: string) => /(^|\/)stub(\/|$)/.test(model);
 /** "the plain prompt", "guard C (evidence rule)" */
 const promptPhrase = (arm: string) => {
   const n = promptName(arm);
@@ -134,12 +134,14 @@ const Side = ({ side }: { side: "Long" | "Short" }) => (
 
 function Hero({ a }: { a: AgentData }) {
   const open = useDrawer();
-  const stub = isStub(a.model);
+  const stub = isTestAgent(a.model);
   const others = a.prompts.filter((p) => p !== a.prompt);
   const prompt = stub
     ? a.model.startsWith("stub/")
       ? `${a.model} picks Long or Short from a hash of its input: no AI model, no enclave.`
-      : `${a.model} is a test bot: no enclave signs its calls.`
+      : isStubModel(a.model)
+        ? `${a.model} is a test bot: no enclave signs its calls.`
+        : `${a.model} is the team's red-team bot: it probes the contract's guards and is not an AI model to follow.`
     : a.prompt
       ? `${PROMPTS[a.prompt] ?? `It runs ${promptPhrase(a.prompt)}.`}${others.length ? ` Before that it ran ${list(others.map(promptPhrase))}.` : ""}`
       : "Its prompt is not in the published record yet.";
@@ -419,7 +421,7 @@ function Record({ a }: { a: AgentData }) {
                 </td>
                 <td className={tone(d.opponentModel)}>
                   <a className="who ag-op" href={agentHref(d.opponent)}>
-                    {d.opponentModel ? (isStub(d.opponentModel) ? "Test bot" : who(d.opponentModel)) : "Agent"}{" "}
+                    {d.opponentModel ? (isTestAgent(d.opponentModel) ? "Test bot" : who(d.opponentModel)) : "Agent"}{" "}
                     <small>{d.opponent.slice(0, 4)}</small>
                   </a>
                 </td>
@@ -488,7 +490,7 @@ function Calls({ a, now }: { a: AgentData; now: number }) {
         })
       ) : (
         <p className="lede ag-empty">
-          {isStub(a.model)
+          {isTestAgent(a.model)
             ? "A test bot has no reasoning to publish: no enclave model writes its calls."
             : "None of its calls are in the published record yet. The dataset is rebuilt with each release."}
         </p>
@@ -504,7 +506,7 @@ function Follow({ a }: { a: AgentData }) {
   return (
     <div className="join">
       <div>
-        <h2>Follow {isStub(a.model) ? "it" : who(a.model)}</h2>
+        <h2>Follow {isTestAgent(a.model) ? "it" : who(a.model)}</h2>
         <p>
           Following signs a spending limit, not a deposit to anyone: a cap per trade, a total, the tokens it may touch
           and an expiry. The agent can only fill inside that limit, and you can revoke it any time.
@@ -515,7 +517,7 @@ function Follow({ a }: { a: AgentData }) {
             className="btn"
             onClick={() => open({ kind: "follow", model: a.model, agent: a.pk, owner: a.owner, prompt: a.prompt })}
           >
-            Follow {isStub(a.model) ? "it" : who(a.model)}
+            Follow {isTestAgent(a.model) ? "it" : who(a.model)}
           </button>
         ) : (
           <p className="ag-no">Only agents whose calls are verified inside an enclave can be followed.</p>
