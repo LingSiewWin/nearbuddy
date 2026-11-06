@@ -90,7 +90,8 @@ impl Contract {
     /// Follower locks NEAR here. Solvers are repaid from it only inside a mandate. A first deposit
     /// also pays for the vault record.
     /// Caller: anyone (follower). Deposit: the amount to lock, above a first vault record's
-    /// storage. Panics: "paused", "deposit required", "vault cap".
+    /// storage. Panics: "paused", "deposit required", "vault cap", "account cap" (the caller's vault
+    /// would pass `max_vault_per_account`).
     #[payable]
     pub fn deposit(&mut self) -> U128 {
         self.not_paused();
@@ -110,6 +111,7 @@ impl Contract {
         let cost = storage_cost_since(before);
         require!(amt > cost, "deposit required");
         let bal = bal - cost;
+        require!(bal <= self.max_vault_per_account, "account cap");
         self.vaults.insert(who, bal);
         self.vault_total += amt - cost;
         U128(bal)

@@ -2167,13 +2167,9 @@ fn mandate_v1(allowance: u128) -> MandateV1 {
 }
 
 #[test]
-fn migrate_v15_rekeys_follows_in_batches_and_keeps_the_rest() {
+fn migrate_follows_rekeys_in_batches() {
     let (mut c, ..) = setup();
     let (a, b) = (key(1).1, key(2).1);
-    let d0 = open(&mut c);
-    ctx(FOLLOWER, VAULT);
-    c.deposit();
-    let vault = c.get_vault(FOLLOWER.parse().unwrap()).0;
     // deploy-14 follower lists under the old `Follows` prefix: two followers of A, one of B
     let (f, o): (AccountId, AccountId) = (FOLLOWER.parse().unwrap(), OPERATOR.parse().unwrap());
     c.follows_v1.insert(
@@ -2182,81 +2178,139 @@ fn migrate_v15_rekeys_follows_in_batches_and_keeps_the_rest() {
     );
     c.follows_v1
         .insert(b.clone(), vec![(f.clone(), mandate_v1(8))]);
-    c.follows_v1.flush();
-    c.duels.flush();
-    c.agents.flush();
-    c.agent_duels.flush();
-    c.vaults.flush();
-    // deploy-14 state: the current layout minus the fields deploy 15 appends
-    let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
-    let tail = near_sdk::borsh::to_vec(&(
-        &c.follows,
-        &c.follows_cursor,
-        &c.intents_account,
-        &c.holdings,
-        &c.accounted,
-        &c.outflow_seq,
-        &c.pending_withdrawals,
-        &c.withdraw_delay_ns,
-        &c.paused,
-        &c.max_vault_total,
-        &c.vault_total,
-        &c.duel_locks,
-        &c.sweeping,
-        &c.self_chaos,
-    ))
-    .unwrap();
-    assert_eq!(raw.split_off(raw.len() - tail.len()), tail);
-    env::storage_write(b"STATE", &raw);
-    ctx(CONTRACT, 0);
-    let mut m = Contract::migrate_v15(INTENTS.parse().unwrap(), U128(VAULT_CAP));
-    let cfg = m.get_config();
-    assert!(cfg.migrating);
-    assert_eq!(
-        (
-            cfg.withdraw_delay_s,
-            cfg.paused,
-            cfg.intents_account.as_str()
-        ),
-        (900, false, INTENTS)
-    );
-    assert_eq!(
-        (cfg.next_duel.0, cfg.open_duels, cfg.intent_lock_s),
-        (1, 1, 10)
-    );
-    assert_eq!(m.get_vault(f.clone()).0, vault, "vaults untouched");
+    c.follows_cursor = Some(0); // as migrate_v15 left it
+    assert!(c.get_config().migrating);
     // follow and settle are refused until the re-key finishes
     ctx(FOLLOWER, 0);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        m.follow(Base64VecU8(a.clone()), mandate(NEAR, VAULT, vec![]))
+        c.follow(Base64VecU8(a.clone()), mandate(NEAR, VAULT, vec![]))
     }));
     assert_eq!(panic_msg(r.unwrap_err()), "migrating");
     ctx(SOLVER, 0);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = m.settle_follow(Base64VecU8(a.clone()), f.clone(), vec![fill(1, "usdc", 1)]);
+        let _ = c.settle_follow(Base64VecU8(a.clone()), f.clone(), vec![fill(1, "usdc", 1)]);
     }));
     assert_eq!(panic_msg(r.unwrap_err()), "migrating");
     // one agent per call
     ctx(OWNER, 1);
-    assert_eq!(m.migrate_follows(1), Some(1));
-    assert_eq!(m.migrate_follows(1), None);
-    assert!(!m.get_config().migrating);
-    let got = |m: &Contract, pk: &[u8], who: &AccountId| {
-        m.get_follow(Base64VecU8(pk.to_vec()), who.clone())
+    assert_eq!(c.migrate_follows(1), Some(1));
+    assert_eq!(c.migrate_follows(1), None);
+    assert!(!c.get_config().migrating);
+    let got = |c: &Contract, pk: &[u8], who: &AccountId| {
+        c.get_follow(Base64VecU8(pk.to_vec()), who.clone())
             .map(|x| (x.allowance.0, x.spent.0, x.min_out_per_near.0))
     };
-    assert_eq!(got(&m, &a, &f), Some((5, 7, 0)));
-    assert_eq!(got(&m, &a, &o), Some((6, 7, 0)));
-    assert_eq!(got(&m, &b, &f), Some((8, 7, 0)));
-    assert_eq!(got(&m, &b, &o), None);
-    assert!(m.follows_v1.get(&a).is_none(), "old lists are drained");
-    // the duel open across the deploy keeps the global lock; it still takes intents
-    assert_eq!(m.lock_of(d0), 10_000_000_000);
+    assert_eq!(got(&c, &a, &f), Some((5, 7, 0)));
+    assert_eq!(got(&c, &a, &o), Some((6, 7, 0)));
+    assert_eq!(got(&c, &b, &f), Some((8, 7, 0)));
+    assert_eq!(got(&c, &b, &o), None);
+    assert!(c.follows_v1.get(&a).is_none(), "old lists are drained");
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ctx(OWNER, 1);
-        m.migrate_follows(1)
+        c.migrate_follows(1)
     }));
     assert_eq!(panic_msg(r.unwrap_err()), "migration done");
+}
+
+/// Deploy-15 state bytes: the current layout minus the fields deploy 16 appends.
+fn v15_state(c: &mut Contract) -> Vec<u8> {
+    c.duels.flush();
+    c.agents.flush();
+    c.agent_duels.flush();
+    c.vaults.flush();
+    c.follows.flush();
+    let mut raw = near_sdk::borsh::to_vec(&*c).unwrap();
+    let tail = near_sdk::borsh::to_vec(&c.max_vault_per_account).unwrap();
+    assert_eq!(raw.split_off(raw.len() - tail.len()), tail);
+    raw
+}
+
+#[test]
+fn migrate_v16_keeps_deploy_15_state_and_adds_the_account_cap() {
+    let (mut c, d, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let raw = v15_state(&mut c);
+    let before = c.get_config();
+    env::storage_write(b"STATE", &raw);
+    ctx(CONTRACT, 0);
+    let mut m = Contract::migrate_v16(U128(12 * NEAR));
+    let cfg = m.get_config();
+    assert_eq!(cfg.max_vault_per_account.0, 12 * NEAR);
+    assert_eq!(
+        near_sdk::serde_json::to_value(Config {
+            max_vault_per_account: before.max_vault_per_account,
+            ..cfg
+        })
+        .unwrap(),
+        near_sdk::serde_json::to_value(before).unwrap(),
+        "every deploy-15 setting carried over"
+    );
+    let f: AccountId = FOLLOWER.parse().unwrap();
+    assert_eq!(m.get_vault(f.clone()).0, v, "vaults untouched");
+    assert!(m.get_follow(Base64VecU8(key(1).1), f).is_some());
+    assert_eq!(m.lock_of(d), LOCK);
+    // the fill posted before the deploy still settles
+    assert_eq!(settle(&mut m, vec![fill(1, "usdc", 50)]).settled, 1);
+    // the follower holds ~10 NEAR: 2 more fit under 12, 1 more after that does not
+    ctx(FOLLOWER, 2 * NEAR);
+    m.deposit();
+    ctx(FOLLOWER, NEAR);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.deposit()));
+    assert_eq!(panic_msg(r.unwrap_err()), "account cap");
+}
+
+#[test]
+#[should_panic(expected = "account cap")]
+fn one_account_cannot_fill_the_global_vault_cap() {
+    // red team V1: one deposit of the whole free cap blocked every later follower
+    let mut c = fresh(0);
+    ctx(OWNER, 1);
+    c.set_vault_cap(U128(10 * NEAR));
+    c.set_vault_account_cap(U128(4 * NEAR));
+    ctx(SPECTATOR, 9 * NEAR);
+    c.deposit();
+}
+
+#[test]
+fn account_cap_leaves_room_for_others_and_spares_existing_vaults() {
+    let mut c = fresh(0);
+    ctx(OWNER, 1);
+    c.set_vault_cap(U128(10 * NEAR));
+    c.set_vault_account_cap(U128(4 * NEAR));
+    ctx(SPECTATOR, 4 * NEAR);
+    let s = c.deposit().0;
+    ctx(FOLLOWER, 4 * NEAR);
+    let f = c.deposit().0;
+    assert_eq!(c.get_config().vault_total.0, s + f);
+    // lowering the cap below a vault keeps that vault and its exit
+    ctx(OWNER, 1);
+    c.set_vault_account_cap(U128(NEAR));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, f);
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(f));
+    // but not a top-up (last: a unit-test panic does not revert the writes before it)
+    ctx(SPECTATOR, NEAR / 10);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.deposit()));
+    assert_eq!(panic_msg(r.unwrap_err()), "account cap");
+}
+
+#[test]
+fn set_vault_account_cap_is_owner_only_with_one_yocto() {
+    let mut c = fresh(0);
+    assert_eq!(
+        c.get_config().max_vault_per_account.0,
+        VAULT_CAP,
+        "init: no tighter than the global cap"
+    );
+    ctx(FOLLOWER, 1);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.set_vault_account_cap(U128(1))
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "not owner");
+    ctx(OWNER, 0);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.set_vault_account_cap(U128(1))
+    }));
+    assert!(panic_msg(r.unwrap_err()).contains("exactly 1 yoctoNEAR"));
 }
 
 #[test]

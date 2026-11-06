@@ -85,6 +85,7 @@ impl Contract {
             withdraw_delay_s: self.withdraw_delay_ns / 1_000_000_000,
             paused: self.paused,
             max_vault_total: U128(self.max_vault_total),
+            max_vault_per_account: U128(self.max_vault_per_account),
             vault_total: U128(self.vault_total),
             migrating: self.follows_cursor.is_some(),
         }

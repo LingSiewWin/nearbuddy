@@ -143,14 +143,18 @@ pub struct Contract {
     /// not the pool, so an owner cannot buy shield or recycle chaos deposits through its own duel.
     /// Duels opened before deploy 15 have no entry.
     pub(crate) self_chaos: LookupMap<u64, u64>,
+    /// `deposit` is refused once the caller's vault would exceed this (deploy 16), so one account
+    /// cannot park the whole of `max_vault_total` and block every other follower. Vaults already
+    /// above it stay as they are and withdraw normally; only new deposits are checked.
+    pub(crate) max_vault_per_account: u128,
 }
 
-/// State layout of deploy 14 (commit-reveal, before verified settlement). Read once by
-/// `migrate_v15`.
+/// State layout of deploy 15 (verified settlement, vault delay and cap, per-duel lock, self-chaos).
+/// Read once by `migrate_v16`.
 #[allow(dead_code)]
 #[derive(near_sdk::borsh::BorshDeserialize)]
 #[borsh(crate = "near_sdk::borsh")]
-pub struct ContractV14 {
+pub struct ContractV15 {
     owner: AccountId,
     oracle_account: AccountId,
     oracle_deposit: u128,
@@ -163,7 +167,7 @@ pub struct ContractV14 {
     used_nonces: LookupSet<Vec<u8>>,
     solvers: LookupSet<AccountId>,
     vaults: LookupMap<AccountId, u128>,
-    follows: LookupMap<Vec<u8>, Vec<(AccountId, MandateV1)>>,
+    follows_v1: LookupMap<Vec<u8>, Vec<(AccountId, MandateV1)>>,
     settled_fills: LookupSet<Vec<u8>>,
     owner_fees: u128,
     tee_signers: LookupSet<Vec<u8>>,
@@ -179,6 +183,20 @@ pub struct ContractV14 {
     commitments: LookupMap<Vec<u8>, ([u8; 32], u64)>,
     no_reveal: LookupMap<u64, (bool, bool)>,
     used_commitments: LookupSet<Vec<u8>>,
+    follows: LookupMap<Vec<u8>, VersionedMandate>,
+    follows_cursor: Option<u32>,
+    intents_account: AccountId,
+    holdings: LookupMap<String, u128>,
+    accounted: LookupMap<String, u128>,
+    outflow_seq: u64,
+    pending_withdrawals: LookupMap<AccountId, (u128, u64)>,
+    withdraw_delay_ns: u64,
+    paused: bool,
+    max_vault_total: u128,
+    vault_total: u128,
+    duel_locks: LookupMap<u64, u64>,
+    sweeping: LookupMap<String, u128>,
+    self_chaos: LookupMap<u64, u64>,
 }
 
 /// Seconds to ns, at most `MAX_DUEL_NS`: a floor above the longest duel `open_duel` accepts would
@@ -224,7 +242,8 @@ impl Contract {
     /// Outlayer price oracle; `oracle_deposit` is attached to each price request. `slash_bps` of the
     /// loser's bond moves to the pool. `fee_bps` is charged on every settled fill, inside the
     /// follower's caps, and accrues to the owner. `intents_account` is where fill outputs land
-    /// (`intents.near`, or the stub on testnet). `max_vault_total` caps all vault deposits. The
+    /// (`intents.near`, or the stub on testnet). `max_vault_total` caps all vault deposits, and is
+    /// also the starting per-account cap (`set_vault_account_cap` lowers it). The
     /// intent lock starts at 0 and the duel floor at 0, so `lock <= floor / 2` holds until
     /// `set_oracle` sets both.
     /// Caller: deployer, once. Deposit: none. Panics: "bps out of range".
@@ -284,21 +303,21 @@ impl Contract {
             duel_locks: LookupMap::new(StorageKey::DuelLocks),
             sweeping: LookupMap::new(StorageKey::Sweeping),
             self_chaos: LookupMap::new(StorageKey::SelfChaos),
+            max_vault_per_account: max_vault_total.0,
         }
     }
 
     // ---------------------------------------------------------------- migration
 
-    /// Deploy 14 → 15: verified settlement against `intents_account`, follower holdings, delayed
-    /// withdraw (900 s), pause (off), vault cap, per-duel lock, and `follows` re-keyed per pair.
-    /// The old per-agent follower lists stay under their prefix as `follows_v1` and are moved by
-    /// `migrate_follows`; follow and settle are refused until that finishes.
-    /// Caller: the contract itself (private), once after the deploy-15 code lands. Deposit:
+    /// Deploy 15 → 16: a per-account vault cap (`max_vault_per_account`). Every deploy-15 field is
+    /// carried over unchanged, so existing vaults, mandates, holdings and duels read as before.
+    /// `vault_total` keeps its deploy-15 value; `reconcile_vault_total` clears its drift.
+    /// Caller: the contract itself (private), once after the deploy-16 code lands. Deposit:
     /// none. Panics: "no state", or the SDK private-method panic for any other caller.
     #[private]
     #[init(ignore_state)]
-    pub fn migrate_v15(intents_account: AccountId, max_vault_total: U128) -> Self {
-        let old: ContractV14 = env::state_read().expect("no state");
+    pub fn migrate_v16(max_vault_per_account: U128) -> Self {
+        let old: ContractV15 = env::state_read().expect("no state");
         Self {
             owner: old.owner,
             oracle_account: old.oracle_account,
@@ -312,7 +331,7 @@ impl Contract {
             used_nonces: old.used_nonces,
             solvers: old.solvers,
             vaults: old.vaults,
-            follows_v1: old.follows,
+            follows_v1: old.follows_v1,
             settled_fills: old.settled_fills,
             owner_fees: old.owner_fees,
             tee_signers: old.tee_signers,
@@ -328,20 +347,21 @@ impl Contract {
             commitments: old.commitments,
             no_reveal: old.no_reveal,
             used_commitments: old.used_commitments,
-            follows: LookupMap::new(StorageKey::FollowsByPair),
-            follows_cursor: Some(0),
-            intents_account,
-            holdings: LookupMap::new(StorageKey::Holdings),
-            accounted: LookupMap::new(StorageKey::Accounted),
-            outflow_seq: 0,
-            pending_withdrawals: LookupMap::new(StorageKey::PendingWithdrawals),
-            withdraw_delay_ns: DEFAULT_WITHDRAW_DELAY_NS,
-            paused: false,
-            max_vault_total: max_vault_total.0,
-            vault_total: 0,
-            duel_locks: LookupMap::new(StorageKey::DuelLocks),
-            sweeping: LookupMap::new(StorageKey::Sweeping),
-            self_chaos: LookupMap::new(StorageKey::SelfChaos),
+            follows: old.follows,
+            follows_cursor: old.follows_cursor,
+            intents_account: old.intents_account,
+            holdings: old.holdings,
+            accounted: old.accounted,
+            outflow_seq: old.outflow_seq,
+            pending_withdrawals: old.pending_withdrawals,
+            withdraw_delay_ns: old.withdraw_delay_ns,
+            paused: old.paused,
+            max_vault_total: old.max_vault_total,
+            vault_total: old.vault_total,
+            duel_locks: old.duel_locks,
+            sweeping: old.sweeping,
+            self_chaos: old.self_chaos,
+            max_vault_per_account: max_vault_per_account.0,
         }
     }
 
@@ -463,6 +483,14 @@ impl Contract {
     pub fn set_vault_cap(&mut self, max_vault_total: U128) {
         self.only_owner_yocto();
         self.max_vault_total = max_vault_total.0;
+    }
+
+    /// Cap on one account's vault, checked by `deposit`. Lowering it below a vault only stops that
+    /// account's new deposits. Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner".
+    #[payable]
+    pub fn set_vault_account_cap(&mut self, max_vault_per_account: U128) {
+        self.only_owner_yocto();
+        self.max_vault_per_account = max_vault_per_account.0;
     }
 
     /// Recompute `vault_total` as the sum of `accounts`' vaults. `vaults` is not iterable, so the

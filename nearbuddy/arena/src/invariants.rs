@@ -3,7 +3,7 @@
 //! (fills credited only against delivered, unaccounted output; sum(holdings) == accounted per token),
 //! `withdraw_token` (debit first, exact re-credit on a failed transfer), the vault delay (never paid
 //! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted);
-//! from deploy 16 `vault_total == sum(vaults)`.
+//! from deploy 16 `vault_total == sum(vaults)` and no deposit past `max_vault_per_account`.
 //!
 //! Every operation runs like a transaction on chain: the contract is read from the mocked trie,
 //! the method runs, and on success the struct is written back and the collections flushed. A
@@ -450,6 +450,8 @@ struct Cfg {
     no_reveal_bps: u16,
     commit_reveal: bool,
     require_consent: bool,
+    /// `max_vault_per_account` (deploy 16); `VAULT_CAP` = no tighter than the global cap.
+    account_cap: u128,
 }
 
 /// Intent, salt and TEE proof behind one unrevealed commitment.
@@ -536,6 +538,7 @@ impl World {
         c.add_tee_signer(Base64VecU8(key(TEE_SEED).1), "prop".into());
         c.set_commit_reveal(cfg.commit_reveal, cfg.no_reveal_bps);
         c.set_require_consent(cfg.require_consent);
+        c.set_vault_account_cap(U128(cfg.account_cap));
         env::state_write(&c);
         drop(c);
         w.balance = env::account_balance().as_yoctonear();
@@ -757,8 +760,20 @@ impl World {
             Op::Deposit { who, milli } => {
                 kind = Kind::PaysStorage;
                 let amt = milli as u128 * MILLI;
-                if self.call(ACCOUNTS[who], amt, |c| c.deposit()).is_ok() {
-                    self.vault_in[who] += amt;
+                match self.call(ACCOUNTS[who], amt, |c| c.deposit()) {
+                    Ok(_) => {
+                        self.vault_in[who] += amt;
+                        let v = self.snap().vaults[who];
+                        assert!(
+                            v <= self.cfg.account_cap,
+                            "a deposit left a vault above its cap"
+                        );
+                    }
+                    Err(e) if e == "account cap" => assert!(
+                        pre.vaults[who] + amt > self.cfg.account_cap,
+                        "a deposit inside the account cap was refused"
+                    ),
+                    Err(_) => {}
                 }
             }
             Op::Withdraw { who, milli } => {
@@ -1729,9 +1744,12 @@ proptest! {
 
     #[test]
     fn arena_money_and_mandate_invariants(
-        cfg in (0u16..=10_000, 0u16..=1_000, 0u16..=10_000, any::<bool>(), any::<bool>())
-            .prop_map(|(slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent)| Cfg {
-                slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent,
+        cfg in (
+            (0u16..=10_000, 0u16..=1_000, 0u16..=10_000, any::<bool>(), any::<bool>()),
+            prop_oneof![Just(VAULT_CAP), (500u128..6_000).prop_map(|m| m * MILLI)],
+        )
+            .prop_map(|((slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent), account_cap)| Cfg {
+                slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent, account_cap,
             }),
         ops in (setup(), vec(op(), 1..=40)).prop_map(|(s, t)| [s, t].concat()),
     ) {

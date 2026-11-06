@@ -7,7 +7,7 @@
 #
 #   scripts/deploy-contract.sh                       # code-only deploy
 #   scripts/deploy-contract.sh --migrate migrate_v12 # deploy + state migration in one tx
-#   scripts/deploy-contract.sh --migrate migrate_v15 --migrate-args '{"intents_account":"…","max_vault_total":"…"}'
+#   scripts/deploy-contract.sh --migrate migrate_v16 --migrate-args '{"max_vault_per_account":"…"}'
 #   scripts/deploy-contract.sh --dry-run             # checks only (source + chain), prints the commands
 #   scripts/deploy-contract.sh --at-boundary [...]   # stop both duel loops at their next batch boundary first
 #
