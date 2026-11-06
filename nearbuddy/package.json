@@ -3,15 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "api": "tsx packages/resource-server/src/index.ts",
-    "solver": "tsx packages/solver/src/index.ts",
-    "demo": "tsx packages/demo/src/index.ts",
-    "test": "tsx --test packages/protocol/src/*.test.ts packages/solver/src/*.test.ts",
-    "web": "pnpm --dir web dev",
-    "guarantor": "tsx packages/demo/src/guarantor.ts",
-    "arena-demo": "tsx packages/demo/src/arena.ts",
-    "real-swap": "tsx packages/demo/src/swap.ts",
-    "spectator": "tsx packages/demo/src/spectator.ts"
+    "api": "bun packages/resource-server/src/index.ts",
+    "solver": "bun packages/solver/src/index.ts",
+    "demo": "bun packages/demo/src/index.ts",
+    "test": "bun test packages/protocol/src packages/solver/src",
+    "web": "bun --cwd web dev",
+    "guarantor": "bun packages/demo/src/guarantor.ts",
+    "arena-demo": "bun packages/demo/src/arena.ts",
+    "real-swap": "bun packages/demo/src/swap.ts",
+    "spectator": "bun packages/demo/src/spectator.ts"
   },
   "dependencies": {
     "borsh": "2.0.0",
@@ -20,7 +20,6 @@
   },
   "devDependencies": {
     "@types/node": "26.6.5",
-    "tsx": "4.23.15",
     "typescript": "7.0.2"
   }
 }

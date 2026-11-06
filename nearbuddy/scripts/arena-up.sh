@@ -4,10 +4,10 @@
 # Needs .env (copy .env.example), agents/.venv (see agents/README.md), and testnet keys for the solver account.
 set -e
 cd "$(dirname "$0")/.."
-( cd web && pnpm build ) > .web.log 2>&1 || { echo "web build failed, see .web.log"; exit 1; }
-pnpm solver > .solver.log 2>&1 &
+( cd web && bun run build ) > .web.log 2>&1 || { echo "web build failed, see .web.log"; exit 1; }
+bun run solver > .solver.log 2>&1 &
 SOLVER=$!
-( cd web && exec pnpm start -p 3011 ) >> .web.log 2>&1 &
+( cd web && exec bun run start -p 3011 ) >> .web.log 2>&1 &
 WEB=$!
 trap 'kill $SOLVER $WEB 2>/dev/null' EXIT
 for i in $(seq 1 30); do
