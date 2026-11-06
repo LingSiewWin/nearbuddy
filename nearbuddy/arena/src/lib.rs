@@ -1,13 +1,23 @@
 //! NearBuddy arena.
 //!
 //! Model-backed agents (an ed25519 key plus a NEAR AI Cloud model id) post a bond and duel on live
-//! prices. Spectators pay to inject chaos at one agent. At `close_at` an oracle-signed resolution
-//! scores both agents, slashes the loser's bond into the pool and pays the pool to the winner.
+//! prices. Spectators pay to inject chaos at one agent. Prices come from the Outlayer TEE price
+//! oracle (`price-oracle.*`) through `oracle_call` / `oracle_on_call`: the open price is snapshotted
+//! when the duel opens, and anyone may call `resolve_duel` after `close_at` to fetch the close price,
+//! score both agents, slash the loser's bond into the pool and pay the pool to the winner. There is
+//! no oracle key held by the operator.
+//!
+//! TEE-backed agents must attach a `TeeProof` to every intent: the NEAR AI Cloud enclave's ed25519
+//! signature over `"{model_id}:{request_hash}:{response_hash}"`, verified here against a signer the
+//! owner registered from an attestation report. The signed intent's `proof_hash` is
+//! `sha256(request_hash || response_hash)`, which binds the agent's decision to that completion.
+//!
 //! Followers never hand an agent funds: they deposit here and attach a mandate (per-trade cap,
 //! token allowlist, expiry, revoke); a registered solver fronts the swap through NEAR Intents and
 //! is repaid from the follower's vault only inside that mandate.
 //!
-//! Everything here is testnet NEAR. The only real-money leg is the solver's mainnet swap.
+//! Every state-growing call pays its own storage (`storage_byte_cost` x bytes added) out of the
+//! value it brings: bond, chaos deposit, vault deposit, or the attached deposit.
 mod types;
 pub use types::*;
 
@@ -16,12 +26,14 @@ mod tests;
 
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::store::{IterableMap, LookupMap, LookupSet};
-use near_sdk::{env, near, require, AccountId, BorshStorageKey, NearToken, PanicOnDefault, Promise};
+use near_sdk::{env, ext_contract, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise};
 
 pub const INTENT_DOMAIN: &[u8] = b"nearbuddy-intent-v1";
-pub const RESOLVE_DOMAIN: &[u8] = b"nearbuddy-resolve-v1";
 /// Cap on `Duel.injections` so a duel record cannot grow without bound.
 pub const MAX_INJECTIONS: usize = 32;
+/// After this long past `close_at` with no oracle answer the owner may void the duel.
+pub const VOID_AFTER_NS: u64 = 24 * 3600 * 1_000_000_000;
+const ORACLE_GAS: Gas = Gas::from_tgas(150);
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -33,13 +45,21 @@ enum StorageKey {
     Vaults,
     Follows,
     SettledFills,
+    TeeSigners,
+    TeeAgents,
+}
+
+#[ext_contract(ext_oracle)]
+pub trait Oracle {
+    fn oracle_call(&mut self, receiver_id: AccountId, asset_ids: Option<Vec<String>>, msg: String, resource_limits: Option<near_sdk::serde_json::Value>) -> Promise;
 }
 
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Contract {
     owner: AccountId,
-    oracle_pk: Vec<u8>,
+    oracle_account: AccountId,
+    oracle_deposit: u128,
     slash_bps: u16,
     fee_bps: u16,
     min_chaos_deposit: u128,
@@ -58,6 +78,31 @@ pub struct Contract {
     /// `agent_pk || follower || nonce_le` of every settled fill (see `fill_key`).
     settled_fills: LookupSet<Vec<u8>>,
     owner_fees: u128,
+    /// ed25519 signing addresses of NEAR AI Cloud enclaves, from attestation reports.
+    tee_signers: LookupSet<Vec<u8>>,
+    /// Agents that committed to TEE-proved decisions at registration.
+    tee_agents: LookupSet<Vec<u8>>,
+}
+
+/// State layout of deploys 1-6 (single oracle key). Read once by `migrate`.
+#[allow(dead_code)]
+#[derive(near_sdk::borsh::BorshDeserialize)]
+#[borsh(crate = "near_sdk::borsh")]
+pub struct ContractV1 {
+    owner: AccountId,
+    oracle_pk: Vec<u8>,
+    slash_bps: u16,
+    fee_bps: u16,
+    min_chaos_deposit: u128,
+    agents: IterableMap<Vec<u8>, Agent>,
+    duels: LookupMap<u64, Duel>,
+    next_duel: u64,
+    used_nonces: LookupSet<Vec<u8>>,
+    solvers: LookupSet<AccountId>,
+    vaults: LookupMap<AccountId, u128>,
+    follows: LookupMap<Vec<u8>, Vec<(AccountId, Mandate)>>,
+    settled_fills: LookupSet<Vec<u8>>,
+    owner_fees: u128,
 }
 
 pub fn intent_message(i: &Intent) -> Vec<u8> {
@@ -66,10 +111,20 @@ pub fn intent_message(i: &Intent) -> Vec<u8> {
     out
 }
 
-pub fn resolution_message(r: &Resolution) -> Vec<u8> {
-    let mut out = RESOLVE_DOMAIN.to_vec();
-    out.extend(near_sdk::borsh::to_vec(r).expect("borsh"));
-    out
+/// The exact bytes a NEAR AI Cloud enclave signs for one completion.
+pub fn tee_text(kind: u8, model_id: &str, request_hash: &[u8], response_hash: &[u8]) -> Vec<u8> {
+    let body = format!("{}:{}", hex(request_hash), hex(response_hash));
+    match kind {
+        1 => body.into_bytes(),
+        _ => format!("{model_id}:{body}").into_bytes(),
+    }
+}
+
+/// `Intent.proof_hash` for a TEE-proved decision.
+pub fn proof_hash(request_hash: &[u8], response_hash: &[u8]) -> Vec<u8> {
+    let mut m = request_hash.to_vec();
+    m.extend_from_slice(response_hash);
+    env::sha256(&m)
 }
 
 fn nonce_key(pk: &[u8], nonce: u64) -> Vec<u8> {
@@ -94,24 +149,34 @@ fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
     env::ed25519_verify(&sig, msg, &pk)
 }
 
+/// yoctoNEAR owed for the bytes added since `before`. Zero when storage shrank.
+fn storage_cost_since(before: u64) -> u128 {
+    let after = env::storage_usage();
+    if after <= before {
+        return 0;
+    }
+    (after - before) as u128 * env::storage_byte_cost().as_yoctonear()
+}
+
+/// Oracle price (multiplier / 10^decimals USD) as u64 with 8 decimals.
+fn price8(p: &OraclePrice) -> u64 {
+    let v = if p.decimals <= 8 { p.multiplier.0 * 10u128.pow(8 - p.decimals as u32) } else { p.multiplier.0 / 10u128.pow(p.decimals as u32 - 8) };
+    u64::try_from(v).unwrap_or_else(|_| env::panic_str("price overflow"))
+}
+
 #[near]
 impl Contract {
-    /// `owner` runs duels (the solver account in the hackathon deploy). `oracle_pk` signs
-    /// resolutions. `slash_bps` of the loser's bond moves to the pool. `fee_bps` is charged on top
-    /// of every settled fill and accrues to the owner.
+    /// `owner` runs duels (the solver account in the hackathon deploy). `oracle_account` is the
+    /// Outlayer price oracle; `oracle_deposit` is attached to each price request. `slash_bps` of the
+    /// loser's bond moves to the pool. `fee_bps` is charged on top of every settled fill and accrues
+    /// to the owner.
     #[init]
-    pub fn init(
-        owner: AccountId,
-        oracle_pk: Base64VecU8,
-        slash_bps: u16,
-        fee_bps: u16,
-        min_chaos_deposit: U128,
-    ) -> Self {
-        require!(oracle_pk.0.len() == 32, "oracle_pk length");
+    pub fn init(owner: AccountId, oracle_account: AccountId, oracle_deposit: U128, slash_bps: u16, fee_bps: u16, min_chaos_deposit: U128) -> Self {
         require!(slash_bps <= 10_000 && fee_bps <= 1_000, "bps out of range");
         Self {
             owner,
-            oracle_pk: oracle_pk.0,
+            oracle_account,
+            oracle_deposit: oracle_deposit.0,
             slash_bps,
             fee_bps,
             min_chaos_deposit: min_chaos_deposit.0,
@@ -124,13 +189,42 @@ impl Contract {
             follows: LookupMap::new(StorageKey::Follows),
             settled_fills: LookupSet::new(StorageKey::SettledFills),
             owner_fees: 0,
+            tee_signers: LookupSet::new(StorageKey::TeeSigners),
+            tee_agents: LookupSet::new(StorageKey::TeeAgents),
         }
     }
 
     // ---------------------------------------------------------------- migration
 
-    /// Duels written before `Duel.outcome` existed are borsh-incompatible (positional). Re-encode a
-    /// range of them in the new layout. Owner-only, idempotent, run once per deploy that adds fields.
+    /// Deploy 6 → 7: drop `oracle_pk`, add the oracle account and the TEE sets. Collections keep
+    /// their prefixes, so no element moves. Owner-only; the owner is read from the old state.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate(oracle_account: AccountId, oracle_deposit: U128) -> Self {
+        let old: ContractV1 = env::state_read().expect("no state");
+        Self {
+            owner: old.owner,
+            oracle_account,
+            oracle_deposit: oracle_deposit.0,
+            slash_bps: old.slash_bps,
+            fee_bps: old.fee_bps,
+            min_chaos_deposit: old.min_chaos_deposit,
+            agents: old.agents,
+            duels: old.duels,
+            next_duel: old.next_duel,
+            used_nonces: old.used_nonces,
+            solvers: old.solvers,
+            vaults: old.vaults,
+            follows: old.follows,
+            settled_fills: old.settled_fills,
+            owner_fees: old.owner_fees,
+            tee_signers: LookupSet::new(StorageKey::TeeSigners),
+            tee_agents: LookupSet::new(StorageKey::TeeAgents),
+        }
+    }
+
+    /// Re-encode duels written in an older layout (V1: deploys 1-4, V2: deploys 5-6) into the
+    /// current one. Owner-only, idempotent, run once per deploy that changes `Duel`.
     pub fn migrate_duels(&mut self, from: U64, to: U64) -> u32 {
         self.only_owner();
         use near_sdk::borsh::BorshDeserialize;
@@ -144,20 +238,22 @@ impl Contract {
             if Duel::try_from_slice(&raw).is_ok() {
                 continue;
             }
-            let Ok(o) = OldDuel::try_from_slice(&raw) else { env::panic_str("unknown duel layout") };
-            let d = Duel {
-                id: o.id,
-                a: o.a,
-                b: o.b,
-                symbol: o.symbol,
-                open_at: o.open_at,
-                close_at: o.close_at,
-                pool: o.pool,
-                injections: o.injections,
-                resolved: o.resolved,
-                last_intent_a: o.last_intent_a,
-                last_intent_b: o.last_intent_b,
-                outcome: None,
+            let d = if let Ok(o) = DuelV2::try_from_slice(&raw) {
+                let outcome = o.outcome.map(|x| Outcome {
+                    open_price: x.open_price,
+                    close_price: x.close_price,
+                    pnl_a: x.pnl_a,
+                    pnl_b: x.pnl_b,
+                    winner: x.winner,
+                    slashed: x.slashed,
+                    injections: o.injections.len() as u32,
+                });
+                let open_price = outcome.as_ref().map(|x| x.open_price);
+                Duel { id: o.id, a: o.a, b: o.b, symbol: o.symbol, open_at: o.open_at, close_at: o.close_at, pool: o.pool, injections: o.injections, resolved: o.resolved, last_intent_a: o.last_intent_a, last_intent_b: o.last_intent_b, outcome, open_price }
+            } else if let Ok(o) = DuelV1::try_from_slice(&raw) {
+                Duel { id: o.id, a: o.a, b: o.b, symbol: o.symbol, open_at: o.open_at, close_at: o.close_at, pool: o.pool, injections: o.injections, resolved: o.resolved, last_intent_a: o.last_intent_a, last_intent_b: o.last_intent_b, outcome: None, open_price: None }
+            } else {
+                env::panic_str("unknown duel layout")
             };
             env::storage_write(&key, &near_sdk::borsh::to_vec(&d).expect("borsh"));
             n += 1;
@@ -175,15 +271,28 @@ impl Contract {
         require!(self.solvers.contains(&env::predecessor_account_id()), "not solver");
     }
 
-    pub fn set_oracle_key(&mut self, pk: Base64VecU8) {
-        self.only_owner();
-        require!(pk.0.len() == 32, "oracle_pk length");
-        self.oracle_pk = pk.0;
-    }
-
     pub fn add_solver(&mut self, account_id: AccountId) {
         self.only_owner();
         self.solvers.insert(account_id);
+    }
+
+    /// Accept intents signed by this NEAR AI Cloud enclave key. The owner takes it from
+    /// `GET /v1/attestation/report` after verifying the Intel and NVIDIA quotes off chain; the
+    /// report bytes are published in the dataset so anyone can redo that check.
+    pub fn add_tee_signer(&mut self, signer: Base64VecU8, label: String) {
+        self.only_owner();
+        require!(signer.0.len() == 32, "signer length");
+        self.tee_signers.insert(signer.0.clone());
+        env::log_str(&format!(
+            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"tee_signer","data":{{"signer":"{}","label":"{}"}}}}"#,
+            hex(&signer.0),
+            label.replace('"', "")
+        ));
+    }
+
+    pub fn remove_tee_signer(&mut self, signer: Base64VecU8) {
+        self.only_owner();
+        self.tee_signers.remove(&signer.0);
     }
 
     /// Contract owner collects accrued settlement fees.
@@ -197,24 +306,33 @@ impl Contract {
 
     // ---------------------------------------------------------------- agents
 
-    /// Register an agent. The attached deposit is its bond.
+    /// Register an agent. The attached deposit is its bond, minus the storage its record costs.
+    /// `tee = true` commits the agent to a verified `TeeProof` on every intent.
     #[payable]
-    pub fn register_agent(&mut self, agent_pk: Base64VecU8, model_id: String) -> Agent {
+    pub fn register_agent(&mut self, agent_pk: Base64VecU8, model_id: String, tee: bool) -> AgentView {
         require!(agent_pk.0.len() == 32, "agent_pk length");
         require!(!self.agents.contains_key(&agent_pk.0), "agent exists");
-        let bond = env::attached_deposit().as_yoctonear();
-        require!(bond > 0, "bond required");
+        let before = env::storage_usage();
+        let deposit = env::attached_deposit().as_yoctonear();
         let agent = Agent {
             owner: env::predecessor_account_id(),
             pk: agent_pk.clone(),
             model_id,
-            bond: U128(bond),
+            bond: U128(0),
             alpha_bps: 0,
             shield: 0,
             in_duel: None,
         };
-        self.agents.insert(agent_pk.0, agent.clone());
-        agent
+        self.agents.insert(agent_pk.0.clone(), agent);
+        if tee {
+            self.tee_agents.insert(agent_pk.0.clone());
+        }
+        self.agents.flush();
+        let cost = storage_cost_since(before);
+        require!(deposit > cost, "bond required");
+        self.agents.get_mut(&agent_pk.0).expect("agent missing").bond = U128(deposit - cost);
+        let a = self.agents.get(&agent_pk.0).cloned().expect("agent missing");
+        self.view_of(&a)
     }
 
     /// Agent owner takes bond back. Refused while the agent is in an open duel.
@@ -229,11 +347,15 @@ impl Contract {
 
     // ---------------------------------------------------------------- duels
 
-    /// Pair two registered, idle agents. Returns the duel id.
+    /// Pair two registered, idle agents on an oracle asset. Attached deposit must cover the duel's
+    /// storage plus `oracle_deposit`; the open price is requested from the oracle in the same call
+    /// and lands through `oracle_on_call`. Returns the duel id.
+    #[payable]
     pub fn open_duel(&mut self, a: Base64VecU8, b: Base64VecU8, symbol: String, close_at: U64) -> U64 {
         self.only_owner();
         require!(a.0 != b.0, "same agent");
         require!(close_at.0 > env::block_timestamp(), "close_at in the past");
+        let before = env::storage_usage();
         let id = self.next_duel;
         for pk in [&a.0, &b.0] {
             let agent = self.agents.get_mut(pk).expect("agent missing");
@@ -246,7 +368,7 @@ impl Contract {
                 id: U64(id),
                 a,
                 b,
-                symbol,
+                symbol: symbol.clone(),
                 open_at: U64(env::block_timestamp()),
                 close_at,
                 pool: U128(0),
@@ -255,20 +377,56 @@ impl Contract {
                 last_intent_a: None,
                 last_intent_b: None,
                 outcome: None,
+                open_price: None,
             },
         );
         self.next_duel += 1;
+        self.duels.flush();
+        self.agents.flush();
+        let cost = storage_cost_since(before) + self.oracle_deposit;
+        require!(env::attached_deposit().as_yoctonear() >= cost, "deposit too small");
+        let _ = self.ask_oracle(&symbol, format!("open:{id}"));
         U64(id)
     }
 
+    /// Ask the oracle again for a duel whose open price never arrived (TEE fetch failed or timed
+    /// out). Anyone may call; the contract pays the oracle deposit.
+    pub fn request_open_price(&mut self, duel_id: U64) {
+        let d = self.duels.get(&duel_id.0).expect("duel missing");
+        require!(!d.resolved && d.open_price.is_none(), "has open price");
+        require!(env::block_timestamp() < d.close_at.0, "duel closed");
+        let _ = self.ask_oracle(&d.symbol.clone(), format!("open:{}", duel_id.0));
+    }
+
+    fn ask_oracle(&self, asset: &str, msg: String) -> Promise {
+        ext_oracle::ext(self.oracle_account.clone())
+            .with_attached_deposit(NearToken::from_yoctonear(self.oracle_deposit))
+            .with_static_gas(ORACLE_GAS)
+            .oracle_call(env::current_account_id(), Some(vec![asset.to_string()]), msg, None)
+    }
+
     /// Record an agent-signed intent for an open duel. Submitted by the solver on the agent's
-    /// behalf; the signature is what binds the decision to the agent.
-    pub fn post_intent(&mut self, signed: SignedIntent) {
+    /// behalf; the signature is what binds the decision to the agent. A TEE-backed agent must also
+    /// present the enclave signature over the completion that produced the decision; its storage is
+    /// paid from the agent's bond.
+    pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
         self.only_solver();
+        let before = env::storage_usage();
         let i = &signed.intent;
         require!(i.agent_pk.0.len() == 32, "agent_pk length");
         require!(i.proof_hash.0.len() == 32, "proof_hash length");
         require!(i.size_bps >= 1 && i.size_bps <= 10_000, "bad size");
+        let model_id = self.agents.get(&i.agent_pk.0).expect("agent missing").model_id.clone();
+        let tee_kind = match &tee {
+            Some(p) => {
+                self.verify_tee(p, &model_id, &i.proof_hash.0);
+                p.kind
+            }
+            None => {
+                require!(!self.tee_agents.contains(&i.agent_pk.0), "tee proof required");
+                0
+            }
+        };
         let duel = self.duels.get_mut(&i.duel_id.0).expect("duel missing");
         require!(!duel.resolved && env::block_timestamp() < duel.close_at.0, "duel closed");
         let slot = if i.agent_pk.0 == duel.a.0 {
@@ -283,8 +441,13 @@ impl Contract {
         require!(verify(&i.agent_pk.0, &intent_message(i), &signed.signature.0), "bad signature");
         *slot = Some(i.clone());
         self.used_nonces.insert(key);
+        self.duels.flush();
+        let cost = storage_cost_since(before);
+        let agent = self.agents.get_mut(&i.agent_pk.0).expect("agent missing");
+        require!(agent.bond.0 > cost, "bond exhausted");
+        agent.bond = U128(agent.bond.0 - cost);
         env::log_str(&format!(
-            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.0.0","event":"intent","data":{{"duel_id":{},"agent_pk":"{}","side":"{:?}","size_bps":{},"nonce":{}}}}}"#,
+            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"intent","data":{{"duel_id":{},"agent_pk":"{}","side":"{:?}","size_bps":{},"nonce":{},"tee":{tee_kind}}}}}"#,
             i.duel_id.0,
             near_sdk::base64::Engine::encode(&near_sdk::base64::prelude::BASE64_STANDARD, &i.agent_pk.0),
             i.side,
@@ -293,12 +456,22 @@ impl Contract {
         ));
     }
 
+    fn verify_tee(&self, p: &TeeProof, model_id: &str, proof: &[u8]) {
+        require!(p.kind == 1 || p.kind == 2, "bad tee kind");
+        require!(p.request_hash.0.len() == 32 && p.response_hash.0.len() == 32, "tee hash length");
+        require!(self.tee_signers.contains(&p.signer.0), "unknown tee signer");
+        let text = tee_text(p.kind, model_id, &p.request_hash.0, &p.response_hash.0);
+        require!(verify(&p.signer.0, &text, &p.signature.0), "bad tee signature");
+        require!(proof_hash(&p.request_hash.0, &p.response_hash.0) == proof, "proof_hash mismatch");
+    }
+
     // ---------------------------------------------------------------- chaos and resolve
 
     /// Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver
-    /// delivers the payload to the runner. Deposit joins the duel pool.
+    /// delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool.
     #[payable]
     pub fn inject_chaos(&mut self, duel_id: U64, target: Base64VecU8, kind: String, payload_hash: Base64VecU8) {
+        let before = env::storage_usage();
         let deposit = env::attached_deposit().as_yoctonear();
         require!(deposit >= self.min_chaos_deposit, "chaos deposit too small");
         require!(payload_hash.0.len() == 32, "payload_hash length");
@@ -306,46 +479,105 @@ impl Contract {
         require!(!duel.resolved && env::block_timestamp() < duel.close_at.0, "duel closed");
         require!(target.0 == duel.a.0 || target.0 == duel.b.0, "bad target");
         require!(duel.injections.len() < MAX_INJECTIONS, "chaos full");
-        duel.pool = U128(duel.pool.0 + deposit);
         duel.injections.push(Injection { kind, payload_hash, target, block: U64(env::block_height()) });
+        // flush so the storage delta is measurable before charging
+        self.duels.flush();
+        let cost = storage_cost_since(before);
+        require!(deposit > cost, "chaos deposit too small");
+        self.duels.get_mut(&duel_id.0).expect("duel missing").pool.0 += deposit - cost;
     }
 
-    /// Oracle-signed close. Scores both agents, slashes the loser into the pool, pays the pool to
-    /// the winner, counts the injections the winner survived, frees both agents.
-    pub fn resolve(&mut self, resolution: Resolution, oracle_sig: Base64VecU8) {
-        self.only_solver();
-        require!(verify(&self.oracle_pk, &resolution_message(&resolution), &oracle_sig.0), "bad signature");
-        require!(resolution.open_price.0 > 0 && resolution.close_price.0 > 0, "bad price");
-        let duel = self.duels.get_mut(&resolution.duel_id.0).expect("duel missing");
-        require!(!duel.resolved, "resolved");
-        require!(env::block_timestamp() >= duel.close_at.0, "duel open");
+    /// After `close_at`, anyone asks the oracle for the close price; the answer arrives in
+    /// `oracle_on_call` and finishes the duel. The contract pays the oracle deposit. The oracle
+    /// request is detached: this call succeeds once the request is sent, and may be repeated if the
+    /// oracle never answers.
+    pub fn resolve_duel(&mut self, duel_id: U64) {
+        let d = self.duels.get(&duel_id.0).expect("duel missing");
+        require!(!d.resolved, "resolved");
+        require!(env::block_timestamp() >= d.close_at.0, "duel open");
+        require!(d.open_price.is_some(), "no open price");
+        let _ = self.ask_oracle(&d.symbol.clone(), format!("close:{}", duel_id.0));
+    }
+
+    /// Outlayer delivers the price here. `msg` is `open:<id>` or `close:<id>` as sent by
+    /// `ask_oracle`; `sender_id` is who called `oracle_call` and must be this contract.
+    pub fn oracle_on_call(&mut self, sender_id: AccountId, data: PriceData, msg: String) {
+        require!(env::predecessor_account_id() == self.oracle_account, "not oracle");
+        require!(sender_id == env::current_account_id(), "not our request");
+        let (phase, id) = msg.split_once(':').unwrap_or_else(|| env::panic_str("bad msg"));
+        let id: u64 = id.parse().unwrap_or_else(|_| env::panic_str("bad msg"));
+        let d = self.duels.get(&id).expect("duel missing");
+        let (symbol, resolved, close_at, open_price) = (d.symbol.clone(), d.resolved, d.close_at.0, d.open_price);
+        let price = data
+            .prices
+            .iter()
+            .find(|p| p.asset_id == symbol)
+            .and_then(|p| p.price.as_ref())
+            .map(price8)
+            .unwrap_or_else(|| env::panic_str("no price"));
+        require!(price > 0, "bad price");
+        require!(!resolved, "resolved");
+        match phase {
+            "open" => {
+                let d = self.duels.get_mut(&id).expect("duel missing");
+                if d.open_price.is_none() {
+                    d.open_price = Some(U64(price));
+                    env::log_str(&format!(
+                        r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"open_price","data":{{"duel_id":{id},"price":{price},"at":{}}}}}"#,
+                        data.timestamp.0
+                    ));
+                }
+            }
+            "close" => {
+                require!(env::block_timestamp() >= close_at, "duel open");
+                require!(data.timestamp.0 >= close_at, "price before close");
+                let open = open_price.unwrap_or_else(|| env::panic_str("no open price")).0;
+                self.finish(id, open, price);
+            }
+            _ => env::panic_str("bad msg"),
+        }
+    }
+
+    /// Owner escape hatch when the oracle never answers: a day after `close_at`, free both agents,
+    /// split the pool between them, no slashing, no score. Recorded as a tie with no prices.
+    pub fn void_duel(&mut self, duel_id: U64) {
+        self.only_owner();
+        let d = self.duels.get_mut(&duel_id.0).expect("duel missing");
+        require!(!d.resolved, "resolved");
+        require!(env::block_timestamp() >= d.close_at.0 + VOID_AFTER_NS, "too early");
+        let (pk_a, pk_b, pool, n) = (d.a.0.clone(), d.b.0.clone(), d.pool.0, d.injections.len() as u32);
+        d.resolved = true;
+        d.pool = U128(0);
+        d.injections = vec![];
+        d.outcome = Some(Outcome { open_price: U64(0), close_price: U64(0), pnl_a: 0, pnl_b: 0, winner: None, slashed: U128(0), injections: n });
+        let half = pool / 2;
+        for (pk, share) in [(&pk_a, half + pool % 2), (&pk_b, half)] {
+            let a = self.agents.get_mut(pk).expect("agent missing");
+            a.bond.0 += share;
+            a.in_duel = None;
+        }
+        env::log_str(&format!(r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"void","data":{{"duel_id":{}}}}}"#, duel_id.0));
+    }
+
+    /// Scores both agents, slashes the loser into the pool, pays the pool to the winner, counts the
+    /// injections the winner survived, frees both agents, prunes the injection list.
+    fn finish(&mut self, id: u64, open: u64, close: u64) {
+        let duel = self.duels.get_mut(&id).expect("duel missing");
         let close_at = duel.close_at.0;
-        let pnl_a = pnl_bps(duel.last_intent_a.as_ref(), close_at, resolution.open_price.0, resolution.close_price.0);
-        let pnl_b = pnl_bps(duel.last_intent_b.as_ref(), close_at, resolution.open_price.0, resolution.close_price.0);
+        let pnl_a = pnl_bps(duel.last_intent_a.as_ref(), close_at, open, close);
+        let pnl_b = pnl_bps(duel.last_intent_b.as_ref(), close_at, open, close);
         let (pk_a, pk_b) = (duel.a.0.clone(), duel.b.0.clone());
         let mut pool = duel.pool.0;
-        let injections = duel.injections.clone();
+        let injections = std::mem::take(&mut duel.injections);
         duel.resolved = true;
         duel.pool = U128(0);
 
         let slash_bps = self.slash_bps as u128;
-        let mut outcome = Outcome {
-            open_price: resolution.open_price,
-            close_price: resolution.close_price,
-            pnl_a,
-            pnl_b,
-            winner: None,
-            slashed: U128(0),
-        };
-        {
-            let a = self.agents.get_mut(&pk_a).expect("agent missing");
-            a.alpha_bps += pnl_a;
+        let mut outcome = Outcome { open_price: U64(open), close_price: U64(close), pnl_a, pnl_b, winner: None, slashed: U128(0), injections: injections.len() as u32 };
+        for (pk, pnl) in [(&pk_a, pnl_a), (&pk_b, pnl_b)] {
+            let a = self.agents.get_mut(pk).expect("agent missing");
+            a.alpha_bps += pnl;
             a.in_duel = None;
-        }
-        {
-            let b = self.agents.get_mut(&pk_b).expect("agent missing");
-            b.alpha_bps += pnl_b;
-            b.in_duel = None;
         }
         if pnl_a == pnl_b {
             let half = pool / 2;
@@ -364,22 +596,28 @@ impl Contract {
             w.bond.0 += pool;
             w.shield += survived;
         }
-        self.duels.get_mut(&resolution.duel_id.0).expect("duel missing").outcome = Some(outcome);
+        self.duels.get_mut(&id).expect("duel missing").outcome = Some(outcome);
         env::log_str(&format!(
-            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.0.0","event":"resolve","data":{{"duel_id":{},"pnl_a":{pnl_a},"pnl_b":{pnl_b},"open":{},"close":{}}}}}"#,
-            resolution.duel_id.0, resolution.open_price.0, resolution.close_price.0
+            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"resolve","data":{{"duel_id":{id},"pnl_a":{pnl_a},"pnl_b":{pnl_b},"open":{open},"close":{close}}}}}"#
         ));
     }
 
     // ---------------------------------------------------------------- followers
 
-    /// Follower locks NEAR here. Solvers are repaid from it only inside a mandate.
+    /// Follower locks NEAR here. Solvers are repaid from it only inside a mandate. A first deposit
+    /// also pays for the vault record.
     #[payable]
     pub fn deposit(&mut self) -> U128 {
+        let before = env::storage_usage();
         let who = env::predecessor_account_id();
         let amt = env::attached_deposit().as_yoctonear();
         require!(amt > 0, "deposit required");
         let bal = self.vaults.get(&who).copied().unwrap_or(0) + amt;
+        self.vaults.insert(who.clone(), bal);
+        self.vaults.flush();
+        let cost = storage_cost_since(before);
+        require!(amt > cost, "deposit required");
+        let bal = bal - cost;
         self.vaults.insert(who, bal);
         U128(bal)
     }
@@ -394,15 +632,23 @@ impl Contract {
         Promise::new(who).transfer(NearToken::from_yoctonear(amount.0))
     }
 
-    /// Attach (or replace) the caller's mandate for an agent.
+    /// Attach (or replace) the caller's mandate for an agent. Storage is paid from the vault.
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
         require!(self.agents.contains_key(&agent_pk.0), "agent missing");
         require!(mandate.per_tx_cap.0 > 0 && mandate.allowance.0 > 0, "empty mandate");
+        let before = env::storage_usage();
         let who = env::predecessor_account_id();
         let list = self.follows.entry(agent_pk.0).or_default();
         match list.iter_mut().find(|(f, _)| *f == who) {
             Some(slot) => slot.1 = mandate,
-            None => list.push((who, mandate)),
+            None => list.push((who.clone(), mandate)),
+        }
+        self.follows.flush();
+        let cost = storage_cost_since(before);
+        if cost > 0 {
+            let bal = self.vaults.get(&who).copied().unwrap_or(0);
+            require!(bal >= cost, "insufficient");
+            self.vaults.insert(who, bal - cost);
         }
     }
 
@@ -476,6 +722,19 @@ impl Contract {
 
     // ---------------------------------------------------------------- views
 
+    fn view_of(&self, a: &Agent) -> AgentView {
+        AgentView {
+            owner: a.owner.clone(),
+            pk: a.pk.clone(),
+            model_id: a.model_id.clone(),
+            bond: a.bond,
+            alpha_bps: a.alpha_bps,
+            shield: a.shield,
+            in_duel: a.in_duel,
+            tee: self.tee_agents.contains(&a.pk.0),
+        }
+    }
+
     pub fn get_vault(&self, account: AccountId) -> U128 {
         U128(self.vaults.get(&account).copied().unwrap_or(0))
     }
@@ -491,7 +750,8 @@ impl Contract {
     pub fn get_config(&self) -> Config {
         Config {
             owner: self.owner.clone(),
-            oracle_pk: Base64VecU8(self.oracle_pk.clone()),
+            oracle_account: self.oracle_account.clone(),
+            oracle_deposit: U128(self.oracle_deposit),
             slash_bps: self.slash_bps,
             fee_bps: self.fee_bps,
             min_chaos_deposit: U128(self.min_chaos_deposit),
@@ -500,8 +760,12 @@ impl Contract {
         }
     }
 
-    pub fn get_agent(&self, agent_pk: Base64VecU8) -> Option<Agent> {
-        self.agents.get(&agent_pk.0).cloned()
+    pub fn get_agent(&self, agent_pk: Base64VecU8) -> Option<AgentView> {
+        self.agents.get(&agent_pk.0).map(|a| self.view_of(a))
+    }
+
+    pub fn is_tee_signer(&self, signer: Base64VecU8) -> bool {
+        self.tee_signers.contains(&signer.0)
     }
 
     pub fn get_duel(&self, duel_id: U64) -> Option<Duel> {
@@ -509,8 +773,8 @@ impl Contract {
     }
 
     /// Agents sorted by alpha, then shield, descending.
-    pub fn leaderboard(&self) -> Vec<Agent> {
-        let mut v: Vec<Agent> = self.agents.values().cloned().collect();
+    pub fn leaderboard(&self) -> Vec<AgentView> {
+        let mut v: Vec<AgentView> = self.agents.values().map(|a| self.view_of(a)).collect();
         v.sort_by(|x, y| (y.alpha_bps, y.shield).cmp(&(x.alpha_bps, x.shield)));
         v
     }
@@ -519,8 +783,9 @@ impl Contract {
         hex(&intent_message(&intent))
     }
 
-    pub fn resolution_message_hex(&self, resolution: Resolution) -> String {
-        hex(&resolution_message(&resolution))
+    /// The exact text a TEE signs for an agent's completion, for off-chain parity checks.
+    pub fn tee_text_utf8(&self, kind: u8, model_id: String, request_hash: Base64VecU8, response_hash: Base64VecU8) -> String {
+        String::from_utf8(tee_text(kind, &model_id, &request_hash.0, &response_hash.0)).expect("utf8")
     }
 }
 
