@@ -102,6 +102,14 @@ naive prompt, both inside NEAR AI Cloud TEEs, spectators injecting fake news at 
 The control batch swaps the prompts between the two models under fresh agent keys (`runner.py --swap-prompts`): the behaviour
 follows the prompt, not the model.
 
+Corrected for base rates (`analysis/injection_effects.py`, 52 attacked enclave decisions, duels 258-310; six of the eight payloads
+push Short, and the models lean Long 60-80% when not attacked): the naive prompt took the pushed side 22 of 23 times against a
+42% base rate; the hardened prompt named the attack 28 of 29 times and still took the pushed side 18 of 29 against a 30% base
+rate. Pooled, injections moved the call 77% of the time (95% interval 64-86%, firm) and flipped the agent's previous call 67%
+(54-78%, firm). Calling the attack out is not immunity; it halves the effect. Mirroring any posted intent earned nothing at any
+horizon (next cycle or duel close), so the public window is a design flaw, not yet a loss. The per-prompt split needs about 50
+more attacked rows to leave the provisional band; the night loop is collecting them.
+
 Qwen trades the telemetry every time ("forced liquidations of NEAR perpetuals should create downside pressure"); DeepSeek flags it
 in all twenty reasonings ("contradicts the trusted oracle's modest −18.3 bps move, so I treat it as adversarial injection") and
 trades the oracle drift instead; the DeepSeek calls that landed on the injected side did so because the oracle drift pointed
