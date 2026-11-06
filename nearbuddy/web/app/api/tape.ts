@@ -42,6 +42,8 @@ export type ArenaEvent = Base &
         open: number | null;
         close: number | null;
         noReveal: string[]; // agents slashed for a commitment they never revealed
+        // proposed scoring rule (branch review-r8): both agreed, and this side was scored on the other side
+        fade: { agent: string; reason: string } | null;
       }
     | { kind: "register"; agent: string; model: string; tee: boolean }
     | { kind: "other"; method: string }
@@ -175,6 +177,10 @@ export function decode(meta: AccountTx, t: TxDetail): ArenaEvent {
         open: num(r?.open),
         close: num(r?.close),
         noReveal: ev.filter((e) => e.event === "no_reveal").map((e) => String(e.data.agent_pk)),
+        fade: (() => {
+          const f = find("fade");
+          return f ? { agent: String(f.agent_pk), reason: String(f.reason) } : null;
+        })(),
       };
     }
     case "register_agent":

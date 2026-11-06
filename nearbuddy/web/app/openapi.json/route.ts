@@ -136,6 +136,20 @@ const schemas = {
         open: orNull("integer", "price x1e8 USD"),
         close: orNull("integer", "price x1e8 USD"),
         noReveal: { type: "array", items: t("string", KEY), description: "agents that committed but never revealed" },
+        fade: {
+          oneOf: [
+            { type: "null" },
+            obj({
+              agent: t("string", KEY),
+              reason: t(
+                "string",
+                "later: it agreed later; answerer: they agreed at once and it is this duel's answerer",
+              ),
+            }),
+          ],
+          description:
+            "when both sides made the same call, the side scored on the other side (proposed rule, off today)",
+        },
       }),
       event("register", { agent: t("string", KEY), model: t("string"), tee: t("boolean") }),
       event("other", { method: t("string") }),

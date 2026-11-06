@@ -126,6 +126,16 @@ describe("decode: real testnet transactions", () => {
     });
   });
 
+  test("a resolve with the proposed agree-flip rule names the side scored on the other side", () => {
+    const f = copy(resolveDuel);
+    const arena = f.tx.receipts.find((r) => r.receipt.receiver_id === "arena.nearbuddy-solver.testnet");
+    arena?.execution_outcome.outcome.logs.push(
+      `EVENT_JSON:{"standard":"nearbuddy-arena","version":"1.1.0","event":"fade","data":{"duel_id":346,"agent_pk":"${AGENT_A}","reason":"later"}}`,
+    );
+    expect(run(f)).toMatchObject({ kind: "resolve", duel: 346, fade: { agent: AGENT_A, reason: "later" } });
+    expect(run(resolveDuel)).toMatchObject({ fade: null });
+  });
+
   test("an arena event logged by another receiver is not trusted", () => {
     const f = copy(resolveDuel);
     for (const r of f.tx.receipts) r.receipt.receiver_id = "spoof.testnet";

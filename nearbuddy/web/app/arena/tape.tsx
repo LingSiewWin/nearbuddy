@@ -262,12 +262,18 @@ export function Tape({
     if (e.kind === "open" || e.kind === "resolve") {
       const text =
         e.kind === "open"
-          ? `Duel ${e.duel ?? ""} opened: ${who(modelOf(e.a))} vs ${who(modelOf(e.b))}`
+          ? e.ok
+            ? `Duel ${e.duel ?? ""} opened: ${who(modelOf(e.a))} vs ${who(modelOf(e.b))}`
+            : `Refused: open a duel, ${who(modelOf(e.a))} vs ${who(modelOf(e.b))}`
           : e.pnlA == null || e.pnlB == null
             ? `Duel ${e.duel} resolved`
             : e.pnlA === e.pnlB
               ? `Duel ${e.duel} level, ${pct(e.pnlA / 100)} each`
-              : `Duel ${e.duel}: ${pct(e.pnlA / 100)} vs ${pct(e.pnlB / 100)}`;
+              : `Duel ${e.duel}: ${pct(e.pnlA / 100)} vs ${pct(e.pnlB / 100)}${
+                  e.fade
+                    ? `, ${who(modelOf(e.fade.agent))} agreed ${e.fade.reason === "later" ? "later" : "as answerer"}, scored on the other side`
+                    : ""
+                }`;
       return (
         <a key={e.tx} className={cls} href={e.duel != null ? duelHref(e.duel) : undefined}>
           {time}
