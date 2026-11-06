@@ -1,8 +1,9 @@
 // Terminal-UI primitives shared by /arena, /agent and /duel: fixed-width boxes, rows, bars and links drawn
 // with box-drawing characters inside a <pre>, btop-style (numbered box titles, block-character bars).
 // Every line is exactly W characters wide; under 600 px the trailing padding is hidden and rows wrap
-// (globals.css), so the text stays readable on a phone at the cost of the right border.
+// (tui.css), so the text stays readable on a phone at the cost of the right border.
 import type { ReactNode } from "react";
+import "./tui.css";
 
 export const W = 112;
 const KEY = 16; // label column

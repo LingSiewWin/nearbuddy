@@ -1,0 +1,153 @@
+/* The terminal look of the older /agent and /duel pages; loaded only through tui.tsx. */
+:root {
+  --bg: #0b0f0c;
+  --fg: #c8f5c8;
+  --dim: #5f8a5f;
+  --hi: #eaffea;
+  --warn: #f5d76e;
+  --bad: #ff7b72;
+  --num: #f5d76e; /* btop box index digit */
+  --win: #7ee787;
+  --loss: #ff7b72;
+  --tie: #8fa38f;
+  --open: #f5d76e; /* duel outcomes */
+  --ok: #7ee787;
+  --unv: #f5d76e; /* enclave-verified / unverified tier */
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+body {
+  font:
+    13px / 1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  padding: 16px;
+}
+pre {
+  margin: 0;
+  white-space: pre;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+pre.wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: visible;
+  margin-bottom: 1.45em;
+}
+pre + pre.wrap {
+  margin: 1.45em 0 0;
+}
+.hi {
+  color: var(--hi);
+}
+.dim {
+  color: var(--dim);
+}
+.warn {
+  color: var(--warn);
+}
+.bad {
+  color: var(--bad);
+}
+.num {
+  color: var(--num);
+  font-weight: bold;
+}
+.win {
+  color: var(--win);
+}
+.loss {
+  color: var(--loss);
+}
+.tie {
+  color: var(--tie);
+}
+.open {
+  color: var(--open);
+}
+.ok {
+  color: var(--ok);
+}
+.unv {
+  color: var(--unv);
+}
+a {
+  color: var(--fg);
+}
+a.hi,
+a.ok,
+a.win {
+  text-decoration-color: var(--dim);
+}
+a:focus-visible,
+button.lnk:focus-visible {
+  outline: 2px solid var(--num);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+button.lnk {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--dim);
+}
+.cursor::after {
+  content: "█";
+  animation: blink 1s steps(1) infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+@media (max-width: 600px) {
+  body {
+    font-size: 11.5px;
+    padding: 10px;
+  }
+  /* rows wrap instead of scrolling: the right padding and border go, box rules clip at the viewport */
+  pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-x: hidden;
+  }
+  .pad {
+    display: none;
+  }
+  .rule {
+    display: block;
+    white-space: pre;
+    overflow: hidden;
+  }
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4fbf4;
+    --fg: #163816;
+    --dim: #4a6e4a;
+    --hi: #000;
+    --warn: #8a6d00;
+    --bad: #b3261e;
+    --num: #b35900;
+    --win: #1a7f37;
+    --loss: #b3261e;
+    --tie: #5c6b5c;
+    --open: #8a6d00;
+    --ok: #1a7f37;
+    --unv: #8a6d00;
+  }
+}
