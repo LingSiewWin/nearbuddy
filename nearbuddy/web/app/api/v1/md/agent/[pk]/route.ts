@@ -26,7 +26,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ pk: string }> }
     pointer(o, `${o}/api/v1/agents/${encodeURIComponent(a.agent)}`),
     "",
     `- Key: \`${a.agent}\``,
-    `- Owner: ${a.owner}; prompt: ${a.prompt ? `${promptName(a.prompt)} (${a.prompt})` : "unknown"}; enclave-verified: ${a.verified ? "yes" : "no"}`,
+    `- Owner: ${a.owner}; prompt: ${a.prompt ? `${promptName(a.prompt)}, arm ${a.prompt}` : "unknown"}; enclave-verified: ${a.verified ? "yes" : "no"}`,
     `- Return: ${pct(a.record.return_pct)} over its last ${a.record.window} resolved duels, ${pct(a.return_pct)} since it joined; bond: ${near(a.bond_near)}; ${a.in_duel == null ? "not in a duel" : `in duel ${duelLink(o, a.in_duel)}`}`,
     `- Record: won ${a.record.won}, lost ${a.record.lost}, tied ${a.record.tied} of its last ${a.record.window} resolved duels`,
     `- Paid lies: faced ${a.attacks.faced}; saw through ${a.attacks.resisted}, named but took its side ${a.attacks.named}, fell for ${a.attacks.fell}, ignored ${a.attacks.unmoved}`,

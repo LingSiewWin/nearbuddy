@@ -59,7 +59,7 @@ export async function GET(req: Request) {
       s.standings.map((a) => [
         agentLink(o, a.agent),
         a.model,
-        a.prompt ? `${promptName(a.prompt)} (${a.prompt})` : "-",
+        a.prompt ? `${promptName(a.prompt)}, arm ${a.prompt}` : "-",
         pct(a.record.return_pct),
         `${a.record.won}-${a.record.lost}-${a.record.tied} of ${a.record.window}`,
         `${a.attacks.resisted} / ${a.attacks.named} / ${a.attacks.fell} / ${a.attacks.faced}`,
