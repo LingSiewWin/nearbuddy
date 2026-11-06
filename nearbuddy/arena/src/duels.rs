@@ -297,7 +297,10 @@ impl Contract {
     ) {
         let i = &signed.intent;
         let key = commit_key(i.duel_id.0, &i.agent_pk.0);
-        let (hash, _) = *self.commitments.get(&key).expect("no commitment");
+        let (hash, _) = *self
+            .commitments
+            .get(&key)
+            .unwrap_or_else(|| env::panic_str("no commitment"));
         let mut preimage = intent_message(i);
         preimage.extend_from_slice(&salt.0);
         require!(env::sha256_array(&preimage) == hash, "commitment mismatch");

@@ -2481,7 +2481,8 @@ fn replayed_commit_after_reveal_panics() {
 }
 
 #[test]
-#[should_panic(expected = "no commitment")]
+// a host panic (`env::panic_str`), so the receipt error is the bare text, not "panicked at src/duels.rs:.."
+#[should_panic(expected = "GuestPanic { panic_msg: \"no commitment\" }")]
 fn reveal_without_commitment_panics() {
     let (mut c, _, skb) = setup();
     let d = open(&mut c);
