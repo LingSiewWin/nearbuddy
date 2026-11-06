@@ -106,6 +106,12 @@ code {
 [data-view="agent"] .m {
   display: block;
 }
+/* two panels in one section (a duel's transactions, then its re-check): a scrolled JSON box must not read as cut */
+[data-view="agent"] .m + .m {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
 
 /* top bar */
 .bar {
