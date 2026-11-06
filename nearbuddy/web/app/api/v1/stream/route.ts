@@ -5,6 +5,8 @@
 import { tape } from "../../tape";
 
 const WINDOW = 120_000;
+// the function may run a little past the stream window before the platform cuts it
+export const maxDuration = 130;
 const POLL = 2_000;
 
 export async function GET(req: Request) {
@@ -12,12 +14,17 @@ export async function GET(req: Request) {
   const enc = new TextEncoder();
   let timer: ReturnType<typeof setInterval> | undefined;
   let stop: ReturnType<typeof setTimeout> | undefined;
+  let closed = false; // set by the window timer or by the client going away; no enqueue after it
   const stream = new ReadableStream({
     async start(c) {
       const sent = new Set<string>();
-      let closed = false;
       const send = (s: string) => {
-        if (!closed) c.enqueue(enc.encode(s));
+        if (closed) return;
+        try {
+          c.enqueue(enc.encode(s));
+        } catch {
+          closed = true; // the reader is gone
+        }
       };
       const push = async (first: boolean) => {
         try {
@@ -44,6 +51,7 @@ export async function GET(req: Request) {
       }, WINDOW);
     },
     cancel() {
+      closed = true;
       clearInterval(timer);
       clearTimeout(stop);
     },
