@@ -32,7 +32,7 @@ test("/agent/<pk>: identity, the two numbers, its record, its calls and the agen
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await expect(page.locator(".ag-hero .m .ep code")).toHaveText(`/api/agent?pk=${encodeURIComponent(pk)}`);
   await page.goto("/agent/not-a-key");
-  await expect(page.locator("body")).toContainText("This page could not be found", { timeout: 30_000 });
+  await expect(page.locator("body")).toContainText("Nothing here.", { timeout: 30_000 });
 });
 
 test("/duel/<newest> renders the result and links both agents", async ({ page, request }) => {
@@ -42,9 +42,9 @@ test("/duel/<newest> renders the result and links both agents", async ({ page, r
   await page.goto(`/duel/${id}`);
   await expect(page).toHaveTitle(`duel #${id} · NearBuddy`);
   // resolved: "<model> won duel <id>." or "Level: ..."; still open: "<model> is winning.", "Dead heat." or waiting
-  await expect(page.locator("main h1")).toHaveText(/won duel \d+\.|^Level|is winning\.|Dead heat\.|Waiting for/, {
-    timeout: 30_000,
-  });
+  // while the server streams, the loading frame's h1 and a hidden copy of the page's can both be in the DOM
+  const h1 = page.locator("main h1").filter({ hasNotText: /^Reading / });
+  await expect(h1).toHaveText(/won duel \d+\.|^Level|is winning\.|Dead heat\.|Waiting for/, { timeout: 30_000 });
   await expect(page.locator("a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
   if (process.env.SHOT) await page.screenshot({ path: "../docs/duel-page.png", fullPage: true });
 });
@@ -53,3 +53,4 @@ test("/api/agent with a bad pk returns 400", async ({ request }) => {
   expect((await request.get("/api/agent?pk=nope")).status()).toBe(400);
   expect((await request.get("/api/duel?id=abc")).status()).toBe(400);
 });
+

@@ -77,7 +77,8 @@ test("the drawer focuses Close on a verified call and Esc gives focus back", asy
 
 test("without JavaScript the first frame has the result and the proof links", async ({ request }) => {
   const { resolved, agent } = await ids(request);
-  const duel = await (await request.get(`/duel/${resolved}`)).text();
+  // React separates adjacent text nodes with <!-- --> in server HTML
+  const duel = (await (await request.get(`/duel/${resolved}`)).text()).replaceAll("<!-- -->", "");
   expect(duel).toMatch(/won duel \d+|Level: /);
   expect(duel).toContain("testnet.nearblocks.io/txns/");
   const ag = await (await request.get(`/agent/${encodeURIComponent(agent)}`)).text();
