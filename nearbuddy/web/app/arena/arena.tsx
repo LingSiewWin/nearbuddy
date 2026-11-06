@@ -16,6 +16,7 @@ import {
   proven,
   quoteOut,
 } from "../cells";
+import type { EraSplit } from "../eras";
 import {
   addrHref,
   agentHref,
@@ -100,6 +101,7 @@ type Snap = {
   leaderboard: Agent[];
   duels: (Duel | null)[];
   stats: { scanned: number; verified_decisions: number; attacks: number };
+  eras?: { from: number; operator_duels: number; oracle_duels: number; by_agent: EraSplit }; // absent: lifetime only
   followers: Record<string, [string, Mandate][]>;
   solver: null | {
     intents: (Intent & {
@@ -121,6 +123,7 @@ export default function Arena() {
   const [s, setS] = useState<Snap | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [all, setAll] = useState(false);
+  const [lifetime, setLifetime] = useState(false);
   const [now, setNow] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -147,7 +150,18 @@ export default function Arena() {
   }, []);
 
   const lb = s?.leaderboard ?? [];
-  const shown = all ? lb : lb.filter((a) => !stub(a));
+  const eras = s?.eras;
+  const byEra = !!eras && !lifetime;
+  // default: alpha and rank from the oracle era; the contract's leaderboard order is the lifetime order
+  const alphaOf = (a: Agent) => (byEra ? (eras.by_agent[a.pk]?.oracle.alpha_bps ?? a.alpha_bps) : a.alpha_bps);
+  const ranked = byEra ? [...lb].sort((x, y) => alphaOf(y) - alphaOf(x) || y.shield - x.shield) : lb;
+  const shown = all ? ranked : ranked.filter((a) => !stub(a));
+  const eraTitle = (a: Agent) => {
+    const e = eras?.by_agent[a.pk];
+    return e
+      ? `duels ${eras?.from}+ ${bps(e.oracle.alpha_bps)} bps · operator era ${bps(e.operator_alpha_bps)} bps · lifetime ${bps(a.alpha_bps)} bps`
+      : `lifetime ${bps(a.alpha_bps)} bps`;
+  };
   const hidden = lb.length - shown.length;
   const duels = (s?.duels ?? []).filter((d): d is Duel => !!d);
   const live = duels.find((d) => !d.resolved && countdown(d.close_at, now));
@@ -249,7 +263,11 @@ export default function Arena() {
         <span className="cursor" />
       </pre>
       <pre>
-        {boxTitle(1, "standings", "ranked by alpha, then shield")}
+        {boxTitle(
+          1,
+          "standings",
+          byEra ? `ranked by alpha from duel ${eras.from} on, then shield` : "ranked by lifetime alpha, then shield",
+        )}
         {"\n"}
         {rowx("agent", [{ t: head, c: "dim" }], "dim")}
         {"\n"}
@@ -259,7 +277,11 @@ export default function Arena() {
               { t: short(a.pk, 8), href: agentHref(a.pk), title: a.pk },
               [
                 `${String(i + 1).padStart(2)}  ${a.model_id.slice(0, 32).padEnd(32)}  `,
-                { t: `${bps(a.alpha_bps)} bps`.padStart(9), c: pnlc(a.alpha_bps) },
+                {
+                  t: `${bps(alphaOf(a))} bps`.padStart(9),
+                  c: pnlc(alphaOf(a)),
+                  title: eraTitle(a),
+                },
                 `  ${String(a.shield).padStart(6)}  ${near(a.bond).padStart(9)}  `,
                 a.tee ? { t: "enclave ", c: "ok" } : { t: "no      ", c: "unv" },
                 "  ",
@@ -275,6 +297,20 @@ export default function Arena() {
         {!shown.length ? (
           <>
             {rowx("", [{ t: s ? "no agents registered" : "loading", c: "dim" }])}
+            {"\n"}
+          </>
+        ) : null}
+        {eras ? (
+          <>
+            {rowx("era", [
+              {
+                t: byEra
+                  ? `alpha from duel ${eras.from} on (TEE oracle), ${eras.operator_duels} operator-scored duels excluded · `
+                  : `lifetime alpha, incl. ${eras.operator_duels} operator-scored duels (#0-${eras.from - 1}) · `,
+                c: "dim",
+              },
+              { t: byEra ? "show lifetime" : "oracle era only", onClick: () => setLifetime(!lifetime) },
+            ])}
             {"\n"}
           </>
         ) : null}
@@ -298,7 +334,7 @@ export default function Arena() {
         ])}
         {"\n"}
         {legend(
-          "alpha = lifetime pnl, 1 bps = 0.01 % (duels 0-256 scored by the operator key, 257+ by the TEE oracle) · shield = attacks survived in won duels · bond = NEAR at stake",
+          `alpha = pnl summed over scored duels, 1 bps = 0.01 % (duels 0-256 scored by the operator key, 257+ by the TEE oracle; lifetime = both) · shield = attacks survived in won duels · bond = NEAR at stake`,
         )}
         {"\n"}
         {bottom()}
