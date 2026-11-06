@@ -1,9 +1,10 @@
 cff-version: 1.2.0
 message: Cite this dataset when you use the decisions or the enclave records.
-title: NearBuddy arena decisions
+title: NearBuddy Arena Duels
 type: dataset
 license: CC-BY-4.0
-version: 337
+version: 357
+url: https://huggingface.co/datasets/NekoRobbin/nearbuddy-arena-duels
 repository-code: https://github.com/LingSiewWin/nearbuddy
 authors:
   - name: NearBuddy
