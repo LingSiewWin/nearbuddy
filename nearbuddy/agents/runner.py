@@ -118,10 +118,18 @@ PAIR_TAG = ""  # `--pair-tag`: which agent pair this process drives; "" = the ma
 _record_lock = threading.Lock()  # reveal_all records from several threads; a row must never interleave
 
 
+# The open each duel's brief measures its move from, as (price with 8 decimals, "oracle" | "spot"), set once per duel
+# by run() / run_single() from oracle_open_px(). record() copies it onto every row of that duel, so analysis can tell a
+# brief built on the oracle open (the one the spectator reads) from one built on the runner's own spot.
+OPENS: dict[str, tuple[int, str]] = {}
+
+
 def record(row: dict[str, Any]) -> None:
     """Append one dataset row, tagged with the pair (`pair_tag` null = the main pair) so two loops sharing the file
-    can be split."""
-    line = json.dumps({**row, "pair_tag": PAIR_TAG or None}) + "\n"
+    can be split, and with the duel's `open_px` / `open_source` when this process set them."""
+    opened = OPENS.get(str(row.get("duel_id")))
+    open_fields = {"open_px": opened[0], "open_source": opened[1]} if opened else {}
+    line = json.dumps({**row, **open_fields, "pair_tag": PAIR_TAG or None}) + "\n"
     with _record_lock:
         DATA.parent.mkdir(parents=True, exist_ok=True)
         with DATA.open("a") as f:
@@ -757,11 +765,12 @@ def run_single(
         duel = view("get_duel", {"duel_id": duel_id})
         close_at_ns = int(duel["close_at"])
         sym = next((s for s, a in ASSETS.items() if a == duel["symbol"]), symbol)
-        # the oracle's open price once its callback landed, else our spot: the same brief either way
-        open_px = int(duel["open_price"]) if duel.get("open_price") else price(sym, ENV.get("PYTH_API_KEY"))
+        # the oracle's open price, waiting briefly for its callback; our own spot only when it never lands
+        open_px, source = oracle_open_px(duel_id, sym, wait_s=20)
+        OPENS[duel_id] = (open_px, source)
         other = duel["b"] if duel["a"] == pk else duel["a"]
         print(
-            f"[duel {duel_id}] {sym} vs {other[:8]} open {open_px / 1e8:,.4f} "
+            f"[duel {duel_id}] {sym} vs {other[:8]} {source} open {open_px / 1e8:,.4f} "
             f"closes in {(close_at_ns - time.time_ns()) // 1_000_000_000} s"
         )
         cfg = view("get_config", {}) or {}
@@ -898,6 +907,7 @@ def run(
         if variants:  # treatment slot: agent A's arm is a function of the duel id, agent B stays the naive control
             a.variant = pick_variant(duel_id, variants)
         open_px, source = oracle_open_px(duel_id, symbol, wait_s=20)
+        OPENS[duel_id] = (open_px, source)
         print(
             f"[round {rnd}] duel {duel_id} {symbol} {source} open {open_px / 1e8:,.4f} tx {opened['tx']} "
             f"A prompt {a.prompt_variant}"
