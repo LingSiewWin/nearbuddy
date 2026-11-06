@@ -1,12 +1,13 @@
 "use client";
 // One agent, answering "should I follow it?" for someone who does not trade: who it is and whether its calls
-// are proven, two numbers (how it met paid lies, how it trades), the lies in its own words, the duels it
+// are proven, two numbers (how it met paid lies, how often it calls the next move), the lies in its own words, the duels it
 // fought, its newest calls with their proof, and who follows it. Agent view: every panel's endpoint.
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { Decision } from "../../api/dataset";
 import type { Intent } from "../../arena/model";
 import { useNow } from "../../lib/live";
+import { type Tally, tally, VERDICT_WORD } from "../../lib/verdict";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
 import { acctUrl, agentHref, duelHref, modelName, pct, promptName, stake, tone, txUrl, who } from "../../ui/format";
 import { Machine } from "../../ui/machine";
@@ -34,6 +35,12 @@ const PROMPTS: Record<string, string> = {
 };
 
 const isStub = (model: string) => model.startsWith("stub/");
+/** "the plain prompt", "guard C (evidence rule)" */
+const promptPhrase = (arm: string) => {
+  const n = promptName(arm);
+  return n.startsWith("guard ") ? n : `the ${n}`;
+};
+const list = (xs: string[]) => xs.join(", ").replace(/, ([^,]*)$/, " and $1");
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const day = (ms: number) =>
   new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -49,11 +56,28 @@ const when = (at: number | undefined, now: number) => {
 };
 const RESULT = { win: "won", loss: "lost", tie: "level", open: "in progress" } as const;
 
-function tally(rows: Decision[]) {
-  const fell = rows.filter((d) => d.verdict === "fell").length;
-  const spotted = rows.filter((d) => d.verdict === "spotted").length;
-  return { n: rows.length, fell, spotted, unmoved: rows.length - fell - spotted };
-}
+/** "named 15 as lies but still took the side they pushed, fell for 2 and ignored 1" */
+const rest = (t: Tally) =>
+  list(
+    [
+      t.named ? `named ${t.named} as lies but still took the side they pushed` : "",
+      t.fell ? `fell for ${t.fell}` : "",
+      t.unmoved ? `ignored ${t.unmoved}` : "",
+    ].filter(Boolean),
+  );
+/** What one call did with the lie it was shown, in words. */
+const verdictLine = (d: Decision) => {
+  const call = `${d.side === "Long" ? "long" : "short"} with ${stake(d.size / 100)}`;
+  return d.verdict === "resisted"
+    ? `Named the lie and bet against it: ${call}.`
+    : d.verdict === "named"
+      ? `Named the lie, but its call matched the side the lie pushed: ${call}.`
+      : d.verdict === "fell"
+        ? `Took the side the lie pushed: ${call}.`
+        : `Went ${call}.`;
+};
+const nextLine = (d: Decision) =>
+  d.next ? `The price then went ${d.next}, so the call was ${d.right ? "right" : "wrong"}.` : "";
 
 /** The verified seal on a decision: opens the proof drawer when the tx's block time is known, else links it. */
 function Proof({ d, at, model }: { d: Decision; at: number | undefined; model: string }) {
@@ -98,13 +122,14 @@ function Hero({ a }: { a: AgentData }) {
   const prompt = stub
     ? `${a.model} picks Long or Short from a hash of its input: no AI model, no enclave.`
     : a.prompt
-      ? `${PROMPTS[a.prompt] ?? `It runs the ${promptName(a.prompt)}.`}${others.length ? ` Before that it ran the ${others.map(promptName).join(" and the ")}.` : ""}`
+      ? `${PROMPTS[a.prompt] ?? `It runs ${promptPhrase(a.prompt)}.`}${others.length ? ` Before that it ran ${list(others.map(promptPhrase))}.` : ""}`
       : "Its prompt is not in the published record yet.";
   const lies = tally(a.attacked);
   const done = a.duels.filter((d) => d.result !== "open");
   const won = done.filter((d) => d.result === "win").length;
   const lost = done.filter((d) => d.result === "loss").length;
-  const fooled = lies.fell > 0 && lies.fell >= lies.spotted;
+  const fooled = lies.fell + lies.named > lies.resisted;
+  const hit = a.calls.scored ? Math.round((a.calls.right / a.calls.scored) * 100) : null;
   return (
     <>
       <div className="ag-id">
@@ -157,50 +182,39 @@ function Hero({ a }: { a: AgentData }) {
       <div className="ag-nums">
         <div>
           <span className={`ag-num${fooled ? " fell" : ""}`}>
-            {lies.n ? `${fooled ? lies.fell : lies.spotted}/${lies.n}` : "0"}
+            {lies.faced ? `${lies.resisted}/${lies.faced}` : "0"}
           </span>
           <p className="sub">
-            {lies.n === 0 ? (
-              <>
-                <b>Not attacked yet.</b> Nobody has paid to slip it a fake headline in the published record. One attack
-                costs {a.attackCost} NEAR.
-              </>
-            ) : fooled ? (
+            {lies.faced ? (
               <>
                 <b>
-                  Fell for {lies.fell} of {plural(lies.n, "fake headline")}.
+                  Saw through {lies.resisted} of {plural(lies.faced, "paid lie")}.
                 </b>{" "}
-                Strangers paid to slip it made-up news. {lies.fell === lies.n ? "Every time" : `${lies.fell} times`} it
-                took the side the lie pushed
-                {lies.unmoved ? `; ${lies.unmoved === 1 ? "once" : `${lies.unmoved} times`} it did not move` : ""}
-                {lies.spotted ? `; it called out ${lies.spotted}` : ""}.
+                {lies.resisted === lies.faced
+                  ? "Every time, it named the made-up headline as a lie and bet against it."
+                  : `Strangers paid to slip it made-up headlines; it ${rest(lies)}.`}
               </>
             ) : (
               <>
-                <b>
-                  Called out {lies.spotted} of {plural(lies.n, "fake headline")}.
-                </b>{" "}
-                Strangers paid to slip it made-up news.{" "}
-                {lies.spotted === lies.n ? "Every time" : `${lies.spotted} times`} it said the story could not be
-                trusted and traded on the price
-                {lies.fell ? `; it fell for ${lies.fell}` : ""}.
+                <b>Not attacked yet.</b> Nobody has paid to slip it a fake headline in the published record. One attack
+                costs {a.attackCost} NEAR.
               </>
             )}
           </p>
         </div>
         <div>
-          <span className="ag-num">{pct(a.returnPct)}</span>
+          <span className="ag-num">{hit == null ? "–" : `${hit}%`}</span>
           <p className="sub">
-            {done.length ? (
-              <b>
-                {won} won, {lost} lost, {done.length - won - lost} level in{" "}
-                {done.length === 1 ? "its last duel" : `its last ${done.length} duels`}.
-              </b>
-            ) : (
-              <b>No finished duel in the window read here.</b>
-            )}{" "}
-            {pct(a.returnPct)} is its return over every duel since it joined, scored by the TEE price oracle. Most duels
-            end level because both models make the same call.
+            <b>
+              {hit == null
+                ? "No scored calls in the published record yet."
+                : `Called the next move right in ${a.calls.right} of ${plural(a.calls.scored, "call")}.`}
+            </b>{" "}
+            A coin flip gets 50%. Its return since it joined is {pct(a.returnPct)}
+            {done.length
+              ? `, with ${won} won, ${lost} lost and ${done.length - won - lost} level in ${done.length === 1 ? "its last duel" : `its last ${done.length} duels`}`
+              : ""}
+            ; under today&apos;s scoring that mostly follows where the price happened to close.
           </p>
         </div>
       </div>
@@ -228,10 +242,16 @@ function Lies({ a, now }: { a: AgentData; now: number }) {
                 <div key={arm} className="model">
                   {groups.size > 1 ? (
                     <p>
-                      With the {promptName(arm)}: called out {t.spotted}, fell for {t.fell} of {t.n}.
+                      With {promptPhrase(arm)}: saw through {t.resisted} of {t.faced}
+                      {t.named ? `, named ${t.named} but took their side anyway` : ""}
+                      {t.fell ? `, fell for ${t.fell}` : ""}.
                     </p>
                   ) : null}
-                  <div className="sq ag-sq" role="img" aria-label={`${t.spotted} called out, ${t.fell} fell for`}>
+                  <div
+                    className="sq ag-sq"
+                    role="img"
+                    aria-label={`${t.resisted} saw through, ${t.named} named but took the side, ${t.fell} fell for, ${t.unmoved} ignored`}
+                  >
                     {rows.map((d, i) => (
                       <i key={d.tx ?? i} className={d.verdict ?? ""} title={`duel ${d.duel}: ${d.attack ?? ""}`} />
                     ))}
@@ -240,18 +260,12 @@ function Lies({ a, now }: { a: AgentData; now: number }) {
               );
             })}
             <div className="key">
-              <span>
-                <i />
-                called it out
-              </span>
-              <span>
-                <i className="fell" />
-                fell for it
-              </span>
-              <span>
-                <i className="unmoved" />
-                unmoved
-              </span>
+              {(["resisted", "named", "fell", "unmoved"] as const).map((v) => (
+                <span key={v}>
+                  <i className={v} />
+                  {VERDICT_WORD[v].toLowerCase()}
+                </span>
+              ))}
             </div>
           </div>
           <h3 className="ag-h3">
@@ -272,7 +286,6 @@ function Lies({ a, now }: { a: AgentData; now: number }) {
 }
 
 function Story({ d, at, now }: { d: Decision; at: number | undefined; now: number }) {
-  const side = d.side === "Long" ? "long" : "short";
   return (
     <article className="ag-story">
       <div>
@@ -287,19 +300,9 @@ function Story({ d, at, now }: { d: Decision; at: number | undefined; now: numbe
         <p className="cap">Its own reasoning, signed inside its enclave:</p>
         <blockquote className="reply">“{d.reason}”</blockquote>
         <div className="verdict">
-          {d.verdict === "spotted" ? (
-            <strong>Called it out.</strong>
-          ) : d.verdict === "fell" ? (
-            <strong className="fell">Fell for it.</strong>
-          ) : (
-            <strong>Unmoved.</strong>
-          )}
+          {d.verdict ? <strong className={d.verdict}>{VERDICT_WORD[d.verdict]}.</strong> : null}
           <span>
-            {d.verdict === "spotted"
-              ? `Named the lie and went ${side} with ${stake(d.size / 100)}.`
-              : d.verdict === "fell"
-                ? `Took the side the lie pushed: ${side} with ${stake(d.size / 100)}.`
-                : `Went ${side} with ${stake(d.size / 100)}.`}
+            {verdictLine(d)} {nextLine(d)}
           </span>
         </div>
       </div>
@@ -443,14 +446,14 @@ function Calls({ a, now }: { a: AgentData; now: number }) {
               </div>
               <p className="ag-c2">
                 <Side side={d.side} /> with {stake(d.size / 100)}
-                {d.attack ? (
-                  <span className={`ag-tag${d.verdict === "fell" ? " fell" : ""}`}>
-                    after a paid lie:{" "}
-                    {d.verdict === "fell" ? "fell for it" : d.verdict === "spotted" ? "called it out" : "unmoved"}
+                {d.attack && d.verdict ? (
+                  <span className={`ag-tag${d.verdict === "fell" || d.verdict === "named" ? " fell" : ""}`}>
+                    after a paid lie: {VERDICT_WORD[d.verdict].toLowerCase()}
                   </span>
                 ) : null}
               </p>
               <blockquote>“{d.reason}”</blockquote>
+              {d.next ? <p className={`ag-next${d.right ? " right" : ""}`}>{nextLine(d)}</p> : null}
             </article>
           );
         })
@@ -571,7 +574,7 @@ export function Agent({ data: a }: { data: AgentData }) {
           </div>
           <Machine
             path={`/api/v1/decisions?agent=${enc}&attacked=1&limit=3`}
-            desc="This agent's attacked decisions from the published dataset, newest first: the attack text, its own reasoning, its side and size, the side the lie pushed and a verdict (spotted, fell, unmoved). GET /api/v1/decisions/<tx> returns the exact bytes the enclave signed."
+            desc="This agent's attacked decisions from the published dataset, newest first: the attack text, its own reasoning, its side and size, the side the lie pushed and a verdict (resisted, named, fell, unmoved), and next/right: the next price move on the duel's oracle tape and whether the call matched it. GET /api/v1/decisions/<tx> returns the exact bytes the enclave signed."
           />
         </section>
         <section className="ag-rec">
@@ -590,7 +593,7 @@ export function Agent({ data: a }: { data: AgentData }) {
           </div>
           <Machine
             path={`/api/v1/decisions?agent=${enc}&limit=10`}
-            desc="Its newest enclave-verified decisions from the published dataset: duel, side, size (basis points of its stake), nonce, its reasoning, the brief it was shown, and the tx that posted it."
+            desc="Its newest enclave-verified decisions from the published dataset: duel, side, size (basis points of its stake), nonce, its reasoning, the brief it was shown, next/right (did the call match the next price move) and the tx that posted it."
           />
         </aside>
         <section className="ag-fol">

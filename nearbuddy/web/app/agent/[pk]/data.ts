@@ -6,6 +6,7 @@ import { type AgentRecord, agentRecord } from "../../api/agent";
 import { ms, nearOf } from "../../api/arena";
 import { type Decision, getDecisions } from "../../api/dataset";
 import { ARENA, viewOn } from "../../api/near";
+import { calls } from "../../lib/rows";
 
 type Side = Decision["side"];
 
@@ -37,6 +38,7 @@ export type AgentData = {
   attackCost: number;
   prompt: string | null; // the prompt arm of its newest published decision
   prompts: string[]; // every arm it ran, in order of first use
+  calls: { scored: number; right: number }; // its calls that matched the next price move on the duel tape
   attacked: Decision[]; // every attacked decision in the dataset, oldest first
   recent: Decision[]; // its newest 10 decisions, newest first
   stamps: Record<string, number>; // decision tx -> block time (ms)
@@ -122,6 +124,7 @@ export async function load(pk: string): Promise<AgentData | null> {
     attackCost: nearOf(raw.min_chaos_deposit, 2),
     prompt: mine.at(-1)?.arm ?? null,
     prompts: [...new Set(mine.map((d) => d.arm))],
+    calls: calls(mine),
     attacked,
     recent,
     stamps: await stamps(txs),
