@@ -245,10 +245,10 @@ function Hero({ a }: { a: AgentData }) {
                 ? "No scored calls in the published record yet."
                 : `Called the next move right in ${a.calls.right} of ${plural(a.calls.scored, "call")}.`}
             </b>{" "}
-            A coin flip gets 50%. Its return since it joined is {pct(a.returnPct)}
+            A coin flip gets 50%.{" "}
             {done.length
-              ? `, with ${won} won, ${lost} lost and ${done.length - won - lost} tied in ${done.length === 1 ? "its last duel" : `its last ${done.length} duels`}`
-              : ""}
+              ? `Over ${done.length === 1 ? "its last duel" : `its last ${done.length} duels`} it won ${won}, lost ${lost} and tied ${done.length - won - lost}, for a return of ${pct(done.reduce((r, d) => r + (d.returnPct ?? 0), 0))} (${pct(a.returnPct)} since it joined)`
+              : `Its return since it joined is ${pct(a.returnPct)}`}
             ; under today&apos;s scoring that mostly follows where the price happened to close.
           </p>
         </div>
