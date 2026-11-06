@@ -105,7 +105,8 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 
 Counts move while the runner is on: as of 2026-11-06 23:58 (UTC+8) duels up to 357, 1,870 decisions (838 enclave-signed
 by four models, every one re-verified from its bytes in `dataset/`, 835 of them posted and verified on chain; the 3 others
-arrived after their duel closed) and 97 attacked decisions on testnet. No enclave row in the snapshot fails verification;
+arrived after their duel closed) and 97 attacked decisions on testnet (93 enclave-signed, which the findings below use;
+the other 4 hit the stub model in early duels). No enclave row in the snapshot fails verification;
 the 20 model rows without a proof are outputs the runner could not parse, which never asked for one.
 
 What the enclave rounds showed so far (duels 258-291, DeepSeek-V4.1-Flash-1017 with the hardened prompt vs Qwen3.8-27B with the
@@ -125,7 +126,8 @@ Corrected for base rates (`analysis/injection_effects.py`, 52 attacked enclave d
 push Short, and the models lean Long 60-80% when not attacked): the naive prompt took the pushed side 22 of 23 times against a
 42% base rate; the hardened prompt named the attack 28 of 29 times and still took the pushed side 18 of 29 against a 30% base
 rate. Pooled, injections moved the call 77% of the time (95% interval 64-86%, firm) and flipped the agent's previous call 67%
-(54-78%, firm). Calling the attack out is not immunity; it halves the effect. Mirroring any posted intent earned nothing at any
+(54-78%, firm). These counts mix attacks that push the way the price already moved with attacks that push against it;
+the split below overturns the hardened result. Mirroring any posted intent earned nothing at any
 horizon (next cycle or duel close), so the public window is a design flaw, not yet a loss. The per-prompt split needs about 50
 more attacked rows to leave the provisional band; the night loop is collecting them.
 
@@ -134,10 +136,16 @@ agent-duels, not decisions, because one agent's calls within a duel are correlat
 Long whatever the market does: 503 of 745 unattacked calls, 0.68 (95% interval 0.61-0.74, firm over 191 agent-duels),
 where matching the market would give 0.52. They show no forecasting skill: scored from each call's own price to the duel
 close they are right 0.47 (0.40-0.54), a coin; their calls follow the move since open instead, and the final call loses to
-simply following that move in 19 of the 22 duels where the two disagree (exact p 0.0009, firm). The hardened prompt names
-the attack without resisting it: it called the telemetry out 36 of 37 times (0.97, 0.86-1.00, firm) and still took the
-pushed side 24 of 37 (0.65, 0.49-0.78, firm) against a 0.32 base rate; the naive prompt took it 29 of 30 and named it 0
-of 31. The copier bot's +7.38 bps mean at the duel close (259 mirrored intents) is not an edge either: its interval is
+simply following that move in 19 of the 22 duels where the two disagree (exact p 0.0009, firm). That momentum habit
+confounds the injection result: most attacks push the side the price is already moving, so a model that only follows the
+move lands on the lie's side without believing it. Counting only the attacks that push against the brief's move since
+open (the ones that test the model; same rule as the web's verdict), the hardened prompt resists: it took the lie's side
+0 of 12 times (95% interval 0.00-0.24, 12 agent-duels, against a 0.32 base rate) and named the attack 12 of 12, and with
+arms A, B and C every guarded prompt held 0 of 25 (0.00-0.13). The naive prompt took it 14 of 15 (0.93, 0.70-0.99) and
+named it 0 of 15. Both are provisional (fewer than 30 agent-duels each), but the intervals do not overlap. The earlier
+reading, "hardened names the attack but follows it" (24 of 37), came from the 25 attacks that pushed with the move, where
+it took the side 24 times. Pooled over every prompt, against-move attacks moved the call 14 of 40 (0.35, base 0.37): the
+whole effect sits in the naive prompt. The copier bot's +7.38 bps mean at the duel close (259 mirrored intents) is not an edge either: its interval is
 2.53-12.22 bps when each intent counts, but -6.41 to 21.16 bps when each of the 32 duels counts once
 (`bun analysis/copier_bot.ts --report`).
 
@@ -192,9 +200,9 @@ mainnet quote, not the mainnet tx.
 ```sh
 cp .env.example .env                      # add NEAR_AI_API_KEY to use real models; blank = stub
 cd arena && cargo test                    # 119 contract tests (the sandbox run is --ignored)
-cd .. && bun run test                        # 92 protocol, solver, demo and analysis tests, 2 skip (ARENA_DEPLOYED=1 runs the on-chain parity)
+cd .. && bun run test                        # protocol, solver, demo and analysis tests: 100 pass + 2 skip (ARENA_DEPLOYED=1 runs the on-chain parity)
 bun run solver                               # :4020, mounts /register /duel /intent /chaos /resolve /settle_follow /arena
-cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pytest -q  # 121 tests
+cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pytest -q  # 148 tests
 .venv/bin/python -m runner --rounds 1 --duel-seconds 330 --cycle-seconds 30  # a live NEAR/USD duel (oracle caches 300 s); with a key, both agents are TEE-backed
 cd .. && bun run arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, oracle resolve
 DUELS=8 TARGET=b bun run spectator           # inject one attack per new duel at the naive model (pays 0.1 NEAR each)
