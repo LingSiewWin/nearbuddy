@@ -19,11 +19,11 @@ Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this 
         .venv/bin/python runner.py --only B --wait-pairing [--hardened]
 
 Commit-reveal (`--commit-reveal`, or on by itself when get_config says `commit_reveal: true`): each cycle an agent
-reveals its previous call (POST /reveal: intent, salt, tee; followers are quoted then) and commits the new one
-(POST /commit: sha256(intent bytes || salt) signed over commit_message). Commits stop before the intent lock; the
-last commitment (the scored call) is held until the chain clock is inside the lock, where nobody can commit a
-counter-call, and revealed before close_at. Ctrl-C and SIGTERM reveal at once, since an unrevealed commitment is
-slashed. Rows gain
+commits its call (POST /commit: sha256(intent bytes || salt) signed over commit_message) when the side or size
+changed; the contract keeps one commitment per agent per duel, so a new commit replaces the held one and nothing is
+revealed during the duel. The one commitment left is revealed (POST /reveal: intent, salt, tee; followers are
+quoted then) once the chain clock is inside the intent lock, where nobody can commit a counter-call, and before
+close_at. Ctrl-C and SIGTERM reveal at once, since an unrevealed commitment is slashed. Rows gain
 `commitment`, `committed_tx`, `revealed_tx`. `--consent` (two-sided runs only) has both agents sign the duel terms
 so the solver opens it with open_duel_consented; a self-hosted `--only` runner holds one key, so it gets
 commit-reveal but never consent.
@@ -115,7 +115,7 @@ def make_duelist(
 PAIR_TAG = ""  # `--pair-tag`: which agent pair this process drives; "" = the main pair
 
 
-_record_lock = threading.Lock()  # reveal_all records from several threads; a row must never interleave
+_record_lock = threading.Lock()  # reveal_held records from several threads; a row must never interleave
 
 
 # The open each duel's brief measures its move from, as (price with 8 decimals, "oracle" | "spot"), set once per duel
@@ -446,7 +446,7 @@ def _refused(e: RuntimeError) -> bool:
 
 def commit_decision(
     solver: Solver,
-    held: dict[str, Commitment],
+    held: dict[str, list[Commitment]],
     duel_id: str,
     symbol: str,
     px: int,
@@ -462,10 +462,15 @@ def commit_decision(
     attestations: dict[str, str | None],
 ) -> tuple[int, str]:
     """Commit-reveal, step 1: decide as `post_decision` does, then post only sha256(intent bytes || salt), signed by
-    the agent over `commit_message`. The call stays hidden (no quotes, nothing to copy) until `reveal`. The
-    commitment goes into `held[label]` before the POST: a commit that lands behind a timeout or a dropped RPC wait
-    must still be revealed, or the bond is slashed. Only a verifiable refusal takes it out again. Returns
-    (nonce, status): "committed", "skipped" or "closed" (inside the intent lock)."""
+    the agent over `commit_message`. Nothing is revealed here: the contract stores one commitment per agent per duel
+    and a new commit replaces it, so only the last one is ever opened (`reveal_held`, inside the intent lock).
+
+    `held[label]` lists the commitments that may be the one on chain, oldest first. A call with the same side and
+    size as a confirmed held commitment is not committed again (its row says `kept_commitment`): replacing it would
+    only spend bond storage. A new commitment joins the list before the POST; a confirmed commit leaves it alone in
+    the list (the older ones are replaced on chain, their rows say `replaced_by`), a verifiable refusal takes it out,
+    and a commit that may have landed (timeout, dropped RPC wait) keeps both, so the final reveal can try each.
+    Returns (nonce, status): "committed", "kept", "skipped" or "closed" (inside the intent lock)."""
     prep = prepare_decision(
         duel_id, symbol, px, open_px, close_at_ns, pending, nonce + 1, d, sk, comp, model, attestations
     )
@@ -474,6 +479,31 @@ def commit_decision(
     nonce += 1
     intent, tee, inj, row = prep
     pk = intent["agent_pk"]
+    cands = held.setdefault(label, [])
+
+    def consume() -> None:
+        if inj:  # the model has seen the injection; it is consumed with the call, like a posted intent
+            solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
+
+    top = cands[-1] if cands else None
+    if (
+        top is not None
+        and top.row.get("committed_tx")
+        and (top.signed["intent"]["side"], top.signed["intent"]["size_bps"]) == (intent["side"], intent["size_bps"])
+    ):
+        record(
+            {
+                **row,
+                "commitment": None,
+                "committed_tx": None,
+                "revealed_tx": None,
+                "tx": None,
+                "kept_commitment": top.row["commitment"],
+            }
+        )
+        consume()
+        print(f"  {label} keeps its commitment (same {intent['side']} {intent['size_bps']} bps), nonce {nonce} unused")
+        return nonce, "kept"
     salt = secrets.token_bytes(32)
     c = commitment(intent, salt)
     p = Commitment(
@@ -485,7 +515,7 @@ def commit_decision(
         close_at_ns - REVEAL_MARGIN_S * 1_000_000_000,
     )
     p.row["committed_tx"] = None  # unknown until the solver answers
-    held[label] = p
+    cands.append(p)
     try:
         committed = solver.post(
             "/commit",
@@ -498,17 +528,19 @@ def commit_decision(
         )
     except RuntimeError as e:
         if not _refused(e):
-            raise  # may have landed: stays held, the final reveal settles it
-        del held[label]
+            raise  # may have landed: stays a candidate next to the older one, the final reveal settles it
+        cands.remove(p)
         late = _late(e)
         if late is None:
             raise
         record({**p.row, "revealed_tx": None, "tx": None, "error": late})
-        print(f"  late commitment for {pk[:8]} not posted ({late})")
+        print(f"  late commitment for {pk[:8]} not posted ({late}); the held one is revealed inside the lock")
         return nonce, "closed"
     p.row["committed_tx"] = committed["tx"]
-    if inj:  # the model has seen the injection; it is consumed at commit, like a posted intent
-        solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
+    for old in cands[:-1]:  # replaced on chain by this commit: never revealed, recorded as replaced
+        record({**old.row, "revealed_tx": None, "tx": None, "replaced_by": committed["tx"]})
+    cands[:] = [p]
+    consume()
     print(f"  {label} committed nonce {nonce} tx {committed['tx']}")
     return nonce, "committed"
 
@@ -536,31 +568,47 @@ def reveal(solver: Solver, p: Commitment) -> str:
     return "revealed"
 
 
-def reveal_all(solver: Solver, held: dict[str, Commitment]) -> None:
-    """Reveal every held commitment (an unrevealed one is slashed), all at once: each /reveal waits for its follower
-    quotes, so in a row the last agent could miss the window while the first one waits out a solver restart. One
-    failure, transport errors included, must not strand the others. A reveal whose deadline (close_at minus
-    REVEAL_MARGIN_S) passes is reported loudly: that commitment forfeits the duel and pays no_reveal_bps."""
+NOT_ON_CHAIN = ("commitment mismatch", "no commitment")
+
+
+def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> None:
+    """Reveal the commitment each agent has on chain (an unrevealed one is slashed), all agents at once: each /reveal
+    waits for its follower quotes, so in a row the last agent could miss the window while the first one waits out a
+    solver restart. Per agent the candidates go newest first; one the contract does not hold ("commitment mismatch",
+    "no commitment": a commit that never landed, or one a later commit replaced) is recorded as not on chain and the
+    next older one is tried. One failure, transport errors included, must not strand another agent. A reveal whose
+    deadline (close_at minus REVEAL_MARGIN_S) passes is reported loudly: that commitment forfeits the duel and pays
+    no_reveal_bps."""
     batch = [(label, held.pop(label)) for label in list(held)]
 
-    def one(label: str, p: Commitment) -> None:
-        try:
-            reveal(solver, p)
-        except Exception as e:  # requests' ConnectionError/Timeout are not RuntimeError
-            record({**p.row, "revealed_tx": None, "tx": None, "error": f"reveal failed: {str(e)[:200]}"})
-            print(f"  reveal for {label} failed: {type(e).__name__}: {str(e)[:120]}")
-            if isinstance(e, DeadlineError) or (p.deadline_ns is not None and time.time_ns() >= p.deadline_ns):
-                print(
-                    f"!!! REVEAL DEADLINE PASSED for {label} (nonce {p.signed['intent']['nonce']}): the commitment "
-                    "may stay unrevealed; the contract then forfeits the duel and slashes no_reveal_bps of the bond"
-                )
+    def one(label: str, cands: list[Commitment]) -> None:
+        for i, p in enumerate(reversed(cands)):
+            try:
+                reveal(solver, p)
+            except Exception as e:  # requests' ConnectionError/Timeout are not RuntimeError
+                if isinstance(e, RuntimeError) and any(w in str(e) for w in NOT_ON_CHAIN):
+                    record({**p.row, "revealed_tx": None, "tx": None, "error": "commitment not on chain"})
+                    continue
+                record({**p.row, "revealed_tx": None, "tx": None, "error": f"reveal failed: {str(e)[:200]}"})
+                print(f"  reveal for {label} failed: {type(e).__name__}: {str(e)[:120]}")
+                if isinstance(e, DeadlineError) or (p.deadline_ns is not None and time.time_ns() >= p.deadline_ns):
+                    print(
+                        f"!!! REVEAL DEADLINE PASSED for {label} (nonce {p.signed['intent']['nonce']}): the "
+                        "commitment may stay unrevealed; the contract then forfeits the duel and slashes "
+                        "no_reveal_bps of the bond"
+                    )
+            # revealed, refused as late, or failed: an older candidate was replaced by this one if it landed
+            for older in list(reversed(cands))[i + 1 :]:
+                record({**older.row, "revealed_tx": None, "tx": None, "replaced_by": p.row.get("committed_tx")})
+            return
 
+    batch = [(label, cands) for label, cands in batch if cands]
     if len(batch) <= 1:
-        for label, p in batch:
-            one(label, p)
+        for label, cands in batch:
+            one(label, cands)
         return
     with ThreadPoolExecutor(max_workers=len(batch)) as pool:
-        for f in [pool.submit(one, label, p) for label, p in batch]:
+        for f in [pool.submit(one, label, cands) for label, cands in batch]:
             f.result()
 
 
@@ -611,13 +659,14 @@ def play_duel(
     lock_s: int = 0,
 ) -> int:
     """Every `cycle_seconds` until `stop_ns` (the intent lock plus a margin for model, signature and chain) each
-    player decides once. Plain mode posts the intent. Commit-reveal mode first reveals the player's previous
-    commitment, then commits the new call. The last commitment per player is the scored call: it is held until the
-    chain clock enters the contract's intent lock (`close_at - lock_s`, see `hold_until_lock`), where nobody can
-    commit a counter-call, and revealed before close_at. Earlier reveals only open calls that a later one replaces.
-    On any other exit (Ctrl-C, SIGTERM, an error) held commitments are revealed at once, lock or not: a late
+    player decides once. Plain mode posts the intent. Commit-reveal mode commits the call when it changed
+    (`commit_decision`; a new commit replaces the held one on chain) and reveals nothing during the duel: the one
+    commitment per player left at the end is the scored call, revealed only once the chain clock is inside the
+    contract's intent lock (`close_at - lock_s`, see `hold_until_lock`), where nobody can commit a counter-call, and
+    before close_at. A commit refused inside the lock ends the duel for that player with its held commitment still
+    hidden. On any other exit (Ctrl-C, SIGTERM, an error) held commitments are revealed at once, lock or not: a
     shutdown must not leave a commitment to be slashed. Returns the last nonce used."""
-    held: dict[str, Commitment] = {}
+    held: dict[str, list[Commitment]] = {}
     closed = False
     try:
         while not closed and time.time_ns() < stop_ns:
@@ -628,14 +677,9 @@ def play_duel(
                 if not commit_reveal:
                     nonce, status = post_decision(solver, *args, attestations)
                 else:
-                    status = "committed"
-                    if label in held:
-                        # SIGTERM waits until `held` matches the chain: a kill between the landed reveal and the
-                        # `del` would make reveal_all open it again (refused, "no commitment", plus an error row)
-                        with sigterm_deferred():
-                            status = reveal(solver, held[label])
-                            del held[label]  # only once the reveal returned: a raise leaves it for the final reveal
-                    if status != "closed":
+                    # SIGTERM waits until `held` matches the chain: a kill between a landed commit and the update
+                    # of `held` would leave the final reveal opening a replaced commitment first
+                    with sigterm_deferred():
                         nonce, status = commit_decision(solver, held, *args, attestations)
                 if status == "closed":
                     closed = True
@@ -645,7 +689,7 @@ def play_duel(
         if held and lock_s > 0:
             hold_until_lock(close_at_ns - lock_s * 1_000_000_000, close_at_ns)
     finally:
-        reveal_all(solver, held)
+        reveal_held(solver, held)
     return nonce
 
 
