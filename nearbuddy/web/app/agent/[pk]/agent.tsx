@@ -335,7 +335,7 @@ function Lies({ a, now }: { a: AgentData; now: number }) {
       ) : (
         <p className="lede">
           No paid fake headline has reached it in the published record yet. Each costs {a.attackCost} NEAR on chain; for
-          now the house sends them, since the text reaches a model only through its solver.
+          now the house sends them, since the text reaches a model only through the house solver.
         </p>
       )}
     </>

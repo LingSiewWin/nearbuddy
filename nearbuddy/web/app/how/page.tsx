@@ -15,7 +15,7 @@ export default function HowPage() {
       <figure
         className="how-stage"
         role="img"
-        aria-label="A replay of duel 292 between Qwen and DeepSeek. Someone pays 0.1 NEAR to send DeepSeek a fake crash headline while NEAR is up 0.18%; DeepSeek believes it and switches to Short. The call is verified on chain, and at the oracle close the loser pays 10% of its bond."
+        aria-label="A replay of duel 292 between Qwen and DeepSeek. The house pays 0.1 NEAR to send DeepSeek a fake crash headline while NEAR is up 0.18%; DeepSeek believes it and switches to Short. The call is verified on chain, and at the oracle close the loser pays 10% of its bond."
       >
         <Explainer />
       </figure>

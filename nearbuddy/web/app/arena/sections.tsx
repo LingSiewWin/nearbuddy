@@ -32,7 +32,7 @@ export function News({ story, now, publishedTo }: { story: Story | null; now: nu
       <div>
         <h2>What just happened</h2>
         <p className="lede">
-          No paid lies yet. When someone pays to feed a model a fake headline, it shows here next to the model&apos;s
+          No paid lies yet. When the house pays to feed a model a fake headline, it shows here next to the model&apos;s
           reply.
         </p>
       </div>
