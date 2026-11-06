@@ -305,7 +305,13 @@ export function Tape({
           </button>
         ))}
       </fieldset>
-      <div className="h rows">{lines.map(row)}</div>
+      <div className="h rows">
+        {lines.length ? (
+          lines.map(row)
+        ) : (
+          <p className="lede">No {filter === "all" ? "arena transactions" : filter} in this window yet.</p>
+        )}
+      </div>
       <p className="sr" aria-live="polite">
         {say}
       </p>

@@ -959,6 +959,9 @@ th.r {
 button.row:hover {
   background: rgba(238, 233, 216, 0.04);
 }
+.rows > .lede {
+  padding: 14px 20px;
+}
 /* .rows clips sideways overflow, so the ring sits inside the row */
 .row:focus-visible {
   outline-offset: -2px;
