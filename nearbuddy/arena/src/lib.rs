@@ -16,6 +16,11 @@
 //! token allowlist, expiry, revoke); a registered solver fronts the swap through NEAR Intents and
 //! is repaid from the follower's vault only inside that mandate.
 //!
+//! With `commit_reveal` on, an agent first commits `sha256(intent_message || salt)` before the
+//! intent lock and reveals the intent and salt later (up to `close_at`), so nothing readable is on
+//! chain until the reveal. An unrevealed commitment is slashed `no_reveal_bps` of the bond at
+//! scoring. `open_duel_consented` pairs two agents only with both agent keys' signatures.
+//!
 //! Every state-growing call pays its own storage (`storage_byte_cost` x bytes added) out of the
 //! value it brings: bond, chaos deposit, vault deposit, or the attached deposit.
 mod agents;
@@ -37,6 +42,12 @@ use near_sdk::{AccountId, env};
 pub const INTENT_DOMAIN: &[u8] = b"nearbuddy-intent-v1";
 /// Prefix of the bytes an agent key signs to prove possession at `register_agent`.
 pub const REGISTER_DOMAIN: &[u8] = b"nearbuddy-register-v1";
+/// Prefix of the bytes an agent key signs to commit to a hidden intent (see `commit_bytes`).
+pub const COMMIT_DOMAIN: &[u8] = b"nearbuddy-commit-v1";
+/// Prefix of the bytes an agent key signs to consent to one pairing (see `consent_bytes`).
+pub const DUEL_DOMAIN: &[u8] = b"nearbuddy-duel-v1";
+/// `no_reveal_bps` until the owner sets it through `set_commit_reveal`.
+pub const DEFAULT_NO_REVEAL_BPS: u16 = 500;
 /// `intent_lock_ns` until the owner sets it through `set_oracle`.
 pub const DEFAULT_INTENT_LOCK_NS: u64 = 60 * 1_000_000_000;
 /// Cap on `Duel.injections` so a duel record cannot grow without bound.
@@ -55,6 +66,42 @@ pub fn register_bytes(owner: &AccountId) -> Vec<u8> {
     let mut out = REGISTER_DOMAIN.to_vec();
     out.extend_from_slice(owner.as_bytes());
     out
+}
+
+/// The exact bytes `agent_pk` signs to commit in duel `duel_id`:
+/// `COMMIT_DOMAIN || contract || duel_id_le || commitment`.
+pub fn commit_bytes(contract: &AccountId, duel_id: u64, commitment: &[u8]) -> Vec<u8> {
+    let mut out = COMMIT_DOMAIN.to_vec();
+    out.extend_from_slice(contract.as_bytes());
+    out.extend_from_slice(&duel_id.to_le_bytes());
+    out.extend_from_slice(commitment);
+    out
+}
+
+/// The exact bytes each agent signs to consent to one pairing:
+/// `DUEL_DOMAIN || contract || a || b || symbol || close_at_le`. `close_at` makes the consent
+/// single-use: once that duel opens it is in the past before either agent is free again.
+pub fn consent_bytes(
+    contract: &AccountId,
+    a: &[u8],
+    b: &[u8],
+    symbol: &str,
+    close_at: u64,
+) -> Vec<u8> {
+    let mut out = DUEL_DOMAIN.to_vec();
+    out.extend_from_slice(contract.as_bytes());
+    out.extend_from_slice(a);
+    out.extend_from_slice(b);
+    out.extend_from_slice(symbol.as_bytes());
+    out.extend_from_slice(&close_at.to_le_bytes());
+    out
+}
+
+/// `commitments` key: `duel_id_le || agent_pk`.
+pub(crate) fn commit_key(duel_id: u64, pk: &[u8]) -> Vec<u8> {
+    let mut k = duel_id.to_le_bytes().to_vec();
+    k.extend_from_slice(pk);
+    k
 }
 
 /// The exact bytes a NEAR AI Cloud enclave signs for one completion.

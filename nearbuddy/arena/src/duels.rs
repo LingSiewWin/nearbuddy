@@ -1,11 +1,13 @@
-//! Duel lifecycle: open, intents, chaos, oracle-priced resolution, void.
+//! Duel lifecycle: open (owner or consented), intents (direct or commit-reveal), chaos,
+//! oracle-priced resolution, void.
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::{AccountId, Gas, NearToken, Promise, env, ext_contract, near, require};
 
 use crate::{
     Contract, ContractExt, Duel, Injection, Intent, MAX_INJECTIONS, OraclePrice, Outcome,
-    PriceData, Side, SignedIntent, TeeProof, VOID_AFTER_NS, intent_message, nonce_key, proof_hash,
-    set_entry_cost, storage_cost_since, tee_text, verify,
+    PriceData, Side, SignedIntent, TeeProof, VOID_AFTER_NS, commit_bytes, commit_key,
+    consent_bytes, intent_message, nonce_key, proof_hash, set_entry_cost, storage_cost_since,
+    tee_text, verify,
 };
 
 const ORACLE_GAS: Gas = Gas::from_tgas(150);
@@ -61,8 +63,8 @@ impl Contract {
     /// storage plus `oracle_deposit`; the open price is requested from the oracle in the same call
     /// and lands through `oracle_on_call`. Returns the duel id.
     /// Caller: owner. Deposit: the duel record's storage plus `oracle_deposit`. Panics:
-    /// "not owner", "same agent", "symbol too long", "close_at in the past", "duel too short",
-    /// "agent missing", "in duel", "deposit too small".
+    /// "not owner", "consent required", "same agent", "symbol too long", "close_at in the past",
+    /// "duel too short", "agent missing", "in duel", "deposit too small".
     #[payable]
     pub fn open_duel(
         &mut self,
@@ -72,6 +74,41 @@ impl Contract {
         close_at: U64,
     ) -> U64 {
         self.only_owner();
+        require!(!self.require_consent, "consent required");
+        self.open_duel_inner(a, b, symbol, close_at)
+    }
+
+    /// `open_duel` with both agents' consent: `sig_a` and `sig_b` are each agent key's ed25519
+    /// signature over `consent_message(a, b, symbol, close_at)`. Anyone holding both signatures
+    /// may open it; a consent cannot be replayed because `close_at` has passed by the time either
+    /// agent is free again. Works whether or not `require_consent` is on.
+    /// Caller: anyone. Deposit: as `open_duel`. Panics: "bad consent signature", then as
+    /// `open_duel` minus "not owner" / "consent required".
+    #[payable]
+    pub fn open_duel_consented(
+        &mut self,
+        a: Base64VecU8,
+        b: Base64VecU8,
+        symbol: String,
+        close_at: U64,
+        sig_a: Base64VecU8,
+        sig_b: Base64VecU8,
+    ) -> U64 {
+        let msg = consent_bytes(&env::current_account_id(), &a.0, &b.0, &symbol, close_at.0);
+        require!(
+            verify(&a.0, &msg, &sig_a.0) && verify(&b.0, &msg, &sig_b.0),
+            "bad consent signature"
+        );
+        self.open_duel_inner(a, b, symbol, close_at)
+    }
+
+    fn open_duel_inner(
+        &mut self,
+        a: Base64VecU8,
+        b: Base64VecU8,
+        symbol: String,
+        close_at: U64,
+    ) -> U64 {
         require!(a.0 != b.0, "same agent");
         require!(symbol.len() <= 64, "symbol too long");
         require!(close_at.0 > env::block_timestamp(), "close_at in the past");
@@ -156,8 +193,97 @@ impl Contract {
     /// "tee hash length", "unknown tee signer", "bad tee signature", "proof_hash mismatch",
     /// "proof used", "provider proof required", "tee proof required", "duel missing",
     /// "duel closed", "intent lock", "intent expired", "bad target", "nonce used", "stale nonce",
-    /// "bad signature", "bond exhausted".
+    /// "bad signature", "bond exhausted"; "commit first" while `commit_reveal` is on.
     pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
+        require!(!self.commit_reveal, "commit first");
+        self.accept_intent(&signed, tee, true);
+    }
+
+    /// Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for
+    /// this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
+    /// signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
+    /// should be 32 random bytes: the intent space is small enough to brute-force without it.
+    /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
+    /// "agent_pk length", "commitment length", "bad commit signature", "duel missing",
+    /// "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
+    /// "bond exhausted".
+    pub fn commit_intent(
+        &mut self,
+        duel_id: U64,
+        agent_pk: Base64VecU8,
+        commitment: Base64VecU8,
+        sig: Base64VecU8,
+    ) {
+        require!(agent_pk.0.len() == 32, "agent_pk length");
+        let hash: [u8; 32] = commitment
+            .0
+            .as_slice()
+            .try_into()
+            .unwrap_or_else(|_| env::panic_str("commitment length"));
+        require!(
+            verify(
+                &agent_pk.0,
+                &commit_bytes(&env::current_account_id(), duel_id.0, &hash),
+                &sig.0
+            ),
+            "bad commit signature"
+        );
+        let duel = self.duels.get(&duel_id.0).expect("duel missing");
+        let now = env::block_timestamp();
+        require!(!duel.resolved && now < duel.close_at.0, "duel closed");
+        require!(now + self.intent_lock_ns < duel.close_at.0, "intent lock");
+        require!(
+            agent_pk.0 == duel.a.0 || agent_pk.0 == duel.b.0,
+            "bad target"
+        );
+        let key = commit_key(duel_id.0, &agent_pk.0);
+        let mut used = key.clone();
+        used.extend_from_slice(&hash);
+        require!(!self.used_commitments.contains(&used), "commitment used");
+        let before = env::storage_usage();
+        self.commitments.insert(key, (hash, now));
+        self.commitments.flush();
+        let cost = storage_cost_since(before) + set_entry_cost(used.len());
+        self.used_commitments.insert(used);
+        let agent = self.agents.get_mut(&agent_pk.0).expect("agent missing");
+        require!(agent.bond.0 > cost, "bond exhausted");
+        agent.bond = U128(agent.bond.0 - cost);
+        let b64 = |b: &[u8]| {
+            near_sdk::base64::Engine::encode(&near_sdk::base64::prelude::BASE64_STANDARD, b)
+        };
+        env::log_str(&format!(
+            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"commit","data":{{"duel_id":{},"agent_pk":"{}","commitment":"{}"}}}}"#,
+            duel_id.0,
+            b64(&agent_pk.0),
+            b64(&hash)
+        ));
+    }
+
+    /// Open a commitment: the intent and salt must hash to the stored commitment for
+    /// `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,
+    /// except that the reveal may land inside the intent lock (the decision was fixed when it was
+    /// committed, before the lock) up to `close_at`. The commitment is deleted.
+    /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
+    /// "no commitment", "commitment mismatch", then as `post_intent` minus "intent lock" and
+    /// "commit first".
+    pub fn reveal_intent(
+        &mut self,
+        signed: SignedIntent,
+        salt: Base64VecU8,
+        tee: Option<TeeProof>,
+    ) {
+        let i = &signed.intent;
+        let key = commit_key(i.duel_id.0, &i.agent_pk.0);
+        let (hash, _) = *self.commitments.get(&key).expect("no commitment");
+        let mut preimage = intent_message(i);
+        preimage.extend_from_slice(&salt.0);
+        require!(env::sha256_array(&preimage) == hash, "commitment mismatch");
+        self.commitments.remove(&key);
+        self.accept_intent(&signed, tee, false);
+    }
+
+    /// The checks and effects of `post_intent`; `lock` = refuse inside the intent lock.
+    fn accept_intent(&mut self, signed: &SignedIntent, tee: Option<TeeProof>, lock: bool) {
         let before = env::storage_usage();
         let i = &signed.intent;
         require!(i.agent_pk.0.len() == 32, "agent_pk length");
@@ -193,7 +319,7 @@ impl Contract {
             "duel closed"
         );
         require!(
-            env::block_timestamp() + self.intent_lock_ns < duel.close_at.0,
+            !lock || env::block_timestamp() + self.intent_lock_ns < duel.close_at.0,
             "intent lock"
         );
         require!(i.expires_at.0 >= duel.close_at.0, "intent expired");
@@ -407,6 +533,7 @@ impl Contract {
         });
         let half = pool / 2;
         for (pk, share) in [(&pk_a, half + pool % 2), (&pk_b, half)] {
+            self.commitments.remove(&commit_key(duel_id.0, pk));
             let a = self.agents.get_mut(pk).expect("agent missing");
             a.bond.0 += share;
             a.in_duel = None;
@@ -417,7 +544,8 @@ impl Contract {
         ));
     }
 
-    /// Scores both agents, slashes the loser into the pool, pays the pool to the winner, counts the
+    /// Scores both agents, slashes `no_reveal_bps` of the bond of each side that left a commitment
+    /// unrevealed, slashes the loser into the pool, pays the pool to the winner, counts the
     /// injections the winner survived, frees both agents, prunes the injection list.
     fn finish(&mut self, id: u64, open: u64, close: u64) {
         let duel = self.duels.get_mut(&id).expect("duel missing");
@@ -441,10 +569,29 @@ impl Contract {
             slashed: U128(0),
             injections: injections.len() as u32,
         };
-        for (pk, pnl) in [(&pk_a, pnl_a), (&pk_b, pnl_b)] {
+        let mut flags = [false; 2];
+        for (side, (pk, pnl)) in [(&pk_a, pnl_a), (&pk_b, pnl_b)].into_iter().enumerate() {
+            // the freed commitment record outweighs the flag record written below
+            let unrevealed = self.commitments.remove(&commit_key(id, pk)).is_some();
             let a = self.agents.get_mut(pk).expect("agent missing");
             a.alpha_bps += pnl;
             a.in_duel = None;
+            if unrevealed {
+                let s = a.bond.0 * self.no_reveal_bps as u128 / 10_000;
+                a.bond.0 -= s;
+                pool += s;
+                flags[side] = true;
+                env::log_str(&format!(
+                    r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"no_reveal","data":{{"duel_id":{id},"agent_pk":"{}","slashed":"{s}"}}}}"#,
+                    near_sdk::base64::Engine::encode(
+                        &near_sdk::base64::prelude::BASE64_STANDARD,
+                        pk
+                    )
+                ));
+            }
+        }
+        if flags != [false; 2] {
+            self.no_reveal.insert(id, (flags[0], flags[1]));
         }
         if pnl_a == pnl_b {
             let half = pool / 2;

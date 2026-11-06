@@ -184,6 +184,12 @@ pub struct Config {
     /// `set_oracle` may not lower the lock or move the oracle.
     pub open_duels: u64,
     pub owner_fees: U128,
+    /// `post_intent` refused; intents go through `commit_intent` / `reveal_intent`.
+    pub commit_reveal: bool,
+    /// Bond share slashed at scoring per unrevealed commitment.
+    pub no_reveal_bps: u16,
+    /// `open_duel` refused; pairing only through `open_duel_consented`.
+    pub require_consent: bool,
 }
 
 // ---------------------------------------------------------------- Outlayer price oracle wire types

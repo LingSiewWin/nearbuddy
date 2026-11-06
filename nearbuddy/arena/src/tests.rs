@@ -1467,20 +1467,32 @@ fn agent_duels_index_grows_and_pages_newest_first() {
 }
 
 #[test]
-fn migrate_v12_starts_open_duels_at_zero_and_keeps_index() {
-    let (mut c, ..) = setup();
+fn migrate_v14_keeps_state_and_starts_commit_reveal_off() {
+    let (mut c, _, skb) = setup();
     let d0 = open(&mut c);
     resolve_at_close(&mut c, d0, UP);
-    // deploy-11 state: the current layout minus the trailing `open_duels` (u64)
+    let d1 = open(&mut c);
+    // deploy-12/13 state: the current layout minus the six appended fields
     c.duels.flush();
     c.agents.flush();
     c.agent_duels.flush();
     let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
-    assert_eq!(raw.split_off(raw.len() - 8), 0u64.to_le_bytes());
-    assert_eq!(&raw[raw.len() - 8..], LOCK.to_le_bytes());
+    let tail = raw.split_off(raw.len() - 19);
+    // commit_reveal false, no_reveal_bps 500, require_consent false, three 1-byte prefixes
+    assert_eq!(
+        tail,
+        [
+            0, 0xf4, 0x01, 0, 1, 0, 0, 0, 11, 1, 0, 0, 0, 12, 1, 0, 0, 0, 13
+        ]
+    );
+    assert_eq!(
+        &raw[raw.len() - 8..],
+        1u64.to_le_bytes(),
+        "open_duels ends the old layout"
+    );
     env::storage_write(b"STATE", &raw);
     ctx(CONTRACT, 0);
-    let mut m = Contract::migrate_v12();
+    let mut m = Contract::migrate_v14();
     let cfg = m.get_config();
     assert_eq!(
         (
@@ -1489,22 +1501,25 @@ fn migrate_v12_starts_open_duels_at_zero_and_keeps_index() {
             cfg.intent_lock_s,
             cfg.open_duels
         ),
-        (1, 60, 10, 0),
-        "lock survives, counter starts at zero"
+        (2, 60, 10, 1),
+        "config and the open-duel counter survive"
+    );
+    assert_eq!(
+        (cfg.commit_reveal, cfg.no_reveal_bps, cfg.require_consent),
+        (false, 500, false)
     );
     assert!(m.get_duel(U64(d0)).unwrap().resolved);
     assert_eq!(
         ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)),
-        vec![d0],
+        vec![d1, d0],
         "index survives"
     );
     assert_eq!(bond(&m, 1), bond(&c, 1));
-    let d1 = open(&mut m);
-    assert_eq!(
-        ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)),
-        vec![d1, d0]
-    );
-    assert_eq!(m.get_config().open_duels, 1);
+    // the duel running across the deploy takes a commit-reveal
+    let i = intent(&key(2).1, d1, Side::Long, 5_000, 1);
+    commit_at(&mut m, &skb, &i, &SALT, NOW);
+    reveal_at(&mut m, &skb, &i, &SALT, NOW);
+    assert!(m.get_duel(U64(d1)).unwrap().last_intent_b.is_some());
 }
 
 // ---------------------------------------------------------------- second-audit follow-ups
@@ -1637,4 +1652,298 @@ fn finish_with_an_uncounted_open_duel_does_not_underflow() {
     resolve_at_close(&mut c, d, UP);
     assert!(c.get_duel(U64(d)).unwrap().resolved);
     assert_eq!(c.get_config().open_duels, 0);
+}
+
+// ---------------------------------------------------------------- commit-reveal and consent
+
+const SALT: [u8; 32] = [9u8; 32];
+
+fn commitment(i: &Intent, salt: &[u8]) -> Vec<u8> {
+    let mut m = intent_message(i);
+    m.extend_from_slice(salt);
+    env::sha256(&m)
+}
+
+fn commit_sig(sk: &SigningKey, duel: u64, h: &[u8]) -> Base64VecU8 {
+    let msg = commit_bytes(&CONTRACT.parse().unwrap(), duel, h);
+    Base64VecU8(sk.sign(&msg).to_bytes().to_vec())
+}
+
+/// A relayer commits `sk`'s hidden intent `i` at `ts`.
+fn commit_at(c: &mut Contract, sk: &SigningKey, i: &Intent, salt: &[u8], ts: u64) {
+    let h = commitment(i, salt);
+    ctx_at(OPERATOR, 0, ts);
+    c.commit_intent(
+        i.duel_id,
+        i.agent_pk.clone(),
+        Base64VecU8(h.clone()),
+        commit_sig(sk, i.duel_id.0, &h),
+    );
+}
+
+fn reveal_at(c: &mut Contract, sk: &SigningKey, i: &Intent, salt: &[u8], ts: u64) {
+    ctx_at(OPERATOR, 0, ts);
+    c.reveal_intent(sign(sk, i), Base64VecU8(salt.to_vec()), None);
+}
+
+fn commit_reveal_on(c: &mut Contract) {
+    ctx(OWNER, 0);
+    c.set_commit_reveal(true, 500);
+}
+
+#[test]
+fn commit_then_reveal_inside_the_lock_scores_the_revealed_intent() {
+    let (mut c, _, skb) = setup();
+    commit_reveal_on(&mut c);
+    let d = open(&mut c);
+    let first = intent(&key(2).1, d, Side::Short, 5_000, 1);
+    let call = intent(&key(2).1, d, Side::Long, 5_000, 2);
+    let before = bond(&c, 2);
+    commit_at(&mut c, &skb, &first, &SALT, NOW);
+    let after_first = bond(&c, 2);
+    assert!(
+        after_first < before,
+        "commitment storage is paid from the bond"
+    );
+    commit_at(&mut c, &skb, &call, &SALT, CLOSE - LOCK - 1);
+    assert_eq!(
+        bond(&c, 2),
+        after_first - set_entry_cost(8 + 32 + 32),
+        "a replacement pays only its replay guard"
+    );
+    assert!(
+        c.get_duel(U64(d)).unwrap().last_intent_b.is_none(),
+        "nothing readable before the reveal"
+    );
+    reveal_at(&mut c, &skb, &call, &SALT, CLOSE - 1);
+    assert!(c.commitments.get(&commit_key(d, &key(2).1)).is_none());
+    resolve_at_close(&mut c, d, UP);
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b), (0, 25));
+    assert_eq!(o.winner.unwrap().0, key(2).1);
+    assert_eq!(c.get_no_reveal(U64(d)), (false, false));
+}
+
+#[test]
+#[should_panic(expected = "commitment mismatch")]
+fn reveal_with_another_salt_panics() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    let i = intent(&key(2).1, d, Side::Long, 5_000, 1);
+    commit_at(&mut c, &skb, &i, &SALT, NOW);
+    reveal_at(&mut c, &skb, &i, &[8u8; 32], NOW);
+}
+
+#[test]
+#[should_panic(expected = "commitment mismatch")]
+fn replaced_commitment_cannot_be_revealed() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    let first = intent(&key(2).1, d, Side::Short, 5_000, 1);
+    commit_at(&mut c, &skb, &first, &SALT, NOW);
+    commit_at(
+        &mut c,
+        &skb,
+        &intent(&key(2).1, d, Side::Long, 5_000, 2),
+        &SALT,
+        NOW,
+    );
+    reveal_at(&mut c, &skb, &first, &SALT, NOW);
+}
+
+#[test]
+#[should_panic(expected = "commitment used")]
+fn replayed_commit_after_reveal_panics() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    let i = intent(&key(2).1, d, Side::Long, 5_000, 1);
+    commit_at(&mut c, &skb, &i, &SALT, NOW);
+    reveal_at(&mut c, &skb, &i, &SALT, NOW);
+    // anyone resubmits the public commit tx so the agent cannot reveal and gets slashed
+    commit_at(&mut c, &skb, &i, &SALT, NOW);
+}
+
+#[test]
+#[should_panic(expected = "no commitment")]
+fn reveal_without_commitment_panics() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    reveal_at(
+        &mut c,
+        &skb,
+        &intent(&key(2).1, d, Side::Long, 5_000, 1),
+        &SALT,
+        NOW,
+    );
+}
+
+#[test]
+#[should_panic(expected = "bad commit signature")]
+fn commit_signed_by_another_key_panics() {
+    let (mut c, ska, _) = setup();
+    let d = open(&mut c);
+    let h = commitment(&intent(&key(2).1, d, Side::Long, 5_000, 1), &SALT);
+    ctx(OPERATOR, 0);
+    c.commit_intent(
+        U64(d),
+        Base64VecU8(key(2).1),
+        Base64VecU8(h.clone()),
+        commit_sig(&ska, d, &h),
+    );
+}
+
+#[test]
+#[should_panic(expected = "intent lock")]
+fn commit_inside_lock_panics() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    let i = intent(&key(2).1, d, Side::Long, 5_000, 1);
+    commit_at(&mut c, &skb, &i, &SALT, CLOSE - LOCK);
+}
+
+#[test]
+#[should_panic(expected = "commit first")]
+fn post_intent_refused_when_commit_reveal_on() {
+    let (mut c, _, skb) = setup();
+    commit_reveal_on(&mut c);
+    let d = open(&mut c);
+    post_b(&mut c, &skb, d, Side::Long, 1);
+}
+
+#[test]
+fn unrevealed_commitment_is_slashed_into_the_pool_and_flagged() {
+    // commit_reveal is off: commit still works, and leaving it unrevealed still costs
+    let (mut c, ska, skb) = setup();
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    post_a(&mut c, &ska, &tee, d, Side::Long, 1);
+    let i = intent(&key(2).1, d, Side::Short, 5_000, 1);
+    commit_at(&mut c, &skb, &i, &SALT, NOW);
+    let (bond_a, bond_b) = (bond(&c, 1), bond(&c, 2));
+    resolve_at_close(&mut c, d, UP);
+    let no_reveal = bond_b * 500 / 10_000;
+    let lost = (bond_b - no_reveal) * 1_000 / 10_000;
+    assert_eq!(bond(&c, 2), bond_b - no_reveal - lost);
+    assert_eq!(bond(&c, 1), bond_a + no_reveal + lost);
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    assert_eq!((o.pnl_a, o.pnl_b, o.slashed.0), (25, 0, lost));
+    assert_eq!(c.get_no_reveal(U64(d)), (false, true));
+    assert!(c.commitments.get(&commit_key(d, &key(2).1)).is_none());
+}
+
+#[test]
+fn void_drops_unrevealed_commitments_without_slashing() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    commit_at(
+        &mut c,
+        &skb,
+        &intent(&key(2).1, d, Side::Long, 5_000, 1),
+        &SALT,
+        NOW,
+    );
+    let bond_b = bond(&c, 2);
+    ctx_at(OPERATOR, 0, CLOSE + VOID_AFTER_NS);
+    c.void_duel(U64(d));
+    assert_eq!(bond(&c, 2), bond_b);
+    assert!(c.commitments.get(&commit_key(d, &key(2).1)).is_none());
+    assert_eq!(c.get_no_reveal(U64(d)), (false, false));
+}
+
+#[test]
+#[should_panic(expected = "duels open")]
+fn commit_reveal_cannot_flip_while_a_duel_is_open() {
+    let (mut c, ..) = setup();
+    open(&mut c);
+    commit_reveal_on(&mut c);
+}
+
+#[test]
+#[should_panic(expected = "bps out of range")]
+fn no_reveal_bps_bounded() {
+    let (mut c, ..) = setup();
+    ctx(OWNER, 0);
+    c.set_commit_reveal(true, 10_001);
+}
+
+fn consent_sig(sk: &SigningKey, close_at: u64) -> Base64VecU8 {
+    let msg = consent_bytes(
+        &CONTRACT.parse().unwrap(),
+        &key(1).1,
+        &key(2).1,
+        "wrap.near",
+        close_at,
+    );
+    Base64VecU8(sk.sign(&msg).to_bytes().to_vec())
+}
+
+fn open_consented(c: &mut Contract, sig_a: Base64VecU8, sig_b: Base64VecU8) -> u64 {
+    ctx(OPERATOR, ORACLE_DEPOSIT + NEAR / 10);
+    c.open_duel_consented(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "wrap.near".into(),
+        U64(CLOSE),
+        sig_a,
+        sig_b,
+    )
+    .0
+}
+
+#[test]
+fn consented_open_by_anyone_pairs_the_agents() {
+    let (mut c, ska, skb) = setup();
+    ctx(OWNER, 0);
+    c.set_require_consent(true);
+    assert!(c.get_config().require_consent);
+    let d = open_consented(&mut c, consent_sig(&ska, CLOSE), consent_sig(&skb, CLOSE));
+    for seed in [1, 2] {
+        let a = c.get_agent(Base64VecU8(key(seed).1)).unwrap();
+        assert_eq!(a.in_duel, Some(U64(d)));
+    }
+    assert_eq!(c.get_config().open_duels, 1);
+}
+
+#[test]
+#[should_panic(expected = "bad consent signature")]
+fn consent_signed_for_another_close_panics() {
+    let (mut c, ska, skb) = setup();
+    open_consented(
+        &mut c,
+        consent_sig(&ska, CLOSE),
+        consent_sig(&skb, CLOSE + 1),
+    );
+}
+
+#[test]
+#[should_panic(expected = "consent required")]
+fn owner_open_refused_when_consent_required() {
+    let (mut c, ..) = setup();
+    ctx(OWNER, 0);
+    c.set_require_consent(true);
+    open(&mut c);
+}
+
+#[test]
+fn commit_and_consent_views_return_the_signed_bytes() {
+    let (c, ..) = setup();
+    let contract: AccountId = CONTRACT.parse().unwrap();
+    let h = vec![5u8; 32];
+    let m = c.commit_message(U64(3), Base64VecU8(h.clone())).0;
+    assert_eq!(m, commit_bytes(&contract, 3, &h));
+    assert!(m.starts_with(b"nearbuddy-commit-v1arena.testnet"));
+    assert_eq!(m.len(), 19 + 13 + 8 + 32);
+    let (a, b) = (key(1).1, key(2).1);
+    let m = c
+        .consent_message(
+            Base64VecU8(a.clone()),
+            Base64VecU8(b.clone()),
+            "wrap.near".into(),
+            U64(CLOSE),
+        )
+        .0;
+    assert_eq!(m, consent_bytes(&contract, &a, &b, "wrap.near", CLOSE));
+    assert!(m.starts_with(b"nearbuddy-duel-v1arena.testnet"));
+    assert!(m.ends_with(&CLOSE.to_le_bytes()));
+    assert_eq!(m.len(), 17 + 13 + 32 + 32 + 9 + 8);
 }
