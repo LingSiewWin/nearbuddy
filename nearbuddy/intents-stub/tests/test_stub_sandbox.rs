@@ -98,6 +98,37 @@ async fn arena_calls_against_the_stub() -> testresult::TestResult<()> {
             .fetch_from(&net)
     };
 
+    // only a minter the stub account added may credit (red team S1)
+    let r = call(
+        intents,
+        "stub_credit",
+        json!({"receiver_id": arena, "token_id": T, "amount": "100"}),
+        solver,
+        0,
+    )
+    .await?;
+    let failure = format!("{:?}", r.assert_failure());
+    assert!(failure.contains("not minter"), "{failure}");
+    // `#[private]`: the solver cannot add itself, only the stub account can
+    let r = call(
+        intents,
+        "add_minter",
+        json!({"account_id": solver}),
+        solver,
+        0,
+    )
+    .await?;
+    let failure = format!("{:?}", r.assert_failure());
+    assert!(failure.contains("is private"), "{failure}");
+    call(
+        intents,
+        "add_minter",
+        json!({"account_id": solver}),
+        intents,
+        0,
+    )
+    .await?
+    .assert_success();
     // the solver's swap delivers 100 to the arena's intents account
     let r = call(
         intents,
