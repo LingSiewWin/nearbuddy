@@ -7,6 +7,8 @@ import { type Summary, snapshot, summary } from "../api/arena";
 import { getDecisions } from "../api/dataset";
 import { ARENA } from "../api/near";
 import { tape } from "../api/tape";
+import { NETWORK_ID } from "../network";
+import { CHAIN } from "../ui/format";
 import Arena from "./arena";
 
 export const metadata: Metadata = {
@@ -18,7 +20,7 @@ export const metadata: Metadata = {
 /** The first frame when the chain did not answer in time: no duel, no standings; the client fills it in. */
 const waiting = (): Summary => ({
   at: 0,
-  network: "testnet",
+  network: NETWORK_ID,
   contract: ARENA,
   duels_total: 0,
   live_duels: [],
@@ -57,7 +59,7 @@ export default function ArenaPage() {
       fallback={
         <main className="page solo">
           <section className="p-story">
-            <h1>Reading the arena from NEAR testnet…</h1>
+            <h1>Reading the arena from {CHAIN}…</h1>
             <p className="sub">The live duel, the standings and every decision load from the chain.</p>
           </section>
         </main>

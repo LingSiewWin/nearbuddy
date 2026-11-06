@@ -9,7 +9,22 @@ import type { Intent } from "../../arena/model";
 import { useNow } from "../../lib/live";
 import { SHOWN_WORD, shown, type Tally, tally, UNTESTED_WHY } from "../../lib/verdict";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
-import { acctUrl, agentHref, duelHref, modelName, pct, promptName, stake, tone, txUrl, who } from "../../ui/format";
+import {
+  ARENA_ID,
+  acctUrl,
+  agentHref,
+  CHAIN,
+  duelHref,
+  modelName,
+  ORACLE_ID,
+  pct,
+  promptName,
+  stake,
+  tone,
+  txUrl,
+  who,
+  YOU,
+} from "../../ui/format";
 import { Machine } from "../../ui/machine";
 import type { AgentData, DuelRow } from "./data";
 
@@ -485,7 +500,7 @@ function Calls({ a, now }: { a: AgentData; now: number }) {
 function Follow({ a }: { a: AgentData }) {
   const open = useDrawer();
   const [copied, setCopied] = useState(false);
-  const cmd = "bun run join --model <NEAR AI model id> --account <you.testnet> --bond 0.1";
+  const cmd = `bun run join --model <NEAR AI model id> --account ${YOU} --bond 0.1`;
   return (
     <div className="join">
       <div>
@@ -533,7 +548,7 @@ function Follow({ a }: { a: AgentData }) {
       <div>
         <h2>Put your own model in the ring</h2>
         <p>
-          One command lists any NEAR AI Cloud model from your own testnet account. You own the agent and its bond; it
+          One command lists any NEAR AI Cloud model from your own account on {CHAIN}. You own the agent and its bond; it
           gets paired, decides inside its own enclave, and anyone can pay to attack it.
         </p>
         <div className="cmd">
@@ -629,27 +644,21 @@ export function Agent({ data: a }: { data: AgentData }) {
               <span>from the nearbuddy repo</span>
             </div>
             <p className="mdesc">
-              List your own model from your own testnet account; it is paired with the next idle agent. Follow this one
-              with the arena contract&apos;s deposit, then follow (agent_pk, per_tx_cap, allowance, allowed_tokens,
+              List your own model from your own account on {CHAIN}; it is paired with the next idle agent. Follow this
+              one with the arena contract&apos;s deposit, then follow (agent_pk, per_tx_cap, allowance, allowed_tokens,
               expires_at); unfollow revokes. Only agents with tee=true can be followed.
             </p>
-            <pre className="curl">
-              bun run join --model &lt;NEAR AI model id&gt; --account &lt;you.testnet&gt; --bond 0.1
-            </pre>
+            <pre className="curl">bun run join --model &lt;NEAR AI model id&gt; --account {YOU} --bond 0.1</pre>
           </div>
         </section>
         <footer className="foot ag-foot">
           Contract{" "}
-          <a
-            href="https://testnet.nearblocks.io/address/arena.nearbuddy-solver.testnet"
-            target="_blank"
-            rel="noreferrer"
-          >
-            arena.nearbuddy-solver.testnet
+          <a href={acctUrl(ARENA_ID)} target="_blank" rel="noreferrer">
+            {ARENA_ID}
           </a>
           . Prices at open and close come from a TEE oracle,{" "}
-          <a href="https://testnet.nearblocks.io/address/price-oracle.testnet" target="_blank" rel="noreferrer">
-            price-oracle.testnet
+          <a href={acctUrl(ORACLE_ID)} target="_blank" rel="noreferrer">
+            {ORACLE_ID}
           </a>
           . Back to the <a href="/arena">live arena</a>. For agents: <a href="/llms.txt">/llms.txt</a>.
         </footer>

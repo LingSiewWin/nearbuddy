@@ -10,14 +10,17 @@ import { Cmd } from "./cmd";
 import {
   ARENA_ID,
   account,
+  CHAIN,
   clock,
   modelName,
+  NETWORK_ID,
   promptName,
   stake,
   TAMPER_TX,
   tone,
   txUrl,
   who,
+  YOU,
   yoctoNear,
 } from "./format";
 
@@ -209,7 +212,7 @@ function Body({ item }: { item: DrawerItem }) {
         <Recheck ev={ev} />
         <div className="tamper">
           <b>Tampering is refused.</b> A real proof with one flipped byte was rejected on chain:{" "}
-          <a href={txUrl(TAMPER_TX)} target="_blank" rel="noreferrer">
+          <a href={txUrl(TAMPER_TX, "testnet")} target="_blank" rel="noreferrer">
             bad tee signature ↗
           </a>
         </div>
@@ -274,9 +277,9 @@ function Body({ item }: { item: DrawerItem }) {
           the cap, in the wrong token, expired or revoked. <code>unfollow</code> stops it.
         </li>
       </ol>
-      <p className="cap">With near-cli-rs, from your own testnet account (amounts in yoctoNEAR, expiry in ns):</p>
+      <p className="cap">With near-cli-rs, from your own account on {CHAIN} (amounts in yoctoNEAR, expiry in ns):</p>
       <Cmd
-        text={`near contract call-function as-transaction ${ARENA_ID} deposit empty-args prepaid-gas '30 Tgas' attached-deposit '1 NEAR' sign-as <you.testnet> network-config testnet sign-with-keychain send`}
+        text={`near contract call-function as-transaction ${ARENA_ID} deposit empty-args prepaid-gas '30 Tgas' attached-deposit '1 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
       />
       <Cmd
         text={`near contract call-function as-transaction ${ARENA_ID} follow json-args '${JSON.stringify({
@@ -289,11 +292,11 @@ function Body({ item }: { item: DrawerItem }) {
             expires_at: String(BigInt(Date.now() + 7 * 86_400_000) * 1_000_000n),
             revoked: false,
           },
-        })}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as <you.testnet> network-config testnet sign-with-keychain send`}
+        })}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
       />
       <p className="meta">
-        That follows with a 0.2 NEAR cap per fill, 1 NEAR in total, wrapped NEAR only, for a week. Testnet; no wallet
-        button yet. Owner {item.owner}.
+        That follows with a 0.2 NEAR cap per fill, 1 NEAR in total, wrapped NEAR only, for a week. No wallet button yet.
+        Owner {item.owner}.
       </p>
     </div>
   );

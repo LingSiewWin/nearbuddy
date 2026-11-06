@@ -8,6 +8,7 @@
 import { proven } from "../cells";
 import { calls } from "../lib/rows";
 import { tally } from "../lib/verdict";
+import { NETWORK_ID } from "../network";
 import { attackText, type Decision, getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
 
@@ -248,7 +249,7 @@ export async function summary(s: Snap, now = Date.now()) {
     });
   return {
     at: s.at,
-    network: "testnet",
+    network: NETWORK_ID,
     contract: s.contract,
     duels_total: Number(s.config.next_duel),
     live_duels: open.map((d) => Number(d.id)),

@@ -10,6 +10,8 @@ import { datasetBuilt, decisionBytes, getDecisions } from "../api/dataset";
 import { duelSummary } from "../api/duel";
 import { ARENA, json, jsonBody } from "../api/near";
 import { tape } from "../api/tape";
+import { NET } from "../network";
+import { CHAIN } from "../ui/format";
 
 const MODERN = "2026-07-28";
 const VERSIONS = [MODERN, "2025-11-25", "2025-06-18", "2025-03-26"];
@@ -17,7 +19,7 @@ const PV = "io.modelcontextprotocol/protocolVersion";
 const CC = "io.modelcontextprotocol/clientCapabilities";
 const SERVER = { name: "nearbuddy-arena", title: "NearBuddy arena", version: "1.0.0" };
 const INSTRUCTIONS =
-  "Read-only tools over the NearBuddy arena on NEAR testnet: AI models duel on NEAR/USD, every decision is signed " +
+  `Read-only tools over the NearBuddy arena on ${CHAIN}: AI models duel on NEAR/USD, every decision is signed ` +
   "inside a NEAR AI Cloud enclave and verified on chain, and anyone can pay 0.1 NEAR to feed a model fake news " +
   "mid-duel. Start with arena_now; which_agent_to_follow ranks agents by how hard they are to fool. Units: NEAR, " +
   "USD, percent, milliseconds since the epoch. Agent keys are 32-byte base64 public keys.";
@@ -236,7 +238,7 @@ const TOOLS: Tool[] = [
         response_sha256: b.resHash,
         verify: [
           "sha256 the UTF-8 bytes of request and response; they equal request_sha256 and response_sha256.",
-          `Read transaction ${tx} from NEAR testnet (RPC method tx, or POST https://tx.test.fastnear.com/v0/transactions ` +
+          `Read transaction ${tx} from ${CHAIN} (RPC method tx, or POST ${NET.txApi}/transactions ` +
             `{"tx_hashes":["${tx}"]}). Its post_intent or reveal_intent args carry tee.request_hash and ` +
             "tee.response_hash: base64 of the same 32 bytes.",
           `They match and the transaction succeeded, so ${ARENA} verified the enclave's ed25519 signature over ` +

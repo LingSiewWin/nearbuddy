@@ -12,6 +12,7 @@ import { ARENA, viewOn } from "../../api/near";
 import { type ArenaEvent, decode, tape } from "../../api/tape";
 import type { Focus } from "../../arena/model";
 import { proven } from "../../cells";
+import { NET } from "../../network";
 
 export type DuelSide = Focus["a"] & { score: number | null };
 export type DuelData = Focus & {
@@ -24,7 +25,7 @@ export type DuelData = Focus & {
   at: number;
 };
 
-const TX_API = process.env.FASTNEAR_TX_API ?? "https://tx.test.fastnear.com";
+const TX_API = process.env.FASTNEAR_TX_API ?? NET.txApi; // ends in /v0, as in app/api/events
 const BLOCK_MS = 610; // testnet block time, only to aim the first history page; each page re-aims from its own blocks
 const ID = /^\d{1,12}$/;
 const view = viewOn(ARENA);
@@ -57,7 +58,7 @@ async function byHash(hashes: string[]): Promise<ArenaEvent[]> {
   for (let i = 0; i < hashes.length; i += 20) chunks.push(hashes.slice(i, i + 20));
   const lists = await Promise.all(
     chunks.map(async (c) => {
-      const { transactions } = await post<{ transactions: Tx[] }>("/v0/transactions", { tx_hashes: c });
+      const { transactions } = await post<{ transactions: Tx[] }>("/transactions", { tx_hashes: c });
       return Promise.all(
         (transactions ?? []).map(async (t) => {
           const e = decode(
@@ -93,7 +94,7 @@ async function history(opened: number, closes: number, anchor: { block: number; 
   let token = anchor ? aim(anchor.block, anchor.at) : undefined; // no anchor: read the newest page, aim from it
   const got: Meta[] = [];
   for (let i = 0; i < 6; i++) {
-    const r = await post<{ account_txs?: Meta[]; resume_token?: string }>("/v0/account", {
+    const r = await post<{ account_txs?: Meta[]; resume_token?: string }>("/account", {
       account_id: ARENA,
       max_tx_count: 200,
       ...(token ? { resume_token: token } : {}),

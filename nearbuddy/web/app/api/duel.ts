@@ -4,7 +4,7 @@
 // is throttled. `duelSummary()` is the v1 shape: human units, both sides, the attacks, the decisions with
 // reasoning from the published dataset, and the duel's events when they are still on the live tape.
 import { proven } from "../cells";
-import { NET } from "../network";
+import { NET, NETWORK_ID } from "../network";
 import { type Agent, type Duel, type Intent, ms, nearOf, snapshot, symbolOf, usd, ZERO } from "./arena";
 import { attackText, getDecisions } from "./dataset";
 import { ARENA, RPC, viewOn } from "./near";
@@ -118,7 +118,7 @@ export async function duelSummary(id: string, now = Date.now()) {
       );
   return {
     at: r.at,
-    network: "testnet",
+    network: NETWORK_ID,
     contract: r.contract,
     oracle: r.oracle,
     duel: n,

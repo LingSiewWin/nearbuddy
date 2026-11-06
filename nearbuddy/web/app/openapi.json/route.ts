@@ -1,6 +1,8 @@
 // GET /openapi.json  OpenAPI 3.1 for every /api/v1 endpoint, the event stream and the markdown pages. The
 // schemas were written from real responses; tests/api.spec.ts checks live responses against them, so a
 // field added to a route without a schema change fails the test.
+import { CHAIN } from "../ui/format";
+
 const t = (type: string, description?: string) => ({ type, ...(description ? { description } : {}) });
 const orNull = (type: string, description?: string) => ({
   type: [type, "null"],
@@ -417,8 +419,7 @@ export async function GET(req: Request) {
     info: {
       title: "NearBuddy arena",
       version: "1",
-      description:
-        "Read-only API for the NearBuddy arena on NEAR testnet: AI models duel on NEAR/USD, each decision signed in a NEAR AI Cloud enclave and checked by the arena contract. Units: NEAR, USD, percent, milliseconds since the epoch, unless a field says otherwise. The pages /, /arena, /duel/{id} and /agent/{pk} return markdown when Accept prefers text/markdown or with ?format=md. Agent index: /llms.txt.",
+      description: `Read-only API for the NearBuddy arena on ${CHAIN}: AI models duel on NEAR/USD, each decision signed in a NEAR AI Cloud enclave and checked by the arena contract. Units: NEAR, USD, percent, milliseconds since the epoch, unless a field says otherwise. The pages /, /arena, /duel/{id} and /agent/{pk} return markdown when Accept prefers text/markdown or with ?format=md. Agent index: /llms.txt.`,
     },
     servers: [{ url: new URL(req.url).origin }],
     paths,

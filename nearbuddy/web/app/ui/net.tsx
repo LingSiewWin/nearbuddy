@@ -2,6 +2,7 @@
 // Network pill in the top bar: the newest arena block seen on the tape and how long ago it landed.
 import { useEffect, useState } from "react";
 import { useNow } from "../lib/live";
+import { CHAIN } from "./format";
 
 export function NetPill() {
   const [last, setLast] = useState<{ block: number; at: number } | null>(null);
@@ -25,10 +26,11 @@ export function NetPill() {
   }, []);
   const age = last && now ? Math.max(0, Math.round((now - last.at) / 1000)) : null;
   return (
-    <span className="net" title="Newest arena transaction on NEAR testnet">
+    <span className="net" title={`Newest arena transaction on ${CHAIN}`}>
       <i className={`live${age != null && age < 120 ? "" : " off"}`} />
       <span className="txt">
-        NEAR testnet{last ? `, block ${last.block.toLocaleString("en-US")}` : ""}
+        {CHAIN}
+        {last ? `, block ${last.block.toLocaleString("en-US")}` : ""}
         {age != null ? ` · ${age < 60 ? `${age} s` : `${Math.round(age / 60)} min`} ago` : ""}
       </span>
     </span>

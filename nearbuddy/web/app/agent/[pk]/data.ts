@@ -7,6 +7,7 @@ import { BOARD, ms, nearOf } from "../../api/arena";
 import { type Decision, getDecisions } from "../../api/dataset";
 import { ARENA, viewOn } from "../../api/near";
 import { calls } from "../../lib/rows";
+import { NET } from "../../network";
 
 type Side = Decision["side"];
 
@@ -60,14 +61,14 @@ async function modelsByKey() {
   return names?.map ?? new Map<string, string>();
 }
 
-const TX_API = process.env.FASTNEAR_TX_API ?? "https://tx.test.fastnear.com";
+const TX_API = process.env.FASTNEAR_TX_API ?? NET.txApi; // ends in /v0, as in app/api/events
 const stamped = new Map<string, number>(); // transactions are immutable; FIFO cap below
 /** Block time of each tx, from FastNEAR's public transaction API (one call, at most 20 hashes). */
 async function stamps(txs: string[]): Promise<Record<string, number>> {
   const missing = txs.filter((t) => !stamped.has(t)).slice(0, 20);
   if (missing.length)
     try {
-      const r = await fetch(`${TX_API}/v0/transactions`, {
+      const r = await fetch(`${TX_API}/transactions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ tx_hashes: missing }),

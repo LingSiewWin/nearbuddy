@@ -8,7 +8,7 @@
 import type { Fill } from "../cells";
 import { calls } from "../lib/rows";
 import { tally } from "../lib/verdict";
-import { NET } from "../network";
+import { NET, NETWORK_ID } from "../network";
 import { type Agent, type Duel, type Mandate, ms, nearOf, snapshot } from "./arena";
 import { getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
@@ -180,7 +180,7 @@ export async function agentSummary(pk: string) {
   const count = (x: string) => done.filter((d) => d.result === x).length;
   return {
     at: r.at,
-    network: "testnet",
+    network: NETWORK_ID,
     contract: r.contract,
     agent: a.pk,
     model: a.model_id,

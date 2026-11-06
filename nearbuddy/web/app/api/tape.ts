@@ -9,12 +9,13 @@
 import { attackText } from "./dataset";
 import { ARENA } from "./near";
 
-const TX_API = process.env.FASTNEAR_TX_API ?? "https://tx.test.fastnear.com";
+const TX_API = process.env.FASTNEAR_TX_API ?? NET.txApi; // ends in /v0, as in app/api/events
 const TTL = 3_000;
 const LIST = 100; // newest transactions decoded (about an hour of arena activity)
 const BATCH = 20; // the transactions endpoint takes at most 20 hashes
 
 import type { Side } from "../lib/verdict";
+import { NET } from "../network";
 
 type Base = { tx: string; at: number; block: number; ok: boolean; signer: string };
 export type ArenaEvent = Base &
@@ -202,7 +203,7 @@ let cache: { at: number; list: ArenaEvent[] } | null = null;
 let inflight: Promise<ArenaEvent[]> | null = null;
 
 async function build(): Promise<ArenaEvent[]> {
-  const { account_txs } = await post<{ account_txs: AccountTx[] }>("/v0/account", {
+  const { account_txs } = await post<{ account_txs: AccountTx[] }>("/account", {
     account_id: ARENA,
     max_tx_count: LIST,
   });
@@ -213,7 +214,7 @@ async function build(): Promise<ArenaEvent[]> {
   for (let i = 0; i < missing.length; i += BATCH) chunks.push(missing.slice(i, i + BATCH));
   await Promise.all(
     chunks.map(async (c) => {
-      const { transactions } = await post<{ transactions: TxDetail[] }>("/v0/transactions", {
+      const { transactions } = await post<{ transactions: TxDetail[] }>("/transactions", {
         tx_hashes: c.map((m) => m.transaction_hash),
       });
       const byHash = new Map(transactions.map((t) => [t.transaction.hash, t]));

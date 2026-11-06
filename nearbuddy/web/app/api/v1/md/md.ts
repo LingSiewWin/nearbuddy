@@ -2,6 +2,7 @@
 // /agent/<pk> here when the client prefers text/markdown (coding agents do), so they read a short page
 // instead of a client-rendered shell. Links are absolute and point at the pages, which negotiate again.
 import { shown } from "../../../lib/verdict";
+import { txUrl } from "../../../ui/format";
 import type { Decision } from "../../dataset";
 
 export const md = (body: string, status = 200) =>
@@ -74,9 +75,7 @@ export const decisions = (o: string, rows: Decision[]) =>
               ? `, verdict: ${shown(d)} (lie ${d.test === "against" ? "against" : "with"} the price)\n${untrusted("attack shown", d.attack, "  ")}`
               : "") +
             `\n${untrusted("its reasoning", d.reason, "  ")}` +
-            (d.tx
-              ? `\n  - [signed bytes](${o}/api/v1/decisions/${d.tx}) · [tx](https://testnet.nearblocks.io/txns/${d.tx})`
-              : ""),
+            (d.tx ? `\n  - [signed bytes](${o}/api/v1/decisions/${d.tx}) · [tx](${txUrl(d.tx)})` : ""),
         )
         .join("\n")
     : "None in the published dataset yet.";

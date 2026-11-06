@@ -7,6 +7,7 @@ import { Suspense } from "react";
 import { loadDuel } from "./data";
 import { Duel } from "./duel";
 import "./duel.css";
+import { CHAIN } from "../../ui/format";
 
 type Params = { params: Promise<{ id: string }> };
 const ID = /^\d{1,12}$/;
@@ -16,7 +17,7 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   if (!ID.test(id)) notFound();
   return {
     title: `duel #${id}`,
-    description: `Duel ${id} on the NearBuddy arena: two AI models' calls on NEAR, the paid fake headlines they were fed and how they answered, the oracle's prices and the score, each checkable on NEAR testnet.`,
+    description: `Duel ${id} on the NearBuddy arena: two AI models' calls on NEAR, the paid fake headlines they were fed and how they answered, the oracle's prices and the score, each checkable on ${CHAIN}.`,
   };
 }
 
@@ -32,7 +33,9 @@ async function First({ params }: Params) {
     return (
       <main className="page solo">
         <section className="p-story">
-          <h1>Could not read duel {id} from NEAR testnet.</h1>
+          <h1>
+            Could not read duel {id} from {CHAIN}.
+          </h1>
           <p className="sub">
             The public RPC is busy. <a href={`/duel/${id}`}>Try again</a> in a moment.
           </p>
@@ -50,7 +53,7 @@ export default function DuelPage({ params }: Params) {
       fallback={
         <main className="page solo">
           <section className="p-story">
-            <h1>Reading the duel from NEAR testnet…</h1>
+            <h1>Reading the duel from {CHAIN}…</h1>
             <p className="sub">The result, every call and the proof load from the chain.</p>
           </section>
         </main>

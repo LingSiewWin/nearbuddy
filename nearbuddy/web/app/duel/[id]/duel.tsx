@@ -7,7 +7,22 @@ import { useEffect, useState } from "react";
 import { type Intent, isCall, markPct, openOf } from "../../arena/model";
 import { type Tick, useNow, usePrice } from "../../lib/live";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
-import { acctUrl, clock, mmss, near, pct, sideWord, stake, TAMPER_TX, txUrl, usd, who } from "../../ui/format";
+import {
+  ARENA_ID,
+  acctUrl,
+  CHAIN,
+  clock,
+  mmss,
+  near,
+  ORACLE_ID,
+  pct,
+  sideWord,
+  stake,
+  TAMPER_TX,
+  txUrl,
+  usd,
+  who,
+} from "../../ui/format";
 import { Machine } from "../../ui/machine";
 import { type DuelData, type DuelSide, loadDuel } from "./data";
 import { Race, tones } from "./race";
@@ -163,12 +178,12 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
         </section>
         <footer className="foot">
           Contract{" "}
-          <a href={acctUrl("arena.nearbuddy-solver.testnet")} target="_blank" rel="noreferrer">
-            arena.nearbuddy-solver.testnet
+          <a href={acctUrl(ARENA_ID)} target="_blank" rel="noreferrer">
+            {ARENA_ID}
           </a>
           . Prices at open and close come from a TEE oracle,{" "}
-          <a href={acctUrl("price-oracle.testnet")} target="_blank" rel="noreferrer">
-            price-oracle.testnet
+          <a href={acctUrl(ORACLE_ID)} target="_blank" rel="noreferrer">
+            {ORACLE_ID}
           </a>
           . The line is Coinbase NEAR-USD. For agents: <a href="/llms.txt">/llms.txt</a>.
         </footer>
@@ -399,7 +414,7 @@ function Proof({ d }: { d: DuelData }) {
   return (
     <>
       <h2>Check it yourself</h2>
-      <p className="lede">The result and every call on this page come from these transactions on NEAR testnet.</p>
+      <p className="lede">The result and every call on this page come from these transactions on {CHAIN}.</p>
       <ul className="proof">
         <li>
           <b>Opening price {usd(d.open)}</b>
@@ -445,7 +460,7 @@ function Proof({ d }: { d: DuelData }) {
         <li>
           <b>Tampering is refused</b>
           <span>A real proof with one flipped byte was rejected by the contract.</span>
-          <a href={txUrl(TAMPER_TX)} {...ext}>
+          <a href={txUrl(TAMPER_TX, "testnet")} {...ext}>
             refusal ↗
           </a>
         </li>
@@ -478,7 +493,7 @@ function ProofMachine({ d }: { d: DuelData }) {
     <div className="m">
       <div className="ep">
         <b>TX</b>
-        <code>https://testnet.nearblocks.io/txns/&lt;hash&gt;</code>
+        <code>{txUrl("<hash>")}</code>
         <span>the transactions behind this page</span>
       </div>
       <p className="mdesc">

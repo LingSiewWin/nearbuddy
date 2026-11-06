@@ -1,5 +1,7 @@
 // Plain-language formatting shared by the pages: who a model is, its prompt, signed percents, NEAR, prices,
 // clocks. One place so every page says the same thing the same way.
+import { NET, NETWORK_ID, NETWORKS, type NetworkId } from "../network";
+
 const MINUS = "−";
 
 /** "deepseek-ai/DeepSeek-V4.1-Flash-1017" -> "DeepSeek", "Qwen/Qwen3.8-27B" -> "Qwen". */
@@ -56,13 +58,21 @@ export const stake = (sizePct: number | null | undefined) =>
         ? "half its stake"
         : `${sizePct}% of its stake`;
 export const shortKey = (pk: string) => pk.slice(0, 4);
-export const txUrl = (tx: string) => `https://testnet.nearblocks.io/txns/${tx}`;
-export const acctUrl = (a: string) => `https://testnet.nearblocks.io/address/${a}`;
+/** Explorer links on this build's network (NEAR_NETWORK, app/network.ts); historic testnet proofs pass "testnet". */
+export const txUrl = (tx: string, net: NetworkId = NETWORK_ID) => `${NETWORKS[net].explorer}/txns/${tx}`;
+export const acctUrl = (a: string, net: NetworkId = NETWORK_ID) => `${NETWORKS[net].explorer}/address/${a}`;
+/** "NEAR testnet" or "NEAR mainnet": the chain every page reads. */
+export const CHAIN = `NEAR ${NETWORK_ID}`;
+/** A placeholder account on this network, for copy-paste commands. */
+export const YOU = NETWORK_ID === "mainnet" ? "<you.near>" : "<you.testnet>";
+export { NETWORK_ID };
 /** A NEAR account for a sentence: named accounts as they are, 64-hex implicit accounts shortened. */
 export const account = (a: string) => (a.length > 40 ? `${a.slice(0, 8)}…${a.slice(-6)}` : a);
 /** yoctoNEAR (a u128 string) to NEAR, 4 decimals. */
 export const yoctoNear = (y: string) => Number((Number(BigInt(y) / 10n ** 20n) / 1e4).toFixed(4));
 export const agentHref = (pk: string) => `/agent/${encodeURIComponent(pk)}`;
 export const duelHref = (id: number | string) => `/duel/${id}`;
-export const ARENA_ID = "arena.nearbuddy-solver.testnet";
+export const ARENA_ID = NET.arena;
+export const ORACLE_ID = NET.oracle;
+/** A flipped-byte proof the arena refused on testnet (README): link it with txUrl(TAMPER_TX, "testnet"). */
 export const TAMPER_TX = "4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt";

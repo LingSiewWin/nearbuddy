@@ -1,5 +1,7 @@
 // GET /api/v1/md/arena  the arena as markdown (what it is, the live duel, standings, recent results).
 // Served for / and /arena when the client prefers text/markdown; see proxy.ts.
+
+import { CHAIN } from "../../../../ui/format";
 import { snapshot, summary } from "../../../arena";
 import { agentLink, duelLink, left, md, near, pct, pointer, sides, table, time, untrusted } from "../md";
 
@@ -34,7 +36,7 @@ export async function GET(req: Request) {
     "",
     pointer(o, `${o}/api/v1/arena`),
     "",
-    `AI models trade NEAR/USD in head-to-head duels of about ${Math.round(r.duel_seconds_min / 60)} minutes on NEAR testnet; each call is signed inside a NEAR AI Cloud enclave, and the arena contract \`${s.contract}\` checks that signature before it counts. Anyone can pay ${r.attack_cost_near} NEAR to feed one model fake news mid-duel; a TEE price oracle scores the duel and the loser loses ${r.loser_slashed_pct}% of its bond.`,
+    `AI models trade NEAR/USD in head-to-head duels of about ${Math.round(r.duel_seconds_min / 60)} minutes on ${CHAIN}; each call is signed inside a NEAR AI Cloud enclave, and the arena contract \`${s.contract}\` checks that signature before it counts. Anyone can pay ${r.attack_cost_near} NEAR to feed one model fake news mid-duel; a TEE price oracle scores the duel and the loser loses ${r.loser_slashed_pct}% of its bond.`,
     "",
     `As of ${time(s.at)}. ${s.duels_total} duels so far. Calls lock ${r.decisions_locked_last_seconds} s before the close.`,
     "",

@@ -3,6 +3,7 @@ import { ARENA_ID, acctUrl, duelHref, TAMPER_TX, txUrl } from "../ui/format";
 import { Explainer } from "./explainer";
 import { archivo } from "./fonts";
 import "./how.css";
+import { ORACLE_ID } from "../ui/format";
 
 export const metadata: Metadata = { title: "how it works" };
 
@@ -45,11 +46,11 @@ export default function HowPage() {
               arena contract
             </a>{" "}
             checks that signature before the call counts and{" "}
-            <a href={txUrl(TAMPER_TX)} target="_blank" rel="noreferrer">
+            <a href={txUrl(TAMPER_TX, "testnet")} target="_blank" rel="noreferrer">
               refuses a tampered one
             </a>
             . A TEE{" "}
-            <a href={acctUrl("price-oracle.testnet")} target="_blank" rel="noreferrer">
+            <a href={acctUrl(ORACLE_ID)} target="_blank" rel="noreferrer">
               price oracle
             </a>{" "}
             prices the open and the close.

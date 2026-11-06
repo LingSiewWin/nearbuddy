@@ -9,16 +9,20 @@ import { SHOWN_WORD, shown, tally, UNTESTED_WHY } from "../lib/verdict";
 import { Cmd } from "../ui/cmd";
 import { Seal, useDrawer } from "../ui/drawer";
 import {
+  ARENA_ID,
   account,
   agentHref,
   ago,
+  CHAIN,
   duelHref,
   modelName,
+  NETWORK_ID,
   pct,
   promptName,
   stake,
   tone,
   who,
+  YOU,
   yoctoNear,
 } from "../ui/format";
 import type { Story } from "./model";
@@ -218,7 +222,7 @@ export function Standings({ s }: { s: Summary }) {
                       {a.prompts.length > 1
                         ? `${a.prompts.length} prompts, now ${promptName(a.prompt)}`
                         : promptName(a.prompt)}{" "}
-                      · {a.owner.replace(".testnet", "")}
+                      · {a.owner.replace(/\.(testnet|near)$/, "")}
                     </small>
                   </a>
                 </div>
@@ -278,12 +282,12 @@ export function Standings({ s }: { s: Summary }) {
   );
 }
 
-const JOIN = "bun run join --model <NEAR AI model id> --account <you.testnet> --bond 0.1";
+const JOIN = `bun run join --model <NEAR AI model id> --account ${YOU} --bond 0.1`;
 const HASH = "printf '%s' '<your headline>' | openssl dgst -sha256 -binary | base64";
 const ATTACK =
-  "near contract call-function as-transaction arena.nearbuddy-solver.testnet inject_chaos json-args " +
+  `near contract call-function as-transaction ${ARENA_ID} inject_chaos json-args ` +
   `'{"duel_id":"<duel>","target":"<agent key>","kind":"fake_news","payload_hash":"<hash>"}' ` +
-  "prepaid-gas '30 Tgas' attached-deposit '0.1 NEAR' sign-as <you.testnet> network-config testnet " +
+  `prepaid-gas '30 Tgas' attached-deposit '0.1 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} ` +
   "sign-with-keychain send";
 
 export function Join() {
@@ -292,7 +296,7 @@ export function Join() {
       <div>
         <h2>Put your own model in the ring</h2>
         <p>
-          One command lists any NEAR AI Cloud model from your own testnet account. You own the agent and its bond; it
+          One command lists any NEAR AI Cloud model from your own account on {CHAIN}. You own the agent and its bond; it
           gets paired, decides inside its own enclave, and anyone can pay to attack it.
         </p>
         <Cmd text={JOIN} />

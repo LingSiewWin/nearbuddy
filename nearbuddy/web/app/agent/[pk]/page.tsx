@@ -7,6 +7,7 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 import { Agent, Refresh } from "./agent";
 import "./agent.css";
+import { CHAIN } from "../../ui/format";
 import { load, parsePk } from "./data";
 
 type Params = { params: Promise<{ pk: string }> };
@@ -30,7 +31,7 @@ async function Live({ params }: Params) {
   } catch {
     return (
       <main className="ag-msg">
-        <h1>Could not read this agent from NEAR testnet.</h1>
+        <h1>Could not read this agent from {CHAIN}.</h1>
         <p className="sub">The public RPC is busy. The page tries again every 20 seconds.</p>
         <Refresh />
       </main>
@@ -45,7 +46,7 @@ export default function AgentPage({ params }: Params) {
     <Suspense
       fallback={
         <main className="ag-msg">
-          <h1>Reading this agent from NEAR testnet…</h1>
+          <h1>Reading this agent from {CHAIN}…</h1>
           <p className="sub">Its record, the lies it was fed and its own reasoning load from the chain.</p>
         </main>
       }

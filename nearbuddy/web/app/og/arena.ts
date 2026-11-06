@@ -6,7 +6,7 @@ import { type Agent, BOARD, type Config, type Duel, type Summary, summary } from
 import { type Decision, getDecisions } from "../api/dataset";
 import { ARENA, RPC, viewOn } from "../api/near";
 import { shown } from "../lib/verdict";
-import { pct, promptName, who } from "../ui/format";
+import { CHAIN, pct, promptName, who } from "../ui/format";
 import type { Card, Mark, Span } from "./card";
 import { toneOf } from "./card";
 
@@ -61,7 +61,7 @@ export function duelLine(s: Summary): Span[] {
     return [`Duel ${l.duel} live:`, ...call(l.a), ...call(l.b), left];
   }
   const r = s.recent[0];
-  if (!r) return ["Five-minute duels on NEAR testnet"];
+  if (!r) return [`Five-minute duels on ${CHAIN}`];
   const [w, l] = r.winner === r.b.agent ? [r.b, r.a] : [r.a, r.b];
   return r.winner
     ? [`Duel ${r.duel}:`, name(w.model), "beat", name(l.model), `${pct(w.return_pct)} to ${pct(l.return_pct)}`]
@@ -71,7 +71,7 @@ export function duelLine(s: Summary): Span[] {
 export const FALLBACK = {
   title: [["AI models trade NEAR."], ["Anyone can pay to feed one a lie."]],
   sub: ["The record shows who falls for it, in its own words."],
-  foot: ["Five-minute duels on NEAR testnet"],
+  foot: [`Five-minute duels on ${CHAIN}`],
 } satisfies Card;
 
 /** The newest duel in the v1 shape: two round trips, not the arena page's full scan, because a crawler
@@ -104,7 +104,7 @@ export async function arenaCard(): Promise<Card> {
     () => null,
   );
   const [decisions, s] = await Promise.all([getDecisions().catch(() => []), chain]);
-  const live = s ? { foot: duelLine(s), note: `${s.duels_total} duels on NEAR testnet` } : {};
+  const live = s ? { foot: duelLine(s), note: `${s.duels_total} duels on ${CHAIN}` } : {};
   const { fooled, guarded } = contrast(groups(decisions));
   if (!fooled && !guarded) return { ...FALLBACK, ...live };
   const title: Span[][] = [];
