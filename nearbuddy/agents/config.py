@@ -84,5 +84,6 @@ def network_file(path: Path, network: str = NETWORK) -> Path:
     return path.with_name(f"{path.stem}-{network}{path.suffix}")
 
 
-DATA = network_file(HERE / "data" / "decisions.jsonl")
+# NEARBUDDY_DATA moves the dataset (sandbox and test runs must not append to the real one)
+DATA = Path(ENV.get("NEARBUDDY_DATA") or network_file(HERE / "data" / "decisions.jsonl"))
 ATTEST_DIR = network_file(HERE / "data" / "attestations")
