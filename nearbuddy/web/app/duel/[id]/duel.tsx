@@ -4,7 +4,7 @@
 // trail in the rail. Agent view swaps each panel for its endpoint. While the duel is open the data is
 // re-read every 10 s; once it is scored, never again.
 import { useEffect, useState } from "react";
-import { type Intent, isCall, markPct, openOf } from "../../arena/model";
+import { type Attack, type Intent, isCall, markPct, openOf, replyTo } from "../../arena/model";
 import { type Tick, useNow, usePrice } from "../../lib/live";
 import { NET } from "../../network";
 import { DrawerProvider, Seal, useDrawer } from "../../ui/drawer";
@@ -335,6 +335,28 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
         </>
       );
     }
+  }
+  // as on the arena: the duel's newest paid lie and the target's answer to it, while the duel runs
+  const hit = d.live && now ? d.events.findLast((e): e is Attack => e.kind === "attack" && e.ok) : undefined;
+  if (hit) {
+    const target = hit.target === d.a.agent ? d.a : d.b;
+    const answer = replyTo(hit, d.events);
+    const ago = Math.max(0, Math.round((now - hit.at) / 1000));
+    const closed = now > d.closes;
+    sub = (
+      <>
+        {sub}{" "}
+        <span className="lie-now">
+          {nm(target)} was fed a paid fake headline {ago < 60 ? `${ago} s` : `${Math.round(ago / 60)} min`} ago.{" "}
+          {answer
+            ? `Its answer: ${sideWord(answer.side)}.`
+            : closed
+              ? "It made no call after it that was revealed."
+              : "Its answer is not revealed yet."}{" "}
+          The headline and the model&apos;s own words are below.
+        </span>
+      </>
+    );
   }
   const left = Math.max(0, Math.round((d.closes - now) / 1000));
   const span = Math.max(1, (d.closes - d.opened) / 1000);
