@@ -10,6 +10,23 @@ import type { Tick } from "../lib/live";
 export type Intent = Extract<ArenaEvent, { kind: "intent" | "reveal" }>;
 export const isCall = (e: ArenaEvent): e is Intent => e.kind === "intent" || e.kind === "reveal";
 export type Attack = Extract<ArenaEvent, { kind: "attack" }>;
+/** When a call was fixed: a plain intent when it landed; a reveal when its commit landed (the agent's newest commit
+ *  in the same duel at or before the reveal), since under commit-reveal the side was chosen then, not at the reveal. */
+export const fixedAt = (c: Intent, events: ArenaEvent[]) =>
+  c.kind === "reveal"
+    ? Math.max(
+        0,
+        ...events
+          .filter((e) => e.kind === "commit" && e.ok && e.duel === c.duel && e.agent === c.agent && e.at <= c.at)
+          .map((e) => e.at),
+      ) || c.at
+    : c.at;
+/** The target's first call fixed after an attack: the call that could have read the lie. */
+export const replyTo = (a: Attack, events: ArenaEvent[]): Intent | null =>
+  events
+    .filter((e): e is Intent => isCall(e) && e.ok && e.duel === a.duel && e.agent === a.target)
+    .filter((c) => fixedAt(c, events) > a.at)
+    .sort((x, y) => x.at - y.at)[0] ?? null;
 export type Side = {
   agent: string;
   model: string;
@@ -150,6 +167,7 @@ export type Story = {
   model: string;
   duel: number;
   reply: Intent | null;
+  replyFixed?: number | null; // when the reply's side was chosen: its commit under commit-reveal, else the call
   d: Decision | null;
 };
 
@@ -164,10 +182,8 @@ export function latestStory(
   // the newest attack on an enclave-verified agent: red-team bots must not take over the story
   const atk = events.find((e): e is Attack => e.kind === "attack" && e.ok && trusted(e.target));
   if (atk) {
-    const reply =
-      events
-        .filter((e): e is Intent => isCall(e) && e.ok && e.duel === atk.duel && e.agent === atk.target && e.at > atk.at)
-        .sort((x, y) => x.at - y.at)[0] ?? null;
+    const reply = replyTo(atk, events);
+    const replyFixed = reply ? fixedAt(reply, events) : null;
     return {
       attack: atk,
       text: atk.text,
@@ -175,6 +191,7 @@ export function latestStory(
       model: modelOf(atk.target),
       duel: atk.duel,
       reply,
+      replyFixed,
       d: reply ? (byTx.get(reply.tx) ?? null) : null,
     };
   }

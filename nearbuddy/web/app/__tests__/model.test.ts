@@ -12,6 +12,7 @@ import {
   markPct,
   openOf,
   priceAt,
+  replyTo,
   type Side,
   withTape,
 } from "../arena/model";
@@ -371,5 +372,47 @@ describe("withTape: a sealed call is a commit newer than the side's last reveal"
     expect(g?.a).toMatchObject({ side: "Short", sealed: true });
     expect(g?.b).toMatchObject({ side: "Short", sealed: false });
     expect(withTape(f, [commit("a", 5)])?.a).toMatchObject({ side: null, sealed: true });
+  });
+});
+
+describe("replyTo: the call fixed after the attack, not the first reveal after it", () => {
+  const base = { tx: "t", block: 1, ok: true, signer: "s", duel: 7, agent: "a" };
+  const atk = {
+    ...base,
+    at: 100,
+    kind: "attack",
+    target: "a",
+    hash: "h",
+    text: null,
+    payer: "p",
+    deposit: 0.1,
+  } as unknown as Parameters<typeof replyTo>[0];
+  const commit = (at: number, tx: string): ArenaEvent => ({ ...base, tx, at, kind: "commit", commitment: "c" });
+  const reveal = (at: number, tx: string): ArenaEvent => ({
+    ...base,
+    tx,
+    at,
+    kind: "reveal",
+    side: "Short",
+    size: 5000,
+    nonce: "1",
+    tee: 2,
+  });
+  test("a reveal whose commit came before the attack is not the reply; the next sealed one is", () => {
+    const ev = [commit(50, "c1"), reveal(105, "r1"), commit(130, "c2"), reveal(250, "r2")];
+    expect(replyTo(atk, ev)?.tx).toBe("r2");
+  });
+  test("a plain intent after the attack is the reply", () => {
+    const plain: ArenaEvent = {
+      ...base,
+      tx: "i1",
+      at: 120,
+      kind: "intent",
+      side: "Long",
+      size: 5000,
+      nonce: "2",
+      tee: 2,
+    };
+    expect(replyTo(atk, [plain])?.tx).toBe("i1");
   });
 });

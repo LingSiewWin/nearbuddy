@@ -5,7 +5,7 @@
 // be read says "time unknown" rather than guessing.
 import { Fragment, useEffect, useRef } from "react";
 import type { Decision } from "../../api/dataset";
-import { type Attack, type Intent, isCall } from "../../arena/model";
+import { type Attack, type Intent, isCall, replyTo } from "../../arena/model";
 import { type Shown, shown, shownWord, type Test, UNTESTED_WHY, type Verdict } from "../../lib/verdict";
 import { Seal, useDrawer } from "../../ui/drawer";
 import { clock, mmss, pct, stake, usd, who } from "../../ui/format";
@@ -25,10 +25,7 @@ export function stories(d: DuelData): Story[] {
       const shown = d.decisions.find(
         (r) => r.agent === a.target && r.attack && (!a.text || r.attack === a.text) && !used.has(r.tx ?? ""),
       );
-      const reply =
-        (shown && calls.find((c) => c.tx === shown.tx)) ??
-        calls.find((c) => c.agent === a.target && c.at > a.at) ??
-        null;
+      const reply = (shown && calls.find((c) => c.tx === shown.tx)) ?? replyTo(a, d.events) ?? null;
       const dd = shown ?? d.decisions.find((r) => r.tx === reply?.tx) ?? null;
       if (dd?.tx) used.add(dd.tx);
       return { e: a, text: a.text ?? dd?.attack ?? null, target: a.target, reply, d: dd };

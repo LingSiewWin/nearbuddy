@@ -63,7 +63,8 @@ export function News({ story, now, publishedTo }: { story: Story | null; now: nu
         </>
       ) : story.reply ? (
         <p className="cap">
-          Its next call landed {Math.round((story.reply.at - (story.attack?.at ?? story.reply.at)) / 1000)} s later:{" "}
+          Its next call was {story.reply.kind === "reveal" ? "sealed" : "made"}{" "}
+          {Math.round(((story.replyFixed ?? story.reply.at) - (story.attack?.at ?? story.reply.at)) / 1000)} s later:{" "}
           {story.reply.side} with {stake(story.reply.size / 100)}.{" "}
           {publishedTo
             ? `Its reasoning is not in the published record yet: that ends at duel ${publishedTo}.`
