@@ -1,0 +1,35 @@
+// Each page reads the arena contract over the public RPC, so a run needs the network; ids and keys come
+// from /api/arena rather than fixtures. SHOT=1 also saves a 1440 px screenshot of the duel page to docs/.
+import { expect, test } from "@playwright/test";
+
+const box = (name: string) => `pre span.hi:text-is("${name}")`;
+
+test("/arena renders the STANDINGS box", async ({ page }) => {
+  await page.goto("/arena");
+  await expect(page.locator("body")).toContainText("STANDINGS");
+});
+
+test("/agent/<pk> renders the record box", async ({ page, request }) => {
+  const snap = await (await request.get("/api/arena")).json();
+  const pk = snap.leaderboard[0]?.pk as string;
+  expect(pk).toBeTruthy();
+  await page.goto(`/agent/${encodeURIComponent(pk)}`);
+  await expect(page.locator(box("record"))).toBeVisible();
+  await expect(page.locator("body")).toContainText(pk.slice(0, 10));
+});
+
+test("/duel/<newest> renders the sides box", async ({ page, request }) => {
+  const snap = await (await request.get("/api/arena")).json();
+  const id = Number(snap.config.next_duel) - 1;
+  expect(id).toBeGreaterThanOrEqual(0);
+  await page.goto(`/duel/${id}`);
+  await expect(page.locator(box("sides"))).toBeVisible();
+  await expect(page.locator("body")).toContainText(`DUEL #${id}`);
+  await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
+  if (process.env.SHOT) await page.screenshot({ path: "../docs/duel-page.png", fullPage: true });
+});
+
+test("/api/agent with a bad pk returns 400", async ({ request }) => {
+  expect((await request.get("/api/agent?pk=nope")).status()).toBe(400);
+  expect((await request.get("/api/duel?id=abc")).status()).toBe(400);
+});
