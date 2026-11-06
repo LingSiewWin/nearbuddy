@@ -38,8 +38,8 @@ def check_row(r: dict) -> tuple[bool, str]:
         return False, "no signature record"
     try:
         tee_proof(rec, r["model"], req, res)  # text, kind, ed25519 signature under signing_address
-    except TeeProofError as exc:
-        return False, f"enclave record: {exc}"
+    except (TeeProofError, KeyError, ValueError, TypeError) as exc:
+        return False, f"enclave record: {type(exc).__name__}: {str(exc)[:80]}"
     if r.get("intent", {}).get("proof_hash") != proof_hash(req, res):
         return False, "proof_hash differs"
     return True, "ok"

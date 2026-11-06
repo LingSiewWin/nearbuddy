@@ -111,7 +111,16 @@ def resolve_duel(solver: Solver, duel_id: str, attempts: int = 4) -> dict[str, A
     txs: list[str] = []
     outcome = None
     for _ in range(attempts):
-        r = solver.post("/resolve", {"duel_id": duel_id})
+        try:
+            r = solver.post("/resolve", {"duel_id": duel_id})
+        except RuntimeError as e:
+            if "no open price" not in str(e):
+                raise
+            # the oracle never delivered the open price (TEE fetch failed): ask again, then retry the close
+            print(f"  duel {duel_id} has no open price; re-asking the oracle")
+            solver.post("/open_price", {"duel_id": duel_id})
+            time.sleep(30)
+            continue
         if r.get("tx"):
             txs.append(r["tx"])
         outcome = wait_outcome(duel_id, 120 if r.get("sent", True) else 30)

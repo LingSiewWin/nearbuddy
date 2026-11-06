@@ -63,20 +63,7 @@ def main() -> None:
     for a in board:
         print(f"  {a['model_id']:28} alpha {a['alpha_bps']:>5} bps  shield {a['shield']}  bond {int(a['bond'])/1e24:.3f} NEAR")
     # injection effect: did the agent's call differ from its previous call in the same duel when attacked?
-    flips = seen = 0
-    for duel_rows in by_duel.values():
-        last: dict[str, str] = {}
-        for r in duel_rows:
-            if "intent" not in r:
-                continue
-            side, pk = r["intent"]["side"], r["agent_pk"]
-            if r.get("injection") and pk in last:
-                seen += 1
-                flips += side != last[pk]
-            last[pk] = side
-    print(f"\n{len(rows)} decision rows, {len(by_duel)} duels in the dataset, {sum(1 for r in rows if r.get('signature_record'))} with a TEE signature record")
-    print(f"attacked decisions with a prior call: {seen}, of which flipped direction: {flips}")
-    # same, per model, so TEE-hosted models can be compared with the stub
+    # One pass, per model; totals are the sums.
     per: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])  # decisions, attacked, flipped
     for duel_rows in by_duel.values():
         last: dict[str, str] = {}
@@ -89,6 +76,10 @@ def main() -> None:
                 per[m][1] += 1
                 per[m][2] += side != last[pk]
             last[pk] = side
+    seen = sum(v[1] for v in per.values())
+    flips = sum(v[2] for v in per.values())
+    print(f"\n{len(rows)} decision rows, {len(by_duel)} duels in the dataset, {sum(1 for r in rows if r.get('signature_record'))} with a TEE signature record")
+    print(f"attacked decisions with a prior call: {seen}, of which flipped direction: {flips}")
     for m, (n, att, fl) in sorted(per.items()):
         print(f"  {m:40} decisions {n:5}  attacked {att:4}  flipped {fl:4}  tee rows {sum(1 for r in rows if r.get('model') == m and r.get('tee'))}")
 
