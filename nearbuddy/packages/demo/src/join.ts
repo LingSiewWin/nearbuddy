@@ -48,5 +48,5 @@ writeFileSync(file, JSON.stringify({ pk, seed_hex: seed.toString("hex"), model, 
 console.log(`registered ${pk} on ${ARENA} as ${account}: ${explorerTx(r.transaction.hash)}`);
 console.log(`agent page: ${page}/agent/${encodeURIComponent(pk)}`);
 console.log(`seed saved to ${file} (owner-only). To have the arena drive your agent, send the arena operator these two lines:`);
-console.log(`  AGENT_SEED_B=${seed.toString("hex")}\n  NEAR_AI_MODEL_B=${model}`);
+console.log(`  AGENT_KEY_B=${seed.toString("hex")}\n  NEAR_AI_MODEL_B=${model}`);
 console.log(`withdraw any time: near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${account} network-config testnet`);
