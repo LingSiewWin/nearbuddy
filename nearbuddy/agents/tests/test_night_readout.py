@@ -3,6 +3,7 @@ filter, per-pair counts, the scored reveal per agent-duel against the intent loc
 arm, spot opens, pair 2 parse failures per cap and the verify-duel tally. The statistics themselves are
 injection_effects'/model_report's and are not re-tested here."""
 
+import base64
 import json
 import sys
 from pathlib import Path
@@ -35,8 +36,18 @@ def row(duel, pk, nonce, side="Long", pair=None, arm="B", **kw):
     return r
 
 
-def duel(resolved=True):
-    return {"open_price": "366000000", "close_at": str(CLOSE), "resolved": resolved, "outcome": None}
+def duel(resolved=True, la=None, lb=None):
+    """get_duel between agents "A" and "B"; `la`/`lb` = the nonce of last_intent_a/b, the call the duel scored."""
+    return {
+        "a": "A",
+        "b": "B",
+        "open_price": "366000000",
+        "close_at": str(CLOSE),
+        "resolved": resolved,
+        "outcome": None,
+        "last_intent_a": {"nonce": str(la)} if la else None,
+        "last_intent_b": {"nonce": str(lb)} if lb else None,
+    }
 
 
 def test_composition():
@@ -67,10 +78,9 @@ def test_composition():
     md = nr.render(
         rows,
         340,
-        duels={"339": duel(), "340": duel(), "341": duel(), "342": duel(resolved=False)},
+        duels={"339": duel(), "340": duel(la=2), "341": duel(), "342": duel(resolved=False)},
         no_reveal={"340": (False, True), "341": (False, False), "342": (False, False)},
-        reveal_ns={"R1": CLOSE - 120 * S, "R2": CLOSE - 30 * S},
-        lock_s=LOCK,
+        reveal_at={"R1": (CLOSE - 120 * S, LOCK, "duel_locks"), "R2": (CLOSE - 30 * S, LOCK, "duel_locks")},
         verified=[("340", "PASS"), ("341", "FAIL")],
     )
     lines = md.splitlines()
@@ -81,8 +91,9 @@ def test_composition():
     assert "Duels #340..#342 in the dataset, 8 rows." in md
     assert table_row("| main |") == "| main | 2 | 2 | DeepSeek-V4.1-Flash-1017 | 6 | 6/6 (100%) |"
     assert table_row("| p2 |") == "| p2 | 1 | 0 | glm-5.3-flash | 1 | 0/1 (0%) |"
-    # only A's nonce-2 reveal is scored, at close - 30 s: inside a 60 s lock; B's commitment forfeited
+    # only A's nonce-2 reveal is scored (last_intent_a), at close - 30 s: inside a 60 s lock; B's commitment forfeited
     assert "| main | 3 | 2 | 1/1 (100%) | 1 duels, 1 sides |" in md
+    assert "Lock per duel from duel_locks 1 " in md
     against = table_row("| B | against |")
     assert against.startswith("| B | against | 2 | 1/2 = 0.50") and "2 agent-duels" in against
     assert "1 rows in 1 duels have open_source spot" in md
@@ -96,13 +107,14 @@ def test_a_reveal_outside_the_lock_or_unknown_is_counted_as_such():
         row(350, "A", 1, revealed_tx="early"),
         row(350, "B", 1, revealed_tx="lost"),
     ]
-    md = nr.render(rows, 350, {"350": duel()}, {}, {"early": CLOSE - 90 * S, "lost": None}, LOCK, [])
+    timing = {"early": (CLOSE - 90 * S, LOCK, "config@block"), "lost": (None, LOCK, "config now")}
+    md = nr.render(rows, 350, {"350": duel(la=1, lb=1)}, {}, timing, [])
     assert "| main | 0 | 2 | 0/2 (0%), 1 unknown | 0 duels, 0 sides |" in md
     assert "No resolved duel to verify." in md
 
 
 def test_no_rows_since():
-    assert "No dataset rows from duel 999 on." in nr.render([row(1, "A", 1)], 999, {}, {}, {}, LOCK, [])
+    assert "No dataset rows from duel 999 on." in nr.render([row(1, "A", 1)], 999, {}, {}, {}, [])
 
 
 def test_verify_maps_exit_codes(monkeypatch, tmp_path):
@@ -117,3 +129,66 @@ def test_verify_maps_exit_codes(monkeypatch, tmp_path):
         )
         assert nr.verify("377", tmp_path / "d.jsonl") == want
     assert seen[0] == (["bun", "run", "verify-duel", "377"], str(tmp_path / "d.jsonl"))
+
+
+def test_the_scored_reveal_is_the_chains_last_intent_not_the_highest_nonce():
+    rows = [row(360, "A", 1, revealed_tx="R1"), row(360, "A", 2, revealed_tx="R2")]
+    timing = {"R1": (CLOSE - 10 * S, LOCK, "duel_locks"), "R2": (CLOSE - 100 * S, LOCK, "duel_locks")}
+    md = nr.render(rows, 360, {"360": duel(la=1)}, {}, timing, [])
+    assert "| main | 0 | 2 | 1/1 (100%) | 0 duels, 0 sides |" in md
+    assert nr.scored_reveals(rows, {"360": duel(la=1)}) == {("360", "A"): rows[0]}
+    assert nr.scored_reveals(rows, {"360": duel()}) == {}, "no last intent on chain: nothing was scored"
+
+
+class FakeRpc:
+    def __init__(self, answers):
+        self.answers, self.calls = answers, []
+
+    def __call__(self, method, params, what=""):
+        self.calls.append((method, params))
+        key = params.get("request_type") or method
+        a = self.answers[key]
+        a = a(params) if callable(a) else a
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+
+def test_the_reveal_is_timed_at_its_successful_arena_receipt(monkeypatch):
+    times = {"TB": 100, "BAD": 200, "AB": 300}
+    rpc = FakeRpc(
+        {
+            "tx": {
+                "transaction_outcome": {"block_hash": "TB"},
+                "receipts_outcome": [
+                    {
+                        "block_hash": "TB",
+                        "outcome": {"executor_id": "solver.testnet", "status": {"SuccessReceiptId": "x"}},
+                    },
+                    {"block_hash": "BAD", "outcome": {"executor_id": nr.chain.ARENA, "status": {"Failure": {}}}},
+                    {"block_hash": "AB", "outcome": {"executor_id": nr.chain.ARENA, "status": {"SuccessValue": ""}}},
+                ],
+            },
+            "block": lambda p: {"header": {"timestamp_nanosec": str(times[p["block_id"]])}},
+        }
+    )
+    monkeypatch.setattr(nr.chain, "rpc", rpc)
+    assert nr.arena_receipt("T", "solver.testnet") == (300, "AB")
+    rpc.answers["tx"]["receipts_outcome"] = rpc.answers["tx"]["receipts_outcome"][:2]
+    assert nr.arena_receipt("T", "solver.testnet") is None, "no successful arena receipt"
+
+
+def test_the_lock_comes_from_duel_locks_then_config_at_the_block_then_now(monkeypatch):
+    key = base64.b64encode(bytes([18]) + (377).to_bytes(8, "little")).decode()
+    value = base64.b64encode((30 * S).to_bytes(8, "little")).decode()
+    cfg = {"result": list(json.dumps({"intent_lock_s": 45}).encode())}
+    rpc = FakeRpc({"view_state": {"values": [{"key": key, "value": value}]}, "call_function": cfg})
+    monkeypatch.setattr(nr.chain, "rpc", rpc)
+    monkeypatch.setattr(nr.chain, "view", lambda m, a: {"intent_lock_s": 60})
+    assert nr.lock_at("377", "AB") == (30, "duel_locks")
+    assert rpc.calls[0][1]["block_id"] == "AB" and rpc.calls[0][1]["prefix_base64"] == key
+    rpc.answers["view_state"] = RuntimeError("State of contract is too large to be viewed")
+    assert nr.lock_at("377", "AB") == (45, "config@block")
+    rpc.answers["call_function"] = RuntimeError("UNKNOWN_BLOCK")
+    assert nr.lock_at("377", "AB") == (60, "config now")
+    assert nr.lock_at("377", None) == (60, "config now")

@@ -5,8 +5,9 @@
 
 Sections:
   1. duels per pair (main pair = no pair_tag, p2), decisions and their enclave-proof rate
-  2. commit-reveal: commits, reveals, the scored (last) reveal per agent-duel landing inside the intent lock (chain
-     time of its tx block vs close_at - intent_lock_s from get_config now), no-reveal forfeits (get_no_reveal)
+  2. commit-reveal: commits, reveals, the scored reveal per agent-duel (the row of get_duel's last_intent_{a,b}
+     nonce) landing inside the intent lock: the block time of its arena receipt (where the contract checks the lock)
+     vs close_at minus the duel's lock (see `lock_at`), and no-reveal forfeits (get_no_reveal)
   3. attacks per prompt arm split against / with / flat (injection_effects.enrich and .clustered: took the injected
      side, interval over agent-duels, baseline = the arm's unattacked rate of the pushed side, as injection_effects)
   4. briefs measured from the runner's spot (open_source "spot") rather than the oracle open
@@ -20,6 +21,7 @@ analysis/data. Stdlib plus agents/ through injection_effects.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -53,15 +55,18 @@ def pct(k: int, n: int) -> str:
     return f"{k}/{n} ({k / n:.0%})" if n else "0/0"
 
 
-def last_reveals(rows: list[dict]) -> dict[tuple[str, str], dict]:
-    """(duel_id, agent_pk) -> the revealed row with the highest nonce: the call the duel scored."""
+def scored_reveals(rows: list[dict], duels: dict[str, dict]) -> dict[tuple[str, str], dict]:
+    """(duel_id, agent_pk) -> the revealed row the duel scored: the one whose nonce is get_duel's last_intent_a/b
+    nonce for that agent. A higher-nonce row is not it when the chain kept an earlier call."""
     out: dict[tuple[str, str], dict] = {}
     for r in rows:
         if not r.get("revealed_tx"):
             continue
-        k = (str(r["duel_id"]), r["agent_pk"])
-        if k not in out or int(r["intent"]["nonce"]) > int(out[k]["intent"]["nonce"]):
-            out[k] = r
+        d = duels.get(str(r["duel_id"])) or {}
+        for side in ("a", "b"):
+            last = d.get(f"last_intent_{side}") or {}
+            if d.get(side) == r["agent_pk"] and str(last.get("nonce")) == str(r["intent"]["nonce"]):
+                out[(str(r["duel_id"]), r["agent_pk"])] = r
     return out
 
 
@@ -70,13 +75,12 @@ def render(
     since: int,
     duels: dict[str, dict],
     no_reveal: dict[str, tuple[bool, bool]],
-    reveal_ns: dict[str, int | None],
-    lock_s: int,
+    reveal_at: dict[str, tuple[int | None, int | None, str]],
     verified: list[tuple[str, str]],
 ) -> str:
     """The readout from already-fetched inputs. `rows`: dataset rows; `duels`: get_duel by id; `no_reveal`:
-    get_no_reveal by duel id; `reveal_ns`: chain time of each revealed_tx (None = unknown); `verified`:
-    (duel id, PASS | FAIL | ERROR ...)."""
+    get_no_reveal by duel id; `reveal_at`: revealed_tx -> (arena receipt block time ns, the duel's lock in s,
+    where the lock came from), None = unknown; `verified`: (duel id, PASS | FAIL | ERROR ...)."""
     rows = [r for r in rows if int(r["duel_id"]) >= since]
     pairs = sorted({pair(r) for r in rows}, key=lambda p: (p != "main", p))
     out = [f"# Night readout: duels from #{since}", ""]
@@ -106,14 +110,16 @@ def render(
 
     # 2. commit-reveal
     body = []
+    lock_sources: dict[str, int] = defaultdict(int)
     for p in pairs:
         sub = [r for r in rows if pair(r) == p]
-        last = last_reveals(sub)
+        last = scored_reveals(sub, duels)
         inside = unknown = 0
         for (d, _), r in last.items():
-            t = reveal_ns.get(r["revealed_tx"])
+            t, lock_s, src = reveal_at.get(r["revealed_tx"], (None, None, "unknown"))
             close = int((duels.get(d) or {}).get("close_at") or 0)
-            if t is None or not close:
+            lock_sources[src] += 1
+            if t is None or lock_s is None or not close:
                 unknown += 1
             elif close - lock_s * S <= t < close:
                 inside += 1
@@ -131,8 +137,11 @@ def render(
     out += [
         "## 2. Commit-reveal",
         "",
-        f"Scored reveal = the last revealed call per agent-duel; inside the lock = its tx block time is in "
-        f"[close_at - {lock_s} s, close_at) (`intent_lock_s` from get_config now). Forfeits from get_no_reveal.",
+        "Scored reveal = the revealed row of get_duel's last_intent nonce per agent-duel; inside the lock = the "
+        "block time of its arena receipt is in [close_at - lock, close_at). Lock per duel from "
+        + (", ".join(f"{k} {v}" for k, v in sorted(lock_sources.items())) or "nothing scored")
+        + " (duel_locks = the deploy-15 per-duel record; config@block = get_config at the receipt's block; "
+        "config now = get_config at the head). Forfeits from get_no_reveal.",
         "",
     ]
     out += er.md_table(["pair", "commits", "reveals", "scored reveal inside the lock", "no-reveal forfeits"], body)
@@ -212,14 +221,66 @@ def render(
 # ---------------------------------------------------------------- fetching
 
 
-def tx_time_ns(tx: str, sender: str) -> int | None:
-    """Chain time of the block that included `tx`, or None when the RPC no longer has it."""
+DUEL_LOCKS_PREFIX = 18  # StorageKey::DuelLocks (deploy 15): duel id (u64 LE) -> lock ns (u64 LE)
+
+
+def arena_receipt(tx: str, sender: str) -> tuple[int, str] | None:
+    """(block time ns, block hash) of the transaction's successful receipt executed by the arena: the block whose
+    timestamp the contract compared with the lock, which can be later than the transaction's own block. None when
+    the RPC no longer has the tx or no arena receipt succeeded."""
     try:
         r = chain.rpc("tx", {"tx_hash": tx, "sender_account_id": sender, "wait_until": "NONE"})
-        block = chain.rpc("block", {"block_id": r["transaction_outcome"]["block_hash"]})
-        return int(block["header"]["timestamp_nanosec"])
+        for o in r.get("receipts_outcome") or []:
+            status = o["outcome"]["status"]
+            if o["outcome"]["executor_id"] == chain.ARENA and (
+                "SuccessValue" in status or "SuccessReceiptId" in status
+            ):
+                block = chain.rpc("block", {"block_id": o["block_hash"]})
+                return int(block["header"]["timestamp_nanosec"]), o["block_hash"]
     except (RuntimeError, KeyError, TypeError):
-        return None
+        pass
+    return None
+
+
+def lock_at(duel_id: str, block_hash: str | None) -> tuple[int | None, str]:
+    """The intent lock (s) duel `duel_id` ran under, and where it came from: the deploy-15 `duel_locks` record at
+    `block_hash` (the entry is deleted at resolution, so the reveal's block is where it still exists; view_state is
+    refused for a contract state over the RPC's limit, as the testnet arena's is), else `get_config.intent_lock_s`
+    at that block (the global lock then), else at the head."""
+    key = base64.b64encode(bytes([DUEL_LOCKS_PREFIX]) + int(duel_id).to_bytes(8, "little")).decode()
+    at = {"block_id": block_hash} if block_hash else {"finality": "final"}
+    try:
+        vals = chain.rpc("query", {"request_type": "view_state", "account_id": chain.ARENA, "prefix_base64": key, **at})
+        for v in vals.get("values") or []:
+            if base64.b64decode(v["key"]) == base64.b64decode(key):
+                return int.from_bytes(base64.b64decode(v["value"]), "little") // S, "duel_locks"
+    except (RuntimeError, KeyError, TypeError, ValueError):
+        pass
+    if block_hash:
+        try:
+            cfg = chain.rpc(
+                "query",
+                {
+                    "request_type": "call_function",
+                    "account_id": chain.ARENA,
+                    "method_name": "get_config",
+                    "args_base64": base64.b64encode(b"{}").decode(),
+                    "block_id": block_hash,
+                },
+            )
+            return int(json.loads(bytes(cfg["result"]))["intent_lock_s"]), "config@block"
+        except (RuntimeError, KeyError, TypeError, ValueError):
+            pass
+    try:
+        return int((chain.view("get_config", {}) or {})["intent_lock_s"]), "config now"
+    except (RuntimeError, KeyError, TypeError, ValueError):
+        return None, "unknown"
+
+
+def reveal_timing(duel_id: str, tx: str, sender: str) -> tuple[int | None, int | None, str]:
+    rec = arena_receipt(tx, sender)
+    lock, src = lock_at(duel_id, rec[1] if rec else None)
+    return (rec[0] if rec else None), lock, src
 
 
 def verify(duel_id: str, data: Path) -> str:
@@ -245,15 +306,19 @@ def fetch(rows: list[dict], since: int, n_verify: int, data: Path) -> dict[str, 
     with ThreadPoolExecutor(max_workers=4) as ex:
         nr = dict(zip(ids, ex.map(lambda d: tuple(chain.view("get_no_reveal", {"duel_id": d})), ids), strict=True))
         sender = ENV.get("SOLVER_ID", NET["solver"])
-        txs = [r["revealed_tx"] for r in last_reveals(rows).values()]
-        times = dict(zip(txs, ex.map(lambda t: tx_time_ns(t, sender), txs), strict=True))
-    lock_s = int((chain.view("get_config", {}) or {}).get("intent_lock_s") or 0)
+        scored = [(d, r["revealed_tx"]) for (d, _), r in scored_reveals(rows, duels).items()]
+        timing = dict(
+            zip(
+                [t for _, t in scored],
+                ex.map(lambda dt: reveal_timing(dt[0], dt[1], sender), scored),
+                strict=True,
+            )
+        )
     resolved = [d for d in ids if (duels.get(d) or {}).get("resolved")][-n_verify:] if n_verify else []
     return {
         "duels": duels,
         "no_reveal": nr,
-        "reveal_ns": times,
-        "lock_s": lock_s,
+        "reveal_at": timing,
         "verified": [(d, verify(d, data)) for d in resolved],
     }
 
