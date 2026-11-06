@@ -159,8 +159,14 @@ export class Arena {
       leaderboard?: () => Promise<AgentView[]>;
       quote?: typeof quote;
       now?: () => bigint;
+      /** Backoff between RPC retries and `findDuel` polls; tests pass `async () => {}`. */
+      sleep?: (ms: number) => Promise<void>;
     } = {},
   ) {}
+
+  private sleep(ms: number): Promise<void> {
+    return (this.deps.sleep ?? ((ms) => new Promise<void>((res) => setTimeout(res, ms))))(ms);
+  }
 
   /** One pairing tick: open a DUEL_SECONDS duel for every pair `pairIdle` makes of the leaderboard. A pair whose
    *  open fails (one side got a duel meanwhile, RPC error) is skipped and retried on the next tick. */
@@ -225,7 +231,7 @@ export class Arena {
         break;
       } catch (e) {
         if (attempt >= 4 || !/429|Rate limit/i.test(String(e))) throw e; // never resend on timeout: the tx may have landed
-        await new Promise((res) => setTimeout(res, 1500 * 2 ** attempt));
+        await this.sleep(1500 * 2 ** attempt);
       }
     }
     const st = r.status as { SuccessValue?: string; Failure?: unknown };
@@ -271,7 +277,7 @@ export class Arena {
         });
         if (d && d.a === a && d.b === b && d.close_at === close_at && !d.resolved) return String(id);
       }
-      await new Promise((res) => setTimeout(res, 3000));
+      await this.sleep(3000);
     }
     return null;
   }
