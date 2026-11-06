@@ -1,0 +1,462 @@
+/* Agent page. Same system as the arena (globals.css): colour means who, red hatch means a paid lie, Long is
+   filled and Short outlined. Layout mirrors the arena too: a story column and a sticky rail, where the rail
+   holds this agent's own calls instead of the arena tape. Every class here starts with ag-. */
+.ag {
+  background: linear-gradient(
+    to left,
+    var(--panel) calc(var(--tapew) - 1px),
+    var(--line) 0 var(--tapew),
+    transparent 0
+  );
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--tapew);
+  grid-template-areas: "hero rail" "lies rail" "rec rail" "fol rail" "foot rail";
+  align-items: start;
+}
+.ag-hero {
+  grid-area: hero;
+  border-top: 0;
+  padding-top: 34px;
+}
+.ag-lies {
+  grid-area: lies;
+}
+.ag-rec {
+  grid-area: rec;
+}
+.ag-fol {
+  grid-area: fol;
+}
+.ag-foot {
+  grid-area: foot;
+}
+.ag-msg {
+  padding: 34px 36px;
+}
+.ag-msg .sub {
+  max-width: 60ch;
+}
+
+/* identity */
+.ag-id {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 36px;
+  align-items: start;
+}
+.ag-id h1 {
+  overflow-wrap: anywhere;
+}
+.ag-key {
+  overflow-wrap: anywhere;
+}
+.ag-now {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 14px;
+  padding-top: 8px;
+}
+.ag-now .ring,
+.ag-now .rest {
+  font-size: 14px;
+}
+.ag-cta {
+  font-size: 15px;
+  padding: 9px 18px;
+  border-color: var(--k);
+  color: var(--k);
+}
+.ag-cta:hover:not(:disabled) {
+  background: var(--k);
+  color: var(--bg);
+}
+.ag-proof {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 22px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+  color: var(--dim);
+}
+.ag-proof svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-top: 2px;
+  color: var(--ink);
+}
+
+/* the two numbers */
+.ag-nums {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin-top: 30px;
+}
+.ag-nums > div {
+  padding-right: 32px;
+}
+.ag-nums > div + div {
+  padding: 0 0 0 32px;
+  border-left: 1px solid var(--line);
+}
+.ag-num {
+  display: block;
+  font-stretch: 125%;
+  font-weight: 220;
+  font-size: clamp(54px, 6.2vw, 96px);
+  line-height: 0.85;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ag-num.fell {
+  color: var(--alarm);
+}
+.ag-nums .sub {
+  font-size: 17px;
+  max-width: 46ch;
+}
+
+/* lies */
+.ag-sq {
+  gap: 4px;
+}
+.ag-sq i {
+  width: 18px;
+  height: 18px;
+}
+.ag-h3 {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 30px 0 4px;
+}
+.ag-story {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 32px;
+  padding: 20px 0 22px;
+  border-top: 1px solid var(--line);
+}
+.ag-story + .ag-story {
+  margin-top: 0;
+}
+.ag-h3 + .ag-story {
+  margin-top: 10px;
+}
+.ag-meta {
+  font-size: 13px;
+  color: var(--dim);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ag-meta .seal {
+  margin-left: auto;
+  font-size: 12px;
+}
+.ag-story .cap {
+  margin-top: 0;
+}
+.ag-story .verdict strong {
+  font-size: 20px;
+}
+
+/* record */
+.ag-climb {
+  margin-top: 20px;
+}
+.ag-plot {
+  position: relative;
+  height: 110px;
+  margin: 0 8px 0 28px;
+}
+.ag-plot svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.ag-zero {
+  position: absolute;
+  left: -28px;
+  font-size: 11px;
+  color: var(--faint);
+  transform: translateY(-50%);
+}
+.ag-pt {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 2px solid var(--k);
+  opacity: 0;
+}
+.ag-pt.win {
+  background: var(--k);
+  opacity: 1;
+}
+.ag-pt.loss {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.ag-pt:hover {
+  opacity: 1;
+}
+.ag-climb figcaption {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--dim);
+}
+.ag-op {
+  text-decoration: none;
+}
+.ag-op small {
+  color: var(--faint);
+  font-size: 12px;
+}
+.ag-res.win {
+  font-weight: 650;
+}
+.ag-res.loss,
+.ag-res.tie {
+  color: var(--dim);
+}
+.ag-side {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 650;
+  font-stretch: 80%;
+  line-height: 18px;
+  padding: 0 6px;
+  border: 1.5px solid var(--k);
+  color: var(--k);
+}
+.ag-side.long {
+  background: var(--k);
+  color: var(--bg);
+}
+
+/* rail: its newest calls */
+.ag-rail {
+  grid-area: rail;
+  position: sticky;
+  top: var(--bar);
+  max-height: calc(100vh - var(--bar));
+  overflow-y: auto;
+  scrollbar-width: thin;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  min-width: 0;
+}
+.ag-rail > .m {
+  padding: 18px 20px;
+}
+.ag-railhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.ag-railhead h2 {
+  margin: 0;
+}
+.ag-railhead span {
+  font-size: 12.5px;
+  color: var(--dim);
+  font-stretch: 80%;
+}
+.ag-call {
+  position: relative;
+  padding: 14px 20px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.ag-call.lied::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: var(--hatch);
+}
+.ag-c1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--dim);
+}
+.ag-c1 a:first-child {
+  color: var(--ink);
+  font-weight: 650;
+  text-decoration: none;
+}
+.ag-c1 .seal {
+  margin-left: auto;
+  font-size: 12px;
+  text-decoration: none;
+}
+.ag-c2 {
+  margin-top: 8px;
+  font-size: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.ag-tag {
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.ag-tag.fell {
+  color: var(--alarm);
+}
+.ag-call blockquote {
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--k);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.ag-empty {
+  padding: 16px 20px;
+}
+
+/* follow */
+.ag-fol .join .btn {
+  margin-top: 14px;
+}
+.ag-no {
+  font-weight: 600;
+}
+.ag-fols {
+  list-style: none;
+  margin-top: 8px;
+  font-size: 15px;
+  color: var(--dim);
+  max-width: 56ch;
+}
+.ag-fols li {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.ag-fols a {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ag .seal {
+  text-decoration: none;
+}
+.ag-id .sub a {
+  color: var(--ink);
+}
+
+[data-view="agent"] .ag-rail > .m {
+  display: block;
+}
+/* endpoint paths carry a percent-encoded key with no break opportunity */
+.ag-banner code,
+.ag .ep code {
+  overflow-wrap: anywhere;
+}
+
+/* bold text, least specific first so each rule wins where it is meant to */
+.ag-proof b {
+  color: var(--ink);
+  font-weight: 650;
+}
+.ag-fols b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ag-climb figcaption b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ag-nums .sub b {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 19px;
+}
+.ag-proof.no b {
+  color: var(--dim);
+}
+.ag-fols li.off b {
+  color: var(--dim);
+}
+
+@media (max-width: 1180px) {
+  .ag-story {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+}
+@media (max-width: 900px) {
+  .ag {
+    background: none;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "hero" "lies" "rec" "rail" "fol" "foot";
+  }
+  .ag-hero {
+    padding-top: 26px;
+  }
+  .ag-msg {
+    padding: 26px 16px;
+  }
+  .ag-id {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .ag-now {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 0;
+  }
+  .ag-nums {
+    grid-template-columns: 1fr;
+    gap: 26px;
+  }
+  .ag-nums > div,
+  .ag-nums > div + div {
+    padding: 0;
+    border-left: 0;
+  }
+  .ag-nums > div + div {
+    padding-top: 26px;
+    border-top: 1px solid var(--line);
+  }
+  .ag-num {
+    font-size: 64px;
+  }
+  .ag-rail {
+    position: relative;
+    top: 0;
+    max-height: none;
+    overflow: visible;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .ag-railhead {
+    flex-wrap: wrap;
+    padding: 18px 16px 12px;
+  }
+  .ag-call {
+    padding: 14px 16px 16px;
+  }
+  .ag-rail > .m {
+    padding: 18px 16px;
+  }
+}

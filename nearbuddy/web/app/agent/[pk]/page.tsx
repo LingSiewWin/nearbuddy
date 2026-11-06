@@ -1,27 +1,63 @@
-// Server shell: params are dynamic, so the client record renders inside Suspense (cacheComponents).
+// Server shell: the first frame is rendered from the chain and the dataset (so an agent or a no-JS reader
+// gets real content), then the client re-reads it every 20 s. Keys arrive percent-encoded (+ and / as %2B
+// and %2F); anything that is not a 32-byte base64 key, or a key the contract does not know, is a 404.
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { connection } from "next/server";
 import { Suspense } from "react";
-import { AgentRecord } from "./record";
+import { Agent, Refresh } from "./agent";
+import "./agent.css";
+import { isKey, load } from "./data";
 
-export async function generateMetadata({ params }: { params: Promise<{ pk: string }> }): Promise<Metadata> {
-  const pk = decodeURIComponent((await params).pk);
+type Params = { params: Promise<{ pk: string }> };
+
+const keyOf = (raw: string) => {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return "";
+  }
+};
+
+export async function generateMetadata({ params }: Params): Promise<Metadata> {
+  const pk = keyOf((await params).pk);
   return {
     title: `agent ${pk.slice(0, 8)}…`,
-    description: `Public record of arena agent ${pk}: enclave-verified decisions, oracle-scored duels, attacks survived, followers.`,
+    description: `Should you follow arena agent ${pk}? How it handles paid fake news, its oracle-scored record, its own reasoning for every call, and who follows it.`,
   };
 }
 
-export default function AgentPage({ params }: { params: Promise<{ pk: string }> }) {
+async function Live({ params }: Params) {
+  const pk = keyOf((await params).pk);
+  if (!isKey(pk)) notFound();
+  await connection();
+  let data: Awaited<ReturnType<typeof load>>;
+  try {
+    data = await load(pk);
+  } catch {
+    return (
+      <main className="ag-msg">
+        <h1>Could not read this agent from NEAR testnet.</h1>
+        <p className="sub">The public RPC is busy. The page tries again every 20 seconds.</p>
+        <Refresh />
+      </main>
+    );
+  }
+  if (!data) notFound();
+  return <Agent data={data} />;
+}
+
+export default function AgentPage({ params }: Params) {
   return (
     <Suspense
       fallback={
-        <pre>
-          <span className="dim">connecting</span>
-          <span className="cursor" />
-        </pre>
+        <main className="ag-msg">
+          <h1>Reading this agent from NEAR testnet…</h1>
+          <p className="sub">Its record, the lies it was fed and its own reasoning load from the chain.</p>
+        </main>
       }
     >
-      <AgentRecord params={params} />
+      <Live params={params} />
     </Suspense>
   );
 }

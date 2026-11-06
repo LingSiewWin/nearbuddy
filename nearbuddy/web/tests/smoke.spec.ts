@@ -17,14 +17,22 @@ test("/ redirects to /arena: headline, standings, tape and the agent view", asyn
   await expect(page.locator(".p-story .m .ep code", { hasText: "/api/v1/arena" })).toBeVisible();
 });
 
-test("/agent/<pk> renders the record box", async ({ page, request }) => {
+test("/agent/<pk>: identity, the two numbers, its record, its calls and the agent view", async ({ page, request }) => {
   const snap = await (await request.get("/api/arena")).json();
   const pk = snap.leaderboard[0]?.pk as string;
   expect(pk).toBeTruthy();
   await page.goto(`/agent/${encodeURIComponent(pk)}`);
   await expect(page).toHaveTitle(`agent ${pk.slice(0, 8)}… · NearBuddy`);
-  await expect(page.locator(box("record"))).toBeVisible();
+  await expect(page.locator(".ag-hero h1")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".ag-nums .ag-num")).toHaveCount(2);
+  await expect(page.getByRole("heading", { name: "Its record" })).toBeVisible();
+  await expect(page.locator(".ag-duels a[href^='/duel/']").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Its calls, in its own words" })).toBeVisible();
   await expect(page.locator("body")).toContainText(pk.slice(0, 10));
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await expect(page.locator(".ag-hero .m .ep code")).toHaveText(`/api/agent?pk=${encodeURIComponent(pk)}`);
+  await page.goto("/agent/not-a-key");
+  await expect(page.locator("body")).toContainText("This page could not be found", { timeout: 30_000 });
 });
 
 test("/duel/<newest> renders the result and links both agents", async ({ page, request }) => {
