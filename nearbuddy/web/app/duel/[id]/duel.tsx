@@ -240,7 +240,7 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
     const lead = Math.abs(ma - mb) < 0.005 ? null : ma > mb ? d.a : d.b;
     const lag = lead === d.a ? d.b : d.a;
     const pay = lag.bond != null ? (lag.bond * d.slashPct) / 100 : null;
-    fine = "Live line: Coinbase NEAR-USD trades. The score uses the oracle's prices at the open and at the bell.";
+    fine = "Live line: Coinbase NEAR-USD trades. The score uses the oracle's prices at the open and at the close.";
     if (now && now > d.closes + 60_000) {
       h1 = "Waiting for the closing price.";
       sub = (
@@ -430,7 +430,9 @@ function Proof({ d }: { d: DuelData }) {
           </span>
         </li>
         <li>
-          <b>{d.live ? "Closing price and score: after the bell" : `Closing price ${usd(d.close)} and the score`}</b>
+          <b>
+            {d.live ? "Closing price and score: when the duel ends" : `Closing price ${usd(d.close)} and the score`}
+          </b>
           <span>Fetched by the price oracle and scored in one transaction.</span>
           {scored ? (
             <a href={txUrl(scored.tx)} {...ext}>

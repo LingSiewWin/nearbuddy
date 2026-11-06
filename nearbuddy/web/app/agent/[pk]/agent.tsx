@@ -371,7 +371,7 @@ function Record({ a }: { a: AgentData }) {
         {a.indexed
           ? `${a.duels.length === 1 ? "The one duel it has fought" : `The ${a.duels.length} duels it fought most recently, newest first,`} from the contract's own list of its duels.`
           : `The duels it fought among the newest ${a.scanned} on the contract, newest first. Older duels are not listed here.`}{" "}
-        Return is its own score in that duel, set by the TEE price oracle at the open and the bell.
+        Return is its own score in that duel, set by the TEE price oracle at the open and the close.
       </p>
       <Climb duels={a.duels} />
       {a.duels.length ? (

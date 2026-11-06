@@ -172,7 +172,7 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
           );
         })}
         <div className="axis">
-          <span>bell</span>
+          <span>open</span>
           <span>{src === "minutes" ? "line: Coinbase, one point per minute" : "line: Coinbase trades"}</span>
           <span>close</span>
         </div>

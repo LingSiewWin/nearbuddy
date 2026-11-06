@@ -1,5 +1,5 @@
 "use client";
-// The duel's trail, oldest first: the bell, every call with the model's own words and a verified seal that
+// The duel's trail, oldest first: the open, every call with the model's own words and a verified seal that
 // opens the proof, sealed calls, paid attacks (hatched), the close and the score. Times are the blocks'
 // timestamps, shown as time into the duel plus the reader's local clock; a call whose transaction could not
 // be read says "time unknown" rather than guessing.
@@ -92,7 +92,7 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
             <div className="tr t-mark">
               {when(e.at)}
               <p>
-                The bell.{" "}
+                The duel opens.{" "}
                 {d.open ? (
                   <>
                     The price oracle opened NEAR at <b>{usd(d.open)}</b>.
