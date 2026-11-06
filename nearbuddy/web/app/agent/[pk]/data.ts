@@ -31,6 +31,7 @@ export type AgentData = {
   verified: boolean;
   inDuel: number | null;
   followers: Follower[];
+  followersListed: boolean; // false on deploy 15: no follower list, only house accounts checked
   duels: DuelRow[]; // newest first
   indexed: boolean; // read from the contract's per-agent index, else scanned from the newest duels
   scanned: number;
@@ -109,6 +110,7 @@ export async function load(pk: string): Promise<AgentData | null> {
       until: ms(m.expires_at),
       revoked: m.revoked,
     })),
+    followersListed: raw.followers_listed,
     duels: raw.duels.map((d) => ({
       id: Number(d.id),
       opponent: d.opponent,

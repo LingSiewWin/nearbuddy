@@ -62,7 +62,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ pk: string }> }
             time(f.expires_at),
           ]),
         )
-      : "None.",
+      : a.followers_complete
+        ? "None."
+        : "None of the house accounts.",
+    ...(a.followers_complete
+      ? []
+      : ["", "This contract version has no follower list; only the house accounts were checked."]),
     "",
     "## Latest decisions, with the model's own reasoning",
     "",

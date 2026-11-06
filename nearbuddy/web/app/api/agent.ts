@@ -8,6 +8,7 @@
 import type { Fill } from "../cells";
 import { calls } from "../lib/rows";
 import { tally } from "../lib/verdict";
+import { NET } from "../network";
 import { type Agent, type Duel, type Mandate, ms, nearOf, snapshot } from "./arena";
 import { getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
@@ -37,16 +38,32 @@ async function chunked<T>(items: string[], size: number, f: (id: string) => Prom
   return out;
 }
 
+/** Followers and their mandates. Deploy 15 dropped `list_followers` and reads one (agent, follower) pair with
+ *  `get_follow`, so there the known house followers are asked by name.
+ *  ponytail: strangers' follows are invisible on deploy 15; index `follow` calls from FastNEAR to list them. */
+async function followersOf(pk: string): Promise<{ list: [string, Mandate][]; listed: boolean }> {
+  try {
+    return { list: (await view("list_followers", { agent_pk: pk })) as [string, Mandate][], listed: true };
+  } catch {
+    const who = [...new Set([NET.owner, process.env.FOLLOWER_ID].filter((x): x is string => !!x))];
+    const got = await Promise.all(
+      who.map((f) => (view("get_follow", { agent_pk: pk, follower: f }) as Promise<Mandate | null>).catch(() => null)),
+    );
+    return { list: who.flatMap((f, i): [string, Mandate][] => (got[i] ? [[f, got[i]]] : [])), listed: false };
+  }
+}
+
 async function build(pk: string) {
-  const [agent, config, followers, fills] = await Promise.all([
+  const [agent, config, fol, fills] = await Promise.all([
     view("get_agent", { agent_pk: pk }) as Promise<Agent | null>,
     view("get_config", {}) as Promise<{ next_duel: string; slash_bps: number; min_chaos_deposit: string }>,
-    view("list_followers", { agent_pk: pk }) as Promise<[string, Mandate][]>,
+    followersOf(pk),
     fetch(`${SOLVER_URL}/execution`, { cache: "no-store", signal: AbortSignal.timeout(3000) })
       .then((r) => r.json())
       .then((j: { quality?: Fill[] }) => (Array.isArray(j?.quality) ? j.quality : null))
       .catch(() => null), // solver offline or before batched RFQ
   ]);
+  const followers = fol.list;
   const mine = new Set(followers.map(([w]) => w));
   const execution = fills?.filter((f) => mine.has(f.follower)) ?? null;
   const n = Number(config.next_duel);
@@ -105,6 +122,7 @@ async function build(pk: string) {
     min_chaos_deposit: config.min_chaos_deposit,
     agent,
     followers,
+    followers_listed: fol.listed, // false: the contract cannot list followers, only house accounts were asked
     duels,
     execution,
   };
@@ -121,6 +139,7 @@ const EMPTY: AgentRecord = {
   min_chaos_deposit: "0",
   agent: null,
   followers: [],
+  followers_listed: true,
   duels: [],
   execution: null,
 };
@@ -183,6 +202,7 @@ export async function agentSummary(pk: string) {
       revoked: m.revoked,
       expires_at: ms(m.expires_at),
     })),
+    followers_complete: r.followers_listed,
     duels: r.duels.map((d) => ({
       duel: Number(d.id),
       closed_at: ms(d.close_at), // scheduled close while the result is still open

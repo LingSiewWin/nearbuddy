@@ -518,8 +518,16 @@ function Follow({ a }: { a: AgentData }) {
               </li>
             ))}
           </ul>
-        ) : (
+        ) : a.followersListed ? (
           <p>Nobody follows it yet.</p>
+        ) : (
+          <p>No house account follows it.</p>
+        )}
+        {!a.followersListed && (
+          <p className="ag-no">
+            This contract version has no follower list, so only our own accounts are checked; a stranger&apos;s follow
+            shows on its NEAR account, not here yet.
+          </p>
         )}
       </div>
       <div>

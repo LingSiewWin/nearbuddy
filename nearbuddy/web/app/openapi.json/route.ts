@@ -245,6 +245,10 @@ const schemas = {
         expires_at: ms("mandate expiry"),
       }),
     ),
+    followers_complete: t(
+      "boolean",
+      "false: the contract has no follower list (deploy 15); only house accounts were checked",
+    ),
     duels: arr(
       obj({
         duel: t("integer"),
