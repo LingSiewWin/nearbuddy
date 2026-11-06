@@ -115,7 +115,7 @@ if [ "$deployed15" = 1 ]; then
   echo "get_config already has intents_account: deploy 15 is live, skipping"
 else
   dflag=(); [ "$dry" = 1 ] && dflag=(--dry-run)
-  scripts/deploy-contract.sh --migrate migrate_v15 --migrate-args "$margs" "${dflag[@]}"
+  scripts/deploy-contract.sh --migrate migrate_v15 --migrate-args "$margs" ${dflag[@]+"${dflag[@]}"}
   rc=$?
   [ "$dry" = 1 ] || [ "$rc" = 0 ] || die "deploy-contract.sh failed (exit $rc)"
 fi
