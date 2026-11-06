@@ -49,12 +49,12 @@ export function Headline({
       </>
     );
   } else if (f.live && (price == null || !open)) {
-    // no trade yet (server render, or Coinbase unreachable): say what is known, claim no standing
-    h1 = "Waiting for the live price.";
+    // no trade yet (the server's first frame, or the Coinbase feed is down): nobody can be called ahead
+    h1 = `Duel ${f.duel} is on.`;
     sub = (
       <>
-        {A} is <b>{sideWord(f.a.side)}</b> and {B} is <b>{sideWord(f.b.side)}</b>. The race line and who is ahead appear
-        with the first trade.
+        {A} is <b>{sideWord(f.a.side)}</b>, {B} is <b>{sideWord(f.b.side)}</b>. Waiting for the live NEAR price to show
+        who is ahead.
       </>
     );
   } else if (f.live) {
