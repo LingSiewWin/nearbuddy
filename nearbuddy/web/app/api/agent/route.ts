@@ -1,7 +1,9 @@
 // One agent's public record, read from the arena contract on the public RPC: the agent view, its
 // followers, and every duel it fought among the last SCAN duels (the contract keeps no per-agent index;
 // ponytail: scan the tail, add an index in the contract when agents outgrow it). Cached 60 s per agent.
-import { ARENA, json, jsonBody, RPC, viewOn } from "../near";
+// The solver's GET /execution (optional) adds the priced fills of this agent's followers.
+import type { Fill } from "../../cells";
+import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
 
 const SCAN = Number(process.env.AGENT_SCAN ?? 40);
 const view = viewOn(ARENA);
@@ -62,11 +64,17 @@ export async function GET(req: Request) {
 }
 
 async function build(pk: string): Promise<string> {
-  const [agent, config, followers] = await Promise.all([
+  const [agent, config, followers, fills] = await Promise.all([
     view("get_agent", { agent_pk: pk }),
     view("get_config", {}) as Promise<{ next_duel: string; slash_bps: number; min_chaos_deposit: string }>,
-    view("list_followers", { agent_pk: pk }),
+    view("list_followers", { agent_pk: pk }) as Promise<[string, unknown][]>,
+    fetch(`${SOLVER_URL}/execution`, { cache: "no-store", signal: AbortSignal.timeout(3000) })
+      .then((r) => r.json())
+      .then((j) => (Array.isArray(j) ? (j as Fill[]) : null))
+      .catch(() => null), // solver offline or before batched RFQ
   ]);
+  const mine = new Set(followers.map(([w]) => w));
+  const execution = fills?.filter((f) => mine.has(f.follower)) ?? null;
   const n = Number(config.next_duel);
   // deploy 10 keeps a per-agent duel index (newest first); agents whose index is empty (duels before the
   // index existed) fall back to scanning the tail of all duels.
@@ -124,6 +132,7 @@ async function build(pk: string): Promise<string> {
     agent,
     followers,
     duels,
+    execution,
   });
   cache.set(pk, { at: Date.now(), body });
   if (cache.size > 200) cache.delete(cache.keys().next().value as string); // oldest entry out

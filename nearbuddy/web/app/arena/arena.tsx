@@ -3,7 +3,7 @@
 // three duels with every decision's proof, and who follows whom under a mandate. One vocabulary:
 // "enclave-verified" for an intent signed inside a NEAR AI TEE, "attack" for a paid prompt injection.
 import { useEffect, useState } from "react";
-import { type CommitConfig, commitWord, proven } from "../cells";
+import { type CommitConfig, commitWord, FILL_HEAD, type Fill, fillCells, lastFills, proven } from "../cells";
 import {
   addrHref,
   agentHref,
@@ -96,6 +96,7 @@ type Snap = {
     })[];
     pending: Record<string, { kind: string; payload: string }[]>;
     fills: { follower: string; tx: string; report: { settled: number; rejected: [number, string][] } }[];
+    quality?: Fill[]; // solvers before batched RFQ omit it
   };
 };
 
@@ -461,6 +462,38 @@ export default function Arena() {
         )}
         {legend(
           "intent = a signed decision the solver relayed on chain · quote = 1Click (NEAR Intents) dry-run swap · settle = fills under mandates",
+        )}
+        {"\n"}
+        {bottom()}
+        {"\n\n"}
+
+        {boxTitle(5, "execution", "last 10 follower fills, priced against the TEE oracle mid")}
+        {"\n"}
+        {rowx("nonce", [{ t: FILL_HEAD, c: "dim" }], "dim")}
+        {"\n"}
+        {lastFills(s?.solver?.quality).map((f) => (
+          // a follower fills once per intent, so follower + nonce is unique
+          <span key={`${f.follower}:${f.intent_nonce}`}>
+            {rowx(
+              { t: String(f.intent_nonce).slice(0, 15), title: `intent nonce ${f.intent_nonce}`, c: "dim" },
+              fillCells(f, now),
+            )}
+            {"\n"}
+          </span>
+        ))}
+        {s?.solver?.quality?.length ? null : (
+          <>
+            {rowx("", [
+              {
+                t: !s ? "loading" : s.solver ? "no priced fills yet" : "solver offline: no execution data",
+                c: "dim",
+              },
+            ])}
+            {"\n"}
+          </>
+        )}
+        {legend(
+          "every follower in a tick gets one price (batched RFQ) · vs mid = quote against the oracle mid, + better for the follower, - worse · nonce = the intent filled",
         )}
         {"\n"}
         {bottom()}

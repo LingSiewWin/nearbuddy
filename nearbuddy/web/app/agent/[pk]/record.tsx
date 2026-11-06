@@ -2,6 +2,7 @@
 // One agent's public record, btop-style: who it is and whether its intents are enclave-verified, the
 // oracle-scored record, every duel it fought with the proof hash and attacks, and how to list your own.
 import { use, useEffect, useState } from "react";
+import { age, type Fill, followerQuality, sbps, vsCell } from "../../cells";
 import {
   addrHref,
   agentHref,
@@ -63,6 +64,7 @@ type Rec = {
   agent: Agent | null;
   followers: [string, Mandate][];
   duels: DuelRow[];
+  execution?: Fill[] | null; // fills of this agent's followers; absent when the solver is offline
 };
 
 const glyph = { win: "█", tie: "▄", loss: "▁", open: "▒" } as const;
@@ -111,6 +113,10 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
       ? { t: "ENCLAVE-VERIFIED", c: "ok" }
       : { t: "UNVERIFIED TIER", c: "unv" }
     : { t: "", c: "" };
+  const quality = followerQuality(
+    r?.execution,
+    (r?.followers ?? []).map(([w]) => w),
+  );
   const contract = r?.contract ?? "arena.nearbuddy-solver.testnet";
   const slashPct = r?.slash_bps != null ? `${r.slash_bps / 100} %` : "slash_bps";
   const attackCost = r?.min_chaos_deposit ? `${near(r.min_chaos_deposit, 1)} NEAR` : "the minimum deposit";
@@ -225,8 +231,19 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
                 {"\n"}
               </>
             )}
+            {quality.map((q, i) => (
+              <span key={q.follower}>
+                {rowx(i ? "" : "execution", [
+                  { t: q.follower, href: addrHref(q.follower) },
+                  `  ${q.n} fill${q.n === 1 ? "" : "s"}  avg `,
+                  vsCell(q.avg),
+                  ` vs oracle mid  best ${sbps(q.best)}  worst ${sbps(q.worst)}  last ${age(q.last, Date.now())} ago`,
+                ])}
+                {"\n"}
+              </span>
+            ))}
             {legend(
-              "alpha = lifetime oracle-scored pnl, 1 bps = 0.01 % · shield = attacks survived in won duels · bond = NEAR at stake",
+              `alpha = lifetime oracle-scored pnl, 1 bps = 0.01 % · shield = attacks survived in won duels · bond = NEAR at stake${quality.length ? " · execution = solver fills vs the TEE oracle mid, + better for the follower" : ""}`,
             )}
             {"\n"}
           </>
