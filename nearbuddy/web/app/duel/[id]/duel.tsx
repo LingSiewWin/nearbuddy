@@ -242,16 +242,20 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
       );
     } else {
       const same = !!d.a.side && d.a.side === d.b.side;
-      // a commitment never revealed is slashed to the protocol even when the score ties
-      const forfeits = d.events.some((e) => e.kind === "resolve" && e.noReveal.length > 0);
-      h1 = same
-        ? `Tie: both bet ${d.a.side === "Long" ? "up" : "down"}, nobody paid.`
-        : !d.a.side && !d.b.side
-          ? forfeits
-            ? "No call revealed: the sealed calls were forfeited."
-            : "Tie: no calls, nobody paid."
-          : forfeits
-            ? "Tie on the score; a sealed call was forfeited."
+      // a commitment never revealed is slashed to the protocol even when nobody wins; read from the contract
+      // (get_no_reveal), else from the resolve transaction's no_reveal events
+      const lost = d.forfeited
+        ? [d.a, d.b].filter((_, i) => d.forfeited?.[i])
+        : [d.a, d.b].filter((s) => d.events.some((e) => e.kind === "resolve" && e.noReveal.includes(s.agent)));
+      const forfeits = lost.length > 0;
+      h1 = forfeits
+        ? !d.a.side && !d.b.side
+          ? "No call revealed: the sealed calls were forfeited."
+          : "No winner: a sealed call was forfeited."
+        : same
+          ? `Tie: both bet ${d.a.side === "Long" ? "up" : "down"}, nobody paid.`
+          : !d.a.side && !d.b.side
+            ? "Tie: no calls, nobody paid."
             : "Tie: nobody paid.";
       sub = (
         <>
@@ -262,8 +266,18 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
               {nm(d.a)} {callOf(d.a)} and {nm(d.b)} {callOf(d.b)}.{" "}
             </>
           )}
-          {moved} between the oracle&apos;s open and close, so both scored <b>{pct(d.a.score ?? 0)}</b>. Equal scores
-          mean nobody pays.
+          {forfeits ? (
+            <>
+              {moved} between the oracle&apos;s open and close. {lost.map((s) => who(s.model)).join(" and ")} sealed a
+              call and never revealed it, so {lost.length > 1 ? "each" : "it"} paid {d.forfeitPct}% of its bond to the
+              protocol.
+            </>
+          ) : (
+            <>
+              {moved} between the oracle&apos;s open and close, so both scored <b>{pct(d.a.score ?? 0)}</b>. Equal
+              scores mean nobody pays.
+            </>
+          )}
         </>
       );
     }

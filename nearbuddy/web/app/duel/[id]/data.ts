@@ -22,6 +22,8 @@ export type DuelData = Focus & {
   events: ArenaEvent[]; // this duel's transactions, oldest first
   decisions: Decision[]; // dataset rows for this duel, with each model's reasoning
   source: "tape" | "history" | "dataset";
+  /** get_no_reveal: [a, b] sealed a call and never revealed it (forfeit); null while open or when unread */
+  forfeited: [boolean, boolean] | null;
   at: number;
 };
 
@@ -172,6 +174,10 @@ export async function loadDuel(id: string): Promise<DuelData | null> {
   const decisions = all.filter((r) => r.duel === id);
   const { events, source } = await eventsOf(n, d, opened, closes, decisions);
   const o = d.outcome ?? null;
+  // a resolved duel's forfeits, from the contract itself, so the page knows them even without the resolve tx
+  const forfeited = d.resolved
+    ? ((await view("get_no_reveal", { duel_id: id }).catch(() => null)) as [boolean, boolean] | null)
+    : null;
   const side = (pk: string, ag: Agent | null, i: Duel["last_intent_a"], pnl: number | undefined): DuelSide => ({
     agent: pk,
     model: ag?.model_id ?? "unknown",
@@ -202,6 +208,7 @@ export async function loadDuel(id: string): Promise<DuelData | null> {
     events,
     decisions,
     source,
+    forfeited,
     at: Date.now(),
   };
   cache.set(id, out);
