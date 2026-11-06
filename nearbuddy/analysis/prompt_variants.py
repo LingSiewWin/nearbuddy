@@ -13,8 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agents"))
 
-import prompts  # noqa: E402
-from prompts import (  # noqa: E402, F401
+import prompts
+from prompts import (  # noqa: F401
     MARK,
     VARIANT_A,
     VARIANT_B,
@@ -40,4 +40,6 @@ if __name__ == "__main__":
         raise SystemExit(1)
     for name, text in VARIANTS.items():
         t = tokens(text.format(symbol="NEAR/USD"))
-        print(f"variant {name}: {len(text)} chars ~ {t} tokens {'OK' if t < 350 else 'OVER 350'}")
+        print(
+            f"variant {name}: {len(text)} chars ~ {t} tokens {'OK' if t < 350 else 'OVER 350'}"
+        )
