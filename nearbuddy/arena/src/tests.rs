@@ -2942,3 +2942,28 @@ fn the_owner_open_refunds_its_margin_too() {
     );
 }
 
+#[test]
+#[should_panic(expected = "set_oracle first")]
+fn open_before_set_oracle_panics() {
+    // a fresh init has no duel floor and no lock: refuse duels until set_oracle sets both
+    ctx(OWNER, 0);
+    let mut c = Contract::init(
+        OWNER.parse().unwrap(),
+        ORACLE.parse().unwrap(),
+        U128(ORACLE_DEPOSIT),
+        1_000,
+        0,
+        U128(MIN_CHAOS),
+        INTENTS.parse().unwrap(),
+        U128(VAULT_CAP),
+    );
+    register(&mut c, 1, MODEL_A, true);
+    register(&mut c, 2, MODEL_B, false);
+    ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
+    c.open_duel(
+        Base64VecU8(key(1).1),
+        Base64VecU8(key(2).1),
+        "wrap.near".into(),
+        U64(CLOSE),
+    );
+}

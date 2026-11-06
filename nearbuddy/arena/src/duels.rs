@@ -74,9 +74,9 @@ impl Contract {
     /// storage plus `oracle_deposit`; the open price is requested from the oracle in the same call
     /// and lands through `oracle_on_call`. Returns the duel id.
     /// Caller: owner. Deposit: at least the duel record's storage plus `oracle_deposit`; the excess
-    /// is refunded. Panics: "not owner", "consent required", "paused", "same agent",
-    /// "symbol too long", "close_at in the past", "duel too short", "duel too long", "agent missing",
-    /// "in duel", "deposit too small".
+    /// is refunded. Panics: "not owner", "consent required", "paused", "set_oracle first",
+    /// "same agent", "symbol too long", "close_at in the past", "duel too short", "duel too long",
+    /// "agent missing", "in duel", "deposit too small".
     #[payable]
     pub fn open_duel(
         &mut self,
@@ -122,6 +122,8 @@ impl Contract {
         close_at: U64,
     ) -> U64 {
         self.not_paused();
+        // a fresh `init` has no duel floor and no lock: a duel then would take intents up to close
+        require!(self.min_duel_ns > 0, "set_oracle first");
         require!(a.0 != b.0, "same agent");
         require!(symbol.len() <= 64, "symbol too long");
         require!(close_at.0 > env::block_timestamp(), "close_at in the past");
