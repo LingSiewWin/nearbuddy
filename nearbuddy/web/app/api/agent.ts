@@ -6,6 +6,8 @@
 // `agentSummary()` is the v1 shape: human units, the record over those duels, followers' mandates, how the
 // agent met attacks and its latest decisions with reasoning from the published dataset.
 import type { Fill } from "../cells";
+import { calls } from "../lib/rows";
+import { tally } from "../lib/verdict";
 import { type Agent, type Duel, type Mandate, ms, nearOf } from "./arena";
 import { getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
@@ -154,11 +156,8 @@ export async function agentSummary(pk: string) {
     bond_near: nearOf(a.bond),
     in_duel: a.in_duel == null ? null : Number(a.in_duel),
     record: { won: count("win"), lost: count("loss"), tied: count("tie"), window: done.length },
-    attacks: {
-      faced: attacked.length,
-      fell: attacked.filter((d) => d.verdict === "fell").length,
-      spotted: attacked.filter((d) => d.verdict === "spotted").length,
-    },
+    attacks: tally(attacked),
+    calls: calls(mine),
     followers: r.followers.map(([account, m]) => ({
       account,
       cap_near: nearOf(m.per_tx_cap),

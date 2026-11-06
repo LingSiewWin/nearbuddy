@@ -6,6 +6,8 @@
 // `summary()` turns the raw snapshot into the v1 shape: human units (NEAR, USD, %, ms) and per-agent
 // records, with each agent's prompt and attack verdicts joined from the published dataset.
 import { proven } from "../cells";
+import { calls } from "../lib/rows";
+import { tally } from "../lib/verdict";
 import { attackText, type Decision, getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
 
@@ -159,20 +161,17 @@ export const shortModel = (m: string) =>
     .pop()
     ?.replace(/-\d{4}$/, "") ?? m;
 
-/** Per agent: the prompt it ran most recently and how it met attacks, from the published dataset. */
+/** Per agent from the published dataset: the prompt it ran most recently, how it met attacks, and how often
+ * its call matched the next price move (a coin flip is 50%). */
 function attackRecord(decisions: Decision[]) {
-  const by = new Map<string, { prompt: string; faced: number; fell: number; spotted: number }>();
+  const by = new Map<string, { prompt: string; rows: Decision[] }>();
   for (const r of decisions) {
-    const e = by.get(r.agent) ?? { prompt: r.arm, faced: 0, fell: 0, spotted: 0 };
+    const e = by.get(r.agent) ?? { prompt: r.arm, rows: [] };
     e.prompt = r.arm;
-    if (r.attack) {
-      e.faced++;
-      if (r.verdict === "fell") e.fell++;
-      if (r.verdict === "spotted") e.spotted++;
-    }
+    e.rows.push(r);
     by.set(r.agent, e);
   }
-  return by;
+  return new Map([...by].map(([k, e]) => [k, { prompt: e.prompt, attacks: tally(e.rows), calls: calls(e.rows) }]));
 }
 
 export type Side1 = { agent: string; model: string; side: Side | null; size_pct: number | null; verified: boolean };
@@ -215,7 +214,8 @@ export async function summary(s: Snap, now = Date.now()) {
         verified: a.tee,
         return_pct: a.alpha_bps / 100,
         record: record(a.pk),
-        attacks: atk ? { faced: atk.faced, fell: atk.fell, spotted: atk.spotted } : { faced: 0, fell: 0, spotted: 0 },
+        attacks: atk?.attacks ?? tally([]),
+        calls: atk?.calls ?? { scored: 0, right: 0 },
         bond_near: nearOf(a.bond),
         in_duel: a.in_duel == null ? null : Number(a.in_duel),
       };

@@ -2,7 +2,7 @@
 // own reasoning, the attack it was shown and a plain verdict. Used by scripts/snapshot.ts at build time and
 // by the optional live tail in app/api/dataset.ts, so both produce the same rows.
 import { createHash } from "node:crypto";
-import { pushedSide, reasoning, type Side, type Verdict, verdict } from "./verdict";
+import { briefMove, pushedSide, reasoning, type Side, type Verdict, verdict } from "./verdict";
 
 export type Raw = {
   duel_id: string;
@@ -33,7 +33,16 @@ export type Decision = {
   attack: string | null;
   pushed: Side | null;
   verdict: Verdict | null;
+  /** The next distinct price on the duel's shared brief tape after this call, and whether the call matched it.
+   * Mirrors next_ret in analysis/injection_effects.py; null when the duel had no later price. */
+  next: "up" | "down" | null;
+  right: boolean | null;
   tx: string | null;
+};
+/** How often a set of calls matched the next price move on the duel tape. */
+export const calls = (rows: { right: boolean | null }[]) => {
+  const scored = rows.filter((r) => r.right != null);
+  return { scored: scored.length, right: scored.filter((r) => r.right).length };
 };
 export type Bytes = { req: string; res: string; reqHash: string; resHash: string };
 
@@ -46,7 +55,24 @@ export function slim(raws: Raw[], last = new Map<string, Side>()) {
   const attacks: Record<string, string> = {};
   const bodies: Record<string, Bytes> = {};
   let mismatched = 0;
-  for (const r of raws) {
+  // distinct brief moves per duel in order of appearance (both agents read the same oracle tape); each row
+  // remembers the index of its own move, so a value seen twice in a duel still points at the right next one
+  const spots = new Map<string, number[]>();
+  const spotAt = raws.map((r) => {
+    const m = briefMove(r.brief ?? "");
+    if (m == null) return null;
+    const list = spots.get(r.duel_id) ?? [];
+    if (list.at(-1) !== m) list.push(m);
+    spots.set(r.duel_id, list);
+    return list.length - 1;
+  });
+  const nextOf = (k: number, duel: string): "up" | "down" | null => {
+    const i = spotAt[k];
+    const list = spots.get(duel) ?? [];
+    if (i == null || i + 1 >= list.length) return null;
+    return (list[i + 1] as number) > (list[i] as number) ? "up" : "down";
+  };
+  for (const [k, r] of raws.entries()) {
     if (r.injection) attacks[sha(r.injection).toString("base64")] = r.injection;
     if (!r.intent) continue; // a post that never landed
     const key = `${r.duel_id}:${r.agent_pk}`;
@@ -70,6 +96,10 @@ export function slim(raws: Raw[], last = new Map<string, Side>()) {
       attack: r.injection,
       pushed,
       verdict: r.injection ? verdict(r.text, r.intent.side, pushed) : null,
+      ...(() => {
+        const next = nextOf(k, r.duel_id);
+        return { next, right: next ? (next === "up") === (r.intent.side === "Long") : null };
+      })(),
       tx: r.tx,
     });
     // only bytes whose sha256 equals the hash the chain checked are published for in-browser verification

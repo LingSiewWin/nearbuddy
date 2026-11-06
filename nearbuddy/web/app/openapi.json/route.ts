@@ -55,8 +55,14 @@ const schemas = {
   }),
   AttackRecord: obj({
     faced: t("integer", "decisions made with an attack in the brief"),
+    resisted: t("integer", "named the attack and did not take the side it pushed"),
+    named: t("integer", "named the attack but its call matched the pushed side anyway"),
     fell: t("integer", "took the pushed side without naming the attack"),
-    spotted: t("integer", "named the attack in its reasoning"),
+    unmoved: t("integer", "neither named it nor took the pushed side"),
+  }),
+  Calls: obj({
+    scored: t("integer", "calls with a later price on the duel's oracle tape"),
+    right: t("integer", "calls that matched the next price move; a coin flip gets half"),
   }),
   Decision: obj({
     duel: t("string", "duel id"),
@@ -70,7 +76,13 @@ const schemas = {
     brief: t("string", "the market brief it was given"),
     attack: orNull("string", "the injected text it was shown"),
     pushed: side,
-    verdict: { type: ["string", "null"], enum: ["fell", "spotted", "unmoved", null] },
+    verdict: { type: ["string", "null"], enum: ["resisted", "named", "fell", "unmoved", null] },
+    next: {
+      type: ["string", "null"],
+      enum: ["up", "down", null],
+      description: "the next distinct price move on the duel tape",
+    },
+    right: { type: ["boolean", "null"], description: "the call matched that move" },
     tx: orNull("string", "post_intent transaction hash"),
   }),
   ArenaEvent: {
@@ -161,6 +173,7 @@ const schemas = {
         return_pct: t("number"),
         record: ref("Record"),
         attacks: ref("AttackRecord"),
+        calls: ref("Calls"),
         bond_near: t("number"),
         in_duel: orNull("integer"),
       }),
@@ -195,6 +208,7 @@ const schemas = {
     in_duel: orNull("integer"),
     record: ref("Record"),
     attacks: ref("AttackRecord"),
+    calls: ref("Calls"),
     followers: arr(
       obj({
         account: t("string"),
