@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
-import { fmtNear, loadAccount } from "./chain.ts";
+import { ARENA, explorerTx, fmtNear, loadAccount, loadKey } from "./chain.ts";
+import { NETWORK_ID, NETWORKS } from "./network.ts";
 
 // No keychain here: a successful load proves the env key was used and the file never read.
 const emptyHome = mkdtempSync(join(tmpdir(), "chain-test-home-"));
@@ -32,6 +33,33 @@ test("loadAccount without an env key falls back to the legacy keychain file and 
   } finally {
     process.env.HOME = realHome;
   }
+});
+
+test("loadKey reads ~/.near-credentials/<network>/, so a mainnet id never picks up a testnet key", () => {
+  const home = mkdtempSync(join(tmpdir(), "chain-test-keys-"));
+  const kp = { testnet: KeyPair.fromRandom("ed25519"), mainnet: KeyPair.fromRandom("ed25519") };
+  for (const net of ["testnet", "mainnet"] as const) {
+    mkdirSync(join(home, ".near-credentials", net), { recursive: true });
+    writeFileSync(
+      join(home, ".near-credentials", net, "who.json"),
+      JSON.stringify({ private_key: kp[net].toString() }),
+    );
+  }
+  const realHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    assert.equal(loadKey("who", "testnet"), kp.testnet.toString());
+    assert.equal(loadKey("who", "mainnet"), kp.mainnet.toString());
+    assert.equal(loadKey("who"), kp[NETWORK_ID].toString()); // default follows NEAR_NETWORK
+    assert.throws(() => loadKey("only.near", "mainnet"), /ENOENT.*mainnet\/only\.near\.json/);
+  } finally {
+    process.env.HOME = realHome;
+  }
+});
+
+test("explorerTx and the arena default come from the selected network row", () => {
+  assert.equal(explorerTx("H"), `${NETWORKS[NETWORK_ID].explorer}/txns/H`);
+  if (!process.env.ARENA_CONTRACT) assert.equal(ARENA, NETWORKS[NETWORK_ID].arena);
 });
 
 test("fmtNear renders yocto with fixed digits", () => {
