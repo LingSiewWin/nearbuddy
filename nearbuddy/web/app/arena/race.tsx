@@ -146,6 +146,12 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
   const price = f.live ? (last?.p ?? null) : f.close;
   const move = open && price ? ((price - open) / open) * 100 : null;
   const { intents, attacks } = duelEvents(events, f.duel);
+  // the chart's numbers in words, for screen readers
+  const label = `NEAR price over duel ${f.duel}${open ? `, open ${usd(open)}` : ""}${
+    price != null && move != null
+      ? `, ${f.live ? "now" : "close"} ${usd(price)}, ${move >= 0 ? "up" : "down"} ${Math.abs(move).toFixed(2)}%`
+      : ", no trades yet"
+  }${attacks.length ? `, ${attacks.length} paid attack${attacks.length > 1 ? "s" : ""}` : ""}`;
   const t = sideTone(f);
   const lockX = x(t1 - f.lockS * 1000);
   const lane = (s: Focus["a"], k: string) => {
@@ -211,7 +217,7 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
           </div>
         ) : null}
         <div className="plot">
-          <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-label="NEAR price during the duel">
+          <svg viewBox="0 0 1000 100" preserveAspectRatio="none" role="img" aria-label={label}>
             {open ? (
               <line
                 x1="0"
