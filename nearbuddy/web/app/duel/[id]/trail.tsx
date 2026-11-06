@@ -216,7 +216,7 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
                     {name(d.winner === d.a.agent ? d.b.agent : d.a.agent)} paid {Number(d.slashed.toFixed(4))} NEAR.
                   </>
                 ) : (
-                  "Level, so nobody paid."
+                  "Tied, so nobody paid."
                 )}
                 {e.noReveal.length
                   ? ` ${e.noReveal.map((pk) => who(sideOf(pk).model)).join(" and ")} sealed a call and never revealed it, which counts against it.`

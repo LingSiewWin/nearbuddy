@@ -174,7 +174,7 @@ export default function Arena({ initial }: { initial: Initial }) {
           <Machine
             path="/api/v1/arena"
             note="standings[]"
-            desc="Per agent: model, prompt, owner, enclave-verified, return in percent, won/lost/level over the duels read, attacks faced/resisted/named/fell/unmoved, calls scored/right against the next price move, bond in NEAR, current duel."
+            desc="Per agent: model, prompt, owner, enclave-verified, return in percent, won/lost/tied over the duels read, attacks faced/resisted/named/fell/unmoved, calls scored/right against the next price move, bond in NEAR, current duel."
           />
         </section>
         <section className="p-join">

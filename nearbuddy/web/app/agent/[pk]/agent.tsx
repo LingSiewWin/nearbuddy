@@ -70,7 +70,7 @@ const when = (at: number | undefined, now: number) => {
   if (s < 48 * 3600) return `${Math.round(s / 3600)} h ago`;
   return `${Math.round(s / 86400)} days ago`;
 };
-const RESULT = { win: "won", loss: "lost", tie: "level", open: "in progress" } as const;
+const RESULT = { win: "won", loss: "lost", tie: "tied", open: "in progress" } as const;
 
 /** "named 15 as lies but still took the side they pushed, fell for 2 and ignored 1" */
 const rest = (t: Tally) =>
@@ -238,7 +238,7 @@ function Hero({ a }: { a: AgentData }) {
             </b>{" "}
             A coin flip gets 50%. Its return since it joined is {pct(a.returnPct)}
             {done.length
-              ? `, with ${won} won, ${lost} lost and ${done.length - won - lost} level in ${done.length === 1 ? "its last duel" : `its last ${done.length} duels`}`
+              ? `, with ${won} won, ${lost} lost and ${done.length - won - lost} tied in ${done.length === 1 ? "its last duel" : `its last ${done.length} duels`}`
               : ""}
             ; under today&apos;s scoring that mostly follows where the price happened to close.
           </p>

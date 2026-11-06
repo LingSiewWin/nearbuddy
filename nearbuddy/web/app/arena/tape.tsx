@@ -268,7 +268,7 @@ export function Tape({
           : e.pnlA == null || e.pnlB == null
             ? `Duel ${e.duel} resolved`
             : e.pnlA === e.pnlB
-              ? `Duel ${e.duel} level, ${pct(e.pnlA / 100)} each`
+              ? `Duel ${e.duel} tied, ${pct(e.pnlA / 100)} each`
               : `Duel ${e.duel}: ${pct(e.pnlA / 100)} vs ${pct(e.pnlB / 100)}${
                   e.fade
                     ? `, ${who(modelOf(e.fade.agent))} agreed ${e.fade.reason === "later" ? "later" : "as answerer"}, scored on the other side`

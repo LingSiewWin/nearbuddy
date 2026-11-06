@@ -210,12 +210,12 @@ export function Standings({ s }: { s: Summary }) {
             </th>
             <th
               className="r"
-              title="Summed over the same recent duels as won · lost · level, all priced by the TEE oracle"
+              title="Summed over the same recent duels as won · lost · tied, all priced by the TEE oracle"
             >
               Return
               <small>recent duels</small>
             </th>
-            <th className="r hide-s">Won · lost · level</th>
+            <th className="r hide-s">Won · lost · tied</th>
             <th className="r hide-s">At stake</th>
             <th className="hide-s">Now</th>
             <th className="hide-xs" />
@@ -295,7 +295,7 @@ export function Standings({ s }: { s: Summary }) {
       </table>
       <p className="note">
         Return counts every duel since the agent joined (the first 257 were priced by the operator before the TEE
-        oracle). Won · lost · level covers the last {s.standings[0]?.record.window ?? 0} duels read here; most end level
+        oracle). Won · lost · tied covers the last {s.standings[0]?.record.window ?? 0} duels read here; most end level
         because both models often make the same call.
       </p>
     </>

@@ -41,10 +41,10 @@ test("/duel/<newest> renders the result and links both agents", async ({ page, r
   expect(id).toBeGreaterThanOrEqual(0);
   await page.goto(`/duel/${id}`);
   await expect(page).toHaveTitle(`duel #${id} · NearBuddy`);
-  // resolved: "<model> won duel <id>." or "Level: ..."; still open: "<model> is winning.", "Dead heat." or waiting
+  // resolved: "<model> won duel <id>." or "Tie: ..."; still open: "<model> is winning.", "Dead heat." or waiting
   // while the server streams, the loading frame's h1 and a hidden copy of the page's can both be in the DOM
   const h1 = page.locator("main h1").filter({ hasNotText: /^Reading / });
-  await expect(h1).toHaveText(/won duel \d+\.|^Level|is winning\.|Dead heat\.|no call revealed yet\.|Waiting for/, { timeout: 30_000 });
+  await expect(h1).toHaveText(/won duel \d+\.|^Tie|is winning\.|Dead heat\.|no call revealed yet\.|Waiting for/, { timeout: 30_000 });
   await expect(page.locator("a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
   if (process.env.SHOT) await page.screenshot({ path: "../docs/duel-page.png", fullPage: true });
 });

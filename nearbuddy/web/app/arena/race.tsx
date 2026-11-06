@@ -48,7 +48,7 @@ export function Headline({
         {lead ? (
           <>{lead === "a" ? A : B} was ahead</>
         ) : f.a.side || f.b.side ? (
-          "the two sides were level"
+          "the two sides were tied"
         ) : (
           "neither side had revealed a call"
         )}
@@ -100,7 +100,7 @@ export function Headline({
         {w === "a" ? A : B} won duel {f.duel}.
       </>
     ) : (
-      `Duel ${f.duel} ended level.`
+      `Duel ${f.duel} ended in a tie.`
     );
     sub = w ? (
       <>
@@ -189,7 +189,7 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
             {!s.side && !(s === f.a ? f.b : f.a).side
               ? "no call yet"
               : Math.abs(mark - other) < 0.005
-                ? "level"
+                ? "tied"
                 : mark > other
                   ? "ahead"
                   : "behind"}

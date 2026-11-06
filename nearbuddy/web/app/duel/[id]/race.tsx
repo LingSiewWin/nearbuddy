@@ -49,12 +49,12 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
       ? !s.side && !other.side
         ? "no call yet"
         : Math.abs(mark - vs) < 0.005
-          ? "level"
+          ? "tied"
           : mark > vs
             ? "ahead"
             : "behind"
       : d.winner == null
-        ? `level, ${pct(mark)}`
+        ? `tied, ${pct(mark)}`
         : d.winner === s.agent
           ? `won, ${pct(mark)}`
           : `lost, ${pct(mark)}`;

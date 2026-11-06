@@ -98,7 +98,7 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
   const say = !d.live
     ? won
       ? `${who(won.model)} won duel ${d.duel}.`
-      : `Duel ${d.duel} ended level, nobody paid.`
+      : `Duel ${d.duel} ended in a tie, nobody paid.`
     : hit
       ? `Attack on ${who(hit.target === d.a.agent ? d.a.model : d.b.model)}: ${hit.text ?? "a custom headline"}`
       : "";
@@ -242,10 +242,10 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
     } else {
       const same = !!d.a.side && d.a.side === d.b.side;
       h1 = same
-        ? `Level: both bet ${d.a.side === "Long" ? "up" : "down"}, nobody paid.`
+        ? `Tie: both bet ${d.a.side === "Long" ? "up" : "down"}, nobody paid.`
         : !d.a.side && !d.b.side
-          ? "Level: no calls, nobody paid."
-          : "Level: nobody paid.";
+          ? "Tie: no calls, nobody paid."
+          : "Tie: nobody paid.";
       sub = (
         <>
           {same && d.a.size_pct === d.b.size_pct ? (
@@ -276,7 +276,7 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
           {lead ? (
             <>{nm(lead)} was ahead</>
           ) : d.a.side || d.b.side ? (
-            "the two sides were level"
+            "the two sides were tied"
           ) : (
             "neither side had revealed a call"
           )}
