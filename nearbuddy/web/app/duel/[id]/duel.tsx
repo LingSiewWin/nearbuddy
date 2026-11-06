@@ -28,6 +28,7 @@ import { Machine } from "../../ui/machine";
 import { type DuelData, type DuelSide, loadDuel } from "./data";
 import { Race, tones } from "./race";
 import { type Story, stories, Trail, verdictOf } from "./trail";
+import { Verified } from "./verified";
 
 const TX_HOST = new URL(NET.txApi).host;
 
@@ -178,6 +179,13 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
             <Proof d={d} />
           </div>
           <ProofMachine d={d} />
+          {d.live ? null : (
+            <Machine
+              path={`/api/verify?duel=${d.duel}`}
+              note="JSON, one line per check"
+              desc="This duel re-read from public sources by the same checks as bun run verify-duel: every signature and enclave proof, both oracle prices, the score, the slash and the payout, each PASS, FAIL, SKIP or INFO with its evidence. MCP: verify_duel."
+            />
+          )}
         </section>
         <footer className="foot">
           Contract{" "}
@@ -467,6 +475,7 @@ function Proof({ d }: { d: DuelData }) {
             <i>{d.live ? "not yet" : "not in reach"}</i>
           )}
         </li>
+        {d.live ? null : <Verified duel={d.duel} />}
         <li>
           <b>Tampering is refused</b>
           <span>A real proof with one flipped byte was rejected by the contract.</span>
