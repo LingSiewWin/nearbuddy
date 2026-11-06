@@ -19,3 +19,4 @@ __pycache__/
 .web.log
 test-results/
 playwright-report/
+dataset/decisions.parquet
