@@ -4,14 +4,14 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { Quote } from "./oneclick.ts";
+import { type Quote, type QuoteRequest, USDC_NEAR, WNEAR } from "./oneclick.ts";
 
 // Keep the unit tests away from the solver's real state files.
 const scratch = mkdtempSync(join(tmpdir(), "arena-test-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
 process.env.ARENA_HISTORY = join(scratch, "history.json");
 process.env.ARENA_SECRET ??= "route-test-secret"; // shared module cache: arena.routes.test.ts reads it back from the module
-const { Arena, mandateOpen, pairIdle, quoteAmount } = await import("./arena.ts");
+const { Arena, fillRecipient, mandateOpen, pairIdle, quoteAmount } = await import("./arena.ts");
 type Mandate = import("./arena.ts").Mandate;
 type AgentView = import("./arena.ts").AgentView;
 
@@ -85,6 +85,99 @@ test("batched quotesFor: one quote for the open mandates' sum, split pro rata at
   );
   assert.equal(out[0]?.price, out[1]?.price);
   assert.equal(out[0]?.quote, out[1]?.quote);
+});
+
+/** Run `f` with env vars set (undefined = unset), restoring them after: arena.ts reads them per call. */
+async function withEnv<T>(vars: Record<string, string | undefined>, f: () => Promise<T>): Promise<T> {
+  const old = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  const set = (v: Record<string, string | undefined>) => {
+    for (const [k, x] of Object.entries(v))
+      if (x === undefined) delete process.env[k];
+      else process.env[k] = x;
+  };
+  set(vars);
+  try {
+    return await f();
+  } finally {
+    set(old);
+  }
+}
+const recording = (solverId: string, reqs: QuoteRequest[]) =>
+  new Arena({} as never, solverId, {
+    listFollowers: async () => [
+      ["f1.near", m()],
+      ["f3.near", m({ spent: "950" })],
+    ],
+    quote: async (req) => {
+      reqs.push(req);
+      return fixture;
+    },
+    now: () => NOW,
+  });
+
+test("B14: a Long buys NEAR with USDC (EXACT_OUTPUT of the mandate amount); a Short sells NEAR", async () => {
+  const reqs: QuoteRequest[] = [];
+  await recording("nearbuddy-solver.testnet", reqs).quotesFor("pk", "Long");
+  await recording("nearbuddy-solver.testnet", reqs).quotesFor("pk", "Short");
+  assert.deepEqual(
+    reqs.map((r) => [r.swapType, r.originAsset, r.destinationAsset, r.amount]),
+    [
+      ["EXACT_OUTPUT", USDC_NEAR, WNEAR, "350"],
+      ["EXACT_INPUT", WNEAR, USDC_NEAR, "350"],
+    ],
+  );
+});
+
+test("B14: testnet defaults to paying the solver (one batched quote); mainnet pays each follower's intents balance", async () => {
+  const testnet: QuoteRequest[] = [];
+  const t = await withEnv({ FILL_RECIPIENT: undefined }, () =>
+    recording("nearbuddy-solver.testnet", testnet).quotesFor("pk", "Short"),
+  );
+  assert.deepEqual(
+    testnet.map((r) => [r.recipient, r.recipientType, r.refundTo]),
+    [["nearbuddy-solver.near", "INTENTS", "nearbuddy-solver.near"]],
+  );
+  assert.deepEqual(
+    t.map((o) => o.recipient),
+    ["nearbuddy-solver.near", "nearbuddy-solver.near"],
+  );
+
+  const mainnet: QuoteRequest[] = [];
+  const o = await withEnv({ FILL_RECIPIENT: undefined }, () =>
+    recording("nearbuddy-solver.near", mainnet).quotesFor("pk", "Short"),
+  );
+  // a quote has one recipient, so paying followers means one quote each, even with BATCH_RFQ on
+  assert.deepEqual(
+    mainnet.map((r) => [r.recipient, r.recipientType, r.refundTo, r.amount]),
+    [
+      ["f1.near", "INTENTS", "nearbuddy-solver.near", "300"],
+      ["f3.near", "INTENTS", "nearbuddy-solver.near", "50"],
+    ],
+  );
+  assert.deepEqual(
+    o.map((x) => [x.follower, x.recipient, x.quote_out]),
+    [
+      ["f1.near", "f1.near", "3744739"],
+      ["f3.near", "f3.near", "3744739"],
+    ],
+  );
+});
+
+test("B14: FILL_RECIPIENT overrides the network default and refuses anything else", async () => {
+  const reqs: QuoteRequest[] = [];
+  await withEnv({ FILL_RECIPIENT: "follower" }, () =>
+    recording("nearbuddy-solver.testnet", reqs).quotesFor("pk", "Long"),
+  );
+  await withEnv({ FILL_RECIPIENT: "solver" }, () => recording("nearbuddy-solver.near", reqs).quotesFor("pk", "Long"));
+  assert.deepEqual(
+    reqs.map((r) => r.recipient),
+    ["f1.near", "f3.near", "nearbuddy-solver.near"],
+  );
+  assert.equal(fillRecipient("x.near"), "follower");
+  await assert.rejects(
+    withEnv({ FILL_RECIPIENT: "agent" }, () => recording("s.testnet", []).quotesFor("pk")),
+    /FILL_RECIPIENT must be solver or follower/,
+  );
 });
 
 test("route: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Quote } from "./oneclick.ts";
-import { batchQuote, bpsVsOracle, duelMid, executionRecords, proRata } from "./rfq.ts";
+import { batchQuote, bpsVsOracle, duelMid, executionRecords, proRata, quotePrice, variableLeg } from "./rfq.ts";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 const withOut = (amountOut: string): Quote => ({ ...fixture, quote: { ...fixture.quote, amountOut } });
@@ -135,7 +135,7 @@ test("duelMid: close beats open, only a NEAR/USD duel counts", () => {
 });
 
 test("executionRecords: one row per quoted follower, errors skipped, no rows at all without a mid", () => {
-  const intent = { agent_pk: "PK", duel_id: "3", nonce: "9" };
+  const intent = { agent_pk: "PK", duel_id: "3", nonce: "9", side: "Short" as const };
   const quotes = [
     { follower: "a", amount: "1000000000000000000000000", quote: fixture, quote_out: "3744739" },
     { follower: "b", amount: "5", error: "1click quote 503" },
@@ -147,4 +147,47 @@ test("executionRecords: one row per quoted follower, errors skipped, no rows at 
   assert.equal(spot[0]?.oracle_source, "coinbase_spot");
   assert.equal(spot[0]?.bps_vs_oracle, 127.76);
   assert.equal(spot[0]?.quoted_at, Date.parse(fixture.timestamp));
+  assert.equal(spot[0]?.side, "Short");
+});
+
+// A Long buys exactly 1 wNEAR (EXACT_OUTPUT); the USDC leg is amountIn. Live dry quote shape, 2026-11-06.
+const longFixture: Quote = {
+  ...fixture,
+  quoteRequest: { ...fixture.quoteRequest, swapType: "EXACT_OUTPUT" },
+  quote: {
+    ...fixture.quote,
+    amountIn: "3759616",
+    amountInFormatted: "3.759616",
+    amountOut: "1000000000000000000000000",
+    amountOutFormatted: "1.0",
+  },
+};
+
+test("Long: the batch splits the USDC paid (amountIn), price is USDC per NEAR, bps positive = paid less", async () => {
+  assert.equal(variableLeg(longFixture), "amountIn");
+  assert.equal(variableLeg(fixture), "amountOut");
+  assert.equal(quotePrice(longFixture), 3.759616);
+  const b = await batchQuote(
+    [
+      { follower: "a", amount: 3n },
+      { follower: "b", amount: 1n },
+    ],
+    async () => longFixture,
+  );
+  assert.equal(b.quote_out_total, "3759616");
+  assert.deepEqual(
+    b.fills.map((f) => f.quote_out),
+    ["2819712", "939904"],
+  );
+  const NEAR = "1000000000000000000000000";
+  const rows = (mid: string) =>
+    executionRecords(
+      { agent_pk: "PK", duel_id: "3", nonce: "9", side: "Long" },
+      [{ follower: "a", amount: NEAR, quote: longFixture, quote_out: "3759616" }],
+      { mid, source: "outlayer_open" },
+    );
+  assert.equal(rows("370000000")[0]?.bps_vs_oracle, -161.12); // paid 3.759616 for a 3.70 mid: worse
+  assert.equal(rows("380000000")[0]?.bps_vs_oracle, 106.27); // paid 3.759616 for a 3.80 mid: better
+  assert.equal(rows("375961600")[0]?.bps_vs_oracle, 0); // exactly the mid: 0, not -0
+  assert.ok(Object.is(rows("375961600")[0]?.bps_vs_oracle, 0));
 });

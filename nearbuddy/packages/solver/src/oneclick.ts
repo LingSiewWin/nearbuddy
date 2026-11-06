@@ -71,17 +71,32 @@ export async function quote(req: QuoteRequest, fetchFn: typeof fetch = fetch): P
 
 /** Intent-sized request: sell `amountYocto` of wNEAR for USDC on NEAR, settled inside Intents. */
 export function sellNearForUsdc(amountYocto: bigint, account: string, dry = true): QuoteRequest {
+  return fillRequest("Short", amountYocto, account, account, dry);
+}
+
+/** A follower fill sized in NEAR, settled inside Intents. Short sells exactly `amountYocto` wNEAR for USDC
+ *  (EXACT_INPUT: USDC is `amountOut`); Long buys exactly `amountYocto` wNEAR with USDC (EXACT_OUTPUT: USDC is
+ *  `amountIn`). The solver's intents.near balance pays and takes refunds (`refundTo`); the output lands in
+ *  `recipient`'s intents.near balance. */
+export function fillRequest(
+  side: "Long" | "Short",
+  amountYocto: bigint,
+  refundTo: string,
+  recipient: string,
+  dry = true,
+): QuoteRequest {
+  const long = side === "Long";
   return {
     dry,
-    swapType: "EXACT_INPUT",
+    swapType: long ? "EXACT_OUTPUT" : "EXACT_INPUT",
     slippageTolerance: 100,
-    originAsset: WNEAR,
+    originAsset: long ? USDC_NEAR : WNEAR,
     depositType: "INTENTS",
-    destinationAsset: USDC_NEAR,
+    destinationAsset: long ? WNEAR : USDC_NEAR,
     amount: amountYocto.toString(),
-    refundTo: account,
+    refundTo,
     refundType: "INTENTS",
-    recipient: account,
+    recipient,
     recipientType: "INTENTS",
     deadline: new Date(Date.now() + 10 * 60_000).toISOString(),
   };

@@ -440,16 +440,16 @@ test("GET /execution: a batched intent records every follower's fill against the
       ["f2.testnet", mandate("250000000000000000000000")], // 0.25 NEAR
     ],
     quote: async (req) => {
-      asked.push(req.amount);
+      asked.push(`${req.swapType} ${req.amount}`);
       return fixture; // 1.0 wNEAR -> 3.744739 USDC
     },
   });
-  const s = signed(KeyPair.fromRandom("ed25519"), { nonce: "7" });
+  const s = signed(KeyPair.fromRandom("ed25519"), { nonce: "7", side: "Short" });
   await withRpc({ get_duel: () => ({ symbol: "wrap.near", open_price: "380000000", outcome: null }) }, async (seen) => {
     await arena.route("POST", "/intent", JSON.stringify({ signed: s }), KEY);
     assert.deepEqual(seen, ["get_duel"]);
   });
-  assert.deepEqual(asked, ["1000000000000000000000000"]); // one RFQ for the sum
+  assert.deepEqual(asked, ["EXACT_INPUT 1000000000000000000000000"]); // one RFQ for the sum, a Short sells NEAR
   const r = (await arena.route("GET", "/execution", ""))!;
   assert.equal(r.code, 200);
   // 3.744739 USDC per NEAR vs a 3.80 mid: -145.42 bps at the batch price; f2's floor costs it 0.01 bps
@@ -464,6 +464,7 @@ test("GET /execution: a batched intent records every follower's fill against the
     agent_pk: s.intent.agent_pk,
     duel_id: "3",
     oracle_source: "outlayer_open",
+    side: "Short",
   });
   assert.deepEqual((r.body as { quality: unknown[] }).quality, [
     row("f1.testnet", "750000000000000000000000", "2808555", -145.42),
