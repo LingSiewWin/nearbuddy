@@ -203,7 +203,7 @@ cd arena && cargo test                    # 119 contract tests (the sandbox run 
 cd .. && bun run test                        # protocol, solver, demo and analysis tests: 100 pass + 2 skip (ARENA_DEPLOYED=1 runs the on-chain parity)
 bun run solver                               # :4020, mounts /register /duel /intent /chaos /resolve /settle_follow /arena
 cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pytest -q  # 148 tests
-(cd .. && bun run e2e)                       # ~4 min, not in CI: sandbox + contract + solver + runner, PASS/FAIL table (see e2e/run.ts)
+(cd .. && bun run e2e)                       # ~4 min, CI nightly with E2E_OFFLINE=1: sandbox + contract + solver + runner, PASS/FAIL table (see e2e/run.ts)
 .venv/bin/python -m runner --rounds 1 --duel-seconds 330 --cycle-seconds 30  # a live NEAR/USD duel (oracle caches 300 s); with a key, both agents are TEE-backed
 cd .. && bun run arena-demo                  # follower mandate, chaos, 1Click quote, settle, rejections, oracle resolve
 DUELS=8 TARGET=b bun run spectator           # inject one attack per new duel at the naive model (pays 0.1 NEAR each)
