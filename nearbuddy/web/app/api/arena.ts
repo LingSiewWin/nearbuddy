@@ -147,7 +147,8 @@ const YOCTO = 10n ** 24n;
 export const nearOf = (y: string | null | undefined, d = 3) => {
   if (!y) return 0;
   const v = BigInt(y);
-  return Number(v / YOCTO) + Number(((v % YOCTO) * 10n ** BigInt(d)) / YOCTO) / 10 ** d;
+  const scaled = (v * 10n ** BigInt(d)) / YOCTO; // integer in units of 10^-d NEAR, so no float sum drifts
+  return Number(scaled) / 10 ** d;
 };
 export const usd = (p: string | number | null | undefined) => (p == null ? null : Number(p) / 1e8);
 export const ms = (ns: string | number) => Math.floor(Number(BigInt(ns) / 1_000_000n));
