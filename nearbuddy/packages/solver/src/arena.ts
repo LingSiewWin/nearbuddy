@@ -457,7 +457,7 @@ export class Arena {
         } | null;
         this.intents.push(...(h?.intents ?? []));
         this.fills.push(...(h?.fills ?? []));
-        this.quality.push(...(h?.quality ?? []).slice(-MAX_EXECUTION));
+        if (Array.isArray(h?.quality)) this.quality.push(...h.quality.slice(-MAX_EXECUTION));
       }
     } catch (e) {
       console.log(`[arena] history file ignored: ${String(e).slice(0, 80)}`);
@@ -569,7 +569,7 @@ export class Arena {
       intents: this.intents.slice(-50).map((r) => ({ ...r.signed.intent, tx: r.tx, quotes: r.quotes, at: r.at })),
       pending: await this.pending(),
       fills: this.fills.slice(-50),
-      quality: this.quality,
+      quality: this.quality.slice(-10), // the page shows 10; GET /execution serves all MAX_EXECUTION
     };
   }
 
