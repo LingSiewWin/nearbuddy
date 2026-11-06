@@ -141,6 +141,9 @@ export function Headline({
           <p className="fine">
             Live line: Coinbase NEAR-USD trades. The score is set by the TEE price oracle at the open and the close; its
             prices can be up to five minutes old, so the final score can differ from the live line.
+            {f.open && open && Math.abs(f.open - open) / open >= 0.0001
+              ? ` This duel's oracle open is ${usd(f.open)}, ${pct(((f.open - open) / open) * 100)} from Coinbase's first trade after the open.`
+              : ""}
             {f.sealed
               ? ` Calls are sealed until revealed, so nobody can copy them in time; a side that never reveals forfeits ${f.forfeitPct}% of its bond.`
               : ""}
