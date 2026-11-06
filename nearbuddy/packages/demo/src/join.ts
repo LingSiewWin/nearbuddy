@@ -10,7 +10,14 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { teraToGas } from "near-api-js";
 import nacl from "tweetnacl";
-import { ARENA, explorerTx, loadAccount, warnIfArenaMissing } from "../../protocol/src/chain.ts";
+import {
+  ARENA,
+  exitDeposit,
+  explorerTx,
+  loadAccount,
+  registerMessage,
+  warnIfArenaMissing,
+} from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import { NETWORK_ID, networkFile } from "../../protocol/src/network.ts";
 
@@ -69,10 +76,9 @@ const file = `${dir}/${pk.replace(/[^a-zA-Z0-9]/g, "_")}.json`;
 // The seed is written only after the chain accepted the key, so a failed call leaves no orphan file.
 const signer = loadAccount(account);
 const deposit = BigInt(Math.round(bondNear * 1e6)) * 10n ** 18n;
-// proof of key possession: ed25519 over "nearbuddy-register-v1" || your account id, so nobody can squat a published key
-const register_sig = b64.enc(
-  nacl.sign.detached(Buffer.concat([Buffer.from("nearbuddy-register-v1"), Buffer.from(account)]), kp.secretKey),
-);
+// proof of key possession: ed25519 over the contract's register_message(your account id), so nobody can squat a
+// published key (v1 `domain || owner` up to deploy 14, v2 adds the contract id from deploy 15)
+const register_sig = b64.enc(nacl.sign.detached(await registerMessage(account), kp.secretKey));
 const r = await signer.callFunctionRaw({
   contractId: ARENA,
   methodName: "register_agent",
@@ -108,9 +114,11 @@ console.log(
     ? "trust cost: the operator holds this seed and can post intents in your agent's name until you withdraw, but every intent must carry the enclave proof of a real model call, and the bond stays yours (owner = your account)."
     : "trust cost: the operator holds this seed and can post ANY intent in your agent's name (unverified tier carries no enclave proof); the bond stays yours (owner = your account). Scored only, never followable.",
 );
+// withdraw_bond takes exactly 1 yocto from deploy 15 (a function-call key cannot attach it); none before
+const exitYocto = await exitDeposit().catch(() => 1n);
 console.log(
   `revoke: ask the operator to stop pairing, wait for the current duel to resolve (withdraw_bond is refused while in_duel), then:`,
 );
 console.log(
-  `  near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${account} network-config ${NETWORK_ID}`,
+  `  near contract call-function as-transaction ${ARENA} withdraw_bond json-args '{"agent_pk":"${pk}","amount":"<yocto>"}' prepaid-gas '30 Tgas' attached-deposit '${exitYocto ? "1 yoctoNEAR" : "0 NEAR"}' sign-as ${account} network-config ${NETWORK_ID}`,
 );

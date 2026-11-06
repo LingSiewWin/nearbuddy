@@ -109,3 +109,27 @@ export async function warnIfArenaMissing(
   );
   return true;
 }
+
+type ArenaView = <T>(method: string, args: Record<string, unknown>) => Promise<T>;
+
+/** Deploy 15 or later (verified settlement): `get_config` names the intents account. */
+export async function isDeploy15(view: ArenaView = arenaView): Promise<boolean> {
+  return typeof (await view<{ intents_account?: unknown }>("get_config", {})).intents_account === "string";
+}
+
+/** The exact bytes `register_agent` by `owner` verifies, from the contract's `register_message` view (v1 up to
+ *  deploy 14, v2 with the contract id from deploy 15). The v1 bytes when the view cannot be read: a deploy-15
+ *  contract then refuses the registration, it never accepts a wrong one. */
+export async function registerMessage(owner: string, view: ArenaView = arenaView): Promise<Buffer> {
+  try {
+    return Buffer.from(await view<string>("register_message", { owner }), "base64");
+  } catch {
+    return Buffer.concat([Buffer.from("nearbuddy-register-v1"), Buffer.from(owner)]);
+  }
+}
+
+/** Deposit for the arena's owner and exit calls (`withdraw_bond`, admin setters): exactly 1 yocto from deploy 15,
+ *  none before, where those methods are not payable and refuse any deposit. */
+export async function exitDeposit(view: ArenaView = arenaView): Promise<bigint> {
+  return (await isDeploy15(view)) ? 1n : 0n;
+}

@@ -4,7 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
-import { ARENA, explorerTx, fmtNear, loadAccount, loadKey, warnIfArenaMissing } from "./chain.ts";
+import {
+  ARENA,
+  exitDeposit,
+  explorerTx,
+  fmtNear,
+  isDeploy15,
+  loadAccount,
+  loadKey,
+  registerMessage,
+  warnIfArenaMissing,
+} from "./chain.ts";
 import { NETWORK_ID, NETWORKS } from "./network.ts";
 
 // No keychain here: a successful load proves the env key was used and the file never read.
@@ -92,4 +102,29 @@ test("warnIfArenaMissing: mainnet warns on UNKNOWN_ACCOUNT only, testnet never a
   } finally {
     console.warn = warn;
   }
+});
+
+/** Fake arena view answering by method name; a missing method throws like a MethodNotFound view. */
+const fakeView =
+  (answers: Record<string, unknown>) =>
+  async <T>(method: string, _args: Record<string, unknown>): Promise<T> => {
+    if (!(method in answers)) throw new Error(`MethodNotFound ${method}`);
+    return answers[method] as T;
+  };
+
+test("deploy detection and exit deposit: get_config with intents_account is deploy 15 (1 yocto), without is 14 (none)", async () => {
+  const v14 = fakeView({ get_config: { oracle_deposit: "1" } });
+  const v15 = fakeView({ get_config: { oracle_deposit: "1", intents_account: "intents.near" } });
+  assert.equal(await isDeploy15(v14), false);
+  assert.equal(await isDeploy15(v15), true);
+  assert.equal(await exitDeposit(v14), 0n);
+  assert.equal(await exitDeposit(v15), 1n);
+});
+
+test("registerMessage signs what the contract's view returns, v1 bytes when the view fails", async () => {
+  const v2 = Buffer.from("nearbuddy-register-v2arena.testnet\u0000me.testnet");
+  const fromView = await registerMessage("me.testnet", fakeView({ register_message: v2.toString("base64") }));
+  assert.deepEqual(fromView, v2);
+  const fallback = await registerMessage("me.testnet", fakeView({}));
+  assert.equal(fallback.toString(), "nearbuddy-register-v1me.testnet");
 });

@@ -9,7 +9,7 @@
 import "../../protocol/src/env.ts";
 import { sign as edSign } from "node:crypto";
 import { teraToGas } from "near-api-js";
-import { ARENA, arenaView, explorerTx, fmtNear, loadAccount, NEAR } from "../../protocol/src/chain.ts";
+import { ARENA, arenaView, explorerTx, fmtNear, isDeploy15, loadAccount, NEAR } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import {
   type Intent,
@@ -51,6 +51,19 @@ const post = async <T = { tx: string }>(path: string, body: unknown): Promise<T>
   return j as T;
 };
 type Settled = { tx: string; report: { rejected?: [number, string][] } };
+/** Deploy 15 pays only for output delivered to the arena: the solver stub-credits it on testnet (empty swap_tx), and a
+ *  batch with nothing settled is a refused transaction, reported here as its reason. Deploy 14 returns every
+ *  rejection in the report. */
+const DEPLOY15 = await isDeploy15();
+const settle = async (fills: unknown[]): Promise<Settled & { refused?: string }> => {
+  try {
+    return await post<Settled>("/settle_follow", { agent_pk: teeA, follower: FOLLOWER_ID, fills });
+  } catch (e) {
+    if (!DEPLOY15) throw e;
+    return { tx: "", report: {}, refused: String(e).slice(0, 300) };
+  }
+};
+const shown = (s: Settled & { refused?: string }) => (s.refused ? `refused: ${s.refused}` : JSON.stringify(s.report));
 const line = (label: string, tx: string, extra = "") => console.log(`${label.padEnd(18)} ${explorerTx(tx)} ${extra}`);
 
 type DuelIntents = {
@@ -147,55 +160,45 @@ console.log(
   `1Click dry quote: sell ${fmtNear(CAP)} wNEAR -> ${q.quote.amountOutFormatted} USDC (min ${Number(q.quote.minAmountOut) / 1e6}), ${q.quote.timeEstimate}s`,
 );
 
-// 4. settle one fill inside the cap, then one over the cap
-const ok = await post<Settled>("/settle_follow", {
-  agent_pk: teeA,
-  follower: FOLLOWER_ID,
-  fills: [
-    {
-      intent_nonce: nonce,
-      token: "nep141:wrap.near",
-      amount_in: CAP.toString(),
-      amount_out: q.quote.amountOut,
-      swap_tx: `dry-quote:${q.timestamp}`,
-    },
-  ],
-});
-line("settle fill", ok.tx, JSON.stringify(ok.report));
+// 4. settle one fill inside the cap, then one over the cap. Deploy 14 takes the dry quote as the swap; deploy 15
+// refuses `dry-quote:` and the solver credits the output to the arena on the testnet stub (empty swap_tx).
+const ok = await settle([
+  {
+    intent_nonce: nonce,
+    token: "nep141:wrap.near",
+    amount_in: CAP.toString(),
+    amount_out: q.quote.amountOut,
+    swap_tx: DEPLOY15 ? "" : `dry-quote:${q.timestamp}`,
+  },
+]);
+if (ok.refused) throw new Error(`fill inside the cap was refused: ${ok.refused}`);
+line("settle fill", ok.tx, shown(ok));
 // the older nonce: one fill over the cap, one with a token outside the allowlist; and the settled nonce replayed
-const over = await post<Settled>("/settle_follow", {
-  agent_pk: teeA,
-  follower: FOLLOWER_ID,
-  fills: [
-    {
-      intent_nonce: nonce2,
-      token: "nep141:wrap.near",
-      amount_in: (CAP + 1n).toString(),
-      amount_out: "0",
-      swap_tx: "over-cap",
-    },
-    { intent_nonce: nonce2, token: "nep141:usdc.near", amount_in: "1", amount_out: "0", swap_tx: "wrong-token" },
-    {
-      intent_nonce: nonce,
-      token: "nep141:wrap.near",
-      amount_in: CAP.toString(),
-      amount_out: q.quote.amountOut,
-      swap_tx: "replay",
-    },
-  ],
-});
-line("settle rejected", over.tx, JSON.stringify(over.report));
+const over = await settle([
+  {
+    intent_nonce: nonce2,
+    token: "nep141:wrap.near",
+    amount_in: (CAP + 1n).toString(),
+    amount_out: "0",
+    swap_tx: "over-cap",
+  },
+  { intent_nonce: nonce2, token: "nep141:usdc.near", amount_in: "1", amount_out: "0", swap_tx: "wrong-token" },
+  {
+    intent_nonce: nonce,
+    token: "nep141:wrap.near",
+    amount_in: CAP.toString(),
+    amount_out: q.quote.amountOut,
+    swap_tx: "replay",
+  },
+]);
+line("settle rejected", over.tx, shown(over));
 // revoke: the follower unfollows, and the very next fill is refused on chain
 line("unfollow enclave A", await call("unfollow", { agent_pk: teeA }));
-const revoked = await post<Settled>("/settle_follow", {
-  agent_pk: teeA,
-  follower: FOLLOWER_ID,
-  fills: [
-    { intent_nonce: nonce2, token: "nep141:wrap.near", amount_in: "1", amount_out: "0", swap_tx: "after-revoke" },
-  ],
-});
-line("settle after revoke", revoked.tx, JSON.stringify(revoked.report));
-if (revoked.report.rejected?.[0]?.[1] !== "mandate revoked")
+const revoked = await settle([
+  { intent_nonce: nonce2, token: "nep141:wrap.near", amount_in: "1", amount_out: "1", swap_tx: "after-revoke" },
+]);
+line("settle after revoke", revoked.tx, shown(revoked));
+if (!shown(revoked).includes("mandate revoked"))
   throw new Error("fill after unfollow was not refused with 'mandate revoked'");
 const vault = await arenaView<string>("get_vault", { account: FOLLOWER_ID });
 const mandate = await arenaView<{ spent: string }>("get_follow", { agent_pk: teeA, follower: FOLLOWER_ID });
