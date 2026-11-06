@@ -3,8 +3,7 @@ use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::{NearToken, Promise, env, near, require};
 
 use crate::{
-    Agent, AgentView, Contract, ContractExt, hex, register_bytes, set_entry_cost,
-    storage_cost_since, verify,
+    Agent, AgentView, Contract, ContractExt, hex, register_bytes, storage_cost_since, verify,
 };
 
 #[near]
@@ -74,7 +73,8 @@ impl Contract {
             self.tee_agents.insert(agent_pk.0.clone());
         }
         self.agents.flush();
-        let cost = storage_cost_since(before) + if tee { set_entry_cost(32) } else { 0 };
+        // includes the tee_agents entry: LookupSet writes at insert
+        let cost = storage_cost_since(before);
         require!(deposit > cost, "bond required");
         self.agents
             .get_mut(&agent_pk.0)

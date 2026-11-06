@@ -10,8 +10,7 @@
 //! Each case draws the owner settings (slash, fee and no-reveal bps, commit-reveal, consent), runs
 //! a setup prefix (agents, vaults, mandates, two duels, a few intents or commitments) and then up
 //! to 40 random operations. Default 64 cases, about 20 s. More cases (1000 take about 5 min):
-//! `PROPTEST_CASES=1000 cargo test --lib invariants`. The two reproductions at the bottom are
-//! ignored until the contract is fixed: `cargo test --lib invariants -- --ignored`.
+//! `PROPTEST_CASES=1000 cargo test --lib invariants`.
 #![cfg(test)]
 
 use std::any::{Any, TypeId};
@@ -1134,9 +1133,7 @@ impl World {
         let added = bytes_added(trie0, &self.trie) as i128 * cost as i128;
         match kind {
             Kind::Neutral => assert_eq!(kept, 0, "neutral op changed balance - liabilities"),
-            // `>=`, not `==`: see `tee_register_charges_set_entry_twice` and
-            // `post_intent_charges_set_entries_twice` (`reveal_intent` shares `accept_intent`)
-            Kind::PaysStorage => assert!(kept >= added, "kept {kept} for {added} of new storage"),
+            Kind::PaysStorage => assert_eq!(kept, added, "kept {kept} for {added} of new storage"),
             Kind::Open => {
                 assert!(
                     kept == open_keep as i128 && kept >= added,
@@ -1243,20 +1240,17 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------- reproductions of property failures
+// ---------------------------------------------------------------- regressions found by the property
 
 /// yoctoNEAR for the bytes added to storage since `u0`.
 fn bytes_added_since(u0: u64) -> u128 {
     (env::storage_usage() - u0) as u128 * env::storage_byte_cost().as_yoctonear()
 }
 
-/// Shrunk from `arena_money_and_mandate_invariants`: `[Register { agent: 0, milli: 5 }]` kept
-/// 4.32e21 yocto for 3.55e21 of new storage. `store::LookupSet::insert` writes at once, so
-/// `storage_cost_since(before)` already counts the `tee_agents` entry and `set_entry_cost(32)`
-/// charges its 77 bytes a second time. Plain agents (`tee = false`) are charged exactly.
+/// Shrunk case `[Register { agent: 0, milli: 5 }]`: a TEE agent's `tee_agents` entry (77 bytes)
+/// was charged twice, once by `storage_cost_since` and again by `set_entry_cost(32)`.
 #[test]
-#[ignore = "contract bug: register_agent charges the tee_agents entry twice"]
-fn tee_register_charges_set_entry_twice() {
+fn tee_register_charges_its_storage_once() {
     use crate::tests::{BOND, OPERATOR, ctx, fresh};
     let mut c = fresh(0);
     let (sk, pk) = key(1);
@@ -1271,11 +1265,10 @@ fn tee_register_charges_set_entry_twice() {
     assert_eq!(BOND - v.bond.0, bytes_added_since(u0));
 }
 
-/// Same cause in `post_intent`: the `used_nonces` entry (85 bytes) is in `storage_cost_since`
-/// and again in `set_entry_cost(32 + 8)`; for a TEE agent the `used_proofs` entry (77 bytes) too.
+/// Same double charge in `accept_intent` (`post_intent` and `reveal_intent`): the `used_nonces`
+/// entry (85 bytes), plus the `used_proofs` entry (77 bytes) for a TEE agent.
 #[test]
-#[ignore = "contract bug: post_intent charges the used_nonces entry twice"]
-fn post_intent_charges_set_entries_twice() {
+fn post_intent_charges_its_storage_once() {
     use crate::tests::{ctx, intent, open, setup};
     let (mut c, _, skb) = setup();
     let d = open(&mut c);

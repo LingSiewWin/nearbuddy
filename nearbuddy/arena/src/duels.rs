@@ -341,13 +341,12 @@ impl Contract {
         );
         *slot = Some(i.clone());
         self.used_nonces.insert(key);
-        let mut cost = set_entry_cost(32 + 8);
         if tee_kind != 0 {
             self.used_proofs.insert(i.proof_hash.0.clone());
-            cost += set_entry_cost(32);
         }
         self.duels.flush();
-        cost += storage_cost_since(before);
+        // includes the used_nonces / used_proofs entries: LookupSet writes at insert
+        let cost = storage_cost_since(before);
         let agent = self.agents.get_mut(&i.agent_pk.0).expect("agent missing");
         require!(agent.bond.0 > cost, "bond exhausted");
         agent.bond = U128(agent.bond.0 - cost);
