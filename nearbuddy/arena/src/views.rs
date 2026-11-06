@@ -1,0 +1,109 @@
+//! Read-only views and the signing-helper views off-chain code uses for parity checks.
+use near_sdk::json_types::{Base64VecU8, U64, U128};
+use near_sdk::{AccountId, near};
+
+use crate::{
+    Agent, AgentView, Config, Contract, ContractExt, Duel, Intent, Mandate, hex, intent_message,
+    register_bytes, tee_text,
+};
+
+#[near]
+impl Contract {
+    pub(crate) fn view_of(&self, a: &Agent) -> AgentView {
+        AgentView {
+            owner: a.owner.clone(),
+            pk: a.pk.clone(),
+            model_id: a.model_id.clone(),
+            bond: a.bond,
+            alpha_bps: a.alpha_bps,
+            shield: a.shield,
+            in_duel: a.in_duel,
+            tee: self.tee_agents.contains(&a.pk.0),
+        }
+    }
+
+    pub fn get_vault(&self, account: AccountId) -> U128 {
+        U128(self.vaults.get(&account).copied().unwrap_or(0))
+    }
+
+    pub fn get_follow(&self, agent_pk: Base64VecU8, follower: AccountId) -> Option<Mandate> {
+        self.follows
+            .get(&agent_pk.0)?
+            .iter()
+            .find(|(f, _)| *f == follower)
+            .map(|(_, m)| m.clone())
+    }
+
+    pub fn list_followers(&self, agent_pk: Base64VecU8) -> Vec<(AccountId, Mandate)> {
+        self.follows.get(&agent_pk.0).cloned().unwrap_or_default()
+    }
+
+    pub fn get_config(&self) -> Config {
+        Config {
+            owner: self.owner.clone(),
+            oracle_account: self.oracle_account.clone(),
+            oracle_deposit: U128(self.oracle_deposit),
+            min_duel_s: self.min_duel_ns / 1_000_000_000,
+            intent_lock_s: self.intent_lock_ns / 1_000_000_000,
+            slash_bps: self.slash_bps,
+            fee_bps: self.fee_bps,
+            min_chaos_deposit: U128(self.min_chaos_deposit),
+            next_duel: U64(self.next_duel),
+            owner_fees: U128(self.owner_fees),
+        }
+    }
+
+    pub fn get_agent(&self, agent_pk: Base64VecU8) -> Option<AgentView> {
+        self.agents.get(&agent_pk.0).map(|a| self.view_of(a))
+    }
+
+    pub fn is_tee_signer(&self, signer: Base64VecU8) -> bool {
+        self.tee_signers.contains(&signer.0)
+    }
+
+    pub fn get_duel(&self, duel_id: U64) -> Option<Duel> {
+        self.duels.get(&duel_id.0).cloned()
+    }
+
+    /// Duel ids an agent took part in, newest first, `limit` entries from offset `from`. Only duels
+    /// opened from deploy 10 on are indexed; unknown agents return an empty list.
+    pub fn agent_duels(&self, agent_pk: Base64VecU8, from: u64, limit: u64) -> Vec<U64> {
+        let Some(list) = self.agent_duels.get(&agent_pk.0) else {
+            return vec![];
+        };
+        list.iter()
+            .rev()
+            .skip(from as usize)
+            .take(limit as usize)
+            .map(|d| U64(*d))
+            .collect()
+    }
+
+    /// Agents sorted by alpha, then shield, descending.
+    pub fn leaderboard(&self) -> Vec<AgentView> {
+        let mut v: Vec<AgentView> = self.agents.values().map(|a| self.view_of(a)).collect();
+        v.sort_by(|x, y| (y.alpha_bps, y.shield).cmp(&(x.alpha_bps, x.shield)));
+        v
+    }
+
+    /// The exact bytes an agent key signs to be registered by `owner`.
+    pub fn register_message(&self, owner: AccountId) -> Base64VecU8 {
+        Base64VecU8(register_bytes(&owner))
+    }
+
+    pub fn intent_message_hex(&self, intent: Intent) -> String {
+        hex(&intent_message(&intent))
+    }
+
+    /// The exact text a TEE signs for an agent's completion, for off-chain parity checks.
+    pub fn tee_text_utf8(
+        &self,
+        kind: u8,
+        model_id: String,
+        request_hash: Base64VecU8,
+        response_hash: Base64VecU8,
+    ) -> String {
+        String::from_utf8(tee_text(kind, &model_id, &request_hash.0, &response_hash.0))
+            .expect("utf8")
+    }
+}
