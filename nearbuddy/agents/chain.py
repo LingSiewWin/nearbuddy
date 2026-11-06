@@ -20,20 +20,22 @@ ARENA = ENV.get("ARENA_CONTRACT", NET["arena"])
 ASSETS = {"NEAR/USD": "wrap.near"}
 
 
-def rpc(method: str, params: dict[str, Any], what: str = "") -> Any:
-    """One JSON-RPC call with retries; rate limits and internal errors back off and alternate endpoints."""
+def rpc(method: str, params: dict[str, Any], what: str = "", retries: int = RETRIES, timeout: float = 30) -> Any:
+    """One JSON-RPC call with retries; rate limits and internal errors back off and alternate endpoints. `retries`
+    and `timeout` bound a caller that has its own deadline (with the defaults one call can take minutes)."""
     body: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     what = what or method
     endpoints = [RPC, RPC_FALLBACK] if RPC_FALLBACK and RPC_FALLBACK != RPC else [RPC]
     last = ""
-    for attempt in range(RETRIES):
+    for attempt in range(retries):
         url = endpoints[attempt % len(endpoints)]
         try:
-            resp = requests.post(url, json=body, headers={"User-Agent": "nearbuddy/1"}, timeout=30)
+            resp = requests.post(url, json=body, headers={"User-Agent": "nearbuddy/1"}, timeout=timeout)
             r = resp.json()
         except (requests.RequestException, ValueError) as exc:
             last = f"{url} {what}: {exc}"
-            time.sleep(2**attempt)
+            if attempt + 1 < retries:
+                time.sleep(2**attempt)
             continue
         if "error" in r:
             msg = str(r["error"].get("message", r["error"]))
@@ -41,10 +43,11 @@ def rpc(method: str, params: dict[str, Any], what: str = "") -> Any:
             transient = resp.status_code == 429 or "rate limit" in msg.lower() or "internal" in msg.lower()
             if not transient:
                 raise RuntimeError(last)
-            time.sleep(2**attempt)
+            if attempt + 1 < retries:
+                time.sleep(2**attempt)
             continue
         return r["result"]
-    raise RuntimeError(f"after {RETRIES} attempts: {last}")
+    raise RuntimeError(f"after {retries} attempts: {last}")
 
 
 def view(method: str, args: dict[str, Any]) -> Any:
@@ -62,10 +65,11 @@ def view(method: str, args: dict[str, Any]) -> Any:
     return json.loads(bytes(result["result"]).decode())
 
 
-def chain_now_ns() -> int:
+def chain_now_ns(timeout: float = 5) -> int:
     """Timestamp of the latest final block. The contract's `env::block_timestamp()` is at least this for any
-    transaction sent now, so a check against it never runs ahead of the chain."""
-    return int(rpc("block", {"finality": "final"})["header"]["timestamp_nanosec"])
+    transaction sent now, so a check against it never runs ahead of the chain. One attempt per endpoint, each at most
+    `timeout` seconds: the caller (runner.hold_until_lock) polls against a deadline and must get control back."""
+    return int(rpc("block", {"finality": "final"}, retries=2, timeout=timeout)["header"]["timestamp_nanosec"])
 
 
 def warn_if_arena_missing(network: str = NETWORK, arena: str = ARENA, rpc: str = RPC) -> bool:

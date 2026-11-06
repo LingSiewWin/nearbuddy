@@ -433,9 +433,13 @@ class Commitment:
     deadline_ns: int | None = None  # close_at minus REVEAL_MARGIN_S: no solver wait for this reveal runs past it
 
 
+S_NS = 1_000_000_000
+
 # A reveal must land before close_at; every solver wait for it (restart retries, the follower quotes) ends this long
 # before, leaving time for the transaction itself.
 REVEAL_MARGIN_S = 5
+# hold_until_lock reveals by the local clock at the latest this long before close_at, chain read or not
+BACKSTOP_BEFORE_CLOSE_NS = (REVEAL_MARGIN_S + 2) * 1_000_000_000
 
 
 def _refused(e: RuntimeError) -> bool:
@@ -632,19 +636,23 @@ def hold_until_lock(lock_at_ns: int, close_at_ns: int) -> None:
     """Wait until the chain clock reaches `lock_at_ns` (close_at minus the intent lock). From there no agent can
     commit again, so revealing the scored call cannot be answered by a counter-call; reveals stay open up to
     close_at. Reads the latest final block's time, which trails the head by a block or two, so the reveal always
-    lands inside the lock. If the chain cannot be read until the local clock is halfway through the lock, reveal
-    anyway: an unrevealed commitment is slashed, an early reveal only leaks the call."""
-    give_up = lock_at_ns + (close_at_ns - lock_at_ns) // 2
+    lands inside the lock. Hard backstop by the local clock, whatever the chain reads do: reveal once it reaches
+    halfway through the lock, and never later than REVEAL_MARGIN_S + 2 s before close_at (the reveal's own deadline
+    is close_at - REVEAL_MARGIN_S, so the POST still gets 2 s). Each chain read gets only the time left to the
+    backstop, so a slow or throttled RPC cannot hold the reveal past it: an unrevealed commitment is slashed, an early
+    reveal only leaks the call."""
+    give_up = max(lock_at_ns, min(lock_at_ns + (close_at_ns - lock_at_ns) // 2, close_at_ns - BACKSTOP_BEFORE_CLOSE_NS))
     while True:
+        left = (give_up - time.time_ns()) / S_NS
+        if left <= 0:
+            print("  chain clock not past the intent lock by the local backstop; revealing now")
+            return
         try:
-            if chain_now_ns() >= lock_at_ns:
+            if chain_now_ns(timeout=max(0.5, min(5.0, left))) >= lock_at_ns:
                 return
         except RuntimeError as e:
             print(f"  chain clock unreadable ({str(e)[:80]}); retrying")
-        if time.time_ns() >= give_up:
-            print("  chain clock not past the intent lock by the local deadline; revealing now")
-            return
-        time.sleep(0.5)
+        time.sleep(max(0.0, min(0.5, (give_up - time.time_ns()) / S_NS)))
 
 
 def play_duel(
@@ -678,6 +686,9 @@ def play_duel(
             px = price(symbol, ENV.get("PYTH_API_KEY"))
             pending = solver.get("/arena")["pending"]
             for label, d, sk, comp, model in players:
+                if time.time_ns() >= stop_ns:  # a slow call before this one ate the margin: no call past stop_ns
+                    print(f"  {label} skipped: commits stopped (intent lock + margin) during this cycle")
+                    break
                 args = (duel_id, symbol, px, open_px, close_at_ns, pending, nonce, label, d, sk, comp, model)
                 if not commit_reveal:
                     nonce, status = post_decision(solver, *args, attestations)
@@ -690,7 +701,9 @@ def play_duel(
                     closed = True
                     break
             if not closed:
-                time.sleep(cycle_seconds)
+                # never sleep past stop_ns: a cycle that started just before it would otherwise sleep into the
+                # lock and past the reveal deadline (duel 464: both agents forfeited)
+                time.sleep(max(0.0, min(cycle_seconds, (stop_ns - time.time_ns()) / S_NS)))
         if held and lock_s > 0:
             hold_until_lock(close_at_ns - lock_s * 1_000_000_000, close_at_ns)
     except Exception as e:  # not KeyboardInterrupt / SystemExit (SIGTERM): those reveal at once, below

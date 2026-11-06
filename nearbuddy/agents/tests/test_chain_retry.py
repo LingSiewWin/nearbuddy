@@ -54,3 +54,18 @@ def test_chain_now_reads_the_final_block_time_as_an_exact_int(monkeypatch):
     monkeypatch.setattr(chain.requests, "post", fake_post)
     assert chain.chain_now_ns() == 1793976786174123457  # the float field would lose the low digits
     assert bodies[0]["method"] == "block" and bodies[0]["params"] == {"finality": "final"}
+
+
+def test_chain_now_is_bounded_two_short_attempts_no_long_backoff(monkeypatch):
+    calls: list[float] = []
+    sleeps: list[float] = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(timeout)
+        return _Resp({"error": {"message": "You reached Public endpoint rate limit"}}, 429)
+
+    monkeypatch.setattr(chain.requests, "post", fake_post)
+    monkeypatch.setattr(chain.time, "sleep", sleeps.append)
+    with pytest.raises(RuntimeError, match="after 2 attempts"):
+        chain.chain_now_ns(timeout=1.5)
+    assert calls == [1.5, 1.5] and sleeps == [1], "one backoff between the two attempts, none after the last"

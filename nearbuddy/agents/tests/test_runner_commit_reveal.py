@@ -83,7 +83,7 @@ def env(tmp_path, monkeypatch):
     clock = Clock()
     monkeypatch.setattr(time, "time_ns", lambda: clock.ns)
     monkeypatch.setattr(time, "sleep", clock.sleep)
-    monkeypatch.setattr(runner, "chain_now_ns", lambda: clock.ns)
+    monkeypatch.setattr(runner, "chain_now_ns", lambda **_: clock.ns)
     players = []
     for name in ("Y", "Z"):
         monkeypatch.delitem(ENV, f"AGENT_KEY_{name}", raising=False)
@@ -333,30 +333,101 @@ def test_a_commit_the_contract_refused_leaves_the_held_one_to_reveal(env):
 
 def test_the_final_reveal_waits_for_the_chain_clock_not_the_local_one(env, monkeypatch):
     clock, players = env
-    lag = 4 * S  # the chain's final block trails the local clock
-    monkeypatch.setattr(runner, "chain_now_ns", lambda: clock.ns - lag)
+    lag = 2 * S  # the chain's final block trails the local clock
+    monkeypatch.setattr(runner, "chain_now_ns", lambda **_: clock.ns - lag)
     solver = FakeSolver(clock)
     play(solver, players)
     assert all(LOCK_AT + lag <= t < CLOSE_NS for t in reveal_times(solver)), reveal_times(solver)
 
 
-def test_an_unreadable_chain_clock_still_reveals_halfway_through_the_lock(env, monkeypatch):
+def test_a_chain_clock_lagging_past_the_backstop_is_overruled_by_the_local_clock(env, monkeypatch):
+    clock, players = env
+    monkeypatch.setattr(runner, "chain_now_ns", lambda **_: clock.ns - 20 * S)
+    solver = FakeSolver(clock)
+    play(solver, players)
+    backstop = CLOSE_NS - runner.BACKSTOP_BEFORE_CLOSE_NS
+    deadline = CLOSE_NS - runner.REVEAL_MARGIN_S * S
+    assert all(backstop <= t < deadline for t in reveal_times(solver)), reveal_times(solver)
+    assert all(r["revealed_tx"] for r in rows() if r.get("commitment"))
+
+
+def test_a_slow_rpc_cannot_hold_the_reveal_past_the_backstop(env, monkeypatch):
+    # each chain read takes whatever time it is given and then fails, as a throttled RPC does
+    clock, players = env
+    budgets = []
+
+    def throttled(timeout=5):
+        budgets.append(timeout)
+        clock.ns += int(timeout * S)
+        raise RuntimeError("after 2 attempts: rate limit")
+
+    monkeypatch.setattr(runner, "chain_now_ns", throttled)
+    solver = FakeSolver(clock)
+    play(solver, players)
+    assert all(b <= 5 for b in budgets), budgets
+    assert all(t < CLOSE_NS - runner.REVEAL_MARGIN_S * S for t in reveal_times(solver)), reveal_times(solver)
+    assert not [r for r in rows() if r.get("error")], "no deadline miss"
+
+
+def test_a_slow_last_cycle_never_sleeps_past_the_commit_window(env, monkeypatch):
+    # duel 464: the last cycle started just before stop_ns, a slow model call ran past it, then the full
+    # cycle_seconds sleep ran past close_at - REVEAL_MARGIN_S, and both reveals were refused as late
+    clock, _ = env
+    players = scripted(["Short"], ["Short"])
+    slow = players[1][4]
+    real = slow.complete
+
+    def slow_complete(system, user):
+        clock.ns += 12 * S  # every call by Z takes 12 s
+        return real(system, user)
+
+    slow.complete = slow_complete
+    solver = FakeSolver(clock)
+    runner.play_duel(solver, "5", "NEAR/USD", 365_000_000, CLOSE_NS, STOP_NS, players, 10, 45, {}, True, LOCK_S)
+    # cycles at 0 and ~57 (< STOP_NS 60): Z's second call ends at ~69; the 45 s sleep must not follow
+    assert solver.paths() == ["/commit", "/commit", "/reveal", "/reveal"]
+    assert all(LOCK_AT <= t < CLOSE_NS - runner.REVEAL_MARGIN_S * S for t in reveal_times(solver)), reveal_times(solver)
+    assert not [r for r in rows() if r.get("error")]
+
+
+def test_no_model_call_starts_after_the_commit_window(env):
+    clock, _ = env
+    players = scripted(["Short"], ["Short"])
+    slow = players[0][4]
+    real = slow.complete
+
+    def slow_complete(system, user):
+        clock.ns += 25 * S  # Y's call takes 25 s: cycle 1 ends at 25, sleeps to 45; Y's second call ends at 70
+        return real(system, user)
+
+    slow.complete = slow_complete
+    solver = FakeSolver(clock)
+    play(solver, players)
+    per_agent = {pk_b64(p[2]): sum(1 for r in rows() if r["agent_pk"] == pk_b64(p[2])) for p in players}
+    assert list(per_agent.values()) == [2, 1], "Z's second call would start at 70, past STOP_NS 60: skipped"
+    assert all(LOCK_AT <= t < CLOSE_NS - runner.REVEAL_MARGIN_S * S for t in reveal_times(solver))
+
+
+def test_an_unreadable_chain_clock_still_reveals_at_the_local_backstop(env, monkeypatch):
+    # backstop: halfway through the lock, but no later than REVEAL_MARGIN_S + 2 s before close (here: close - 7 s)
     clock, players = env
 
-    def down():
+    def down(**_):
         raise RuntimeError("after 5 attempts: rpc down")
 
     monkeypatch.setattr(runner, "chain_now_ns", down)
     solver = FakeSolver(clock)
     play(solver, players[:1])
-    assert LOCK_AT + LOCK_S * S // 2 <= reveal_times(solver)[-1] < CLOSE_NS
+    backstop = min(LOCK_AT + LOCK_S * S // 2, CLOSE_NS - runner.BACKSTOP_BEFORE_CLOSE_NS)
+    assert backstop <= reveal_times(solver)[-1] < CLOSE_NS - runner.REVEAL_MARGIN_S * S
+    assert all(r["revealed_tx"] for r in rows() if r.get("commitment"))
 
 
 def test_ctrl_c_while_holding_for_the_lock_reveals_at_once(env, monkeypatch):
     clock, players = env
     solver = FakeSolver(clock)
 
-    def chain_now():
+    def chain_now(**_):
         if clock.ns >= 70 * S:  # past STOP_NS, waiting for the lock
             raise KeyboardInterrupt
         return clock.ns
