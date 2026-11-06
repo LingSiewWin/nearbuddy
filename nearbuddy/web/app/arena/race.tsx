@@ -58,7 +58,9 @@ export function Headline({
   const ma = f.live ? markPct(f.a, open, p) : (f.a.return_pct ?? 0);
   const mb = f.live ? markPct(f.b, open, p) : (f.b.return_pct ?? 0);
   const move = open && p ? ((p - open) / open) * 100 : 0;
-  const lead = Math.abs(ma - mb) < 0.005 ? null : ma > mb ? "a" : "b";
+  // a side whose only call is sealed has no known score, and an unrevealed call forfeits: nobody can lead it
+  const veiled = !f.live ? null : !f.a.side && f.a.sealed ? "a" : !f.b.side && f.b.sealed ? "b" : null;
+  const lead = veiled || Math.abs(ma - mb) < 0.005 ? null : ma > mb ? "a" : "b";
   const loser = lead === "a" ? f.b : lead === "b" ? f.a : null;
   const pay = loser?.bond != null ? (loser.bond * f.slashPct) / 100 : null;
 
@@ -73,6 +75,8 @@ export function Headline({
         oracle supplies the closing price. At the last trade,{" "}
         {lead ? (
           <>{lead === "a" ? A : B} was ahead</>
+        ) : veiled ? (
+          <>{veiled === "a" ? A : B}&apos;s call was not revealed yet</>
         ) : f.a.side || f.b.side ? (
           "the two sides were tied"
         ) : (
@@ -96,6 +100,8 @@ export function Headline({
     ) : f.a.side && f.a.side === f.b.side ? (
       // the common case: both made the same call, so the price cannot separate them
       `Both bet ${f.a.side === "Long" ? "up" : "down"}.`
+    ) : veiled && (f.a.side || f.b.side) ? (
+      <>{veiled === "a" ? A : B}&apos;s call is sealed.</>
     ) : f.a.side || f.b.side ? (
       "Dead heat."
     ) : f.a.sealed && f.b.sealed ? (
@@ -235,8 +241,9 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
   const lane = (s: Focus["a"], k: string) => {
     const mine = intents.filter((i) => i.agent === s.agent);
     const score = (x: Focus["a"]) => (f.live ? markPct(x, open, price) : (x.return_pct ?? 0));
+    const opp = s === f.a ? f.b : f.a;
     const mark = score(s);
-    const other = score(s === f.a ? f.b : f.a);
+    const other = score(opp);
     return (
       <>
         <div className={`lab llab ${k}`}>
@@ -248,15 +255,17 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
             {s.side ? `, ${stake(s.size_pct)}` : ""}
           </span>
           <span className="st">
-            {!s.side && !(s === f.a ? f.b : f.a).side
-              ? s.sealed
-                ? "hidden until revealed"
-                : "no call yet"
-              : Math.abs(mark - other) < 0.005
-                ? "tied"
-                : mark > other
-                  ? "ahead"
-                  : "behind"}
+            {!s.side && s.sealed
+              ? "hidden until revealed"
+              : !s.side && !opp.side
+                ? "no call yet"
+                : !opp.side && opp.sealed
+                  ? "vs a sealed call"
+                  : Math.abs(mark - other) < 0.005
+                    ? "tied"
+                    : mark > other
+                      ? "ahead"
+                      : "behind"}
           </span>
         </div>
         <div className={`trk lane ${k}`}>

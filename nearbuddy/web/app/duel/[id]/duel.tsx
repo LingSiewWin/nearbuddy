@@ -285,7 +285,10 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
   } else {
     const ma = markPct(d.a, open, price);
     const mb = markPct(d.b, open, price);
-    const lead = Math.abs(ma - mb) < 0.005 ? null : ma > mb ? d.a : d.b;
+    // a side whose only call is sealed has no known score, and an unrevealed call forfeits: nobody can lead it
+    const hidden = (s: DuelSide) => !s.side && sealedIn(d.events, d.duel, s.agent);
+    const veiled = hidden(d.a) ? d.a : hidden(d.b) ? d.b : null;
+    const lead = veiled || Math.abs(ma - mb) < 0.005 ? null : ma > mb ? d.a : d.b;
     const lag = lead === d.a ? d.b : d.a;
     const pay = lag.bond != null ? (lag.bond * d.slashPct) / 100 : null;
     fine = "Live line: Coinbase NEAR-USD trades. The score uses the oracle's prices at the open and at the close.";
@@ -297,6 +300,8 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
           At the last trade,{" "}
           {lead ? (
             <>{nm(lead)} was ahead</>
+          ) : veiled ? (
+            <>{nm(veiled)}&apos;s call was not revealed yet</>
           ) : d.a.side || d.b.side ? (
             "the two sides were tied"
           ) : (
@@ -312,6 +317,8 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
       ) : d.a.side && d.a.side === d.b.side ? (
         // the common case: both made the same call, so the price cannot separate them
         `Both bet ${d.a.side === "Long" ? "up" : "down"}.`
+      ) : veiled && (d.a.side || d.b.side) ? (
+        <>{nm(veiled)}&apos;s call is sealed.</>
       ) : d.a.side || d.b.side ? (
         "Dead heat."
       ) : sealedIn(d.events, d.duel, d.a.agent) && sealedIn(d.events, d.duel, d.b.agent) ? (

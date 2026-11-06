@@ -47,15 +47,17 @@ export function Race({ d, ticks, now, src }: { d: DuelData; ticks: Tick[]; now: 
     const vs = d.live ? markPct(other, open, price) : (other.score ?? 0);
     const sealed = d.live && sealedIn(d.events, d.duel, s.agent);
     const state = d.live
-      ? !s.side && !other.side
-        ? sealed
-          ? "hidden until revealed"
-          : "no call yet"
-        : Math.abs(mark - vs) < 0.005
-          ? "tied"
-          : mark > vs
-            ? "ahead"
-            : "behind"
+      ? !s.side && sealed
+        ? "hidden until revealed"
+        : !s.side && !other.side
+          ? "no call yet"
+          : !other.side && sealedIn(d.events, d.duel, other.agent)
+            ? "vs a sealed call"
+            : Math.abs(mark - vs) < 0.005
+              ? "tied"
+              : mark > vs
+                ? "ahead"
+                : "behind"
       : d.winner == null
         ? `tied, ${pct(mark)}`
         : d.winner === s.agent
