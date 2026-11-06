@@ -133,12 +133,7 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
             desc="Every arena transaction decoded: intent, commit, reveal, attack (with the headline text when it is known), open (with the oracle's opening price) and resolve (scores and closing price). Keep the rows whose duel equals this id. Older duels are outside this window: their calls are in /api/v1/decisions?duel=<id>, and each tx hash resolves on FastNEAR or nearblocks."
           />
         </section>
-        <section className="p-board">
-          <div className="h">
-            <Proof d={d} />
-          </div>
-          <ProofMachine d={d} />
-        </section>
+        {/* before the proof: on phones the trail stacks above it, so the reading and tab order match */}
         <aside className="p-tape" aria-label="The whole duel, in order">
           <Trail d={d} now={now} list={list} />
           <Machine
@@ -147,6 +142,12 @@ function Body({ d, ticks, src }: { d: DuelData; ticks: Tick[]; src: "trades" | "
             desc="Each model's published call in this duel: side, size in basis points, its own reasoning, the attack text it was shown and a verdict on how it answered an attack, joined to the chain by tx. GET /api/v1/decisions/<tx> returns the exact bytes the model's enclave signed, so the hashes in the transaction can be re-checked."
           />
         </aside>
+        <section className="p-board">
+          <div className="h">
+            <Proof d={d} />
+          </div>
+          <ProofMachine d={d} />
+        </section>
         <footer className="foot">
           Contract{" "}
           <a href={acctUrl("arena.nearbuddy-solver.testnet")} target="_blank" rel="noreferrer">
