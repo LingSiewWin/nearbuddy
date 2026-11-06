@@ -205,7 +205,7 @@ export async function agentSummary(pk: string) {
       lost: count("loss"),
       tied: count("tie"),
       window: done.length,
-      return_pct: done.reduce((s, d) => s + (d.pnl ?? 0), 0) / 100,
+      return_pct: done.length ? done.reduce((s, d) => s + (d.pnl ?? 0), 0) / 100 : null,
     },
     attacks: tally(attacked),
     calls: calls(mine),

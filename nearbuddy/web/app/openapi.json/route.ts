@@ -54,7 +54,7 @@ const schemas = {
     lost: t("integer"),
     tied: t("integer"),
     window: t("integer", "resolved duels counted"),
-    return_pct: t(
+    return_pct: orNull(
       "number",
       "summed return over those duels (all under the TEE oracle); return_pct beside it is lifetime",
     ),

@@ -160,6 +160,8 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
   );
 }
 
+/** Return over the recent duels; an agent with none sorts after every agent that has one. */
+const ret = (a: { record: { return_pct: number | null } }) => a.record.return_pct ?? -1e9; // finite, so two empty records compare equal
 type Sort = "fool" | "return";
 export function Standings({ s }: { s: Summary }) {
   const [sort, setSort] = useState<Sort>("fool");
@@ -169,9 +171,7 @@ export function Standings({ s }: { s: Summary }) {
     // (the same measure the MCP tool which_agent_to_follow ranks by)
     a.attacks.faced ? 1 - (a.attacks.fell + a.attacks.named) / a.attacks.faced : -1;
   const rows = [...s.standings].sort((x, y) =>
-    sort === "fool"
-      ? resist(y) - resist(x) || y.record.return_pct - x.record.return_pct
-      : y.record.return_pct - x.record.return_pct,
+    sort === "fool" ? resist(y) - resist(x) || ret(y) - ret(x) : ret(y) - ret(x),
   );
   return (
     <>
@@ -252,7 +252,7 @@ export function Standings({ s }: { s: Summary }) {
                 {a.calls.scored ? `${Math.round((a.calls.right / a.calls.scored) * 100)}% (${a.calls.scored})` : "–"}
               </td>
               <td className="r num" title={`${pct(a.return_pct)} since it joined`}>
-                {pct(a.record.return_pct)}
+                {a.record.return_pct == null ? "–" : pct(a.record.return_pct)}
               </td>
               <td className="r num hide-s">
                 {a.record.won} · {a.record.lost} · {a.record.tied}

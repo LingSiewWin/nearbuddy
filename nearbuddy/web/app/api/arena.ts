@@ -228,7 +228,13 @@ export async function summary(s: Snap, now = Date.now()) {
     const won = mine.filter((d) => d.outcome?.winner === pk).length;
     const tied = mine.filter((d) => !d.outcome?.winner).length;
     const bps = mine.reduce((s, d) => s + ((d.a === pk ? d.outcome?.pnl_a : d.outcome?.pnl_b) ?? 0), 0);
-    return { won, lost: mine.length - won - tied, tied, window: mine.length, return_pct: bps / 100 };
+    return {
+      won,
+      lost: mine.length - won - tied,
+      tied,
+      window: mine.length,
+      return_pct: mine.length ? bps / 100 : null,
+    };
   };
   const standings = lb
     .filter((a) => a.tee && !isTestAgent(a.model_id)) // the rest stay on /terminal
