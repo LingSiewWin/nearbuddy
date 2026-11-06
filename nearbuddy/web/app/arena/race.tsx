@@ -12,16 +12,25 @@ const sideTone = (f: Focus) => {
   return { a, b: b === a ? "k-alt" : b };
 };
 
-export function Headline({ f, price, now }: { f: Focus; price: number | null; now: number }) {
+export function Headline({
+  f,
+  price,
+  open,
+  now,
+}: {
+  f: Focus;
+  price: number | null;
+  open: number | null;
+  now: number;
+}) {
   const t = sideTone(f);
   const A = <span className={`who ${t.a}`}>{who(f.a.model)}</span>;
   const B = <span className={`who ${t.b}`}>{who(f.b.model)}</span>;
   const left = Math.max(0, Math.round((f.closes - now) / 1000));
   const span = Math.max(1, (f.closes - f.opened) / 1000);
-  const open = f.open;
   const p = f.live ? price : f.close;
-  const ma = markPct(f.a, open, p);
-  const mb = markPct(f.b, open, p);
+  const ma = f.live ? markPct(f.a, open, p) : (f.a.return_pct ?? 0);
+  const mb = f.live ? markPct(f.b, open, p) : (f.b.return_pct ?? 0);
   const move = open && p ? ((p - open) / open) * 100 : 0;
   const lead = Math.abs(ma - mb) < 0.005 ? null : ma > mb ? "a" : "b";
   const loser = lead === "a" ? f.b : lead === "b" ? f.a : null;
@@ -37,6 +46,15 @@ export function Headline({ f, price, now }: { f: Focus; price: number | null; no
         Duel {f.duel} closed {Math.round((now - f.closes) / 60_000)} min ago. It is scored once someone calls{" "}
         <b>resolve_duel</b>: the call is open to anyone, and the TEE oracle supplies the close price. At the last trade,{" "}
         {lead ? <>{lead === "a" ? A : B} was ahead</> : "the two sides were level"}.
+      </>
+    );
+  } else if (f.live && (price == null || !open)) {
+    // no trade yet (server render, or Coinbase unreachable): say what is known, claim no standing
+    h1 = "Waiting for the live price.";
+    sub = (
+      <>
+        {A} is <b>{sideWord(f.a.side)}</b> and {B} is <b>{sideWord(f.b.side)}</b>. The race line and who is ahead appear
+        with the first trade.
       </>
     );
   } else if (f.live) {
@@ -87,6 +105,10 @@ export function Headline({ f, price, now }: { f: Focus; price: number | null; no
         {f.live ? (
           <p className="fine">
             Live line: Coinbase NEAR-USD trades. The score is set by the TEE price oracle at the open and the bell.
+            {f.sealed
+              ? ` Calls are sealed until revealed, so nobody can copy them in time; a side that never reveals forfeits ${f.forfeitPct}% of its bond.`
+              : ""}
+            {f.consent ? " Both agents agreed to this pairing." : ""}
           </p>
         ) : null}
       </div>
@@ -128,8 +150,9 @@ export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; event
   const lockX = x(t1 - f.lockS * 1000);
   const lane = (s: Focus["a"], k: string) => {
     const mine = intents.filter((i) => i.agent === s.agent);
-    const mark = markPct(s, open, price);
-    const other = s === f.a ? markPct(f.b, open, price) : markPct(f.a, open, price);
+    const score = (x: Focus["a"]) => (f.live ? markPct(x, open, price) : (x.return_pct ?? 0));
+    const mark = score(s);
+    const other = score(s === f.a ? f.b : f.a);
     return (
       <>
         <div className={`lab llab ${k}`}>

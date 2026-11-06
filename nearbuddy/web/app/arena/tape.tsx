@@ -136,14 +136,14 @@ export function Tape({
     return out;
   }, [events, ticks, filter]);
 
-  const reply = (pk: string, after: number) =>
+  const reply = (pk: string, duel: number, after: number) =>
     events
-      .filter((e): e is Intent => isCall(e) && e.ok && e.agent === pk && e.at > after)
+      .filter((e): e is Intent => isCall(e) && e.ok && e.duel === duel && e.agent === pk && e.at > after)
       .sort((x, y) => x.at - y.at)[0];
 
   const row = (l: Line) => {
     if (l.kind === "ticks") {
-      const [hms, msec] = clock(l.at);
+      const [hms, msec] = now ? clock(l.at) : ["··:··:··", ""];
       return (
         <div key={l.key} className="row r-tick">
           <time>
@@ -167,7 +167,7 @@ export function Tape({
       );
     }
     const e = l.e;
-    const [hms, msec] = clock(e.at);
+    const [hms, msec] = now ? clock(e.at) : ["··:··:··", ""];
     const px = priceAt(ticks, e.at);
     const time = (
       <time>
@@ -214,7 +214,7 @@ export function Tape({
     }
     if (e.kind === "attack") {
       const m = modelOf(e.target);
-      const r = reply(e.target, e.at);
+      const r = reply(e.target, e.duel, e.at);
       return (
         <button
           type="button"

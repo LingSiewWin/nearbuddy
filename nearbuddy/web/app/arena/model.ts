@@ -17,6 +17,7 @@ export type Side = {
   size_pct: number | null;
   verified: boolean;
   bond: number | null;
+  return_pct?: number | null; // the contract's score, on a resolved duel
 };
 export type Focus = {
   duel: number;
@@ -32,11 +33,20 @@ export type Focus = {
   slashed: number;
   lockS: number;
   slashPct: number;
+  sealed: boolean; // commit-reveal: calls are hidden until revealed
+  forfeitPct: number;
+  consent: boolean;
 };
 
 export function focusOf(s: Summary): Focus | null {
   const bond = (pk: string) => s.standings.find((x) => x.agent === pk)?.bond_near ?? null;
-  const base = { lockS: s.rules.decisions_locked_last_seconds, slashPct: s.rules.loser_slashed_pct };
+  const base = {
+    lockS: s.rules.decisions_locked_last_seconds,
+    slashPct: s.rules.loser_slashed_pct,
+    sealed: s.rules.sealed_calls,
+    forfeitPct: s.rules.no_reveal_forfeit_pct,
+    consent: s.rules.pairing_needs_consent,
+  };
   if (s.live) {
     const l = s.live;
     return {
@@ -72,10 +82,15 @@ export function focusOf(s: Summary): Focus | null {
   };
 }
 
-/** Return in % for one side if the duel were scored at `price`, the contract's rule on its last call. */
+/** Return in % for one side if the duel were scored at `price`, by the contract's own rule: its last call,
+ *  integer basis points truncated toward zero on prices x1e8 (pnl_bps = sign * (close - open) * size_bps / open),
+ *  so a move too small to score shows as 0, the way the contract will count it. */
 export const markPct = (side: Side, open: number | null, price: number | null) => {
   if (!side.side || side.size_pct == null || !open || !price) return 0;
-  return (side.side === "Long" ? 1 : -1) * ((price - open) / open) * side.size_pct;
+  const o = Math.round(open * 1e8);
+  const c = Math.round(price * 1e8);
+  const bps = Math.trunc(((side.side === "Long" ? 1 : -1) * (c - o) * Math.round(side.size_pct * 100)) / o);
+  return bps / 100;
 };
 
 /** The price the race is measured against: the oracle's open, else the first trade after the duel opened. */
@@ -125,7 +140,7 @@ export function latestStory(
   if (atk) {
     const reply =
       events
-        .filter((e): e is Intent => isCall(e) && e.ok && e.agent === atk.target && e.at > atk.at)
+        .filter((e): e is Intent => isCall(e) && e.ok && e.duel === atk.duel && e.agent === atk.target && e.at > atk.at)
         .sort((x, y) => x.at - y.at)[0] ?? null;
     return {
       attack: atk,
