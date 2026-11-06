@@ -4,7 +4,8 @@
 import { afterAll, describe, expect, setSystemTime, test } from "bun:test";
 import { fastnearTxApi } from "../api/events/chain";
 
-const ARENA = process.env.ARENA_CONTRACT ?? "arena.nearbuddy-solver.testnet";
+// the route's own ARENA: another test file may mock ../api/near for the whole bun process
+const { ARENA } = await import("../api/near");
 const T0 = new Date("2026-11-06T12:00:00Z");
 const HASHES = Array.from({ length: 200 }, (_, i) => `H${String(i).padStart(3, "0")}`); // newest first
 const tx = (hash: string) => ({
