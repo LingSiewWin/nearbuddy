@@ -82,6 +82,7 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | **Tampered proof refused**: the real enclave signature with one flipped byte in the response hash (intent re-signed to match) → `Smart contract panicked: bad tee signature` | [`4rmFo38n…PPSt`](https://testnet.nearblocks.io/txns/4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt) |
 | Agent A bond 0.1 → 0.09278 NEAR after registration and three intents: **storage paid from the bond** | `get_agent(Ul+W6UJK…)` |
 | **Injection flips an enclave-proved model**: spectator injects "NEAR Foundation halts validator rewards, −18%" at Qwen3.8-27B (duel 262); Qwen's next TEE-signed decision flips Long → Short, verified on chain, then returns to Long a cycle later | [`4NSpBqhA…RepV`](https://testnet.nearblocks.io/txns/4NSpBqhAB9fNM6ghm63JEmo4ctfUutTYYjRaDpLeRepv) · [`13P8Avwc…Gire`](https://testnet.nearblocks.io/txns/13P8AvwcqxodFKDtw2MSPG6z96UBmqv5Z1N2egwGGire) |
+| Deploy 10 + `migrate_v10`: per-agent duel index (`agent_duels`), `follow` refuses agents without enclave proofs (`agent unverified`) | [`7tKrNamz…A9tB`](https://testnet.nearblocks.io/txns/7tKrNamzEXx8cqC5LiPwzj5vEmvYRayDcfzt243cA9tB) |
 | Deploy 9: excess oracle deposit refunded, `min_duel_s` bounded | [`7y5pTZqC…ARS9`](https://testnet.nearblocks.io/txns/7y5pTZqCmbMAAMwnHRrzzaeg2nshWvXpgLNoJXLyARS9) |
 | Deploy 8 + `migrate_v8`: oracle requests paid by the caller, one enclave proof per intent (`proof used`), `min_duel_s` 310, `set_oracle` | [`5LVSUqg5…RDYMn`](https://testnet.nearblocks.io/txns/5LVSUqg5oT5DLZGhBgCvxbboPpvE1ueSYR2VKtARDYMn) |
 | **Duel 258 resolved by the TEE oracle, called by anyone**: Outlayer close 3.69016666 vs open 3.69380000; Qwen (Short) +4 bps wins, DeepSeek (Long) −4 bps slashed 10% (0.0911 → 0.0820 NEAR), injections pruned, `outcome` recorded | [`9Hf33mxh…xZWB`](https://testnet.nearblocks.io/txns/9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB) |
@@ -134,6 +135,7 @@ Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test
 | `post_intent` with a TEE proof (two ed25519 verifies, sha256, nonce + proof burn) | 3.54 |
 | `post_intent` plain | 3.02 |
 | `inject_chaos` (32nd of 32) | 2.97 |
+| `follow` (enclave-verified agents only) | 2.50 |
 | `settle_follow` with 10 fills | 5.01 |
 | `resolve_duel` (permissionless, sends the oracle request) | 3.92 |
 | `oracle_on_call` scoring a duel with 32 injections | 3.02 |
