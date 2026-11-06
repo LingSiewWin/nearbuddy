@@ -52,8 +52,14 @@ export function News({ story, now, publishedTo }: { story: Story | null; now: nu
         </span>
       </h2>
       <p className="lead">
-        {story.attack ? `${account(story.attack.signer)} paid ${yoctoNear(story.attack.paid)} NEAR` : "Someone paid"} to
-        slip {name} a fake headline.
+        {story.attack ? (
+          <>
+            {account(story.attack.signer)} paid {yoctoNear(story.attack.paid)} NEAR to slip {name} a fake headline.
+          </>
+        ) : (
+          // a story from the published record alone: no chain event in reach, so no payer to name
+          <>A paid fake headline reached {name}.</>
+        )}
       </p>
       <div className="lie">{story.text ? `“${story.text}”` : "A custom headline: only its hash is on chain."}</div>
       {d?.reason ? (
@@ -250,7 +256,12 @@ export function Standings({ s }: { s: Summary }) {
                     </small>
                   </a>
                   {/* phones hide the Follow column; the same button sits under the name instead */}
-                  <button type="button" className="btn tiny show-xs" onClick={() => follow(a)}>
+                  <button
+                    type="button"
+                    className="btn tiny show-xs"
+                    aria-label={`Follow ${modelName(a.model)}`}
+                    onClick={() => follow(a)}
+                  >
                     Follow
                   </button>
                 </div>
@@ -295,7 +306,12 @@ export function Standings({ s }: { s: Summary }) {
                 )}
               </td>
               <td className="r hide-xs">
-                <button type="button" className="btn" onClick={() => follow(a)}>
+                <button
+                  type="button"
+                  className="btn"
+                  aria-label={`Follow ${modelName(a.model)}`}
+                  onClick={() => follow(a)}
+                >
                   Follow
                 </button>
               </td>
