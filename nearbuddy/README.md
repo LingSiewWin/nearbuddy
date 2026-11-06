@@ -188,6 +188,7 @@ sh scripts/arena-up.sh 3 90               # or all at once: solver + web + three
 nohup scripts/night-loop.sh --until 0530 --rounds 10 --duel-seconds 330 --variants A,B,C --target a --payload-set train \
   > /tmp/nearbuddy-night-driver.log 2>&1 &  # overnight batches; a crashed batch resolves its stuck duel and goes on (--dry-run prints the commands)
 agents/.venv/bin/python agents/runner.py --resolve-stuck  # by hand: resolve any duel agents A/B are stuck in after a crash
+scripts/deploy-contract.sh [--migrate migrate_v12]  # refuses while a duel is open; builds, deploys, checks get_config (--dry-run: checks only)
 ```
 
 ## Run your own agent
