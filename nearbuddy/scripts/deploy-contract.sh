@@ -8,7 +8,13 @@
 #   scripts/deploy-contract.sh                       # code-only deploy
 #   scripts/deploy-contract.sh --migrate migrate_v12 # deploy + state migration in one tx
 #   scripts/deploy-contract.sh --migrate migrate_v15 --migrate-args '{"intents_account":"…","max_vault_total":"…"}'
-#   scripts/deploy-contract.sh --dry-run            # checks only (source + chain), prints the commands
+#   scripts/deploy-contract.sh --dry-run             # checks only (source + chain), prints the commands
+#   scripts/deploy-contract.sh --at-boundary [...]   # stop both duel loops at their next batch boundary first
+#
+# --at-boundary touches the stop files of night-loop.sh and second-loop.sh, waits (up to BOUNDARY_WAIT_S, 7200 s)
+# until both loop pids have exited, then until get_config.open_duels is 0 and no agent is in_duel (running
+# `runner.py --resolve-stuck` for each pair once if not, then up to IDLE_WAIT_S, 900 s), then deploys as above.
+# It never restarts the loops: on exit it prints the exact commands that do, from each loop's own command line.
 #
 # Signs with the legacy keychain key of the contract account (ARENA_CONTRACT, default arena.nearbuddy-solver.testnet).
 set -u
@@ -16,8 +22,11 @@ cd "$(dirname "$0")/.." || exit 1
 
 ARENA="${ARENA_CONTRACT:-arena.nearbuddy-solver.testnet}"
 WASM=arena/target/near/nearbuddy_arena.wasm
-DEPLOY_LOG=/tmp/nearbuddy-deploys.log
-migrate="" margs="{}" force=0 dry=0 build=1
+RUN=${NEARBUDDY_RUN_DIR:-/tmp} # logs, pidfiles and stop files; tests point it at a temp dir
+DEPLOY_LOG=$RUN/nearbuddy-deploys.log
+migrate="" margs="{}" force=0 dry=0 build=1 boundary=0
+BOUNDARY_WAIT_S=${BOUNDARY_WAIT_S:-7200} IDLE_WAIT_S=${IDLE_WAIT_S:-900} POLL_S=${BOUNDARY_POLL_S:-10}
+PY=agents/.venv/bin/python
 
 die() { echo "deploy-contract: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
@@ -27,7 +36,8 @@ while [ $# -gt 0 ]; do
     --force) force=1; shift ;;
     --no-build) build=0; shift ;;
     --dry-run) dry=1; shift ;;
-    -h | --help) echo "usage: $0 [--migrate <init(ignore_state) method> [--migrate-args <json>]] [--force] [--no-build] [--dry-run]"; exit 0 ;;
+    --at-boundary) boundary=1; shift ;;
+    -h | --help) echo "usage: $0 [--migrate <init(ignore_state) method> [--migrate-args <json>]] [--force] [--no-build] [--dry-run] [--at-boundary]"; exit 0 ;;
     *) die "unknown argument '$1' (see --help)" ;;
   esac
 done
@@ -92,6 +102,77 @@ else
   init=(without-init-call)
 fi
 deploy_cmd=(near contract deploy "$ARENA" use-file "$WASM" "${init[@]}" network-config testnet sign-with-legacy-keychain send)
+
+# ---- --at-boundary: stop both duel loops between batches, wait for an idle arena --------------------------------
+# name | pidfile | stop file | driver log | resolve-stuck command
+LOOPS=(
+  "night-loop|$RUN/nearbuddy-night-loop.pid|$RUN/nearbuddy-night-loop.stop|$RUN/nearbuddy-night-driver.log|$PY -u agents/runner.py --resolve-stuck"
+  "second-loop|$RUN/nearbuddy-pair2-loop.pid|$RUN/nearbuddy-pair2-loop.stop|$RUN/nearbuddy-pair2-driver.log|$PY -u agents/runner.py --pair-tag p2 --resolve-stuck"
+)
+loop_pid() { local p; p=$(cat "$1" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo "$p"; }
+restart_lines=()
+print_restart() {
+  [ ${#restart_lines[@]} -gt 0 ] || return 0
+  echo "the loops are stopped (or stopping) at a batch boundary; restart them with:"
+  printf '  %s\n' "${restart_lines[@]}"
+}
+idle_now() { # 0 = open_duels 0 and nobody in_duel
+  local state
+  state=$(chain) || return 2
+  printf '%s' "$state" | python3 -c 'import json,sys; s=json.load(sys.stdin)
+sys.exit(0 if (s["open_duels"] or 0) == 0 and not s["in_duel"] else 1)'
+}
+wait_until() { # seconds, description, command...: poll the command until it succeeds or the time is up
+  local limit=$1 what=$2 t0=$SECONDS
+  shift 2
+  until "$@"; do
+    [ $((SECONDS - t0)) -lt "$limit" ] || return 1
+    echo "waiting for $what ($((SECONDS - t0))s of ${limit}s)"
+    sleep "$POLL_S"
+  done
+}
+loops_gone() {
+  local l pf
+  for l in "${LOOPS[@]}"; do
+    IFS='|' read -r _ pf _ _ _ <<< "$l"
+    [ -z "$(loop_pid "$pf")" ] || return 1
+  done
+}
+at_boundary() {
+  local l name pf stop drv stuck pid args cwd
+  for l in "${LOOPS[@]}"; do
+    IFS='|' read -r name pf stop drv stuck <<< "$l"
+    pid=$(loop_pid "$pf")
+    if [ -z "$pid" ]; then echo "$name: not running"; continue; fi
+    # its own command line and directory, minus --start-batch (a restart carries on from the batch log)
+    args=$(ps -o args= -p "$pid" | sed -E 's/ --start-batch [0-9]+//')
+    cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+    restart_lines+=("cd ${cwd:-$PWD} && rm -f $stop && nohup $args > $drv 2>&1 &")
+    echo "$name: pid $pid, stop file $stop"
+  done
+  if [ "$dry" = 1 ]; then
+    echo "--dry-run: would touch the stop files, wait up to ${BOUNDARY_WAIT_S}s for the loops, ${IDLE_WAIT_S}s for an idle arena"
+    print_restart
+    return 0
+  fi
+  trap print_restart EXIT # whatever happens next the loops are stopping: always say how to bring them back
+  for l in "${LOOPS[@]}"; do
+    IFS='|' read -r _ _ stop _ _ <<< "$l"
+    touch "$stop"
+  done
+  wait_until "$BOUNDARY_WAIT_S" "the loops to finish their batch" loops_gone ||
+    die "loops still running after ${BOUNDARY_WAIT_S}s; the stop files stay, they stop at their next boundary"
+  echo "both loops stopped"
+  idle_now && return 0
+  for l in "${LOOPS[@]}"; do
+    IFS='|' read -r name _ _ _ stuck <<< "$l"
+    echo "resolving stuck duels for $name: $stuck"
+    $stuck || echo "$name resolve-stuck exit $?"
+  done
+  wait_until "$IDLE_WAIT_S" "open_duels 0 and no agent in_duel" idle_now ||
+    die "arena not idle after ${IDLE_WAIT_S}s; not deploying"
+}
+[ "$boundary" = 1 ] && at_boundary
 
 gate
 idle=$?
