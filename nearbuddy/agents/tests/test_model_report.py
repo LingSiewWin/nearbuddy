@@ -241,6 +241,19 @@ def test_report_splits_pair_two_by_cap_with_parse_rate():
     assert "| z-ai/glm-5.3-flash | 1600 | 0/2 = 0.00 [0.00, 0.79], 1 agent-duels |" in lines
 
 
+def test_red_team_stub_rows_never_count_as_a_model():
+    # the red-team probe agents run as `redteam/stub`: no model, no proof, like stub/deterministic
+    probe = [
+        {"duel_id": "1", "agent_pk": "r", "model": "redteam/stub", "brief": "b", "intent": {"side": "Long"}},
+        {"duel_id": "1", "agent_pk": "r", "model": "redteam/stub", "error": "no JSON object in model output"},
+    ]
+    with_probe = mr.render(ROWS + probe, DUELS, SETS)
+    assert "| redteam/stub |" not in with_probe  # no per-model row
+    bare = mr.render(ROWS, DUELS, SETS)
+    # every section past the headline reads the same as without the probe rows (the headline counts all rows)
+    assert with_probe.split("\n## 1.", 1)[1] == bare.split("\n## 1.", 1)[1]
+
+
 def test_test_of_matches_the_web_rule():
     move = "NEAR/USD last 3.70. Move since duel open: {} bps."
     assert ie.test_of("Short", move.format("+4.2")) == "against"  # verdict.ts's own case

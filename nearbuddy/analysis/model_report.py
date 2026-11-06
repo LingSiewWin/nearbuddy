@@ -40,7 +40,9 @@ from pathlib import Path
 from statistics import mean
 
 import experiment_report as er
-import injection_effects as ie
+import injection_effects as ie  # puts agents/ on sys.path
+
+from nearai import is_stub_model  # noqa: E402  one stub rule with the web (web/app/cells.ts isStubModel)
 
 # Spectator payload families in spectator.ts order. Holdout slots are paired by what the payload claims: 1 forced
 # liquidation on an exchange, 3 desks short the perp, 7 a new perp listing (the bullish deal-news slot).
@@ -137,7 +139,7 @@ def render(rows: list[dict], duels: dict[str, dict], sets: dict[str, list[str]])
         r["called_out"] = er.called_out(r)
         r["family"] = family(r["injection"], sets) if r["attacked"] else None
     groups = sorted({r["grp"] for r in rs})
-    models = sorted({r["model"] for r in rows if not r["model"].startswith("stub/")})
+    models = sorted({r["model"] for r in rows if not is_stub_model(r["model"])})
 
     # realised direction per duel: +1 up, -1 down, 0 flat, None unresolved
     def realised(duel_id: str) -> int | None:
@@ -214,7 +216,7 @@ def render(rows: list[dict], duels: dict[str, dict], sets: dict[str, list[str]])
     # ---- 2. stability
     parse_fail: dict[str, int] = defaultdict(int)
     for r in rows:
-        if str(r.get("error", "")).startswith(PARSE_FAIL) and not r["model"].startswith("stub/"):
+        if str(r.get("error", "")).startswith(PARSE_FAIL) and not is_stub_model(r["model"]):
             parse_fail[ie.label(r)] += 1
     out += [
         "## 2. Stability when unattacked",
@@ -388,7 +390,7 @@ def render(rows: list[dict], duels: dict[str, dict], sets: dict[str, list[str]])
     calls = [
         r
         for r in rows
-        if not r["model"].startswith("stub/") and ("intent" in r or str(r.get("error", "")).startswith(PARSE_FAIL))
+        if not is_stub_model(r["model"]) and ("intent" in r or str(r.get("error", "")).startswith(PARSE_FAIL))
     ]
     body = []
     for key in sorted({(r["model"], ie.max_tokens(r) or 0) for r in calls}):
