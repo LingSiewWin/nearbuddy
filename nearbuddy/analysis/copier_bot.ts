@@ -6,12 +6,16 @@
 //   bun analysis/copier_bot.ts --report          table only, from the jsonl
 // Return convention: positive bps = mirroring the intent (Long -> buy, Short -> sell) at detection made money.
 // Close-horizon exit is the oracle close (the network's price oracle), entry is Coinbase: a small basis is baked in.
+// Intents in one duel share the same exit price, so the report prints two 95% intervals on the same mean: per intent
+// (n intents, as if independent) and per duel (the same sd over sqrt(duels): each duel counted once, the conservative
+// end). Read the per-duel one.
 //   bun analysis/copier_bot.ts --mode reveal-aware --minutes 240
 // reveal-aware also writes `phase` (get_config commit_reveal at detection, and the chain times of the `commit`
 // and `intent` events, read from FastNEAR's tx API), `quote_at` (solver /arena snapshot, else the chain time the
 // intent tx finished, when the solver quotes followers) and `info_window_s` = detected_at - quote_at, so a
 // negative window means the copier saw the side before the follower quote. Rows go to data/copier-v2.jsonl.
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { JsonRpcProvider } from "near-api-js";
 import { NET, NETWORK_ID, networkFile } from "../packages/protocol/src/network.ts";
 
@@ -214,13 +218,17 @@ async function revealAware(row: Row, commitReveal: boolean) {
 // ---- stats ------------------------------------------------------------------------------------
 const ret = (side: Row["side"], p0: number, p1: number) => (side === "Long" ? 1 : -1) * ((p1 - p0) / p0) * 10_000;
 
-function stats(xs: number[]) {
+/** Mean, hit rate and two 95% intervals: per intent (sd / sqrt(n)) and clustered by duel (sd / sqrt(duels)). */
+export function stats(xs: number[], duels: string[]) {
   const n = xs.length;
-  if (n === 0) return { n, mean: NaN, hit: NaN, lo: NaN, hi: NaN };
+  const m = new Set(duels).size;
+  if (n === 0) return { n, m, mean: NaN, hit: NaN, lo: NaN, hi: NaN, loDuel: NaN, hiDuel: NaN };
   const mean = xs.reduce((a, b) => a + b, 0) / n;
   const sd = n > 1 ? Math.sqrt(xs.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1)) : 0;
   const half = (1.96 * sd) / Math.sqrt(n);
-  return { n, mean, hit: xs.filter((x) => x > 0).length / n, lo: mean - half, hi: mean + half };
+  const halfDuel = (1.96 * sd) / Math.sqrt(m);
+  const hit = xs.filter((x) => x > 0).length / n;
+  return { n, m, mean, hit, lo: mean - half, hi: mean + half, loDuel: mean - halfDuel, hiDuel: mean + halfDuel };
 }
 
 function report(rows: Row[]) {
@@ -238,16 +246,17 @@ function report(rows: Row[]) {
   ];
   const f = (x: number, d = 2) => (Number.isNaN(x) ? "-" : x.toFixed(d));
   console.log(`\n${rows.length} intents in ${OUT}`);
-  console.log("group     horizon  n     mean_bps  hit    ci95");
+  console.log("group     horizon  n     duels  mean_bps  hit    ci95 per intent    ci95 per duel");
   for (const [g, inG] of groups) {
     for (const [h, px] of horizons) {
-      const xs = rows.filter(inG).flatMap((r) => {
-        const p1 = px(r);
-        return r.p0 && p1 ? [ret(r.side, r.p0, p1)] : [];
-      });
-      const s = stats(xs);
+      const kept = rows.filter(inG).filter((r) => r.p0 && px(r));
+      const s = stats(
+        kept.map((r) => ret(r.side, r.p0 as number, px(r) as number)),
+        kept.map((r) => r.duel_id),
+      );
+      const ci = (lo: number, hi: number) => `[${f(lo)}, ${f(hi)}]`.padEnd(18);
       console.log(
-        `${g.padEnd(9)} ${h.padEnd(8)} ${String(s.n).padEnd(5)} ${f(s.mean).padStart(8)}  ${f(s.hit)}  [${f(s.lo)}, ${f(s.hi)}]`,
+        `${g.padEnd(9)} ${h.padEnd(8)} ${String(s.n).padEnd(5)} ${String(s.m).padEnd(6)} ${f(s.mean).padStart(8)}  ${f(s.hit)}  ${ci(s.lo, s.hi)} ${ci(s.loDuel, s.hiDuel).trimEnd()}`,
       );
     }
   }
@@ -353,5 +362,8 @@ async function collect(minutes: number) {
   stop();
 }
 
-if (args.includes("--report")) report(readRows());
-else await collect(Number(args[args.indexOf("--minutes") + 1] || 60));
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  // imported by the test: no collection
+  if (args.includes("--report")) report(readRows());
+  else await collect(Number(args[args.indexOf("--minutes") + 1] || 60));
+}
