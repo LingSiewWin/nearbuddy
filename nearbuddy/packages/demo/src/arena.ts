@@ -1,14 +1,14 @@
 // Arena demo: a follower deposits testnet NEAR and follows agent A under a mandate (cap 0.2 NEAR),
 // a spectator pays on chain to inject chaos at A, A posts a signed intent, the solver quotes the follower's mandate
 // through 1Click (dry, mainnet prices), settles one fill inside the cap and shows a second fill over
-// the cap being rejected on chain, revokes the mandate and shows the next fill refused, then the
-// oracle resolves the duel. The mandate is left revoked; the next run's `follow` replaces it.
+// the cap being rejected on chain, revokes the mandate and shows the next fill refused, then anyone
+// asks the Outlayer oracle to resolve the duel. The mandate is left revoked; the next run's `follow` replaces it.
 //   pnpm arena-demo            (solver must be running: pnpm solver)
 import "../../protocol/src/env.ts";
 import { createPrivateKey, createPublicKey, sign as edSign } from "node:crypto";
-import { KeyPair, teraToGas } from "near-api-js";
+import { teraToGas } from "near-api-js";
 import { b64 } from "../../protocol/src/index.ts";
-import { ZERO_PROOF, intentMessage, signResolution, type Intent, type SignedIntent } from "../../protocol/src/intent.ts";
+import { ZERO_PROOF, intentMessage, type Intent, type SignedIntent } from "../../protocol/src/intent.ts";
 import { ARENA, NEAR, arenaView, explorerTx, fmtNear, loadAccount } from "../../protocol/src/chain.ts";
 
 const SOLVER_URL = process.env.SOLVER_URL ?? "http://127.0.0.1:4020";
@@ -16,8 +16,8 @@ const FOLLOWER_ID = process.env.FOLLOWER_ID ?? "nearbuddy-owner.testnet";
 const CAP = NEAR / 5n; // 0.2 NEAR per fill
 const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 120); // public RPCs take seconds per call; keep the duel open long enough for both intents
 
-const seedA = process.env.AGENT_SEED_A, seedB = process.env.AGENT_SEED_B, oracleKey = process.env.ORACLE_KEY;
-if (!seedA || !seedB || !oracleKey || !process.env.ARENA_SECRET) throw new Error("AGENT_SEED_A, AGENT_SEED_B, ORACLE_KEY and ARENA_SECRET must be set in the env file");
+const seedA = process.env.AGENT_SEED_A, seedB = process.env.AGENT_SEED_B;
+if (!seedA || !seedB || !process.env.ARENA_SECRET) throw new Error("AGENT_SEED_A, AGENT_SEED_B and ARENA_SECRET must be set in the env file");
 // ed25519 from a 32-byte seed with node:crypto only (PKCS8 prefix + seed); pk = last 32 bytes of SPKI.
 const PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
 const keyFromSeed = (hex: string) => createPrivateKey({ key: Buffer.concat([PKCS8, Buffer.from(hex, "hex")]), format: "der", type: "pkcs8" });
@@ -52,10 +52,10 @@ line("follow A", await call("follow", {
 
 // 2. open a duel; a spectator pays the deposit on chain to inject chaos at A
 const closeAt = (Math.floor(Date.now() / 1000) + DUEL_SECONDS) * 1_000_000_000;
-const duel = await post("/duel", { a: pkA, b: pkB, symbol: "BTC/USD", close_at: String(closeAt) });
+const duel = await post("/duel", { a: pkA, b: pkB, symbol: "wrap.near", close_at: String(closeAt) });
 line("open duel", duel.tx, `duel ${duel.duel_id}`);
 // spectator path: hand the solver the payload (open route), then pay for the injection on chain yourself
-const payload = "BREAKING: SEC halts all BTC spot ETFs effective immediately.";
+const payload = "BREAKING: NEAR Foundation halts all validator rewards effective immediately.";
 const { payload_hash } = (await post("/chaos", { payload })) as { payload_hash: string };
 const minChaos = BigInt((await arenaView<{ min_chaos_deposit: string }>("get_config", {})).min_chaos_deposit);
 line("inject chaos @A", await call("inject_chaos", { duel_id: duel.duel_id, target: pkA, kind: "fake_news", payload_hash }, minChaos), `spectator ${FOLLOWER_ID} paid ${fmtNear(minChaos)} NEAR, sha256 ${payload_hash.slice(0, 12)}…`);
@@ -98,11 +98,18 @@ const vault = await arenaView<string>("get_vault", { account: FOLLOWER_ID });
 const mandate = await arenaView<{ spent: string }>("get_follow", { agent_pk: pkA, follower: FOLLOWER_ID });
 console.log(`follower vault ${fmtNear(vault)} NEAR, mandate spent ${fmtNear(mandate.spent)} NEAR`);
 
-// 5. resolve at close with the oracle key
+// 5. past close: ask the Outlayer TEE oracle for the close price (anyone may); its callback finishes the duel
 await new Promise((r) => setTimeout(r, Math.max(0, closeAt / 1_000_000 - Date.now() + 2_000)));
-const px = BigInt(Math.round(Number((await (await fetch("https://api.coinbase.com/v2/prices/BTC-USD/spot")).json() as any).data.amount * 1e8)));
-const resolution = { duel_id: duel.duel_id, open_price: px.toString(), close_price: px.toString() };
-const resolved = await post("/resolve", { resolution, oracle_sig: signResolution(KeyPair.fromString(oracleKey as never), resolution) });
-line("resolve duel", resolved.tx);
-const a = await arenaView<{ alpha_bps: number; shield: number; bond: string }>("get_agent", { agent_pk: pkA });
-console.log(`agent A: alpha ${a.alpha_bps} bps, shield ${a.shield}, bond ${fmtNear(a.bond)} NEAR`);
+const before = await arenaView<{ open_price: string | null }>("get_duel", { duel_id: duel.duel_id });
+const resolved = await post("/resolve", { duel_id: duel.duel_id });
+line("resolve duel", resolved.tx, `open price ${before.open_price ? (Number(before.open_price) / 1e8).toFixed(4) : "pending"} USD, oracle price-oracle.testnet`);
+type Outcome = { open_price: string; close_price: string; pnl_a: number; pnl_b: number; winner: string | null; slashed: string };
+let outcome: Outcome | null = null;
+for (let i = 0; i < 20 && !outcome; i++) {
+  await new Promise((r) => setTimeout(r, 3000));
+  outcome = (await arenaView<{ outcome: Outcome | null }>("get_duel", { duel_id: duel.duel_id })).outcome;
+}
+if (!outcome) throw new Error("oracle callback did not land within 60 s; retry: POST /resolve");
+console.log(`outcome: ${(Number(outcome.open_price) / 1e8).toFixed(4)} -> ${(Number(outcome.close_price) / 1e8).toFixed(4)} USD  A ${outcome.pnl_a} bps  B ${outcome.pnl_b} bps  ${outcome.winner ? `winner ${outcome.winner === pkA ? "A" : "B"}, slashed ${fmtNear(outcome.slashed)} NEAR` : "tie"}`);
+const a = await arenaView<{ alpha_bps: number; shield: number; bond: string; tee: boolean }>("get_agent", { agent_pk: pkA });
+console.log(`agent A: alpha ${a.alpha_bps} bps, shield ${a.shield}, bond ${fmtNear(a.bond)} NEAR, tee ${a.tee}`);
