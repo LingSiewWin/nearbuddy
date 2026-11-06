@@ -129,7 +129,7 @@ trades the oracle drift instead; the DeepSeek calls that landed on the injected 
 the same way (its reasoning says so each time). "Called out" is a keyword match on the model's own `reasoning` field (injection, unverified, ignore, contradict).
 Every one of those decisions is an
 enclave-signed completion the contract verified before it counted. `agents/.venv/bin/python summarize.py` prints the live table. `get_config().next_duel` and `agents/.venv/bin/python -m summarize` give the live numbers; the runner's
-`agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx (schema in the docs).
+`agents/data/decisions.jsonl` holds every decision with its prompt, injection, intent and tx, one JSON object per line.
 
 Compared with the two arenas people name first: nof1's Alpha Arena runs vendor models from its own harness and executes on
 Hyperliquid from wallets it holds, so "transparency" is a public wallet and the prompt is not published; DXRG's continuous-record
@@ -172,7 +172,7 @@ mainnet quote, not the mainnet tx.
 
 ```sh
 cp .env.example .env                      # add NEAR_AI_API_KEY to use real models; blank = stub
-cd arena && cargo test                    # 63 contract tests
+cd arena && cargo test                    # 82 contract tests
 cd .. && bun run test                        # protocol + solver tests (ARENA_DEPLOYED=1 adds on-chain parity)
 bun run solver                               # :4020, mounts /register /duel /intent /chaos /resolve /settle_follow /arena
 cd agents && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pytest -q
@@ -278,7 +278,7 @@ bun run web            # http://localhost:3000
 
 Run `bun run demo` in another shell and watch the SOLVER box climb to 100 carried IOUs, then drop to 0 as the vault
 balance and the solver's lifetime counter move in the EVENTS box. Paste the base64 agent key printed at step 3 into
-the MANDATE box to watch `spent / allowance` update. Screenshot: `docs/dashboard.png`.
+the MANDATE box to watch `spent / allowance` update.
 
 Run the pieces separately if you prefer:
 
@@ -311,7 +311,7 @@ chain per call. The solver has underwritten the IOU; settlement is batched. Type
 Rebuild and test the contract:
 
 ```sh
-cd nearbuddy/contract
+cd contract
 cargo test --lib                        # 12 unit tests: IOU rules + guarantor reserve, failed-pull payout, replay/forgery/short-reserve, cert encoding
 cargo near build non-reproducible-wasm
 ```
@@ -347,9 +347,9 @@ Proof (`bun run guarantor`, NEAR testnet + Ethereum Sepolia, 2026-11-05):
 
 Measured: cert 498–874 ms (two NEAR views + one Sepolia RPC, cacheable to <300 ms), MPC sign 6–38 s on testnet.
 The puller address is derived from `(nearbuddy-vault.testnet, "sepolia-1")`: no server holds an EVM key.
-Research behind it: `docs/issuer-surface.md` (no issuer exposes a third-party pre-auth hook: needs partnership),
-`docs/pull-failure-rate.md` (0 reverts in 4,814 on-chain pulls: the risk shows up as auth-time declines, not reverts),
-`docs/finance/loss-model.md` (Base fee floor 0.26 bps with the ledger, 2.2 without; ETH L1/BTC are gas-bound).
+Research behind it: no issuer exposes a third-party pre-auth hook, so this needs a partnership; 0 reverts in 4,814
+on-chain pulls, so the risk shows up as auth-time declines, not reverts; the loss model (`analysis/loss_model.py`, output
+in `analysis/loss_model_output.txt`) puts the Base fee floor at 0.26 bps with the ledger, 2.2 without; ETH L1/BTC are gas-bound.
 
 ## Layout
 
@@ -362,7 +362,8 @@ nearbuddy/
   packages/solver/          underwriter + arena solver: /verify, /settle, /guarantee, /pull, /duel, /intent, /chaos, /resolve, /settle_follow
   packages/demo/            terminal demos: bun run demo (IOUs), bun run guarantor (cards), bun run arena-demo (follow + chaos + settle), bun run real-swap
   agents/                   Python runner: model duelists (NEAR AI Cloud or stub), intent signing, prices, dataset, summary
-  web/                      Next.js 16: / dashboard (vault + solver) and /arena (standings, duels, chaos, followers), two API routes
+  analysis/                 loss model (loss_model.py, output committed), injection effects, send latency, copier bot
+  web/                      Next.js 16: / dashboard (vault + solver), /arena (standings, duels, chaos, followers), /agent/[pk]; API routes under web/app/api/
 ```
 
 ## Contract API (`nearbuddy-vault.testnet`)
