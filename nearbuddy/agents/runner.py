@@ -8,7 +8,10 @@ agents/data/decisions.jsonl.
 Prompt-defense experiment (docs/research/prompt-defense.md, section 4): `--variants A,B,C` puts agent A on
 `pick_variant(duel_id)` among the listed arms each duel while agent B stays naive as the within-duel control;
 every row carries `prompt_variant`. A variant-C decision whose `evidence_used` lacks "oracle" is recorded as
-`error: "evidence not oracle"` and not posted.
+`error: "evidence not oracle"` and not posted. Arm D makes two enclave calls: the side call never sees the
+telemetry, and when there is telemetry a sizer call may only lower `size_bps`. The intent carries the proof of the
+last call (the sizer when it ran; its signed request quotes the side and sha256 of the side call's output); both
+calls are kept in the row's `arm_d`, and an unproven side call means no post.
 
 Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this process finds it via GET /agent_duel):
 
@@ -73,14 +76,17 @@ from prompts import VARIANTS, pick_variant
 
 
 class Tracked:
-    """`complete_fn` for a Duelist that keeps the last Completion (exact bytes, chat id) for the TEE proof."""
+    """`complete_fn` for a Duelist that keeps the last Completion (exact bytes, chat id) for the TEE proof, and every
+    completion since `calls` was last cleared (variant D makes two per decision)."""
 
     def __init__(self, client: ModelClient) -> None:
         self.client = client
         self.last = Completion("", None, client.model_id)
+        self.calls: list[Completion] = []
 
     def __call__(self, system: str, user: str) -> str:
         self.last = self.client.complete(system, user)
+        self.calls.append(self.last)
         return self.last.text
 
 
@@ -172,6 +178,7 @@ def prepare_decision(
     pk = pk_b64(sk)
     inj = [i for i in pending.get(pk, []) if i["duel_id"] == duel_id]
     injection_text = "\n".join(i["payload"] for i in inj) or None
+    comp.calls.clear()
     try:
         decision = d.decide(symbol, brief(symbol, px, open_px), injection_text)
     except DuelistError as e:
@@ -209,23 +216,24 @@ def prepare_decision(
         )
         print(f"  model call failed ({str(e)[:120]}); skipping this cycle")
         return None
-    c = comp.last
-    sig_error = None
-    try:
-        sig_record = model.signature(c.chat_id) if c.chat_id else None
-    except requests.RequestException as e:
-        if not _model_transient(e):
-            raise
-        sig_record, sig_error = None, f"transient: signature {str(e)[:200]}"
-    tee = None
-    if sig_record:
-        try:
-            tee = tee_proof(sig_record, model.model_id, c.request_hash, c.response_hash)
-            if tee is not None and tee.get("kind") != 2:
-                print(f"  {pk[:8]}: gateway-signed completion, the contract wants the provider enclave; skipping")
-                tee = None
-        except TeeProofError as e:
-            print(f"  {pk[:8]} enclave record rejected locally: {e}")
+    c = comp.last  # the call the intent's proof binds: variant D's sizer call when it ran, else the only call
+    sig_record, tee, sig_error = _prove(model, c, pk)
+    arm_d = None
+    if d.variant == "D":
+        side_c = comp.calls[0]
+        sized = side_c is not c
+        side_sig, side_tee, side_error = _prove(model, side_c, pk) if sized else (sig_record, tee, sig_error)
+        if model.tee and not side_tee:
+            tee = None  # the sizer's signed request quotes the side call; an unproven side call breaks that chain
+            sig_error = sig_error or side_error
+        arm_d = {
+            "side_call": _call_record(side_c, side_sig, side_tee),
+            "size_call": _call_record(c, sig_record, tee) if sized else None,
+            "proof_call": "size" if sized else "side",
+            "size_bps": decision.size_bps,
+            "size_asked": decision.size_asked,
+            "size_note": decision.size_note,
+        }
     if model.tee and not tee:
         record(
             {
@@ -235,6 +243,7 @@ def prepare_decision(
                 "error": sig_error or "no tee proof",
                 "chat_id": c.chat_id,
                 "signature_record": sig_record,
+                **({"arm_d": arm_d} if arm_d else {}),
             }
         )
         print(f"  {pk[:8]} no verifiable enclave signature for {c.chat_id}; decision not posted")
@@ -243,7 +252,7 @@ def prepare_decision(
         "agent_pk": pk,
         "duel_id": duel_id,
         "side": "Long" if decision.direction > 0 else "Short",
-        "size_bps": 5000,
+        "size_bps": decision.size_bps,
         "nonce": str(nonce),
         "expires_at": str(close_at_ns + 60_000_000_000),
         "proof_hash": proof_hash(c.request_hash, c.response_hash) if tee else proof_hash(None),
@@ -256,6 +265,41 @@ def prepare_decision(
         "prompt_variant": d.prompt_variant,
         "brief": brief(symbol, px, open_px),
         "injection": injection_text,
+        **_call_record(c, sig_record, tee),
+        "attestation_file": attestations.get(model.model_id),
+        "intent": intent,
+        **({"arm_d": arm_d} if arm_d else {}),
+    }
+    return intent, tee, inj, row
+
+
+def _prove(
+    model: ModelClient, c: Completion, pk: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    """(signature record, `TeeProof`, transient error) for one completion; the proof is None unless the provider
+    enclave (kind 2) signed exactly our request and response bytes, which is the only proof the contract accepts.
+    A transient failure fetching the record is returned as the error, not raised."""
+    try:
+        sig_record = model.signature(c.chat_id) if c.chat_id else None
+    except requests.RequestException as e:
+        if not _model_transient(e):
+            raise
+        return None, None, f"transient: signature {str(e)[:200]}"
+    tee = None
+    if sig_record:
+        try:
+            tee = tee_proof(sig_record, model.model_id, c.request_hash, c.response_hash)
+            if tee is not None and tee.get("kind") != 2:
+                print(f"  {pk[:8]}: gateway-signed completion, the contract wants the provider enclave; skipping")
+                tee = None
+        except TeeProofError as e:
+            print(f"  {pk[:8]} enclave record rejected locally: {e}")
+    return sig_record, tee, None
+
+
+def _call_record(c: Completion, sig_record: dict[str, Any] | None, tee: dict[str, Any] | None) -> dict[str, Any]:
+    """One completion as dataset fields: output, exact bytes, their sha256, the enclave record and the proof."""
+    return {
         "text": c.text,
         "chat_id": c.chat_id,
         "request_body": c.request_bytes.decode(errors="replace"),
@@ -264,10 +308,7 @@ def prepare_decision(
         "response_hash": c.response_hash.hex() if c.response_bytes else None,
         "signature_record": sig_record,
         "tee": tee,
-        "attestation_file": attestations.get(model.model_id),
-        "intent": intent,
     }
-    return intent, tee, inj, row
 
 
 def _late(e: RuntimeError) -> str | None:
@@ -786,7 +827,7 @@ if __name__ == "__main__":
     p.add_argument(
         "--variants",
         default="",
-        metavar="A,B,C",
+        metavar="A,B,C,D",
         help="prompt-defense arms for agent A, picked per duel by pick_variant(duel_id); agent B stays naive",
     )
     p.add_argument(

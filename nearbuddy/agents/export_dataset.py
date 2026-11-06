@@ -43,7 +43,16 @@ FIELDS: list[tuple[str, str, str]] = [
     (
         "prompt_variant",
         "string \\| null",
-        "Prompt arm: `naive`, `hardened`, or experiment arm `A`/`B`/`C`; null on rows older than the field.",
+        "Prompt arm: `naive`, `hardened`, or experiment arm `A`/`B`/`C`/`D`; null on rows older than the field.",
+    ),
+    (
+        "arm_d",
+        "struct \\| null",
+        "Arm D only: `{side_call, size_call, proof_call, size_bps, size_asked, size_note}`. `side_call` saw no "
+        "telemetry and fixed the side; `size_call` (null when unattacked) read the telemetry and could only lower "
+        "`size_bps`. Each call carries `{text, chat_id, request_body, response_body, request_hash, response_hash, "
+        "signature_record, tee}`. `proof_call` names the call the top-level bytes and the intent's proof are; the "
+        "size call's request quotes the side and `sha256(side_call.text)`.",
     ),
     (
         "pair_tag",
