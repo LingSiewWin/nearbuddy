@@ -11,7 +11,8 @@
 //     `cd arena && cargo test --test test_arena_sandbox -- --ignored` runs.
 //   - the runner venv: E2E_PYTHON, else agents/.venv/bin/python (see README), else python3 with requirements.txt.
 //   - internet for the runner's Coinbase spot price and the solver's dry 1Click quote.
-// Not in CI (sandbox download, ~4 minutes). Everything it writes goes to a temp dir printed at the start.
+// Not in CI (sandbox download, ~4 minutes). Everything it writes goes to a temp dir printed at the start; the
+// runner's dataset goes there through NEARBUDDY_DATA.
 //
 // Scenarios:
 //   1. commit-reveal duel: owner turns commit-reveal on, the runner plays one duel with two stub agents, the oracle
@@ -19,7 +20,8 @@
 //      dataset row, the revealed intents scored, no no-reveal flags, the outcome, the dataset columns, and that the
 //      final reveals land inside the intent lock (after the last moment the opponent could still commit).
 //   2. SIGTERM mid-duel: the runner is killed after its second commit round; its held commitments must still be
-//      revealed, and the duel resolves with no no-reveal flag.
+//      revealed, and the duel resolves with no no-reveal flag. Stub A and B take opposite sides, so this duel is
+//      decided: the loser's bond is slashed and the winner is paid the pool.
 //   3. follower fill: two enclave agents (this script plays the enclave signer), a follower with a mandate on one,
 //      commit + reveal with a TeeProof through the solver, then POST /settle_follow with the dry quote.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
@@ -49,7 +51,7 @@ const S = 1_000_000_000n;
 const OPEN_PX = 366_000_000n; // 3.66 USD, 8 decimals
 const CLOSE_PX = 367_830_000n; // +0.5%
 const MIN_DUEL_S = 20;
-const LOCK_S = 5;
+const LOCK_S = 10; // the most set_oracle allows for a 20 s floor; the final reveal must land inside it
 const ORACLE_DEPOSIT = 20n * MILLI;
 const FEE_BPS = 50n;
 
@@ -410,11 +412,11 @@ async function main() {
     AGENT_SEED_B: "",
     AGENT_KEY_A: "",
     AGENT_KEY_B: "",
-    E2E_DATA: data,
+    NEARBUDDY_DATA: data, // never the real agents/data/decisions.jsonl
     PYTHONUNBUFFERED: "1",
   });
   const runnerArgs = (duelS: number) => [
-    join(ROOT, "e2e/runner_e2e.py"),
+    join(ROOT, "agents/runner.py"),
     "--rounds",
     "1",
     "--duel-seconds",
@@ -488,7 +490,8 @@ async function main() {
         o.open_price === OPEN_PX.toString() &&
         o.close_price === CLOSE_PX.toString() &&
         o.pnl_a === ea &&
-        o.pnl_b === eb,
+        o.pnl_b === eb &&
+        o.winner === (ea === eb ? null : ea > eb ? d.a : d.b),
       o
         ? `open ${o.open_price} close ${o.close_price} pnl_a ${o.pnl_a} (want ${ea}) pnl_b ${o.pnl_b} (want ${eb}) winner ${String(o.winner).slice(0, 8)}`
         : "no outcome",
@@ -559,8 +562,8 @@ async function main() {
     const code = await Promise.race([r.exited, sleep(60_000).then(() => "timeout" as const)]);
     const duelId = r.lines.map((l) => /\[round 0\] duel (\d+)/.exec(l)?.[1]).find(Boolean);
     if (killedAt && duelId) {
-      const after = r.lines.slice(killedAt);
-      const revealed = ["A", "B"].filter((w) => after.some((l) => l.includes(`  ${w} revealed`)));
+      const afterKill = r.lines.slice(killedAt);
+      const revealed = ["A", "B"].filter((w) => afterKill.some((l) => l.includes(`  ${w} revealed`)));
       check(sc, "runner exits on SIGTERM (143)", code === 143, `exit ${code}, log ${r.file}`);
       check(
         sc,
@@ -572,9 +575,25 @@ async function main() {
       const closeAt = BigInt(d.close_at);
       log(`${sc}: waiting for close_at, then resolving duel ${duelId} through the solver`);
       await until("chain clock past close_at", async () => (await chainNow()) >= closeAt + 2n * S, 120_000, 1000);
+      const bond = async (pk: string) => BigInt((await view("get_agent", { agent_pk: pk })).bond);
+      const before = { a: await bond(d.a), b: await bond(d.b) };
       await post("/resolve", { duel_id: duelId });
-      await until("outcome", async () => (await view("get_duel", { duel_id: duelId })).outcome, 60_000, 1000);
+      const o = await until("outcome", async () => (await view("get_duel", { duel_id: duelId })).outcome, 60_000, 1000);
       await checkDuel(sc, duelId, readRows(data), oracle.answered.get(`close:${duelId}`));
+      // stub A and B take opposite sides, so the duel is decided: the loser pays slash_bps of its bond into the
+      // pool and the winner takes the pool (no chaos here, so the pool is exactly the slash)
+      const after = { a: await bond(d.a), b: await bond(d.b) };
+      const [w, l] = o.winner === d.a ? (["a", "b"] as const) : (["b", "a"] as const);
+      const slashed = (before[l] * 1000n) / 10_000n;
+      check(
+        sc,
+        "decided duel: loser slashed 10%, winner paid the pool",
+        o.winner !== null &&
+          o.slashed === slashed.toString() &&
+          after[l] === before[l] - slashed &&
+          after[w] === before[w] + slashed,
+        `winner ${w.toUpperCase()} slashed ${o.slashed} (want ${slashed}); ${l.toUpperCase()} ${before[l]} -> ${after[l]}, ${w.toUpperCase()} ${before[w]} -> ${after[w]}`,
+      );
     } else if (duelId) check(sc, "runner opened a duel", true, duelId);
     else check(sc, "runner opened a duel", false, r.lines.slice(-5).join(" | "));
   }
