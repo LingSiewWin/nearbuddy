@@ -11,6 +11,7 @@ import {
   fillCells,
   followerQuality,
   lastFills,
+  legs,
   proven,
   quoteOut,
   revealCell,
@@ -67,16 +68,30 @@ describe("commit-reveal", () => {
 describe("execution", () => {
   test("units: yocto wNEAR in, 6-dp USDC out, 1e8 oracle mid", () => {
     const t = text(fillCells(fill(), NOW));
-    expect(t).toMatch(/ 0\.250 wNEAR → +0\.6401 USDC /);
+    expect(t).toMatch(/ sell +0\.250 wNEAR → +0\.6401 USDC /); // no side: an older solver, which only sold
     expect(t).toContain("2.5610");
     expect(t).toContain("+3.4 bps");
     expect(t).toContain("42s ago");
     expect(usdc(null)).toBe("-");
   });
+  test("direction follows the side: Short sells wNEAR for USDC, Long buys wNEAR with USDC", () => {
+    const short = text(fillCells(fill({ side: "Short" }), NOW));
+    const long = text(fillCells(fill({ side: "Long", bps_vs_oracle: 2.1 }), NOW));
+    expect(short).toMatch(/ sell +0\.250 wNEAR → +0\.6401 USDC /);
+    expect(long).toMatch(/ buy +0\.250 wNEAR ← +0\.6401 USDC /);
+    expect(long.length).toBe(short.length);
+    expect(fillCells(fill({ side: "Long" }), NOW)[3]).toMatchObject({ title: "Long: bought wNEAR, paid USDC" });
+    // the solver already signs bps so + is better for the follower on both sides: same colour rule
+    expect(vsCell(2.1)).toMatchObject({ c: "win" });
+    expect(legs(undefined)).toEqual(legs("Short"));
+    expect(legs(null).arrow).toBe("→");
+  });
   test("a row and the header fit the value column, with the columns aligned", () => {
     const t = text(fillCells(fill({ follower: "a-very-long-follower-account.testnet" }), NOW));
     expect(t.length).toBeLessThanOrEqual(VW);
     expect(FILL_HEAD.length).toBe(text(fillCells(fill(), NOW)).length);
+    expect(FILL_HEAD.length).toBeLessThanOrEqual(VW);
+    expect(FILL_HEAD.indexOf("side")).toBe(text(fillCells(fill({ side: "Long" }), NOW)).indexOf("buy"));
   });
   test("vs mid is coloured: better a win, worse a loss, equal a tie", () => {
     expect(vsCell(2)).toMatchObject({ t: "+2.0 bps", c: "win" });

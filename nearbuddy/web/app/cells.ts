@@ -45,11 +45,12 @@ export const proven = (i: { proof_hash?: string | null } | null | undefined, zer
 export type Fill = {
   follower: string;
   intent_nonce: string;
-  amount_in: string; // yocto wNEAR
-  quote_out: string; // USDC base units, 6 decimals
+  side?: "Long" | "Short"; // the agent's side; absent in rows from solvers that only sold (read as Short)
+  amount_in: string; // yocto wNEAR: sold on a Short, bought on a Long
+  quote_out: string; // USDC base units, 6 decimals: received on a Short, paid on a Long
   oracle_mid: string; // USD price x 1e8, as the oracle reports it
   quoted_at: number; // ms since epoch
-  bps_vs_oracle: number | null; // quote vs oracle mid; positive = the follower got more than mid; null in old rows
+  bps_vs_oracle: number | null; // vs oracle mid, positive = better for the follower on either side; null in old rows
 };
 
 export const usdc = (base: string | null | undefined) => (base ? (Number(base) / 1e6).toFixed(4) : "-");
@@ -81,15 +82,27 @@ export const age = (ms: number, nowMs: number) => {
 /** The newest `n` fills, newest first; the solver appends, so the tail is newest. */
 export const lastFills = (q: Fill[] | null | undefined, n = 10) => (q ?? []).slice(-n).reverse();
 
-// columns: follower · amount in · quoted out · oracle mid · vs mid · age
-export const FILL_HEAD = `${"follower".padEnd(21)}  ${"amount in".padStart(14)}   ${"quoted out".padStart(15)}  ${"mid USD".padStart(7)}  ${"vs mid".padStart(10)}  ${"age".padStart(8)}`;
-export const fillCells = (f: Fill, nowMs: number): Cell[] => [
-  { t: f.follower.slice(0, 21), href: addrHref(f.follower), title: f.follower },
-  " ".repeat(Math.max(0, 21 - f.follower.length)),
-  `  ${near(f.amount_in).padStart(8)} wNEAR → ${usdc(f.quote_out).padStart(10)} USDC  ${price8(f.oracle_mid).padStart(7)}  `,
-  vsCell(f.bps_vs_oracle, 10),
-  `  ${age(f.quoted_at, nowMs).padStart(4)} ago`,
-];
+/** Direction of a fill or quote: a Short sells wNEAR for USDC (→), a Long buys wNEAR with USDC (←).
+ *  No side means a solver from before fills followed the agent's side, which only sold. */
+export const legs = (side: "Long" | "Short" | null | undefined) =>
+  side === "Long"
+    ? { word: "buy", arrow: "←", title: "Long: bought wNEAR, paid USDC" }
+    : { word: "sell", arrow: "→", title: "Short: sold wNEAR, received USDC" };
+
+// columns: follower · side · wNEAR leg · USDC leg · oracle mid · vs mid · age
+export const FILL_HEAD = `${"follower".padEnd(21)}  ${"side"} ${"wNEAR leg".padStart(14)}   ${"USDC leg".padStart(15)}  ${"mid USD".padStart(7)}  ${"vs mid".padStart(10)}  ${"age".padStart(8)}`;
+export const fillCells = (f: Fill, nowMs: number): Cell[] => {
+  const l = legs(f.side);
+  return [
+    { t: f.follower.slice(0, 21), href: addrHref(f.follower), title: f.follower },
+    " ".repeat(Math.max(0, 21 - f.follower.length)),
+    "  ",
+    { t: l.word.padEnd(4), title: l.title },
+    ` ${near(f.amount_in).padStart(8)} wNEAR ${l.arrow} ${usdc(f.quote_out).padStart(10)} USDC  ${price8(f.oracle_mid).padStart(7)}  `,
+    vsCell(f.bps_vs_oracle, 10),
+    `  ${age(f.quoted_at, nowMs).padStart(4)} ago`,
+  ];
+};
 
 /** Per-follower execution summary for the given followers, in their order; followers without fills are left out.
  *  `n` counts every fill; avg/best/worst cover the priced ones and are null when none is priced. */

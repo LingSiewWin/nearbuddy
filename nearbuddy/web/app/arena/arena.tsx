@@ -11,6 +11,7 @@ import {
   type FollowerQuote,
   fillCells,
   lastFills,
+  legs,
   proven,
   quoteOut,
 } from "../cells";
@@ -441,7 +442,7 @@ export default function Arena() {
                   "intent",
                   `${i.side.padEnd(5)} ${short(i.agent_pk, 6)}  tx `,
                   i.tx,
-                  `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${quoteOut(q)} USDC`).join("; ") || "no followers"}`,
+                  `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR${legs(i.side).arrow}${quoteOut(q)} USDC`).join("; ") || "no followers"}`,
                 )}
                 {"\n"}
               </span>
@@ -503,7 +504,7 @@ export default function Arena() {
           </>
         )}
         {legend(
-          "every follower in a tick gets one price (batched RFQ) · vs mid = quote against the oracle mid, + better for the follower, - worse · nonce = the intent filled",
+          "every follower in a tick gets one price (batched RFQ) · sell = Short, wNEAR sold for USDC · buy = Long, wNEAR bought with USDC · vs mid = quote against the oracle mid, + better for the follower on either side, - worse · nonce = the intent filled",
         )}
         {"\n"}
         {bottom()}

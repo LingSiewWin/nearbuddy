@@ -71,6 +71,7 @@ const quality = [
 ].map(([follower, nonce, amount_in, quote_out, mid, bps, ago]) => ({
   follower,
   intent_nonce: nonce,
+  ...(nonce === "41" ? { side: "Long" } : {}), // 39 and 40 come from a solver that only sold (no side)
   amount_in,
   quote_out,
   oracle_mid: String(mid),
@@ -134,9 +135,11 @@ test("arena: commit-reveal word and the execution box from solver quality", asyn
   await expect(exec).toBeVisible();
   const body = page.locator("body");
   await expect(body).toContainText("every follower in a tick gets one price (batched RFQ)");
-  await expect(body).toContainText("quotes alice.testnet: 0.250 wNEAR→0.6409 USDC"); // share, not the 2.1782 batch
-  await expect(body).toContainText("quotes carol.testnet: 0.500 wNEAR→1.2818 USDC"); // older solver fallback
-  await expect(body).toContainText("0.500 wNEAR →     1.2818 USDC");
+  await expect(body).toContainText("quotes alice.testnet: 0.250 wNEAR←0.6409 USDC"); // Long; share, not the 2.1782 batch
+  await expect(body).toContainText("quotes carol.testnet: 0.500 wNEAR←1.2818 USDC"); // older solver fallback
+  await expect(body).toContainText("buy     0.500 wNEAR ←     1.2818 USDC"); // nonce 41 fills carry side Long
+  await expect(body).toContainText("sell    0.250 wNEAR →     0.6395 USDC"); // nonce 40: no side, read as Short
+  await expect(page.locator('span[title="Long: bought wNEAR, paid USDC"]')).toHaveCount(3);
   await expect(page.locator("span.win", { hasText: "+1.4 bps" })).toHaveCount(3);
   await expect(page.locator("span.loss", { hasText: "-0.8 bps" })).toHaveCount(2);
   await expect(page.locator('span.dim[title="not priced against the oracle mid"]')).toHaveCount(1); // null bps row
