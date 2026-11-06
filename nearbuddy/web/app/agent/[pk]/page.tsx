@@ -12,7 +12,8 @@ import { load, parsePk } from "./data";
 type Params = { params: Promise<{ pk: string }> };
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
-  const pk = parsePk((await params).pk) ?? "";
+  const pk = parsePk((await params).pk);
+  if (!pk) notFound();
   return {
     title: `agent ${pk.slice(0, 8)}…`,
     description: `Should you follow arena agent ${pk}? How it handles paid fake news, its oracle-scored record, its own reasoning for every call, and who follows it.`,

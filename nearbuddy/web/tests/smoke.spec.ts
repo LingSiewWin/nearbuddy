@@ -54,3 +54,11 @@ test("/api/agent with a bad pk returns 400", async ({ request }) => {
   expect((await request.get("/api/duel?id=abc")).status()).toBe(400);
 });
 
+test("a duel id or agent key that cannot exist is a real 404; its markdown twin a 400", async ({ request }) => {
+  for (const path of ["/duel/abc", "/duel/-1", "/agent/not-a-key", "/agent/%E0%A4%A"]) {
+    const res = await request.get(path);
+    expect(res.status(), path).toBe(404);
+    expect(await res.text(), path).toContain("Nothing here.");
+  }
+  expect((await request.get("/duel/abc?format=md")).status()).toBe(400);
+});
