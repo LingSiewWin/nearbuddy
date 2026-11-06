@@ -13,8 +13,10 @@
 //! `sha256(request_hash || response_hash)`, which binds the agent's decision to that completion.
 //!
 //! Followers never hand an agent funds: they deposit here and attach a mandate (per-trade cap,
-//! token allowlist, expiry, revoke); a registered solver fronts the swap through NEAR Intents and
-//! is repaid from the follower's vault only inside that mandate.
+//! token allowlist, price floor, expiry, revoke); a registered solver fronts the swap through NEAR
+//! Intents with this contract as recipient and is repaid from the follower's vault only inside that
+//! mandate and only for output this contract's `intents.near` balance shows (see `follow.rs`).
+//! Vault withdrawals wait `withdraw_delay_s`; credited output is withdrawn with `withdraw_token`.
 //!
 //! With `commit_reveal` on, an agent first commits `sha256(intent_message || salt)` before the
 //! intent lock and reveals the intent and salt later (up to `close_at`), so nothing readable is on
@@ -41,14 +43,14 @@ mod tests;
 use near_sdk::{AccountId, env};
 
 pub const INTENT_DOMAIN: &[u8] = b"nearbuddy-intent-v1";
-/// Prefix of the bytes an agent key signs to prove possession at `register_agent`.
-pub const REGISTER_DOMAIN: &[u8] = b"nearbuddy-register-v1";
+/// Prefix of the bytes an agent key signs to prove possession at `register_agent`. v2 adds the
+/// contract id (deploy 15); agents registered under v1 stay registered, only new registrations
+/// sign v2.
+pub const REGISTER_DOMAIN: &[u8] = b"nearbuddy-register-v2";
 /// Prefix of the bytes an agent key signs to commit to a hidden intent (see `commit_bytes`).
 pub const COMMIT_DOMAIN: &[u8] = b"nearbuddy-commit-v1";
 /// Prefix of the bytes an agent key signs to consent to one pairing (see `consent_bytes`).
 pub const DUEL_DOMAIN: &[u8] = b"nearbuddy-duel-v1";
-/// `intent_lock_ns` until the owner sets it through `set_oracle`.
-pub const DEFAULT_INTENT_LOCK_NS: u64 = 60 * 1_000_000_000;
 /// Cap on `Duel.injections` so a duel record cannot grow without bound.
 pub const MAX_INJECTIONS: usize = 32;
 /// After this long past `close_at` with no oracle answer anyone may void the duel.
@@ -63,9 +65,13 @@ pub fn intent_message(i: &Intent) -> Vec<u8> {
     out
 }
 
-/// The exact bytes `agent_pk` signs so `owner` may register it: `REGISTER_DOMAIN || owner`.
-pub fn register_bytes(owner: &AccountId) -> Vec<u8> {
+/// The exact bytes `agent_pk` signs so `owner` may register it on `contract`:
+/// `REGISTER_DOMAIN || contract || 0x00 || owner`. The separator keeps `(a.b, c)` and `(a, b.c)`
+/// apart; account ids never contain a zero byte.
+pub fn register_bytes(contract: &AccountId, owner: &AccountId) -> Vec<u8> {
     let mut out = REGISTER_DOMAIN.to_vec();
+    out.extend_from_slice(contract.as_bytes());
+    out.push(0);
     out.extend_from_slice(owner.as_bytes());
     out
 }

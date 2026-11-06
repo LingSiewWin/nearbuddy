@@ -57,13 +57,24 @@ pub(crate) fn pnl_bps(intent: Option<&Intent>, close_at: u64, open: u64, close: 
     v as i64
 }
 
+impl Contract {
+    /// The intent lock duel `id` was opened under; `intent_lock_ns` for duels opened before
+    /// deploy 15.
+    pub(crate) fn lock_of(&self, id: u64) -> u64 {
+        self.duel_locks
+            .get(&id)
+            .copied()
+            .unwrap_or(self.intent_lock_ns)
+    }
+}
+
 #[near]
 impl Contract {
     /// Pair two registered, idle agents on an oracle asset. Attached deposit must cover the duel's
     /// storage plus `oracle_deposit`; the open price is requested from the oracle in the same call
     /// and lands through `oracle_on_call`. Returns the duel id.
     /// Caller: owner. Deposit: the duel record's storage plus `oracle_deposit`. Panics:
-    /// "not owner", "consent required", "same agent", "symbol too long", "close_at in the past",
+    /// "not owner", "consent required", "paused", "same agent", "symbol too long", "close_at in the past",
     /// "duel too short", "duel too long", "agent missing", "in duel", "deposit too small".
     #[payable]
     pub fn open_duel(
@@ -109,6 +120,7 @@ impl Contract {
         symbol: String,
         close_at: U64,
     ) -> U64 {
+        self.not_paused();
         require!(a.0 != b.0, "same agent");
         require!(symbol.len() <= 64, "symbol too long");
         require!(close_at.0 > env::block_timestamp(), "close_at in the past");
@@ -146,10 +158,12 @@ impl Contract {
                 open_price: None,
             },
         );
+        self.duel_locks.insert(id, self.intent_lock_ns);
         self.next_duel += 1;
         self.open_duels += 1;
         self.duels.flush();
         self.agents.flush();
+        self.duel_locks.flush();
         self.agent_duels.flush();
         let cost = storage_cost_since(before) + self.oracle_deposit;
         require!(
@@ -188,17 +202,18 @@ impl Contract {
 
     /// Record an agent-signed intent for an open duel. Anyone may relay it: the signature is what
     /// binds the decision to the agent and the agent's bond pays its storage. Refused inside the
-    /// last `intent_lock_ns` of the duel. A TEE-backed agent must also present the model enclave's
+    /// last `intent_lock_ns` of the duel (the value the duel was opened under). A TEE-backed agent must also present the model enclave's
     /// (kind 2) signature over the completion that produced the decision. The intent must outlive
     /// `close_at` and carry a nonce above the agent's last posted one in this duel, so a relayer
     /// cannot resurface an older decision.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
-    /// "agent_pk length", "proof_hash length", "bad size", "agent missing", "bad tee kind",
+    /// "paused", "agent_pk length", "proof_hash length", "bad size", "agent missing", "bad tee kind",
     /// "tee hash length", "unknown tee signer", "bad tee signature", "proof_hash mismatch",
     /// "proof used", "provider proof required", "tee proof required", "duel missing",
     /// "duel closed", "intent lock", "intent expired", "bad target", "nonce used", "stale nonce",
     /// "bad signature", "bond exhausted"; "commit first" while `commit_reveal` is on.
     pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
+        self.not_paused();
         require!(!self.commit_reveal, "commit first");
         self.accept_intent(&signed, tee, true);
     }
@@ -208,7 +223,7 @@ impl Contract {
     /// signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
     /// should be 32 random bytes: the intent space is small enough to brute-force without it.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
-    /// "agent_pk length", "commitment length", "bad commit signature", "duel missing",
+    /// "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
     /// "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
     /// "bond exhausted".
     pub fn commit_intent(
@@ -218,6 +233,7 @@ impl Contract {
         commitment: Base64VecU8,
         sig: Base64VecU8,
     ) {
+        self.not_paused();
         require!(agent_pk.0.len() == 32, "agent_pk length");
         let hash: [u8; 32] = commitment
             .0
@@ -235,7 +251,10 @@ impl Contract {
         let duel = self.duels.get(&duel_id.0).expect("duel missing");
         let now = env::block_timestamp();
         require!(!duel.resolved && now < duel.close_at.0, "duel closed");
-        require!(now + self.intent_lock_ns < duel.close_at.0, "intent lock");
+        require!(
+            now + self.lock_of(duel_id.0) < duel.close_at.0,
+            "intent lock"
+        );
         require!(
             agent_pk.0 == duel.a.0 || agent_pk.0 == duel.b.0,
             "bad target"
@@ -317,13 +336,14 @@ impl Contract {
                 0
             }
         };
+        let lock_ns = self.lock_of(i.duel_id.0);
         let duel = self.duels.get_mut(&i.duel_id.0).expect("duel missing");
         require!(
             !duel.resolved && env::block_timestamp() < duel.close_at.0,
             "duel closed"
         );
         require!(
-            !lock || env::block_timestamp() + self.intent_lock_ns < duel.close_at.0,
+            !lock || env::block_timestamp() + lock_ns < duel.close_at.0,
             "intent lock"
         );
         require!(i.expires_at.0 >= duel.close_at.0, "intent expired");
@@ -388,7 +408,7 @@ impl Contract {
     /// Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver
     /// delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool.
     /// Caller: anyone (spectator). Deposit: at least `min_chaos_deposit` and above the record's
-    /// storage. Panics: "chaos deposit too small", "payload_hash length", "kind too long",
+    /// storage. Panics: "paused", "chaos deposit too small", "payload_hash length", "kind too long",
     /// "duel missing", "duel closed", "bad target", "chaos full".
     #[payable]
     pub fn inject_chaos(
@@ -398,6 +418,7 @@ impl Contract {
         kind: String,
         payload_hash: Base64VecU8,
     ) {
+        self.not_paused();
         let before = env::storage_usage();
         let deposit = env::attached_deposit().as_yoctonear();
         require!(deposit >= self.min_chaos_deposit, "chaos deposit too small");
@@ -523,6 +544,7 @@ impl Contract {
         );
         d.resolved = true;
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
+        self.duel_locks.remove(&duel_id.0);
         d.pool = U128(0);
         d.injections = vec![];
         d.outcome = Some(Outcome {
@@ -565,6 +587,7 @@ impl Contract {
         duel.resolved = true;
         duel.pool = U128(0);
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
+        self.duel_locks.remove(&id);
 
         let slash_bps = self.slash_bps as u128;
         let mut outcome = Outcome {

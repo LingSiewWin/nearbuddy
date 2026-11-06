@@ -1,10 +1,10 @@
 use super::*;
 use crate::duels::price8;
 use ed25519_dalek::{Signer, SigningKey};
-use near_sdk::NearToken;
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::test_utils::VMContextBuilder;
 use near_sdk::testing_env;
+use near_sdk::{NearToken, PromiseResult};
 
 pub const CONTRACT: &str = "arena.testnet";
 pub const OWNER: &str = "solver.testnet"; // contract owner = solver account in the hackathon deploy
@@ -12,6 +12,8 @@ pub const SOLVER: &str = "solver.testnet";
 pub const ORACLE: &str = "price-oracle.testnet";
 pub const OPERATOR: &str = "operator.testnet";
 pub const FOLLOWER: &str = "follower.testnet";
+pub const INTENTS: &str = "intents.testnet";
+pub const VAULT_CAP: u128 = 1_000 * NEAR;
 pub const NOW: u64 = 1_700_000_000_000_000_000;
 pub const CLOSE: u64 = NOW + 60_000_000_000; // +60 s
 pub const LOCK: u64 = 10_000_000_000; // intent lock set by `fresh`, 10 s
@@ -72,7 +74,10 @@ pub fn fresh(fee_bps: u16) -> Contract {
         1_000,
         fee_bps,
         U128(MIN_CHAOS),
+        INTENTS.parse().unwrap(),
+        U128(VAULT_CAP),
     );
+    ctx(OWNER, 1);
     c.add_solver(SOLVER.parse().unwrap());
     c.set_oracle(
         ORACLE.parse().unwrap(),
@@ -86,9 +91,12 @@ pub fn fresh(fee_bps: u16) -> Contract {
 /// `sk`'s proof of possession for `register_agent` called by `owner`.
 pub fn register_sig(sk: &SigningKey, owner: &str) -> Base64VecU8 {
     Base64VecU8(
-        sk.sign(&register_bytes(&owner.parse().unwrap()))
-            .to_bytes()
-            .to_vec(),
+        sk.sign(&register_bytes(
+            &CONTRACT.parse().unwrap(),
+            &owner.parse().unwrap(),
+        ))
+        .to_bytes()
+        .to_vec(),
     )
 }
 
@@ -161,7 +169,7 @@ fn bond(c: &Contract, seed: u8) -> u128 {
 /// Signer seed 7 plays a NEAR AI Cloud enclave; registered by the owner.
 fn tee_signer(c: &mut Contract) -> SigningKey {
     let (sk, pk) = key(7);
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.add_tee_signer(Base64VecU8(pk), "unit".into());
     sk
 }
@@ -357,7 +365,7 @@ fn plain_agent_may_attach_a_valid_proof() {
 #[should_panic(expected = "not owner")]
 fn only_owner_adds_tee_signers() {
     let (mut c, ..) = setup();
-    ctx(OPERATOR, 0);
+    ctx(OPERATOR, 1);
     c.add_tee_signer(Base64VecU8(key(7).1), "x".into());
 }
 
@@ -430,8 +438,36 @@ fn register_sig_is_bound_to_the_caller() {
 fn register_message_view_matches_signed_bytes() {
     let c = fresh(0);
     let m = c.register_message(OPERATOR.parse().unwrap()).0;
-    assert_eq!(m, [REGISTER_DOMAIN, OPERATOR.as_bytes()].concat());
+    assert_eq!(
+        m,
+        [
+            REGISTER_DOMAIN,
+            CONTRACT.as_bytes(),
+            &[0],
+            OPERATOR.as_bytes()
+        ]
+        .concat()
+    );
     assert!(verify(&key(1).1, &m, &register_sig(&key(1).0, OPERATOR).0));
+}
+
+#[test]
+#[should_panic(expected = "bad register signature")]
+fn register_sig_for_another_arena_panics() {
+    // the same owner, the same key, but signed for a staging arena: not valid here
+    let mut c = fresh(0);
+    let (sk, pk) = key(1);
+    let other = sk.sign(&register_bytes(
+        &"staging-arena.testnet".parse().unwrap(),
+        &OPERATOR.parse().unwrap(),
+    ));
+    ctx(OPERATOR, BOND);
+    c.register_agent(
+        Base64VecU8(pk),
+        MODEL_A.into(),
+        false,
+        Base64VecU8(other.to_bytes().to_vec()),
+    );
 }
 
 #[test]
@@ -458,7 +494,7 @@ fn open_duel_symbol_too_long_panics() {
 #[should_panic(expected = "label too long")]
 fn tee_signer_label_too_long_panics() {
     let (mut c, ..) = setup();
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.add_tee_signer(Base64VecU8(key(7).1), "l".repeat(65));
 }
 
@@ -685,7 +721,7 @@ fn post_intent_just_before_lock_ok() {
 #[should_panic(expected = "intent_lock_s too large")]
 fn set_oracle_bounds_lock_to_half_the_floor() {
     let (mut c, ..) = setup();
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, 31);
 }
 
@@ -717,6 +753,8 @@ pub fn mandate(cap: u128, allowance: u128, tokens: Vec<&str>) -> Mandate {
         allowed_tokens: tokens.into_iter().map(String::from).collect(),
         expires_at: U64(NOW + 1_000_000),
         revoked: false,
+        min_out_per_near: U128(1), // `follow` refuses 0; 1 unit per NEAR keeps the old cases unaffected
+        revoked_at: U64(0),
     }
 }
 
@@ -725,12 +763,14 @@ pub fn fill(nonce: u64, token: &str, amount: u128) -> Fill {
         intent_nonce: U64(nonce),
         token: token.into(),
         amount_in: U128(amount),
-        amount_out: U128(1),
+        amount_out: U128(1_000_000),
         swap_tx: "0xabc".into(),
     }
 }
 
 const VAULT: u128 = 10 * NEAR;
+/// `withdraw_delay_ns` default: the grace a fronted fill keeps after unfollow or expiry.
+const GRACE: u64 = 900 * 1_000_000_000;
 
 /// setup + TEE signer + duel + A posts nonce 1 through its proof + follower deposits 10 NEAR and
 /// follows A (TEE-backed; plain B cannot be followed) with the given mandate.
@@ -749,9 +789,107 @@ pub fn setup_follow(m: Mandate) -> (Contract, u64, u128) {
     (c, d, v)
 }
 
+/// This contract running its own callback at `ts`, with `results` as the promise answers.
+fn callback_ctx(ts: u64, results: Vec<PromiseResult>) {
+    let mut b = VMContextBuilder::new();
+    b.current_account_id(CONTRACT.parse().unwrap())
+        .predecessor_account_id(CONTRACT.parse().unwrap())
+        .account_balance(NearToken::from_near(100))
+        .block_timestamp(ts);
+    testing_env!(
+        b.build(),
+        near_sdk::test_vm_config(),
+        near_sdk::RuntimeFeesConfig::test(),
+        Default::default(),
+        results
+    );
+}
+
+/// `mt_batch_balance_of` answer.
+fn balances(b: &[u128]) -> PromiseResult {
+    PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&b.iter().map(|x| U128(*x)).collect::<Vec<_>>()).unwrap(),
+    )
+}
+
+/// The balance that exactly covers a batch: per token, what is accounted plus the batch's outputs.
+fn covering(c: &Contract, fills: &[Fill]) -> PromiseResult {
+    let mut tokens: Vec<&str> = vec![];
+    for f in fills {
+        if !tokens.contains(&f.token.as_str()) {
+            tokens.push(&f.token);
+        }
+    }
+    let b: Vec<u128> = tokens
+        .iter()
+        .map(|t| {
+            c.get_accounted(t.to_string()).0
+                + fills
+                    .iter()
+                    .filter(|f| f.token == *t)
+                    .map(|f| f.amount_out.0)
+                    .sum::<u128>()
+        })
+        .collect();
+    balances(&b)
+}
+
+/// The contract's panic text out of a caught unit-test panic (the mock wraps it in
+/// `HostError(GuestPanic { panic_msg: "..." })`).
+fn panic_msg(p: Box<dyn std::any::Any + Send>) -> String {
+    let s = p
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    match s.split_once("panic_msg: \"") {
+        Some((_, rest)) => rest.split('"').next().unwrap_or_default().to_string(),
+        None => s,
+    }
+}
+
+/// The solver's `settle_follow` for agent `seed` at `ts`, then the callback with `answer` as the
+/// balance view. `Err` is the callback's panic (every fill rejected); state is untouched then.
+fn settle_answered(
+    c: &mut Contract,
+    seed: u8,
+    fills: Vec<Fill>,
+    answer: PromiseResult,
+    ts: u64,
+) -> Result<SettleReport, String> {
+    ctx_at(SOLVER, 0, ts);
+    let _ = c.settle_follow(
+        Base64VecU8(key(seed).1),
+        FOLLOWER.parse().unwrap(),
+        fills.clone(),
+    );
+    let seq = c.outflow_seq;
+    callback_ctx(ts, vec![answer]);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.on_settle_follow(
+            Base64VecU8(key(seed).1),
+            FOLLOWER.parse().unwrap(),
+            SOLVER.parse().unwrap(),
+            fills,
+            seq,
+        )
+    }))
+    .map_err(panic_msg);
+    ctx_at(SOLVER, 0, ts);
+    r
+}
+
+/// Settle agent A's fills with their outputs delivered; panics with the reason if none settles.
 fn settle(c: &mut Contract, fills: Vec<Fill>) -> SettleReport {
-    ctx(SOLVER, 0);
-    c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), fills)
+    let answer = covering(c, &fills);
+    settle_answered(c, 1, fills, answer, NOW).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Settle agent A's fills with their outputs delivered and return the rejection that refused the
+/// whole batch.
+fn settle_rejects(c: &mut Contract, fills: Vec<Fill>) -> String {
+    let answer = covering(c, &fills);
+    settle_answered(c, 1, fills, answer, NOW).expect_err("batch should be refused")
 }
 
 #[test]
@@ -779,6 +917,11 @@ fn follow_tee_agent_ok() {
         c.get_follow(Base64VecU8(key(2).1), FOLLOWER.parse().unwrap())
             .is_none()
     );
+    let logs = near_sdk::test_utils::get_logs();
+    assert!(
+        logs.last().unwrap().contains(r#""event":"follow""#),
+        "{logs:?}"
+    );
 }
 
 #[test]
@@ -788,13 +931,20 @@ fn deposit_and_follow_pay_their_storage() {
 }
 
 #[test]
-fn fill_at_cap_ok() {
+fn fill_at_cap_ok_and_credits_the_output() {
     let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    let r = settle(&mut c, vec![fill(1, "usdc", NEAR)]);
+    let mut f = fill(1, "usdc", NEAR);
+    f.amount_out = U128(3_000_000);
+    let r = settle(&mut c, vec![f]);
     assert_eq!(r.settled, 1);
     assert_eq!(r.debited.0, NEAR);
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - NEAR);
     assert_eq!(c.get_vault(SOLVER.parse().unwrap()).0, NEAR);
+    assert_eq!(
+        c.get_holding(FOLLOWER.parse().unwrap(), "usdc".into()).0,
+        3_000_000
+    );
+    assert_eq!(c.get_accounted("usdc".into()).0, 3_000_000);
 }
 
 // Separate test: unit-test storage is global per test, so a second Contract in the same test
@@ -802,54 +952,101 @@ fn fill_at_cap_ok() {
 #[test]
 fn fill_over_cap_rejected() {
     let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    let r = settle(&mut c, vec![fill(1, "usdc", NEAR + 1)]);
-    assert_eq!(r.settled, 0);
-    assert_eq!(r.rejected[0].1, "over cap");
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(1, "usdc", NEAR + 1)]),
+        "over cap"
+    );
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
 }
 
 #[test]
 fn fill_wrong_token_rejected() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec!["usdc"]));
-    let r = settle(&mut c, vec![fill(1, "wbtc", 50)]);
-    assert_eq!(r.rejected[0].1, "token not allowed");
-}
-
-#[test]
-fn fill_after_expiry_rejected() {
-    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    ctx_at(SOLVER, 0, NOW + 1_000_000);
-    let r = c.settle_follow(
-        Base64VecU8(key(1).1),
-        FOLLOWER.parse().unwrap(),
-        vec![fill(1, "usdc", 50)],
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(1, "wbtc", 50)]),
+        "token not allowed"
     );
-    assert_eq!(r.rejected[0].1, "mandate expired");
 }
 
 #[test]
-fn fill_after_revoke_rejected() {
+fn fill_after_expiry_and_its_grace_rejected() {
+    // expires at NOW + 1 ms; a fill landing within withdraw_delay (900 s) after that still settles
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 1_000_000 + GRACE);
+    assert_eq!(r.unwrap_err(), "mandate expired");
+}
+
+#[test]
+fn fill_landing_just_after_expiry_settles_inside_the_grace() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 1_000_000 + GRACE - 1);
+    assert_eq!(r.unwrap().settled, 1);
+}
+
+#[test]
+fn fill_after_revoke_and_its_grace_rejected() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
     ctx(FOLLOWER, 0);
     c.unfollow(Base64VecU8(key(1).1));
-    let r = settle(&mut c, vec![fill(1, "usdc", 50)]);
-    assert_eq!(r.rejected[0].1, "mandate revoked");
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + GRACE);
+    assert_eq!(r.unwrap_err(), "mandate revoked");
+}
+
+#[test]
+fn swap_fronted_before_unfollow_settles_inside_the_grace() {
+    // the follower unfollows after the solver fronted the swap; the fill lands 899 s later and settles
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 0);
+    c.unfollow(Base64VecU8(key(1).1));
+    let m = c
+        .get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
+        .unwrap();
+    assert_eq!((m.revoked, m.revoked_at.0), (true, NOW));
+    // a second unfollow does not restart the grace
+    ctx_at(FOLLOWER, 0, NOW + 10);
+    c.unfollow(Base64VecU8(key(1).1));
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + GRACE - 1);
+    assert_eq!(r.unwrap().settled, 1);
+}
+
+#[test]
+#[should_panic(expected = "price floor required")]
+fn follow_without_a_price_floor_panics() {
+    let (mut c, ..) = setup();
+    ctx(FOLLOWER, VAULT);
+    c.deposit();
+    let mut m = mandate(NEAR, VAULT, vec![]);
+    m.min_out_per_near = U128(0);
+    ctx(FOLLOWER, 0);
+    c.follow(Base64VecU8(key(1).1), m);
 }
 
 #[test]
 fn duplicate_fill_noop() {
     let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
     settle(&mut c, vec![fill(1, "usdc", 50)]);
-    let r = settle(&mut c, vec![fill(1, "usdc", 50)]);
-    assert_eq!(r.rejected[0].1, "duplicate fill");
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(1, "usdc", 50)]),
+        "duplicate fill"
+    );
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - 50);
 }
 
 #[test]
 fn foreign_nonce_rejected() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    let r = settle(&mut c, vec![fill(99, "usdc", 50)]);
-    assert_eq!(r.rejected[0].1, "nonce unknown");
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(99, "usdc", 50)]),
+        "nonce unknown"
+    );
 }
 
 #[test]
@@ -857,7 +1054,7 @@ fn foreign_nonce_rejected() {
 fn non_solver_cannot_settle() {
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
     ctx(OPERATOR, 0);
-    c.settle_follow(
+    let _ = c.settle_follow(
         Base64VecU8(key(1).1),
         FOLLOWER.parse().unwrap(),
         vec![fill(1, "usdc", 50)],
@@ -867,8 +1064,10 @@ fn non_solver_cannot_settle() {
 #[test]
 fn insufficient_vault_rejected() {
     let (mut c, _, v) = setup_follow(mandate(VAULT, VAULT, vec![]));
-    let r = settle(&mut c, vec![fill(1, "usdc", v + 1)]);
-    assert_eq!(r.rejected[0].1, "insufficient");
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(1, "usdc", v + 1)]),
+        "insufficient"
+    );
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
 }
 
@@ -878,8 +1077,10 @@ fn allowance_exhausted_rejected() {
     settle(&mut c, vec![fill(1, "usdc", NEAR)]);
     // A posts a second intent (nonce 2), then a fill against it exceeds the remaining allowance
     post_a(&mut c, &key(1).0, &key(7).0, d, Side::Short, 2);
-    let r = settle(&mut c, vec![fill(2, "usdc", NEAR * 6 / 10)]);
-    assert_eq!(r.rejected[0].1, "allowance exhausted");
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(2, "usdc", NEAR * 6 / 10)]),
+        "allowance exhausted"
+    );
     assert_eq!(
         c.get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
             .unwrap()
@@ -894,21 +1095,446 @@ fn absurd_follower_spent_is_rejected_not_panicked() {
     let mut m = mandate(NEAR, u128::MAX, vec![]);
     m.spent = U128(u128::MAX);
     let (mut c, _, v) = setup_follow(m);
-    let r = settle(&mut c, vec![fill(1, "usdc", 50)]);
     assert_eq!(
-        (r.settled, r.rejected[0].1.as_str()),
-        (0, "allowance exhausted")
+        settle_rejects(&mut c, vec![fill(1, "usdc", 50)]),
+        "allowance exhausted"
     );
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
 }
 
+// ---------------------------------------------------------------- verified settlement (deploy 15)
+
 #[test]
-fn list_followers_and_withdraw() {
+fn fill_without_its_output_delivered_is_refused() {
     let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    assert_eq!(c.list_followers(Base64VecU8(key(1).1)).len(), 1);
+    let mut f = fill(1, "usdc", 50);
+    f.amount_out = U128(100);
+    let r = settle_answered(&mut c, 1, vec![f], balances(&[99]), NOW);
+    assert_eq!(r.unwrap_err(), "no receipt");
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
+    assert_eq!(c.get_accounted("usdc".into()).0, 0);
+}
+
+#[test]
+fn failed_view_is_no_receipt() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let r = settle_answered(
+        &mut c,
+        1,
+        vec![fill(1, "usdc", 50)],
+        PromiseResult::Failed,
+        NOW,
+    );
+    assert_eq!(r.unwrap_err(), "no receipt");
+}
+
+#[test]
+fn malformed_or_short_view_is_no_receipt() {
+    let (mut c, d, _) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let garbage = PromiseResult::Successful(b"{\"not\":\"a list\"}".to_vec());
+    let r = settle_answered(&mut c, 1, vec![fill(1, "usdc", 50)], garbage, NOW);
+    assert_eq!(r.unwrap_err(), "no receipt");
+    // two tokens asked, one balance answered
+    let (sk, tee) = (key(1).0, key(7).0);
+    post_a(&mut c, &sk, &tee, d, Side::Short, 2);
+    let fills = vec![fill(1, "usdc", 50), fill(2, "wbtc", 50)];
+    let r = settle_answered(&mut c, 1, fills, balances(&[10]), NOW);
+    assert_eq!(r.unwrap_err(), "no receipt");
+}
+
+#[test]
+fn oversized_view_is_no_receipt() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let big = PromiseResult::Successful(vec![b' '; 65]);
+    let r = settle_answered(&mut c, 1, vec![fill(1, "usdc", 50)], big, NOW);
+    assert_eq!(r.unwrap_err(), "no receipt");
+}
+
+#[test]
+fn one_balance_cannot_back_two_fills() {
+    // both outputs claim the same 1 unit: the first settles, the second has nothing behind it
+    let (mut c, d, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    post_a(&mut c, &key(1).0, &key(7).0, d, Side::Short, 2);
+    let fills = vec![fill(1, "usdc", 50), fill(2, "usdc", 50)];
+    let r = settle_answered(&mut c, 1, fills, balances(&[1_000_000]), NOW).unwrap();
+    assert_eq!(r.settled, 1);
+    assert_eq!(r.rejected, vec![(1, "no receipt".to_string())]);
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - 50);
+    // a later batch sees the 1 unit as accounted
+    let r = settle_answered(
+        &mut c,
+        1,
+        vec![fill(2, "usdc", 50)],
+        balances(&[1_000_000]),
+        NOW,
+    );
+    assert_eq!(r.unwrap_err(), "no receipt");
+}
+
+#[test]
+fn zero_output_never_settles() {
+    // a follow always carries a floor, which refuses 0 out first; a migrated floor-0 mandate hits
+    // the zero check in the receipt step
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let mut f = fill(1, "usdc", 50);
+    f.amount_out = U128(0);
+    let r = settle_answered(&mut c, 1, vec![f.clone()], balances(&[1_000]), NOW);
+    assert_eq!(r.unwrap_err(), "below min price");
+    c.follows
+        .get_mut(&crate::follow::follow_key(
+            &key(1).1,
+            &FOLLOWER.parse().unwrap(),
+        ))
+        .unwrap()
+        .current_mut()
+        .min_out_per_near = U128(0);
+    let r = settle_answered(&mut c, 1, vec![f], balances(&[1_000]), NOW);
+    assert_eq!(r.unwrap_err(), "no receipt");
+}
+
+#[test]
+fn outflow_during_the_view_rejects_the_batch() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let fills = vec![fill(1, "usdc", 50)];
+    ctx(SOLVER, 0);
+    let _ = c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        fills.clone(),
+    );
+    let seq = c.outflow_seq;
+    c.outflow_seq += 1; // a token withdrawal confirmed while the view was in flight
+    callback_ctx(NOW, vec![balances(&[1_000])]);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.on_settle_follow(
+            Base64VecU8(key(1).1),
+            FOLLOWER.parse().unwrap(),
+            SOLVER.parse().unwrap(),
+            fills,
+            seq,
+        )
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "outflow during view");
+}
+
+#[test]
+fn removed_solver_is_not_paid_by_an_inflight_callback() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let fills = vec![fill(1, "usdc", 50)];
+    ctx(SOLVER, 0);
+    let _ = c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        fills.clone(),
+    );
+    ctx(OWNER, 1);
+    c.remove_solver(SOLVER.parse().unwrap());
+    callback_ctx(NOW, vec![balances(&[1_000])]);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.on_settle_follow(
+            Base64VecU8(key(1).1),
+            FOLLOWER.parse().unwrap(),
+            SOLVER.parse().unwrap(),
+            fills,
+            0,
+        )
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "solver removed");
+}
+
+#[test]
+#[should_panic(expected = "not solver")]
+fn removed_solver_cannot_settle() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(OWNER, 1);
+    c.remove_solver(SOLVER.parse().unwrap());
+    ctx(SOLVER, 0);
+    let _ = c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        vec![fill(1, "usdc", 50)],
+    );
+}
+
+#[test]
+#[should_panic(expected = "not a solver")]
+fn remove_unknown_solver_panics() {
+    let mut c = fresh(0);
+    ctx(OWNER, 1);
+    c.remove_solver(FOLLOWER.parse().unwrap());
+}
+
+#[test]
+#[should_panic(expected = "Requires attached deposit of exactly 1 yoctoNEAR")]
+fn admin_call_without_one_yocto_panics() {
+    let mut c = fresh(0);
+    ctx(OWNER, 0);
+    c.add_solver(FOLLOWER.parse().unwrap());
+}
+
+#[test]
+#[should_panic(expected = "dry quote unsettleable")]
+fn dry_quote_fill_refused() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let mut f = fill(1, "usdc", 50);
+    f.swap_tx = "dry-quote:2026-11-06T00:00:00Z".into();
+    ctx(SOLVER, 0);
+    let _ = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![f]);
+}
+
+#[test]
+#[should_panic(expected = "too many fills")]
+fn eleven_fills_refused() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(SOLVER, 0);
+    let _ = c.settle_follow(
+        Base64VecU8(key(1).1),
+        FOLLOWER.parse().unwrap(),
+        (0..11).map(|n| fill(n, "usdc", 1)).collect(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "empty fills")]
+fn empty_batch_refused() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(SOLVER, 0);
+    let _ = c.settle_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap(), vec![]);
+}
+
+#[test]
+fn price_floor_refuses_a_cheap_fill() {
+    // floor: 3 USDC (6 dp) per NEAR; 1 NEAR in for 2.9 USDC out is refused, 3.0 settles
+    let mut m = mandate(NEAR, VAULT, vec![]);
+    m.min_out_per_near = U128(3_000_000);
+    let (mut c, d, _) = setup_follow(m);
+    let mut f = fill(1, "usdc", NEAR);
+    f.amount_out = U128(2_900_000);
+    assert_eq!(settle_rejects(&mut c, vec![f]), "below min price");
+    post_a(&mut c, &key(1).0, &key(7).0, d, Side::Short, 2);
+    let mut f = fill(2, "usdc", NEAR);
+    f.amount_out = U128(3_000_000);
+    assert_eq!(settle(&mut c, vec![f]).settled, 1);
+}
+
+#[test]
+fn price_floor_overflow_is_rejected_not_panicked() {
+    let mut m = mandate(u128::MAX, u128::MAX, vec![]);
+    m.min_out_per_near = U128(u128::MAX);
+    let (mut c, ..) = setup_follow(m);
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(1, "usdc", 2)]),
+        "amount overflow"
+    );
+}
+
+#[test]
+fn fee_counts_inside_the_per_fill_cap() {
+    // fee 1 %: 0.995 NEAR in costs 1.00495 NEAR, over a 1 NEAR cap
+    let mut c = fresh(100);
+    register(&mut c, 1, MODEL_A, true);
+    register(&mut c, 2, "m", false);
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    post_a(&mut c, &key(1).0, &tee, d, Side::Long, 1);
+    ctx(FOLLOWER, VAULT);
+    c.deposit();
     ctx(FOLLOWER, 0);
-    let _ = c.withdraw(U128(4 * NEAR));
-    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - 4 * NEAR);
+    c.follow(Base64VecU8(key(1).1), mandate(NEAR, VAULT, vec![]));
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(1, "usdc", NEAR * 995 / 1000)]),
+        "over cap"
+    );
+}
+
+#[test]
+fn delayed_withdraw_pays_after_the_delay_only() {
+    let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(4 * NEAR));
+    let (amt, ready) = c.get_pending_withdraw(FOLLOWER.parse().unwrap()).unwrap();
+    assert_eq!((amt.0, ready.0), (4 * NEAR, NOW + 900 * 1_000_000_000));
+    assert_eq!(
+        c.get_vault(FOLLOWER.parse().unwrap()).0,
+        v,
+        "nothing moves yet"
+    );
+    // a fill the solver fronted before the request still settles during the delay
+    settle(&mut c, vec![fill(1, "usdc", NEAR)]);
+    ctx_at(FOLLOWER, 1, NOW + 900 * 1_000_000_000);
+    let _ = c.withdraw();
+    assert_eq!(
+        c.get_vault(FOLLOWER.parse().unwrap()).0,
+        v - NEAR - 4 * NEAR
+    );
+    assert!(c.get_pending_withdraw(FOLLOWER.parse().unwrap()).is_none());
+}
+
+#[test]
+#[should_panic(expected = "withdrawal delay not elapsed")]
+fn withdraw_inside_the_delay_panics() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(NEAR));
+    ctx_at(FOLLOWER, 1, NOW + 899 * 1_000_000_000);
+    let _ = c.withdraw();
+}
+
+#[test]
+fn withdraw_pays_what_is_left_when_settles_drained_the_vault() {
+    let (mut c, _, v) = setup_follow(mandate(VAULT, VAULT, vec![]));
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(v));
+    settle(&mut c, vec![fill(1, "usdc", NEAR)]);
+    ctx_at(FOLLOWER, 1, NOW + 900 * 1_000_000_000);
+    let _ = c.withdraw();
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, 0);
+}
+
+#[test]
+#[should_panic(expected = "withdrawal already pending")]
+fn second_withdraw_request_panics() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(NEAR));
+    c.request_withdraw(U128(NEAR));
+}
+
+#[test]
+#[should_panic(expected = "no pending withdrawal")]
+fn withdraw_without_request_panics() {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 1);
+    let _ = c.withdraw();
+}
+
+#[test]
+#[should_panic(expected = "delay out of range")]
+fn withdraw_delay_bounded() {
+    let mut c = fresh(0);
+    ctx(OWNER, 1);
+    c.set_withdraw_delay(59);
+}
+
+/// Settle one fill of 3 USDC out for the follower and return the contract.
+fn with_holding() -> Contract {
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let mut f = fill(1, "usdc", 50);
+    f.amount_out = U128(3_000_000);
+    settle(&mut c, vec![f]);
+    c
+}
+
+#[test]
+fn withdraw_token_debits_first_and_confirms_in_the_callback() {
+    let mut c = with_holding();
+    ctx(FOLLOWER, 1);
+    let _ = c.withdraw_token("usdc".into(), U128(1_000_000));
+    assert_eq!(
+        c.get_holding(FOLLOWER.parse().unwrap(), "usdc".into()).0,
+        2_000_000
+    );
+    assert_eq!(c.get_accounted("usdc".into()).0, 3_000_000, "still held");
+    callback_ctx(NOW, vec![PromiseResult::Successful(vec![])]);
+    assert!(c.on_withdraw_token(FOLLOWER.parse().unwrap(), "usdc".into(), U128(1_000_000)));
+    assert_eq!(c.get_accounted("usdc".into()).0, 2_000_000);
+    assert_eq!(c.outflow_seq, 1);
+}
+
+#[test]
+fn failed_token_transfer_recredits_the_holding() {
+    let mut c = with_holding();
+    ctx(FOLLOWER, 1);
+    let _ = c.withdraw_token("usdc".into(), U128(3_000_000));
+    callback_ctx(NOW, vec![PromiseResult::Failed]);
+    assert!(!c.on_withdraw_token(FOLLOWER.parse().unwrap(), "usdc".into(), U128(3_000_000)));
+    assert_eq!(
+        c.get_holding(FOLLOWER.parse().unwrap(), "usdc".into()).0,
+        3_000_000
+    );
+    assert_eq!(
+        (c.get_accounted("usdc".into()).0, c.outflow_seq),
+        (3_000_000, 0)
+    );
+}
+
+#[test]
+#[should_panic(expected = "insufficient")]
+fn withdraw_token_over_holding_panics() {
+    let mut c = with_holding();
+    ctx(FOLLOWER, 1);
+    let _ = c.withdraw_token("usdc".into(), U128(3_000_001));
+}
+
+#[test]
+fn pause_blocks_new_activity_and_leaves_exits_open() {
+    let (mut c, d, _) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(OWNER, 1);
+    c.set_paused(true);
+    assert!(c.get_config().paused);
+    let refused = |f: &mut dyn FnMut()| {
+        panic_msg(std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_err())
+    };
+    ctx(FOLLOWER, NEAR);
+    assert_eq!(
+        refused(&mut || {
+            c.deposit();
+        }),
+        "paused"
+    );
+    ctx(FOLLOWER, 0);
+    assert_eq!(
+        refused(&mut || c.follow(Base64VecU8(key(1).1), mandate(NEAR, VAULT, vec![]))),
+        "paused"
+    );
+    ctx(SOLVER, 0);
+    assert_eq!(
+        refused(&mut || {
+            let _ = c.settle_follow(
+                Base64VecU8(key(1).1),
+                FOLLOWER.parse().unwrap(),
+                vec![fill(1, "usdc", 50)],
+            );
+        }),
+        "paused"
+    );
+    let i = intent(&key(2).1, d, Side::Long, 5_000, 1);
+    let s = sign(&key(2).0, &i);
+    assert_eq!(refused(&mut || c.post_intent(s.clone(), None)), "paused");
+    // exits
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(NEAR));
+    ctx(FOLLOWER, 0);
+    c.unfollow(Base64VecU8(key(1).1));
+    ctx(OWNER, 1);
+    c.set_paused(false);
+    ctx(FOLLOWER, NEAR);
+    c.deposit();
+}
+
+#[test]
+#[should_panic(expected = "vault cap")]
+fn deposits_stop_at_the_vault_cap() {
+    let mut c = fresh(0);
+    ctx(OWNER, 1);
+    c.set_vault_cap(U128(5 * NEAR));
+    ctx(FOLLOWER, 3 * NEAR);
+    c.deposit();
+    assert!(c.get_config().vault_total.0 <= 3 * NEAR);
+    ctx(OPERATOR, 3 * NEAR);
+    c.deposit();
+}
+
+#[test]
+fn vault_total_follows_deposits_and_withdrawals() {
+    let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let total = c.get_config().vault_total.0;
+    assert!(total >= v && total < VAULT, "{total}");
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(NEAR));
+    ctx_at(FOLLOWER, 1, NOW + 900 * 1_000_000_000);
+    let _ = c.withdraw();
+    assert_eq!(c.get_config().vault_total.0, total - NEAR);
 }
 
 // ---------------------------------------------------------------- chaos and resolve
@@ -1128,7 +1754,7 @@ fn resolve_without_deposit_panics() {
 #[should_panic(expected = "duel too short")]
 fn open_duel_respects_min_length() {
     let (mut c, ..) = setup();
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 330, 60);
     assert_eq!(
         (c.get_config().min_duel_s, c.get_config().intent_lock_s),
@@ -1252,7 +1878,7 @@ fn void_duel_before_a_day_panics() {
 fn withdraw_bond_in_duel_panics() {
     let (mut c, ..) = setup();
     open(&mut c);
-    ctx(OPERATOR, 0);
+    ctx(OPERATOR, 1);
     let _ = c.withdraw_bond(Base64VecU8(key(1).1), U128(1));
 }
 
@@ -1262,12 +1888,29 @@ fn withdraw_bond_after_resolve_ok() {
     let d = open(&mut c);
     resolve_at_close(&mut c, d, UP);
     let before = bond(&c, 1);
-    ctx(OPERATOR, 0);
+    ctx(OPERATOR, 1);
     let _ = c.withdraw_bond(Base64VecU8(key(1).1), U128(before / 2));
     assert_eq!(bond(&c, 1), before - before / 2);
-    let board = c.leaderboard();
+    let board = c.leaderboard(0, 100);
     assert_eq!(board.len(), 2);
     assert!(board.iter().any(|a| a.tee) && board.iter().any(|a| !a.tee));
+}
+
+#[test]
+fn leaderboard_pages_in_rank_order() {
+    let (mut c, ska, skb) = setup();
+    register(&mut c, 3, "m3", false);
+    let d = open(&mut c);
+    let tee = tee_signer(&mut c);
+    post_a(&mut c, &ska, &tee, d, Side::Long, 1);
+    post_b(&mut c, &skb, d, Side::Short, 1);
+    resolve_at_close(&mut c, d, UP); // A gains, B loses
+    let all = c.leaderboard(0, 100);
+    assert_eq!(all[0].pk.0, key(1).1);
+    assert_eq!(all[2].pk.0, key(2).1);
+    let page: Vec<_> = c.leaderboard(1, 1).into_iter().map(|a| a.pk.0).collect();
+    assert_eq!(page, vec![all[1].pk.0.clone()]);
+    assert!(c.leaderboard(3, 10).is_empty());
 }
 
 // ---------------------------------------------------------------- review fixes and migrations
@@ -1290,17 +1933,15 @@ fn same_nonce_on_two_agents_settles_both() {
     c.follow(Base64VecU8(key(1).1), mandate(NEAR, VAULT, vec![]));
     c.follow(Base64VecU8(key(2).1), mandate(NEAR, VAULT, vec![]));
     let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
-    ctx(SOLVER, 0);
-    let ra = c.settle_follow(
-        Base64VecU8(key(1).1),
-        FOLLOWER.parse().unwrap(),
+    let ra = settle(&mut c, vec![fill(1, "usdc", 50)]);
+    let rb = settle_answered(
+        &mut c,
+        2,
         vec![fill(1, "usdc", 50)],
-    );
-    let rb = c.settle_follow(
-        Base64VecU8(key(2).1),
-        FOLLOWER.parse().unwrap(),
-        vec![fill(1, "usdc", 50)],
-    );
+        balances(&[2_000_000]),
+        NOW,
+    )
+    .unwrap();
     assert_eq!((ra.settled, rb.settled), (1, 1));
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - 100);
 }
@@ -1316,26 +1957,21 @@ fn owner_withdraws_fees() {
     ctx(FOLLOWER, VAULT);
     c.deposit();
     ctx(FOLLOWER, 0);
-    c.follow(Base64VecU8(key(1).1), mandate(NEAR, VAULT, vec![]));
+    c.follow(Base64VecU8(key(1).1), mandate(2 * NEAR, VAULT, vec![]));
     let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
-    ctx(SOLVER, 0);
-    c.settle_follow(
-        Base64VecU8(key(1).1),
-        FOLLOWER.parse().unwrap(),
-        vec![fill(1, "usdc", NEAR)],
-    );
+    settle(&mut c, vec![fill(1, "usdc", NEAR)]);
     assert_eq!(c.get_config().owner_fees.0, NEAR / 100);
     assert_eq!(
         c.get_vault(FOLLOWER.parse().unwrap()).0,
         v - NEAR - NEAR / 100
     );
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     let _ = c.withdraw_fees();
     assert_eq!(c.get_config().owner_fees.0, 0);
 }
 
 /// fee 1 %: the follower pays amount + fee, the solver is repaid the amount only, the fee accrues to the
-/// owner, and the mandate's `spent` counts the amount without the fee.
+/// owner, and the mandate's `spent` counts the whole debit, fee included.
 #[test]
 fn fee_is_debited_from_follower_and_accrues_to_owner_not_solver() {
     let mut c = fresh(100);
@@ -1347,14 +1983,12 @@ fn fee_is_debited_from_follower_and_accrues_to_owner_not_solver() {
     ctx(FOLLOWER, VAULT);
     c.deposit();
     ctx(FOLLOWER, 0);
-    c.follow(Base64VecU8(key(1).1), mandate(NEAR, NEAR, vec![]));
-    let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
-    ctx(SOLVER, 0);
-    let r = c.settle_follow(
+    c.follow(
         Base64VecU8(key(1).1),
-        FOLLOWER.parse().unwrap(),
-        vec![fill(1, "usdc", NEAR)],
+        mandate(NEAR + NEAR / 100, NEAR + NEAR / 100, vec![]),
     );
+    let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
+    let r = settle(&mut c, vec![fill(1, "usdc", NEAR)]);
     let fee = NEAR / 100;
     assert_eq!((r.settled, r.debited.0), (1, NEAR + fee));
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v - NEAR - fee);
@@ -1364,8 +1998,9 @@ fn fee_is_debited_from_follower_and_accrues_to_owner_not_solver() {
         .get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
         .unwrap();
     assert_eq!(
-        m.spent.0, NEAR,
-        "the allowance is spent by the amount, not the fee"
+        m.spent.0,
+        NEAR + fee,
+        "the allowance is spent by the whole debit"
     );
 }
 
@@ -1373,7 +2008,7 @@ fn fee_is_debited_from_follower_and_accrues_to_owner_not_solver() {
 #[should_panic(expected = "not owner")]
 fn withdraw_fees_by_stranger_panics() {
     let mut c = fresh(100);
-    ctx(OPERATOR, 0);
+    ctx(OPERATOR, 1);
     let _ = c.withdraw_fees();
 }
 
@@ -1381,7 +2016,7 @@ fn withdraw_fees_by_stranger_panics() {
 #[should_panic(expected = "insufficient")]
 fn withdraw_fees_with_nothing_accrued_panics() {
     let mut c = fresh(100);
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     let _ = c.withdraw_fees();
 }
 
@@ -1466,61 +2101,139 @@ fn agent_duels_index_grows_and_pages_newest_first() {
     );
 }
 
+fn mandate_v1(allowance: u128) -> MandateV1 {
+    MandateV1 {
+        allowance: U128(allowance),
+        spent: U128(7),
+        per_tx_cap: U128(NEAR),
+        allowed_tokens: vec![],
+        expires_at: U64(NOW + 1_000_000),
+        revoked: false,
+    }
+}
+
 #[test]
-fn migrate_v14_keeps_state_and_starts_commit_reveal_off() {
-    let (mut c, _, skb) = setup();
+fn migrate_v15_rekeys_follows_in_batches_and_keeps_the_rest() {
+    let (mut c, ..) = setup();
+    let (a, b) = (key(1).1, key(2).1);
     let d0 = open(&mut c);
-    resolve_at_close(&mut c, d0, UP);
-    let d1 = open(&mut c);
-    // deploy-12/13 state: the current layout minus the six appended fields
+    ctx(FOLLOWER, VAULT);
+    c.deposit();
+    let vault = c.get_vault(FOLLOWER.parse().unwrap()).0;
+    // deploy-14 follower lists under the old `Follows` prefix: two followers of A, one of B
+    let (f, o): (AccountId, AccountId) = (FOLLOWER.parse().unwrap(), OPERATOR.parse().unwrap());
+    c.follows_v1.insert(
+        a.clone(),
+        vec![(f.clone(), mandate_v1(5)), (o.clone(), mandate_v1(6))],
+    );
+    c.follows_v1
+        .insert(b.clone(), vec![(f.clone(), mandate_v1(8))]);
+    c.follows_v1.flush();
     c.duels.flush();
     c.agents.flush();
     c.agent_duels.flush();
+    c.vaults.flush();
+    // deploy-14 state: the current layout minus the fields deploy 15 appends
     let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
-    let tail = raw.split_off(raw.len() - 19);
-    // commit_reveal false, no_reveal_bps 1000, require_consent false, three 1-byte prefixes
-    assert_eq!(
-        tail,
-        [
-            0, 0xe8, 0x03, 0, 1, 0, 0, 0, 11, 1, 0, 0, 0, 12, 1, 0, 0, 0, 13
-        ]
-    );
-    assert_eq!(
-        &raw[raw.len() - 8..],
-        1u64.to_le_bytes(),
-        "open_duels ends the old layout"
-    );
+    let tail = near_sdk::borsh::to_vec(&(
+        &c.follows,
+        &c.follows_cursor,
+        &c.intents_account,
+        &c.holdings,
+        &c.accounted,
+        &c.outflow_seq,
+        &c.pending_withdrawals,
+        &c.withdraw_delay_ns,
+        &c.paused,
+        &c.max_vault_total,
+        &c.vault_total,
+        &c.duel_locks,
+        &c.sweeping,
+    ))
+    .unwrap();
+    assert_eq!(raw.split_off(raw.len() - tail.len()), tail);
     env::storage_write(b"STATE", &raw);
     ctx(CONTRACT, 0);
-    let mut m = Contract::migrate_v14();
+    let mut m = Contract::migrate_v15(INTENTS.parse().unwrap(), U128(VAULT_CAP));
     let cfg = m.get_config();
+    assert!(cfg.migrating);
     assert_eq!(
         (
-            cfg.next_duel.0,
-            cfg.min_duel_s,
-            cfg.intent_lock_s,
-            cfg.open_duels
+            cfg.withdraw_delay_s,
+            cfg.paused,
+            cfg.intents_account.as_str()
         ),
-        (2, 60, 10, 1),
-        "config and the open-duel counter survive"
+        (900, false, INTENTS)
     );
     assert_eq!(
-        (cfg.commit_reveal, cfg.no_reveal_bps, cfg.require_consent),
-        (false, 1_000, false),
-        "no_reveal_bps starts at slash_bps"
+        (cfg.next_duel.0, cfg.open_duels, cfg.intent_lock_s),
+        (1, 1, 10)
     );
-    assert!(m.get_duel(U64(d0)).unwrap().resolved);
-    assert_eq!(
-        ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)),
-        vec![d1, d0],
-        "index survives"
+    assert_eq!(m.get_vault(f.clone()).0, vault, "vaults untouched");
+    // follow and settle are refused until the re-key finishes
+    ctx(FOLLOWER, 0);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        m.follow(Base64VecU8(a.clone()), mandate(NEAR, VAULT, vec![]))
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "migrating");
+    ctx(SOLVER, 0);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = m.settle_follow(Base64VecU8(a.clone()), f.clone(), vec![fill(1, "usdc", 1)]);
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "migrating");
+    // one agent per call
+    ctx(OWNER, 1);
+    assert_eq!(m.migrate_follows(1), Some(1));
+    assert_eq!(m.migrate_follows(1), None);
+    assert!(!m.get_config().migrating);
+    let got = |m: &Contract, pk: &[u8], who: &AccountId| {
+        m.get_follow(Base64VecU8(pk.to_vec()), who.clone())
+            .map(|x| (x.allowance.0, x.spent.0, x.min_out_per_near.0))
+    };
+    assert_eq!(got(&m, &a, &f), Some((5, 7, 0)));
+    assert_eq!(got(&m, &a, &o), Some((6, 7, 0)));
+    assert_eq!(got(&m, &b, &f), Some((8, 7, 0)));
+    assert_eq!(got(&m, &b, &o), None);
+    assert!(m.follows_v1.get(&a).is_none(), "old lists are drained");
+    // the duel open across the deploy keeps the global lock; it still takes intents
+    assert_eq!(m.lock_of(d0), 10_000_000_000);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ctx(OWNER, 1);
+        m.migrate_follows(1)
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "migration done");
+}
+
+#[test]
+fn init_starts_with_a_zero_lock() {
+    ctx(OWNER, 0);
+    let c = Contract::init(
+        OWNER.parse().unwrap(),
+        ORACLE.parse().unwrap(),
+        U128(ORACLE_DEPOSIT),
+        1_000,
+        0,
+        U128(MIN_CHAOS),
+        INTENTS.parse().unwrap(),
+        U128(VAULT_CAP),
     );
-    assert_eq!(bond(&m, 1), bond(&c, 1));
-    // the duel running across the deploy takes a commit-reveal
-    let i = intent(&key(2).1, d1, Side::Long, 5_000, 1);
-    commit_at(&mut m, &skb, &i, &SALT, NOW);
-    reveal_at(&mut m, &skb, &i, &SALT, NOW);
-    assert!(m.get_duel(U64(d1)).unwrap().last_intent_b.is_some());
+    let cfg = c.get_config();
+    assert_eq!((cfg.min_duel_s, cfg.intent_lock_s), (0, 0));
+}
+
+#[test]
+fn a_duel_keeps_the_lock_it_was_opened_under() {
+    // opened under a 10 s lock; the owner raises the lock to 25 s mid-duel (allowed); an intent
+    // 15 s before close still lands in this duel
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    ctx(OWNER, 1);
+    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, 25);
+    let i = intent(&key(2).1, d, Side::Long, 5_000, 1);
+    ctx_at(OPERATOR, 0, CLOSE - 15_000_000_000);
+    c.post_intent(sign(&skb, &i), None);
+    assert!(c.get_duel(U64(d)).unwrap().last_intent_b.is_some());
+    assert_eq!(c.lock_of(d), LOCK);
 }
 
 // ---------------------------------------------------------------- second-audit follow-ups
@@ -1530,7 +2243,7 @@ fn migrate_v14_keeps_state_and_starts_commit_reveal_off() {
 fn set_oracle_cannot_lower_lock_while_a_duel_is_open() {
     let (mut c, ..) = setup();
     open(&mut c);
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, 9);
 }
 
@@ -1539,7 +2252,7 @@ fn set_oracle_cannot_lower_lock_while_a_duel_is_open() {
 fn set_oracle_cannot_move_oracle_while_a_duel_is_open() {
     let (mut c, ..) = setup();
     open(&mut c);
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_oracle("other-oracle.testnet".parse().unwrap(), U128(1), 60, 10);
 }
 
@@ -1548,12 +2261,12 @@ fn set_oracle_may_raise_lock_while_open_and_anything_once_resolved() {
     let (mut c, ..) = setup();
     let d = open(&mut c);
     assert_eq!(c.get_config().open_duels, 1);
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_oracle(ORACLE.parse().unwrap(), U128(1), 120, 20);
     assert_eq!(c.get_config().intent_lock_s, 20);
     resolve_at_close(&mut c, d, UP);
     assert_eq!(c.get_config().open_duels, 0);
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_oracle("other-oracle.testnet".parse().unwrap(), U128(1), 60, 5);
     let cfg = c.get_config();
     assert_eq!(
@@ -1595,8 +2308,10 @@ fn absurd_fill_amount_is_rejected_not_panicked() {
     ctx(FOLLOWER, 0);
     c.follow(Base64VecU8(key(1).1), mandate(u128::MAX, u128::MAX, vec![]));
     let v = c.get_vault(FOLLOWER.parse().unwrap()).0;
-    let r = settle(&mut c, vec![fill(1, "usdc", u128::MAX / 50)]);
-    assert_eq!((r.settled, r.rejected[0].1.as_str()), (0, "fee overflow"));
+    assert_eq!(
+        settle_rejects(&mut c, vec![fill(1, "usdc", u128::MAX / 50)]),
+        "fee overflow"
+    );
     assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
 }
 
@@ -1688,7 +2403,7 @@ fn reveal_at(c: &mut Contract, sk: &SigningKey, i: &Intent, salt: &[u8], ts: u64
 }
 
 fn commit_reveal_on(c: &mut Contract) {
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     let bps = c.get_config().no_reveal_bps;
     c.set_commit_reveal(true, bps);
 }
@@ -1938,7 +2653,7 @@ fn commit_reveal_cannot_flip_while_a_duel_is_open() {
 #[should_panic(expected = "bps out of range")]
 fn no_reveal_bps_bounded() {
     let (mut c, ..) = setup();
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_commit_reveal(true, 10_001);
 }
 
@@ -1969,7 +2684,7 @@ fn open_consented(c: &mut Contract, sig_a: Base64VecU8, sig_b: Base64VecU8) -> u
 #[test]
 fn consented_open_by_anyone_pairs_the_agents() {
     let (mut c, ska, skb) = setup();
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_require_consent(true);
     assert!(c.get_config().require_consent);
     let d = open_consented(&mut c, consent_sig(&ska, CLOSE), consent_sig(&skb, CLOSE));
@@ -1995,7 +2710,7 @@ fn consent_signed_for_another_close_panics() {
 #[should_panic(expected = "consent required")]
 fn owner_open_refused_when_consent_required() {
     let (mut c, ..) = setup();
-    ctx(OWNER, 0);
+    ctx(OWNER, 1);
     c.set_require_consent(true);
     open(&mut c);
 }
@@ -2077,4 +2792,90 @@ fn consented_duel_one_ns_past_the_cap_is_refused() {
     ctx(OPERATOR, 0);
     let now = env::block_timestamp();
     open_consented_until(&mut c, &ska, &skb, now + MAX_DUEL_NS + 1);
+}
+
+// ---------------------------------------------------------------- sweep_surplus
+
+/// Owner sweep of `amount` with `balance` as the view answer; true when the transfer was scheduled.
+fn sweep_check(c: &mut Contract, amount: u128, balance: u128) -> bool {
+    ctx(OWNER, 1);
+    let _ = c.sweep_surplus("usdc".into(), OWNER.parse().unwrap(), U128(amount));
+    let seq = c.outflow_seq;
+    callback_ctx(NOW, vec![balances(&[balance])]);
+    matches!(
+        c.on_sweep_check("usdc".into(), OWNER.parse().unwrap(), U128(amount), seq),
+        near_sdk::PromiseOrValue::Promise(_)
+    )
+}
+
+#[test]
+fn sweep_takes_only_unaccounted_balance_and_never_touches_accounted() {
+    let mut c = with_holding(); // 3_000_000 usdc credited to the follower
+    assert!(
+        !sweep_check(&mut c, 1_001, 3_001_000),
+        "one unit over the surplus"
+    );
+    assert_eq!(c.sweeping.get("usdc").copied().unwrap_or(0), 0);
+    assert!(sweep_check(&mut c, 1_000, 3_001_000));
+    assert_eq!(c.sweeping.get("usdc").copied(), Some(1_000), "reserved");
+    assert_eq!(c.get_accounted("usdc".into()).0, 3_000_000);
+    callback_ctx(NOW, vec![PromiseResult::Successful(vec![])]);
+    assert!(c.on_sweep_done("usdc".into(), OWNER.parse().unwrap(), U128(1_000)));
+    assert_eq!(c.sweeping.get("usdc").copied(), Some(0));
+    assert_eq!(
+        (c.get_accounted("usdc".into()).0, c.outflow_seq),
+        (3_000_000, 1)
+    );
+    assert_eq!(
+        c.get_holding(FOLLOWER.parse().unwrap(), "usdc".into()).0,
+        3_000_000
+    );
+}
+
+#[test]
+fn a_failed_sweep_releases_its_reservation_and_moves_nothing() {
+    let mut c = with_holding();
+    assert!(sweep_check(&mut c, 1_000, 3_001_000));
+    callback_ctx(NOW, vec![PromiseResult::Failed]);
+    assert!(!c.on_sweep_done("usdc".into(), OWNER.parse().unwrap(), U128(1_000)));
+    assert_eq!(c.sweeping.get("usdc").copied(), Some(0));
+    assert_eq!(c.outflow_seq, 0);
+}
+
+#[test]
+fn surplus_reserved_by_a_sweep_cannot_back_a_fill() {
+    // 1_000_000 unaccounted; the sweep reserves all of it before its transfer lands
+    let (mut c, d, _) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    assert!(sweep_check(&mut c, 1_000_000, 1_000_000));
+    post_a(&mut c, &key(1).0, &key(7).0, d, Side::Short, 2);
+    let r = settle_answered(
+        &mut c,
+        1,
+        vec![fill(1, "usdc", 50)],
+        balances(&[1_000_000]),
+        NOW,
+    );
+    assert_eq!(r.unwrap_err(), "no receipt");
+}
+
+#[test]
+fn sweep_after_an_outflow_during_its_view_is_refused() {
+    let mut c = with_holding();
+    ctx(OWNER, 1);
+    let _ = c.sweep_surplus("usdc".into(), OWNER.parse().unwrap(), U128(1));
+    let seq = c.outflow_seq;
+    c.outflow_seq += 1;
+    callback_ctx(NOW, vec![balances(&[10_000_000])]);
+    assert!(matches!(
+        c.on_sweep_check("usdc".into(), OWNER.parse().unwrap(), U128(1), seq),
+        near_sdk::PromiseOrValue::Value(false)
+    ));
+}
+
+#[test]
+#[should_panic(expected = "not owner")]
+fn sweep_is_owner_only() {
+    let mut c = with_holding();
+    ctx(FOLLOWER, 1);
+    let _ = c.sweep_surplus("usdc".into(), FOLLOWER.parse().unwrap(), U128(1));
 }
