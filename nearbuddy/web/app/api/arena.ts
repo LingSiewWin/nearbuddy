@@ -76,6 +76,10 @@ export type Config = {
   min_duel_s: number;
   intent_lock_s: number;
   open_duels: number;
+  // deploy 14 (absent before): sealed calls, the forfeit for not revealing, and consent to be paired
+  commit_reveal?: boolean;
+  no_reveal_bps?: number;
+  require_consent?: boolean;
 };
 export type Snap = {
   at: number;
@@ -231,6 +235,9 @@ export async function summary(s: Snap, now = Date.now()) {
       decisions_locked_last_seconds: s.config.intent_lock_s,
       loser_slashed_pct: s.config.slash_bps / 100,
       attack_cost_near: nearOf(s.config.min_chaos_deposit, 2),
+      sealed_calls: !!s.config.commit_reveal,
+      no_reveal_forfeit_pct: (s.config.no_reveal_bps ?? 0) / 100,
+      pairing_needs_consent: !!s.config.require_consent,
     },
     live: live
       ? {

@@ -10,7 +10,7 @@ import type { ArenaEvent } from "../api/tape";
 import { useEvents, useNow, usePrice } from "../lib/live";
 import { DrawerProvider } from "../ui/drawer";
 import { Machine } from "../ui/machine";
-import { focusOf, latestStory } from "./model";
+import { focusOf, latestStory, openOf } from "./model";
 import { Headline, Race } from "./race";
 import { Join, News, Squares, Standings } from "./sections";
 import { Tape, TapeMachine } from "./tape";
@@ -104,11 +104,11 @@ export default function Arena({ initial }: { initial: Initial }) {
           <div className="h">
             {f ? (
               <>
-                <Headline f={f} price={price} now={now} />
+                <Headline f={f} price={price} open={f ? openOf(f, ticks) : null} now={now} />
                 <Race f={f} ticks={ticks} events={events} now={now} />
               </>
             ) : (
-              <h1>No duel yet.</h1>
+              <h1>{s.at ? "No duel yet." : "Reading the arena from NEAR testnet…"}</h1>
             )}
           </div>
           <Machine

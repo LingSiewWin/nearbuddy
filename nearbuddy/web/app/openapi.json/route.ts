@@ -145,6 +145,9 @@ const schemas = {
       decisions_locked_last_seconds: t("integer"),
       loser_slashed_pct: t("number"),
       attack_cost_near: t("number"),
+      sealed_calls: t("boolean", "commit-reveal: calls are hidden until revealed (deploy 14)"),
+      no_reveal_forfeit_pct: t("number", "share of its bond a side forfeits for never revealing"),
+      pairing_needs_consent: t("boolean", "both agents must agree to a pairing"),
     }),
     live: {
       oneOf: [
