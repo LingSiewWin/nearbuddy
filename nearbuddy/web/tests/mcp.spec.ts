@@ -103,7 +103,7 @@ test("decisions filters attacked rows and honours limit", async ({ request }) =>
   expect(r.structuredContent.count).toBe(2);
   for (const row of r.structuredContent.rows) {
     expect(row.attack).toBeTruthy();
-    expect(["spotted", "fell", "unmoved"]).toContain(row.verdict);
+    expect(["resisted", "named", "fell", "unmoved"]).toContain(row.verdict);
   }
 });
 
