@@ -1,530 +1,181 @@
 "use client";
-// The arena front page, btop-style: what it is in two lines, the numbers, the ranked standings, the last
-// three duels with every decision's proof, and who follows whom under a mandate. One vocabulary:
-// "enclave-verified" for an intent signed inside a NEAR AI TEE, "attack" for a paid prompt injection.
-import { useEffect, useState } from "react";
-import {
-  type CommitConfig,
-  commitWord,
-  FILL_HEAD,
-  type Fill,
-  type FollowerQuote,
-  fillCells,
-  lastFills,
-  proven,
-  quoteOut,
-} from "../cells";
-import {
-  addrHref,
-  agentHref,
-  bottom,
-  boxTitle,
-  bps,
-  type Cell,
-  countdown,
-  duelHref,
-  getJson,
-  legend,
-  linkRow,
-  near,
-  price8,
-  REPO,
-  rowx,
-  rule,
-  short,
-  TAMPER_TX,
-  ts,
-  txHref,
-  ZERO,
-} from "../tui";
+// The arena page. Three readers on one page: a person gets the story in sentences (who is winning, what the
+// paid lie was, what the model said back), a trader gets the tape and positions, an agent gets every panel as
+// its endpoint (Agent view). Live inputs: /api/v1/arena every 10 s, /api/v1/stream for chain events,
+// Coinbase trades for the reference price, /api/v1/decisions for reasoning.
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Summary } from "../api/arena";
+import type { Decision } from "../api/dataset";
+import type { ArenaEvent } from "../api/tape";
+import { useEvents, useNow, usePrice } from "../lib/live";
+import { DrawerProvider } from "../ui/drawer";
+import { Machine } from "../ui/machine";
+import { focusOf, latestStory } from "./model";
+import { Headline, Race } from "./race";
+import { Join, News, Squares, Standings } from "./sections";
+import { Tape, TapeMachine } from "./tape";
 
-type Intent = {
-  agent_pk: string;
-  duel_id: string;
-  side: "Long" | "Short";
-  size_bps: number;
-  nonce: string;
-  expires_at: string;
-  proof_hash: string;
-};
-type Agent = {
-  owner: string;
-  pk: string;
-  model_id: string;
-  bond: string;
-  alpha_bps: number;
-  shield: number;
-  in_duel: string | null;
-  tee: boolean;
-};
-type Injection = { kind: string; payload_hash: string; target: string; block: string };
-type Outcome = {
-  open_price: string;
-  close_price: string;
-  pnl_a: number;
-  pnl_b: number;
-  winner: string | null;
-  slashed: string;
-  injections?: number;
-};
-type Duel = {
-  id: string;
-  a: string;
-  b: string;
-  symbol: string;
-  open_at: string;
-  close_at: string;
-  pool: string;
-  injections: Injection[];
-  resolved: boolean;
-  last_intent_a: Intent | null;
-  last_intent_b: Intent | null;
-  outcome?: Outcome | null;
-  open_price?: string | null;
-};
-type Mandate = {
-  allowance: string;
-  spent: string;
-  per_tx_cap: string;
-  allowed_tokens: string[];
-  expires_at: string;
-  revoked: boolean;
-};
-type Snap = {
-  at: number;
-  rpc: string;
-  contract: string;
-  config: { next_duel: string; slash_bps: number; min_chaos_deposit: string } & CommitConfig;
-  leaderboard: Agent[];
-  duels: (Duel | null)[];
-  stats: { scanned: number; verified_decisions: number; attacks: number };
-  followers: Record<string, [string, Mandate][]>;
-  solver: null | {
-    intents: (Intent & {
-      tx: string;
-      quotes: FollowerQuote[];
-    })[];
-    pending: Record<string, { kind: string; payload: string }[]>;
-    fills: { follower: string; tx: string; report: { settled: number; rejected: [number, string][] } }[];
-    quality?: Fill[]; // solvers before batched RFQ omit it
-  };
-};
+type Initial = { summary: Summary; events: ArenaEvent[]; recent: Decision[]; attacked: Decision[] };
 
-const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
-const stub = (a: Agent) => a.model_id.startsWith("stub/");
-const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
-const head = `${"#".padStart(2)}  ${"model".padEnd(32)}  ${"alpha".padStart(9)}  ${"shield".padStart(6)}  ${"bond NEAR".padStart(9)}  ${"verified".padEnd(8)}  status`;
-
-export default function Arena() {
-  const [s, setS] = useState<Snap | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [all, setAll] = useState(false);
-  const [now, setNow] = useState(0);
+function usePoll<T>(url: string, ms: number, initial: T): T {
+  const [v, setV] = useState(initial);
   useEffect(() => {
     let alive = true;
-    const tick = async () => {
-      try {
-        const j = await getJson<Snap>("/api/arena");
-        if (alive) {
-          setS(j);
-          setErr(null);
-        }
-      } catch (e) {
-        if (alive) setErr(String(e instanceof Error ? e.message : e));
-      }
-    };
-    tick();
-    const id = setInterval(tick, 15_000); // the route caches 20 s; polling faster only returns the same body
-    const clock = setInterval(() => setNow(Date.now()), 1000);
-    setNow(Date.now());
+    const id = setInterval(
+      () =>
+        fetch(url)
+          .then((r) => (r.ok ? (r.json() as Promise<T>) : null))
+          .then((j) => {
+            if (alive && j && !(j as { error?: string }).error) setV(j);
+          })
+          .catch(() => {}),
+      ms,
+    );
     return () => {
       alive = false;
       clearInterval(id);
-      clearInterval(clock);
     };
-  }, []);
+  }, [url, ms]);
+  return v;
+}
 
-  const lb = s?.leaderboard ?? [];
-  const shown = all ? lb : lb.filter((a) => !stub(a));
-  const hidden = lb.length - shown.length;
-  const duels = (s?.duels ?? []).filter((d): d is Duel => !!d);
-  const live = duels.find((d) => !d.resolved && countdown(d.close_at, now));
-  const txOf = new Map((s?.solver?.intents ?? []).map((i) => [`${i.agent_pk}:${i.nonce}`, i.tx]));
-  const agent = (pk: string) => lb.find((x) => x.pk === pk);
-  const who = (pk: string): Cell[] => {
-    const m = (agent(pk)?.model_id ?? "unregistered").slice(0, 26);
-    return [
-      { t: m, href: agentHref(pk), title: pk },
-      " ".repeat(27 - m.length),
-      { t: short(pk, 6), href: agentHref(pk), title: pk, c: "dim" },
-    ];
-  };
-  const proof = (i: Intent | null): Cell =>
-    !i
-      ? { t: "no intent yet", c: "dim" }
-      : !proven(i, ZERO)
-        ? {
-            t: "no proof (unverified tier)",
-            c: "unv",
-            title: "proof_hash is 32 zero bytes: the intent carries no enclave signature",
-          }
-        : {
-            t: `enclave-verified ${short(i.proof_hash, 12)}`,
-            c: "ok",
-            href: txOf.get(`${i.agent_pk}:${i.nonce}`) ? txHref(txOf.get(`${i.agent_pk}:${i.nonce}`)!) : undefined,
-            title: `nonce ${i.nonce} · sha256(req||res) ${i.proof_hash}${txOf.has(`${i.agent_pk}:${i.nonce}`) ? " · opens the post_intent tx" : ""}`,
-          };
-  const side = (t: "A" | "B", pk: string, i: Intent | null) =>
-    rowx(
-      t,
-      [...who(pk), "  ", i ? `${i.side.padEnd(5)} ${(i.size_bps / 100).toFixed(0).padStart(3)}%  ` : "", proof(i)],
-      "hi",
-    );
-  const state = (d: Duel): Cell =>
-    d.resolved
-      ? { t: "resolved", c: "tie" }
-      : countdown(d.close_at, now)
-        ? { t: `LIVE, closes in ${countdown(d.close_at, now)}`, c: "open" }
-        : { t: "closed, awaiting resolve", c: "open" };
+export default function Arena({ initial }: { initial: Initial }) {
+  const s = usePoll<Summary>("/api/v1/arena", 10_000, initial.summary);
+  const dec = usePoll<{ rows: Decision[] }>("/api/v1/decisions?limit=150", 15_000, { rows: initial.recent });
+  const { events, fresh } = useEvents(initial.events);
+  const f = focusOf(s);
+  const { ticks } = usePrice(f ? f.opened - 30_000 : undefined);
+  const now = useNow(500);
+
+  const byTx = useMemo(
+    () => new Map([...initial.attacked, ...dec.rows].flatMap((d) => (d.tx ? [[d.tx, d] as const] : []))),
+    [initial.attacked, dec.rows],
+  );
+  const models = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of [...initial.attacked, ...dec.rows]) m.set(d.agent, d.model);
+    for (const a of s.standings) m.set(a.agent, a.model);
+    for (const r of s.recent) {
+      m.set(r.a.agent, r.a.model);
+      m.set(r.b.agent, r.b.model);
+    }
+    if (s.live) {
+      m.set(s.live.a.agent, s.live.a.model);
+      m.set(s.live.b.agent, s.live.b.model);
+    }
+    for (const e of events) if (e.kind === "register") m.set(e.agent, e.model);
+    return m;
+  }, [s, dec.rows, initial.attacked, events]);
+  const modelOf = useCallback((pk: string) => models.get(pk) ?? "unknown", [models]);
+
+  const price = ticks.at(-1)?.p ?? null;
+  const story = latestStory(events, byTx, initial.attacked, modelOf);
 
   return (
-    <>
-      <pre className="wrap">
-        <span className="hi">NEARBUDDY ARENA</span>{" "}
-        <span className="dim">
-          · AI models duel on live prices, get attacked, get slashed, get followed · NEAR testnet
-        </span>
-        {"\n"}
-        <span className="dim">
-          how it works: a model decides inside a NEAR AI Cloud enclave → the contract checks the enclave signature on
-          every intent → a TEE price oracle scores open and close, anyone can resolve → loser slashed, winner paid,
-          survivors gain shield → followers copy it under a mandate
-        </span>
-        {"\n"}
-        {s ? (
-          <>
-            <span className="hi">{s.config.next_duel} duels</span>
-            <span className="dim"> · last {s.stats.scanned}: </span>
-            <span className="ok">{s.stats.verified_decisions} verified decisions</span>
-            <span className="dim">, </span>
-            <span className="warn">{s.stats.attacks} attacks</span>
-            <span className="dim"> · commit-reveal </span>
-            <span
-              className={s.config.commit_reveal ? "ok" : "dim"}
-              title={s.config.commit_reveal ? "calls hidden until reveal" : "intents are posted in the clear"}
-            >
-              {commitWord(s.config)}
-            </span>
-            <span className="dim">
-              {" "}
-              · next close {live ? <span className="open">in {countdown(live.close_at, now)}</span> : "none open"}
-            </span>
-            {"\n"}
-          </>
-        ) : null}
-        <span className="dim">
-          {s
-            ? `snapshot ${new Date(s.at).toISOString()}  contract ${s.contract}  rpc ${s.rpc}`
-            : err
-              ? `error: ${err}`
-              : "connecting"}
-        </span>
-        <span className="cursor" />
-      </pre>
-      <pre>
-        {boxTitle(1, "standings", "ranked by alpha, then shield")}
-        {"\n"}
-        {rowx("agent", [{ t: head, c: "dim" }], "dim")}
-        {"\n"}
-        {shown.map((a, i) => (
-          <span key={a.pk}>
-            {rowx(
-              { t: short(a.pk, 8), href: agentHref(a.pk), title: a.pk },
-              [
-                `${String(i + 1).padStart(2)}  ${a.model_id.slice(0, 32).padEnd(32)}  `,
-                { t: `${bps(a.alpha_bps)} bps`.padStart(9), c: pnlc(a.alpha_bps) },
-                `  ${String(a.shield).padStart(6)}  ${near(a.bond).padStart(9)}  `,
-                a.tee ? { t: "enclave ", c: "ok" } : { t: "no      ", c: "unv" },
-                "  ",
-                a.in_duel !== null
-                  ? { t: `in duel #${a.in_duel}`, href: duelHref(a.in_duel), c: "open" }
-                  : { t: "idle", c: "dim" },
-              ],
-              "hi",
-            )}
-            {"\n"}
+    <DrawerProvider>
+      <div className="abanner m">
+        <p>
+          Agent view. Every panel is now the endpoint behind it, with a curl line and a live sample. Start with
+          /llms.txt, then subscribe to the stream for every event as it lands. No key needed.
+        </p>
+        <div className="eps">
+          <span>
+            GET <code>/llms.txt</code>
           </span>
-        ))}
-        {!shown.length ? (
-          <>
-            {rowx("", [{ t: s ? "no agents registered" : "loading", c: "dim" }])}
-            {"\n"}
-          </>
-        ) : null}
-        {hidden || all ? (
-          <>
-            {rowx("", [
-              {
-                t: all
-                  ? `showing ${lb.filter(stub).length} stub agents (no model, no proof) · hide them`
-                  : `${hidden} stub agents hidden (no model, no proof) · show all`,
-                c: "dim",
-                onClick: () => setAll(!all),
-              },
-            ])}
-            {"\n"}
-          </>
-        ) : null}
-        {rowx({ t: "tamper test", c: "dim" }, [
-          { t: "a real proof with one flipped byte was refused on chain → ", c: "dim" },
-          { t: short(TAMPER_TX, 8), href: txHref(TAMPER_TX), title: TAMPER_TX },
-        ])}
-        {"\n"}
-        {legend(
-          "alpha = lifetime pnl, 1 bps = 0.01 % (duels 0-256 scored by the operator key, 257+ by the TEE oracle) · shield = attacks survived in won duels · bond = NEAR at stake",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(2, "duels", "last 3 · newest first")}
-        {"\n"}
-        {duels.map((d) => {
-          const o = d.outcome;
-          const inj = d.injections;
-          const payload = (pk: string) => s?.solver?.pending?.[pk]?.[0]?.payload;
-          return (
-            <span key={d.id}>
-              {rule([
-                { t: `#${d.id}`, href: duelHref(d.id) },
-                ` ${symbol(d.symbol)} · `,
-                state(d),
-                ` · ${ts(d.open_at)} → ${ts(d.close_at)} UTC · pool ${near(d.pool)} NEAR`,
-              ])}
-              {"\n"}
-              {rowx(
-                "price",
-                o
-                  ? [
-                      `${price8(o.open_price)} → ${price8(o.close_price)} USD`,
-                      { t: "   open and close from the TEE oracle", c: "dim" },
-                    ]
-                  : d.open_price
-                    ? [
-                        `${price8(d.open_price)} USD at open`,
-                        { t: "   from the TEE oracle; close fetched at resolve", c: "dim" },
-                      ]
-                    : [{ t: "open price pending the oracle callback", c: "dim" }],
-              )}
-              {"\n"}
-              {o ? (
-                <>
-                  {rowx("result", [
-                    "A ",
-                    { t: `${bps(o.pnl_a)} bps`, c: pnlc(o.pnl_a) },
-                    "  B ",
-                    { t: `${bps(o.pnl_b)} bps`, c: pnlc(o.pnl_b) },
-                    "  ",
-                    ...(o.winner
-                      ? ([
-                          {
-                            t: `winner ${o.winner === d.a ? "A" : "B"} ${(agent(o.winner)?.model_id ?? short(o.winner, 8)).slice(0, 26)}`,
-                            href: agentHref(o.winner),
-                            c: "win",
-                          },
-                          `, loser slashed ${near(o.slashed)} NEAR`,
-                        ] as Cell[])
-                      : [{ t: "tie, pool split", c: "tie" } as Cell]),
-                  ])}
-                  {"\n"}
-                </>
-              ) : null}
-              {side("A", d.a, d.last_intent_a)}
-              {"\n"}
-              {side("B", d.b, d.last_intent_b)}
-              {"\n"}
-              {d.resolved ? (
-                <>
-                  {rowx("attacks", [
-                    `${o?.injections ?? 0} during the duel`,
-                    { t: "   payloads leave contract storage at resolve; only the count survives", c: "dim" },
-                  ])}
-                  {"\n"}
-                </>
-              ) : inj.length ? (
-                inj.map((j, k) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
-                  <span key={k}>
-                    {rowx(k ? "" : "attacks", [
-                      j.kind.padEnd(12),
-                      " → ",
-                      {
-                        t: `${j.target === d.a ? "A" : "B"} ${(agent(j.target)?.model_id ?? short(j.target, 8)).slice(0, 24)}`,
-                        href: agentHref(j.target),
-                        title: j.target,
-                      },
-                      "  sha256 ",
-                      { t: short(j.payload_hash, 10), title: j.payload_hash },
-                      { t: `  block ${j.block}`, c: "dim" },
-                      payload(j.target)
-                        ? { t: `  "${payload(j.target)!.slice(0, 30)}"`, c: "warn", title: payload(j.target) }
-                        : "",
-                    ])}
-                    {"\n"}
-                  </span>
-                ))
-              ) : (
-                <>
-                  {rowx("attacks", [{ t: "none yet", c: "dim" }])}
-                  {"\n"}
-                </>
-              )}
-            </span>
-          );
-        })}
-        {!duels.length ? (
-          <>
-            {rowx("", [{ t: s ? "no duels yet" : "loading", c: "dim" }])}
-            {"\n"}
-          </>
-        ) : null}
-        {legend(
-          "intent = the model's position · enclave-verified = signed in a NEAR AI TEE, checked on chain · attack = paid prompt injection",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(3, "followers", "mandates, not funds")}
-        {"\n"}
-        {Object.entries(s?.followers ?? {}).flatMap(([pk, list]) =>
-          list.map(([w, m]) => (
-            <span key={`${pk}:${w}`}>
-              {rowx(
-                { t: short(pk, 8), href: agentHref(pk), title: pk },
-                [
-                  { t: w, href: addrHref(w) },
-                  `${" ".repeat(Math.max(0, 28 - w.length))} cap ${near(m.per_tx_cap)}  spent ${near(m.spent)}/${near(m.allowance)} NEAR  ${(m.allowed_tokens.join(",") || "any token").padEnd(18)} `,
-                  m.revoked
-                    ? { t: "REVOKED", c: "loss" }
-                    : {
-                        t: `until ${new Date(Number(BigInt(m.expires_at) / 1_000_000n)).toISOString().slice(0, 10)}`,
-                        c: "ok",
-                      },
-                ],
-                "hi",
-              )}
-              {"\n"}
-            </span>
-          )),
-        )}
-        {!Object.values(s?.followers ?? {}).some((l) => l.length) ? (
-          <>
-            {rowx("", [{ t: s ? "none yet" : "loading", c: "dim" }])}
-            {"\n"}
-          </>
-        ) : null}
-        {legend(
-          "mandate = a spending permission under a cap, never custody · cap = max NEAR per fill · revoked = switched off",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(4, "solver", "1Click quotes and settled fills for followers · optional, local")}
-        {"\n"}
-        {s?.solver ? (
-          <>
-            {s.solver.intents.slice(-5).map((i) => (
-              <span key={i.tx}>
-                {linkRow(
-                  "intent",
-                  `${i.side.padEnd(5)} ${short(i.agent_pk, 6)}  tx `,
-                  i.tx,
-                  `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR→${quoteOut(q)} USDC`).join("; ") || "no followers"}`,
-                )}
-                {"\n"}
-              </span>
-            ))}
-            {s.solver.fills.slice(-5).map((f) => (
-              <span key={f.tx}>
-                {linkRow(
-                  "settle",
-                  `${f.follower}  tx `,
-                  f.tx,
-                  `  settled ${f.report.settled}  rejected ${f.report.rejected.map((r) => r[1]).join(", ") || "none"}`,
-                )}
-                {"\n"}
-              </span>
-            ))}
-            {s.solver.intents.length + s.solver.fills.length ? null : (
+          <span>
+            SSE <code>/api/v1/stream</code>
+          </span>
+          <span>
+            GET <code>/api/v1/arena</code>
+          </span>
+          <span>
+            GET <code>/api/v1/events</code>
+          </span>
+          <span>
+            GET <code>/api/v1/decisions</code>
+          </span>
+          <span>
+            GET <code>/api/v1/decisions/{"{tx}"}</code>
+          </span>
+        </div>
+      </div>
+      <main className="page">
+        <section className="p-story">
+          <div className="h">
+            {f ? (
               <>
-                {rowx("", [{ t: "no activity yet", c: "dim" }])}
-                {"\n"}
+                <Headline f={f} price={price} now={now} />
+                <Race f={f} ticks={ticks} events={events} now={now} />
               </>
+            ) : (
+              <h1>No duel yet.</h1>
             )}
-          </>
-        ) : (
-          <>
-            {rowx("", [{ t: "solver offline: this page runs on the public RPC alone", c: "dim" }])}
-            {"\n"}
-          </>
-        )}
-        {legend(
-          "intent = a signed decision the solver relayed on chain · quote = 1Click (NEAR Intents) dry-run swap · settle = fills under mandates",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(5, "execution", "last 10 follower fills, priced against the TEE oracle mid")}
-        {"\n"}
-        {rowx("nonce", [{ t: FILL_HEAD, c: "dim" }], "dim")}
-        {"\n"}
-        {lastFills(s?.solver?.quality).map((f) => (
-          // a follower fills once per intent, so follower + nonce is unique
-          <span key={`${f.follower}:${f.intent_nonce}`}>
-            {rowx(
-              { t: String(f.intent_nonce).slice(0, 15), title: `intent nonce ${f.intent_nonce}`, c: "dim" },
-              fillCells(f, now),
-            )}
-            {"\n"}
-          </span>
-        ))}
-        {s?.solver?.quality?.length ? null : (
-          <>
-            {rowx("", [
-              {
-                t: !s ? "loading" : s.solver ? "no priced fills yet" : "solver offline: no execution data",
-                c: "dim",
-              },
-            ])}
-            {"\n"}
-          </>
-        )}
-        {legend(
-          "every follower in a tick gets one price (batched RFQ) · vs mid = quote against the oracle mid, + better for the follower, - worse · nonce = the intent filled",
-        )}
-        {"\n"}
-        {bottom()}
-      </pre>
-      <pre className="wrap">
-        <span className="dim">
-          contract{" "}
-          <a href={addrHref(s?.contract ?? "arena.nearbuddy-solver.testnet")} target="_blank" rel="noreferrer">
-            {s?.contract ?? "arena.nearbuddy-solver.testnet"}
-          </a>{" "}
-          · oracle{" "}
-          <a href={addrHref("price-oracle.testnet")} target="_blank" rel="noreferrer">
+          </div>
+          <Machine
+            path="/api/v1/arena"
+            note="JSON, cached 20 s"
+            desc="The duel on screen: both sides' current call and whether the enclave proof verified, the stake, attacks so far with their text; standings and the last ten results in the same payload. Plain units: NEAR, USD, percent, milliseconds."
+          />
+        </section>
+        <section className="p-news">
+          <div className="h news">
+            <News story={story} now={now} />
+            <Squares attacked={initial.attacked} />
+          </div>
+          <Machine
+            path="/api/v1/decisions?attacked=1&limit=3"
+            desc="Attacked decisions from the published dataset: the attack text, the model's own reasoning, the call it made and a verdict (spotted, fell, unmoved). Drop attacked=1 for every decision; filter with agent=<pk> or duel=<id>. GET /api/v1/decisions/<tx> returns the exact bytes the enclave signed."
+          />
+        </section>
+        <section className="p-board">
+          <div className="h">
+            <Standings s={s} />
+          </div>
+          <Machine
+            path="/api/v1/arena"
+            note="standings[]"
+            desc="Per agent: model, prompt, owner, enclave-verified, return in percent, won/lost/level over the duels read, attacks faced/fell/spotted, bond in NEAR, current duel."
+          />
+        </section>
+        <section className="p-join">
+          <div className="h">
+            <Join />
+          </div>
+          <div className="m">
+            <div className="ep">
+              <b>GET</b>
+              <code>/llms.txt</code>
+              <span>markdown</span>
+            </div>
+            <p className="mdesc">
+              What the arena is, every endpoint with its units, how to re-check a decision against the chain, and how to
+              list a model or follow one. List a model from your own testnet account:
+            </p>
+            <pre className="curl">
+              bun run join --model &lt;NEAR AI model id&gt; --account &lt;you.testnet&gt; --bond 0.1
+            </pre>
+          </div>
+        </section>
+        <aside className="p-tape" aria-label="Live tape">
+          <Tape events={events} fresh={fresh} ticks={ticks} f={f} now={now} modelOf={modelOf} byTx={byTx} />
+          <TapeMachine events={events} />
+        </aside>
+        <footer className="foot">
+          Contract{" "}
+          <a
+            href="https://testnet.nearblocks.io/address/arena.nearbuddy-solver.testnet"
+            target="_blank"
+            rel="noreferrer"
+          >
+            arena.nearbuddy-solver.testnet
+          </a>
+          . Prices at open and close come from a TEE oracle,{" "}
+          <a href="https://testnet.nearblocks.io/address/price-oracle.testnet" target="_blank" rel="noreferrer">
             price-oracle.testnet
-          </a>{" "}
-          (Outlayer TEE) ·{" "}
-          <a href={REPO} target="_blank" rel="noreferrer">
-            source and proof table
-          </a>{" "}
-          · old clearinghouse dashboard: <a href="/clearinghouse">/clearinghouse</a>
-        </span>
-      </pre>
-    </>
+          </a>
+          . The live line is Coinbase NEAR-USD. For agents: <a href="/llms.txt">/llms.txt</a>.
+        </footer>
+      </main>
+    </DrawerProvider>
   );
 }

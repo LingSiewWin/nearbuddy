@@ -3,37 +3,55 @@
 // the REST trade history so the line starts at least one duel back). Duels are scored by the TEE oracle at
 // open and close; this line is context, not the score. Arena events: /api/v1/stream (server-sent events),
 // merged by tx so a reconnect never duplicates a row.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArenaEvent } from "../api/tape";
 
 export type Tick = { t: number; p: number; side: "buy" | "sell" };
 const KEEP_MS = 15 * 60_000;
-const CB_REST = "https://api.exchange.coinbase.com/products/NEAR-USD/trades?limit=500";
+const CB_REST = "https://api.exchange.coinbase.com/products/NEAR-USD/trades?limit=1000";
 const CB_WS = "wss://ws-feed.exchange.coinbase.com";
 
-/** Trades newest last, trimmed to the last KEEP_MS; `status` says whether the socket is live. */
-export function usePrice() {
+/** Trades newest last, kept back to `since` (ms) or the last KEEP_MS, whichever is older; older history is
+ *  paged in from the REST trades endpoint (cursor in the cb-after header). `status`: is the socket live. */
+export function usePrice(since?: number) {
   const [ticks, setTicks] = useState<Tick[]>([]);
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
+  const floor = useRef(Number.POSITIVE_INFINITY);
+  floor.current = Math.min(since ?? Number.POSITIVE_INFINITY, Date.now() - KEEP_MS);
+  const add = useCallback(
+    (list: Tick[]) =>
+      setTicks((old) => {
+        const seen = new Set(old.map((x) => `${x.t}:${x.p}`));
+        const merged = [...old, ...list.filter((x) => !seen.has(`${x.t}:${x.p}`))].filter((x) => x.t >= floor.current);
+        merged.sort((a, b) => a.t - b.t);
+        return merged;
+      }),
+    [],
+  );
+  // history: newest page first, then older pages until `since` is covered (at most 6 pages of 1000 trades)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `since` is read through `floor`; a new duel re-runs the backfill
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let after: string | null = null;
+      for (let page = 0; alive && page < 6; page++) {
+        const r: Response = await fetch(after ? `${CB_REST}&after=${after}` : CB_REST);
+        const rows = (await r.json()) as { time: string; price: string; side: "buy" | "sell" }[];
+        if (!Array.isArray(rows) || !rows.length) break;
+        add(rows.map((x) => ({ t: Date.parse(x.time), p: Number(x.price), side: x.side })));
+        after = r.headers.get("cb-after");
+        if (!after || Date.parse((rows.at(-1) as { time: string }).time) <= floor.current) break;
+      }
+    })().catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [since, add]);
   useEffect(() => {
     let alive = true;
     let ws: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let wait = 1_000;
-    const add = (list: Tick[]) =>
-      setTicks((old) => {
-        const cut = Date.now() - KEEP_MS;
-        const merged = [...old, ...list].filter((x) => x.t >= cut);
-        merged.sort((a, b) => a.t - b.t);
-        return merged;
-      });
-    fetch(CB_REST)
-      .then((r) => r.json() as Promise<{ time: string; price: string; side: "buy" | "sell" }[]>)
-      .then((rows) => {
-        if (alive && Array.isArray(rows))
-          add(rows.map((r) => ({ t: Date.parse(r.time), p: Number(r.price), side: r.side })));
-      })
-      .catch(() => {});
     const open = () => {
       ws = new WebSocket(CB_WS);
       ws.onopen = () => {
@@ -60,7 +78,7 @@ export function usePrice() {
       clearTimeout(retry);
       ws?.close();
     };
-  }, []);
+  }, [add]);
   return { ticks, last: ticks.at(-1) ?? null, status };
 }
 
@@ -73,6 +91,7 @@ export function useEvents(initial: ArenaEvent[]) {
     const top = initial[0]?.block ?? 0;
     const es = new EventSource(`/api/v1/stream${top ? `?since=${top}` : ""}`);
     const on = (msg: MessageEvent) => {
+      if (typeof msg.data !== "string") return; // EventSource's own "open" event has no data
       const e = JSON.parse(String(msg.data)) as ArenaEvent;
       if (seen.current.has(e.tx)) return;
       seen.current.add(e.tx);

@@ -1,5 +1,5 @@
 // GET /api/arena  the raw snapshot the pages render: config, leaderboard, the last 3 duels in full,
-// followers, counts over the scanned duels, and the optional solver enrichment.
+// counts over the scanned duels, and the optional solver enrichment.
 import { proven as hasProof } from "../../cells";
 import { snapshot, ZERO } from "../arena";
 import { json, jsonBody } from "../near";

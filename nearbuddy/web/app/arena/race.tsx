@@ -1,0 +1,236 @@
+"use client";
+// The story at the top: one sentence on who is winning and what it costs, the clock, and the race card (the
+// reference price over the duel window with each model's calls as lanes underneath and attacks as flags).
+import type { ArenaEvent } from "../api/tape";
+import type { Tick } from "../lib/live";
+import { agentHref, mmss, near, pct, sideWord, stake, tone, usd, who } from "../ui/format";
+import { duelEvents, type Focus, markPct, openOf } from "./model";
+
+const sideTone = (f: Focus) => {
+  const a = tone(f.a.model);
+  const b = tone(f.b.model);
+  return { a, b: b === a ? "k-alt" : b };
+};
+
+export function Headline({ f, price, now }: { f: Focus; price: number | null; now: number }) {
+  const t = sideTone(f);
+  const A = <span className={`who ${t.a}`}>{who(f.a.model)}</span>;
+  const B = <span className={`who ${t.b}`}>{who(f.b.model)}</span>;
+  const left = Math.max(0, Math.round((f.closes - now) / 1000));
+  const span = Math.max(1, (f.closes - f.opened) / 1000);
+  const open = f.open;
+  const p = f.live ? price : f.close;
+  const ma = markPct(f.a, open, p);
+  const mb = markPct(f.b, open, p);
+  const move = open && p ? ((p - open) / open) * 100 : 0;
+  const lead = Math.abs(ma - mb) < 0.005 ? null : ma > mb ? "a" : "b";
+  const loser = lead === "a" ? f.b : lead === "b" ? f.a : null;
+  const pay = loser?.bond != null ? (loser.bond * f.slashPct) / 100 : null;
+
+  let h1: React.ReactNode;
+  let sub: React.ReactNode;
+  if (f.live && now && now > f.closes + 60_000) {
+    // the bell rang a while ago and nobody has called resolve_duel yet
+    h1 = "Waiting for the bell's price.";
+    sub = (
+      <>
+        Duel {f.duel} closed {Math.round((now - f.closes) / 60_000)} min ago. It is scored once someone calls{" "}
+        <b>resolve_duel</b>: the call is open to anyone, and the TEE oracle supplies the close price. At the last trade,{" "}
+        {lead ? <>{lead === "a" ? A : B} was ahead</> : "the two sides were level"}.
+      </>
+    );
+  } else if (f.live) {
+    h1 = lead ? <>{lead === "a" ? A : B} is winning.</> : "Dead heat.";
+    sub = (
+      <>
+        {A} is <b>{sideWord(f.a.side)}</b>, {B} is <b>{sideWord(f.b.side)}</b>, and NEAR is{" "}
+        <b>
+          {move >= 0 ? "up" : "down"} {Math.abs(move).toFixed(2)}%
+        </b>{" "}
+        since the bell.{" "}
+        {lead && loser ? (
+          <>
+            If it ends now, {lead === "a" ? B : A} pays {lead === "a" ? A : B}{" "}
+            <b>{pay != null ? near(pay) : `${f.slashPct}% of its bond`}</b>
+            {f.pot > 0 ? <> plus the {near(f.pot)} pot</> : null}.
+          </>
+        ) : f.a.side && f.a.side === f.b.side ? (
+          "Same call on both sides: if it ends like this, nobody pays."
+        ) : (
+          "Nobody is ahead yet."
+        )}
+      </>
+    );
+  } else {
+    const w = f.winner === f.a.agent ? "a" : f.winner === f.b.agent ? "b" : null;
+    h1 = w ? (
+      <>
+        {w === "a" ? A : B} won duel {f.duel}.
+      </>
+    ) : (
+      `Duel ${f.duel} ended level.`
+    );
+    sub = w ? (
+      <>
+        {w === "a" ? B : A} paid <b>{near(f.slashed)}</b> of its bond. NEAR moved <b>{pct(move)}</b> between the
+        oracle&apos;s open and close. The next duel opens within a minute.
+      </>
+    ) : (
+      <>Both ended with the same score, so nobody paid. The next duel opens within a minute.</>
+    );
+  }
+  return (
+    <div className="head">
+      <div>
+        <h1>{h1}</h1>
+        <p className="sub">{sub}</p>
+        {f.live ? (
+          <p className="fine">
+            Live line: Coinbase NEAR-USD trades. The score is set by the TEE price oracle at the open and the bell.
+          </p>
+        ) : null}
+      </div>
+      <div className="clock">
+        <span className="cd">{f.live ? (now ? mmss(left) : "–:––") : "0:00"}</span>
+        <small>
+          {f.live
+            ? left > 0
+              ? `left in duel ${f.duel}`
+              : "bell rang, waiting for the oracle"
+            : `duel ${f.duel} closed`}
+        </small>
+        <div className="prog">
+          <i style={{ width: `${f.live ? Math.min(100, ((span - left) / span) * 100) : 100}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function Race({ f, ticks, events, now }: { f: Focus; ticks: Tick[]; events: ArenaEvent[]; now: number }) {
+  const t0 = f.opened;
+  const t1 = f.closes;
+  const end = f.live ? Math.min(now || t0, t1) : t1;
+  const x = (t: number) => Math.max(0, Math.min(1, (t - t0) / (t1 - t0))) * 100;
+  const win = ticks.filter((k) => k.t >= t0 - 2_000 && k.t <= end);
+  const open = openOf(f, ticks);
+  const vals = win.map((k) => k.p).concat(open ? [open] : []);
+  const lo = Math.min(...vals);
+  const hi = Math.max(...vals);
+  const pad = Math.max((hi - lo) * 0.15, (open ?? 1) * 0.0004);
+  const y = (p: number) => (1 - (p - (lo - pad)) / (hi - lo + 2 * pad)) * 100;
+  const d = win.map((k, i) => `${i ? "L" : "M"}${(x(k.t) * 10).toFixed(1)},${y(k.p).toFixed(2)}`).join("");
+  const last = win.at(-1);
+  const price = f.live ? (last?.p ?? null) : f.close;
+  const move = open && price ? ((price - open) / open) * 100 : null;
+  const { intents, attacks } = duelEvents(events, f.duel);
+  const t = sideTone(f);
+  const lockX = x(t1 - f.lockS * 1000);
+  const lane = (s: Focus["a"], k: string) => {
+    const mine = intents.filter((i) => i.agent === s.agent);
+    const mark = markPct(s, open, price);
+    const other = s === f.a ? markPct(f.b, open, price) : markPct(f.a, open, price);
+    return (
+      <>
+        <div className={`lab llab ${k}`}>
+          <a className="n who" href={agentHref(s.agent)}>
+            {who(s.model)}
+          </a>
+          <span className="s">
+            {s.side ?? "No call yet"}
+            {s.side ? `, ${stake(s.size_pct)}` : ""}
+          </span>
+          <span className="st">{Math.abs(mark - other) < 0.005 ? "level" : mark > other ? "ahead" : "behind"}</span>
+        </div>
+        <div className={`trk lane ${k}`}>
+          <div className="rail">
+            {mine.map((i, n) => {
+              const from = x(i.at);
+              const to = x(mine[n + 1]?.at ?? end);
+              const w = Math.max(0.6, to - from);
+              return (
+                <div
+                  key={i.tx}
+                  className={`seg ${i.side === "Long" ? "long" : "short"}`}
+                  style={{ left: `${from}%`, width: `${w}%` }}
+                  title={`${i.side} ${i.size / 100}%`}
+                >
+                  {w > 5 ? <span>{i.side}</span> : null}
+                </div>
+              );
+            })}
+            {attacks
+              .filter((a) => a.target === s.agent)
+              .map((a) => (
+                <i key={a.tx} className="hit" style={{ left: `${x(a.at)}%` }} title="paid attack" />
+              ))}
+            {!mine.length ? <span className="empty">calls appear here as they land on chain</span> : null}
+          </div>
+        </div>
+      </>
+    );
+  };
+  return (
+    <div className="race">
+      <div className="lab plab">
+        <div className="p">{usd(price)}</div>
+        <div className="d">
+          {move == null
+            ? "waiting for trades"
+            : `${move >= 0 ? "up" : "down"} ${Math.abs(move).toFixed(2)}% since the bell`}
+        </div>
+      </div>
+      <div className="trk chart">
+        {f.live ? <div className="future" style={{ left: `${x(end)}%` }} /> : null}
+        {f.live && f.lockS ? (
+          <div className="locked" style={{ left: `${lockX}%` }}>
+            <span>calls locked</span>
+          </div>
+        ) : null}
+        <div className="plot">
+          <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-label="NEAR price during the duel">
+            {open ? (
+              <line
+                x1="0"
+                x2="1000"
+                y1={y(open)}
+                y2={y(open)}
+                stroke="var(--faint)"
+                strokeDasharray="4 5"
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : null}
+            <path
+              d={d}
+              fill="none"
+              stroke="var(--ink)"
+              strokeWidth="1.6"
+              vectorEffect="non-scaling-stroke"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {open ? (
+            <span className="openlab" style={{ top: `${y(open)}%` }}>
+              {f.open ? "oracle open" : "open"} {usd(open)}
+            </span>
+          ) : null}
+          {last ? <i className="dot" style={{ left: `${x(last.t)}%`, top: `${y(last.p)}%` }} /> : null}
+        </div>
+        {attacks.map((a) => {
+          const k = a.target === f.a.agent ? t.a : t.b;
+          return (
+            <div key={a.tx} className={`flag ${x(a.at) > 70 ? "right" : ""} ${k}`} style={{ left: `${x(a.at)}%` }}>
+              <span>Attack on {who(a.target === f.a.agent ? f.a.model : f.b.model)}</span>
+            </div>
+          );
+        })}
+        <div className="axis">
+          <span>bell</span>
+          <span>close</span>
+        </div>
+      </div>
+      {lane(f.a, t.a)}
+      {lane(f.b, t.b)}
+    </div>
+  );
+}

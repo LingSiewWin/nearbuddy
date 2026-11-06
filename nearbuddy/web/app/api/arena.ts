@@ -1,4 +1,5 @@
-// Read-only arena snapshot from the public RPC: config, leaderboard, the last SCAN duels, followers per agent.
+// Read-only arena snapshot from the public RPC: config, leaderboard and the last SCAN duels (followers are
+// read per agent by the agent routes).
 // The solver's GET /arena is optional enrichment (intent txs, injection payloads, quotes, fills); everything
 // renders without it. Built at most once per TTL however many tabs poll; a stale body beats a 500 while the
 // RPC is throttled. Resolved duels never change, so they are kept in memory and not re-read.
@@ -81,7 +82,6 @@ export type Snap = {
   config: Config;
   leaderboard: Agent[];
   duels: Duel[];
-  followers: Record<string, [string, Mandate][]>;
   solver: unknown;
 };
 
@@ -112,9 +112,6 @@ async function build(): Promise<Snap> {
   ]);
   const scanned: (Duel | null)[] = [];
   for (let i = 0; i < ids.length; i += 8) scanned.push(...(await Promise.all(ids.slice(i, i + 8).map(duel)))); // trickle, not a burst
-  const followers = Object.fromEntries(
-    await Promise.all(leaderboard.map(async (a) => [a.pk, await view("list_followers", { agent_pk: a.pk })])),
-  ) as Snap["followers"];
   return {
     at: Date.now(),
     rpc: RPC,
@@ -122,7 +119,6 @@ async function build(): Promise<Snap> {
     config,
     leaderboard,
     duels: scanned.filter((d): d is Duel => !!d),
-    followers,
     solver,
   };
 }
@@ -251,6 +247,7 @@ export async function summary(s: Snap, now = Date.now()) {
     standings,
     recent: done.slice(0, 10).map((d) => ({
       duel: Number(d.id),
+      opened_at: ms(d.open_at),
       closed_at: ms(d.close_at),
       market: symbolOf(d.symbol),
       open_price_usd: usd(d.outcome?.open_price),
@@ -263,4 +260,4 @@ export async function summary(s: Snap, now = Date.now()) {
     })),
   };
 }
-export type Summary = ReturnType<typeof summary>;
+export type Summary = Awaited<ReturnType<typeof summary>>;
