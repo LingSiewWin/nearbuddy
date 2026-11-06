@@ -55,4 +55,5 @@ export const txUrl = (tx: string) => `https://testnet.nearblocks.io/txns/${tx}`;
 export const acctUrl = (a: string) => `https://testnet.nearblocks.io/address/${a}`;
 export const agentHref = (pk: string) => `/agent/${encodeURIComponent(pk)}`;
 export const duelHref = (id: number | string) => `/duel/${id}`;
+export const ARENA_ID = "arena.nearbuddy-solver.testnet";
 export const TAMPER_TX = "4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt";

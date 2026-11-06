@@ -6,7 +6,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useR
 import type { Decision } from "../api/dataset";
 import type { ArenaEvent } from "../api/tape";
 import { VERDICT_WORD } from "../lib/verdict";
-import { clock, modelName, promptName, stake, TAMPER_TX, tone, txUrl, who } from "./format";
+import { ARENA_ID, clock, modelName, promptName, stake, TAMPER_TX, tone, txUrl, who } from "./format";
 
 type Intent = Extract<ArenaEvent, { kind: "intent" | "reveal" }>;
 type Attack = Extract<ArenaEvent, { kind: "attack" }>;
@@ -25,8 +25,10 @@ const b64hex = (b: string) => [...atob(b)].map((c) => c.charCodeAt(0).toString(1
 
 type Check = { label: string; ok: boolean | null; detail: string };
 
-/** Re-hash the published bytes in this browser and compare with the hashes in the transaction itself. */
-async function recheck(tx: string): Promise<Check[]> {
+/** Re-hash the published bytes in this browser and compare with the hashes in the transaction itself, and
+ *  check that transaction is the arena's post_intent/reveal_intent for the call shown, read from FastNEAR. */
+async function recheck(ev: Intent): Promise<Check[]> {
+  const tx = ev.tx;
   const out: Check[] = [];
   const pub = await fetch(`/api/v1/decisions/${tx}`).then((r) => (r.ok ? r.json() : null));
   if (!pub) return [{ label: "Published bytes", ok: null, detail: "not in the published dataset yet" }];
@@ -39,6 +41,21 @@ async function recheck(tx: string): Promise<Check[]> {
   const txd = t.transactions?.[0];
   const fc = txd?.transaction?.actions?.find((a: { FunctionCall?: unknown }) => a.FunctionCall)?.FunctionCall;
   const args = fc ? JSON.parse(atob(fc.args)) : null;
+  // the call shown must be what the transaction carries: right contract, right method, same side and duel
+  const intent = args?.signed?.intent ?? args?.intent ?? null;
+  const sameCall =
+    txd?.transaction?.receiver_id === ARENA_ID &&
+    ["post_intent", "reveal_intent"].includes(fc?.method_name) &&
+    !!intent &&
+    intent.side === ev.side &&
+    String(intent.duel_id) === String(ev.duel);
+  out.push({
+    label: "It is the arena's call shown here",
+    ok: sameCall,
+    detail: sameCall
+      ? `${fc.method_name} on ${ARENA_ID}: ${intent.side} in duel ${intent.duel_id}`
+      : `the transaction does not carry this call (${txd?.transaction?.receiver_id ?? "?"}, ${fc?.method_name ?? "?"})`,
+  });
   // A transaction's own status only says its first receipt was created; a contract panic (the tampered
   // proof "bad tee signature") lives in a receipt outcome, so every receipt in the tree must have succeeded.
   type Outcome = { status?: Record<string, unknown> };
@@ -57,18 +74,18 @@ async function recheck(tx: string): Promise<Check[]> {
   });
   out.push({
     label: "Request bytes hash to the chain's request_hash",
-    ok: !!args && b64hex(args.tee.request_hash) === reqHash,
+    ok: !!args?.tee && b64hex(args.tee.request_hash) === reqHash,
     detail: `sha256 ${reqHash.slice(0, 16)}…`,
   });
   out.push({
     label: "Response bytes hash to the chain's response_hash",
-    ok: !!args && b64hex(args.tee.response_hash) === resHash,
+    ok: !!args?.tee && b64hex(args.tee.response_hash) === resHash,
     detail: `sha256 ${resHash.slice(0, 16)}…`,
   });
   return out;
 }
 
-function Recheck({ tx }: { tx: string }) {
+function Recheck({ ev }: { ev: Intent }) {
   const [checks, setChecks] = useState<Check[] | null>(null);
   const [busy, setBusy] = useState(false);
   return (
@@ -80,7 +97,7 @@ function Recheck({ tx }: { tx: string }) {
         onClick={async () => {
           setBusy(true);
           try {
-            setChecks(await recheck(tx));
+            setChecks(await recheck(ev));
           } catch (e) {
             setChecks([{ label: "Re-check failed", ok: false, detail: String(e).slice(0, 120) }]);
           }
@@ -118,6 +135,30 @@ function Seal() {
 export { Seal };
 
 function Body({ item }: { item: DrawerItem }) {
+  if (item.kind === "intent" && !(item.ev.ok && item.ev.tee === 2)) {
+    // a refused call, or one without an enclave proof, never gets the verified body
+    const { ev, model } = item;
+    return (
+      <div className={tone(model)}>
+        <h3>{ev.ok ? "Call without an enclave proof" : "Call refused on chain"}</h3>
+        <p className="big">
+          <span className="who">{who(model)}</span> {ev.ok ? "posted" : "tried to post"} {ev.side} with{" "}
+          {stake(ev.size / 100)}
+        </p>
+        <p className="meta">
+          Duel #{ev.duel} · {clock(ev.at).join("")} ·{" "}
+          <a href={txUrl(ev.tx)} target="_blank" rel="noreferrer">
+            the transaction ↗
+          </a>
+        </p>
+        <p className="cap">
+          {ev.ok
+            ? "This agent is in the unverified tier: its call counts on the board, but nothing proves a model inside an enclave made it, and it cannot be followed."
+            : "The contract rejected this transaction, so the call does not count. Common reasons: the duel's last minute (calls are locked), a stale nonce, or a proof that does not verify."}
+        </p>
+      </div>
+    );
+  }
   if (item.kind === "intent") {
     const { ev, d, model } = item;
     return (
@@ -152,7 +193,7 @@ function Body({ item }: { item: DrawerItem }) {
             Your browser hashes the published bytes and compares them with the hashes inside the transaction.
           </li>
         </ol>
-        <Recheck tx={ev.tx} />
+        <Recheck ev={ev} />
         <div className="tamper">
           <b>Tampering is refused.</b> A real proof with one flipped byte was rejected on chain:{" "}
           <a href={txUrl(TAMPER_TX)} target="_blank" rel="noreferrer">
