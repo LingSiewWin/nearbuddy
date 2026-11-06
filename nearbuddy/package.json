@@ -17,7 +17,8 @@
     "arena-demo": "bun packages/demo/src/arena.ts",
     "real-swap": "bun packages/demo/src/swap.ts",
     "spectator": "bun packages/demo/src/spectator.ts",
-    "join": "bun packages/demo/src/join.ts"
+    "join": "bun packages/demo/src/join.ts",
+    "status": "scripts/arena-status.sh"
   },
   "dependencies": {
     "borsh": "2.0.0",
