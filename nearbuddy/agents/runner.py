@@ -641,6 +641,23 @@ def wait_for_duel(solver: Solver, pk: str, poll_s: int, skip: str | None = None)
         time.sleep(poll_s)
 
 
+def oracle_open_px(duel_id: str, symbol: str, wait_s: float) -> tuple[int, str]:
+    """The duel's on-chain open price, the one it is scored against, polled up to `wait_s` for the oracle callback;
+    spot when it has not landed by then. Returns (price with 8 decimals, "oracle" | "spot")."""
+    deadline = time.time() + wait_s
+    while True:
+        try:
+            d = view("get_duel", {"duel_id": duel_id}) or {}
+        except RuntimeError as e:
+            print(f"  get_duel {duel_id}: {str(e)[:80]}")
+            d = {}
+        if d.get("open_price"):
+            return int(d["open_price"]), "oracle"
+        if time.time() >= deadline:
+            return price(symbol, ENV.get("PYTH_API_KEY")), "spot"
+        time.sleep(2)
+
+
 def run_single(
     name: str,
     hardened: bool,
@@ -826,9 +843,9 @@ def run(
         duel_id = str(opened["duel_id"])
         if variants:  # treatment slot: agent A's arm is a function of the duel id, agent B stays the naive control
             a.variant = pick_variant(duel_id, variants)
-        open_px = price(symbol, ENV.get("PYTH_API_KEY"))
+        open_px, source = oracle_open_px(duel_id, symbol, wait_s=20)
         print(
-            f"[round {rnd}] duel {duel_id} {symbol} spot {open_px / 1e8:,.4f} tx {opened['tx']} "
+            f"[round {rnd}] duel {duel_id} {symbol} {source} open {open_px / 1e8:,.4f} tx {opened['tx']} "
             f"A prompt {a.prompt_variant}"
         )
         # stop before the contract's intent lock (deploy 11: no intents in the last `intent_lock_s`), plus 25 s for
