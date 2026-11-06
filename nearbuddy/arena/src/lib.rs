@@ -196,6 +196,21 @@ fn set_entry_cost(key_len: usize) -> u128 {
     (1 + 4 + key_len + 40) as u128 * env::storage_byte_cost().as_yoctonear()
 }
 
+/// Seconds to ns with a sanity bound (a week), so a unit mix-up cannot set an absurd floor.
+fn duel_floor_ns(min_duel_s: u64) -> u64 {
+    require!(min_duel_s <= 7 * 24 * 3600, "min_duel_s too large");
+    min_duel_s * 1_000_000_000
+}
+
+/// Caller must attach `oracle_deposit`; anything above it goes straight back.
+fn take_oracle_deposit(oracle_deposit: u128) {
+    let attached = env::attached_deposit().as_yoctonear();
+    require!(attached >= oracle_deposit, "attach oracle_deposit");
+    if attached > oracle_deposit {
+        let _ = Promise::new(env::predecessor_account_id()).transfer(NearToken::from_yoctonear(attached - oracle_deposit));
+    }
+}
+
 /// Oracle price (multiplier / 10^decimals USD) as u64 with 8 decimals.
 fn price8(p: &OraclePrice) -> u64 {
     let v = if p.decimals <= 8 { p.multiplier.0 * 10u128.pow(8 - p.decimals as u32) } else { p.multiplier.0 / 10u128.pow(p.decimals as u32 - 8) };
@@ -260,7 +275,7 @@ impl Contract {
             tee_signers: old.tee_signers,
             tee_agents: old.tee_agents,
             used_proofs: LookupSet::new(StorageKey::UsedProofs),
-            min_duel_ns: min_duel_s * 1_000_000_000,
+            min_duel_ns: duel_floor_ns(min_duel_s),
         }
     }
 
@@ -351,7 +366,7 @@ impl Contract {
         self.only_owner();
         self.oracle_account = oracle_account;
         self.oracle_deposit = oracle_deposit.0;
-        self.min_duel_ns = min_duel_s * 1_000_000_000;
+        self.min_duel_ns = duel_floor_ns(min_duel_s);
     }
 
     /// Accept intents signed by this NEAR AI Cloud enclave key. The owner takes it from
@@ -473,7 +488,7 @@ impl Contract {
     /// balance on oracle fees); the oracle's refund stays with the contract.
     #[payable]
     pub fn request_open_price(&mut self, duel_id: U64) {
-        require!(env::attached_deposit().as_yoctonear() >= self.oracle_deposit, "attach oracle_deposit");
+        take_oracle_deposit(self.oracle_deposit);
         let d = self.duels.get(&duel_id.0).expect("duel missing");
         require!(!d.resolved && d.open_price.is_none(), "has open price");
         require!(env::block_timestamp() < d.close_at.0, "duel closed");
@@ -581,7 +596,7 @@ impl Contract {
     /// oracle never answers.
     #[payable]
     pub fn resolve_duel(&mut self, duel_id: U64) {
-        require!(env::attached_deposit().as_yoctonear() >= self.oracle_deposit, "attach oracle_deposit");
+        take_oracle_deposit(self.oracle_deposit);
         let d = self.duels.get(&duel_id.0).expect("duel missing");
         require!(!d.resolved, "resolved");
         require!(env::block_timestamp() >= d.close_at.0, "duel open");
