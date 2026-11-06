@@ -102,6 +102,14 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         .send_to(&net)
         .await?
         .assert_success();
+    // only minters the stub account adds may stub_credit: the solver, whose swaps land there
+    near_api::Contract(intents.account_id().clone())
+        .call_function("add_minter", json!({"account_id": solver.account_id()}))
+        .transaction()
+        .with_signer(intents.account_id().clone(), signer.clone())
+        .send_to(&net)
+        .await?
+        .assert_success();
     let contract = create_subaccount(&sandbox, "arena.sandbox")
         .await?
         .as_contract();
@@ -424,6 +432,15 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     )
     .await?
     .assert_success();
+    // nonce 1 predates the follow, so it never settles for this follower (deploy 16); 13 replaces it
+    call(
+        "post_intent",
+        mk_a(13, Side::Long, [13u8; 32], [0xbb; 32], false),
+        &solver,
+        zero,
+    )
+    .await?
+    .assert_success();
     const TOKEN: &str = "nep141:wrap.near";
     let stub_view = |who: &AccountId| {
         near_api::Contract(intents.account_id().clone())
@@ -434,7 +451,7 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
             .read_only::<U128>()
             .fetch_from(&net)
     };
-    let fills: Vec<Value> = [1u64].iter().chain((3..=11u64).collect::<Vec<_>>().iter()).map(|n| json!({"intent_nonce": n.to_string(), "token": TOKEN, "amount_in": NearToken::from_millinear(100).as_yoctonear().to_string(), "amount_out": "1", "swap_tx": format!("sim-{n}")})).collect();
+    let fills: Vec<Value> = [13u64].iter().chain((3..=11u64).collect::<Vec<_>>().iter()).map(|n| json!({"intent_nonce": n.to_string(), "token": TOKEN, "amount_in": NearToken::from_millinear(100).as_yoctonear().to_string(), "amount_out": "1", "swap_tx": format!("sim-{n}")})).collect();
     // the solver settles before the outputs landed: refused, nothing moves
     call(
         "settle_follow",
@@ -553,6 +570,19 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         "{failure}"
     );
     println!("withdraw inside the delay: refused (withdrawal delay not elapsed)");
+    // an outsider cannot fake a delivery on the stub (red team S1)
+    let r = near_api::Contract(intents.account_id().clone())
+        .call_function(
+            "stub_credit",
+            json!({"receiver_id": contract.account_id(), "token_id": TOKEN, "amount": "5"}),
+        )
+        .transaction()
+        .with_signer(spectator.account_id().clone(), signer.clone())
+        .send_to(&net)
+        .await?;
+    let failure = format!("{:?}", r.assert_failure());
+    assert!(failure.contains("not minter"), "{failure}");
+    println!("stub_credit by an outsider: refused (not minter)");
     // a gift (or a refused fill's output) lands unaccounted: the owner sweeps exactly that, never holdings
     near_api::Contract(intents.account_id().clone())
         .call_function(
@@ -560,7 +590,7 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
             json!({"receiver_id": contract.account_id(), "token_id": TOKEN, "amount": "5"}),
         )
         .transaction()
-        .with_signer(spectator.account_id().clone(), signer.clone())
+        .with_signer(solver.account_id().clone(), signer.clone())
         .send_to(&net)
         .await?
         .assert_success();

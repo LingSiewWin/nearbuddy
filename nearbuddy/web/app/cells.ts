@@ -320,3 +320,138 @@ export const verifyLineCells = (l: VerifyLine): Cell[] => [
   " ",
   { t: l.detail, title: l.detail },
 ];
+
+// ---------------------------------------------------------------- the follower page (GET /api/follower)
+
+/** One successful arena call by or for the follower, from its own txs. */
+export type FollowerActivity = {
+  kind: "follow" | "unfollow" | "deposit" | "request_withdraw" | "withdraw" | "withdraw_token";
+  tx: string;
+  at_ms: number;
+  agent_pk?: string;
+  amount?: string; // yoctoNEAR, or token units for withdraw_token
+  token?: string;
+};
+/** One fill a solver settled for a follower: the vault paid amount_in (+ fee), the holding gained amount_out. */
+export type SettledFill = {
+  tx: string;
+  at_ms: number;
+  follower: string;
+  agent_pk: string;
+  solver: string;
+  intent_nonce: string;
+  token: string;
+  amount_in: string;
+  amount_out: string;
+  swap_tx: string;
+};
+export type MandateView = {
+  allowance: string;
+  spent: string;
+  per_tx_cap: string;
+  allowed_tokens: string[];
+  expires_at: string;
+  revoked: boolean;
+  min_out_per_near?: string;
+  revoked_at?: string;
+};
+export type FollowerRec = {
+  at: number;
+  account: string;
+  arena: string;
+  /** false on a contract before deploy 15 (no pending withdrawals, holdings or per-pair mandates). */
+  deploy15: boolean;
+  vault: string | null;
+  pending: { amount: string; ready_at: string } | null;
+  holdings: { token: string; amount: string }[];
+  mandates: { agent_pk: string; model_id: string | null; mandate: MandateView | null }[];
+  fills: SettledFill[];
+  /** How far back the arena's txs were read for fills: to the first follow when `complete`. */
+  fills_scan: { from_ms: number | null; oldest_ms: number | null; txs: number; complete: boolean };
+  activity: FollowerActivity[];
+};
+
+/** intents.near token ids the solver settles in (packages/solver/src/oneclick.ts), with their decimals. */
+export const TOKENS: Record<string, { name: string; decimals: number }> = {
+  "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1": { name: "USDC", decimals: 6 },
+  "nep141:wrap.near": { name: "wNEAR", decimals: 24 },
+};
+export const tokenName = (id: string) => {
+  const s = id.replace(/^nep141:/, "");
+  return TOKENS[id]?.name ?? (s.length > 12 ? short(s, 12) : s);
+};
+/** A token amount in display units, 4 dp, floored; an unknown token shows its raw base units. */
+export const tokenAmount = (id: string, amount: string) => {
+  const t = TOKENS[id];
+  if (!t) return amount;
+  const v = BigInt(amount);
+  const unit = 10n ** BigInt(t.decimals);
+  return `${v / unit}.${(((v % unit) * 10_000n) / unit).toString().padStart(4, "0")}`;
+};
+/** A mandate's state as settle_follow sees it: revoked, expired, or active. */
+export const mandateState = (m: MandateView, nowMs: number) =>
+  m.revoked ? "revoked" : Number(BigInt(m.expires_at) / 1_000_000n) <= nowMs ? "expired" : "active";
+
+const hhmm = (atMs: number) => new Date(atMs).toISOString().slice(5, 16).replace("T", " "); // "11-07 01:12"
+const MODEL_W = 22;
+/** An agent's model name (org cut) linked to its page, padded to one column. */
+const agentCell = (pk: string, model: string | null | undefined): Cell[] => {
+  const m = (model?.split("/").pop() ?? short(pk, 8)).slice(0, MODEL_W);
+  return [{ t: m, href: agentHref(pk), title: pk }, " ".repeat(MODEL_W - m.length)];
+};
+
+/** Follower box 2: one mandate. */
+export const mandateCells = (pk: string, model: string | null, m: MandateView | null, nowMs: number): Cell[] => {
+  if (!m) return [...agentCell(pk, model), { t: "  no mandate on chain", c: "dim" }];
+  const state = mandateState(m, nowMs);
+  return [
+    ...agentCell(pk, model),
+    "  ",
+    { t: state.padEnd(7), c: state === "active" ? "ok" : "loss" },
+    `  cap ${near(m.per_tx_cap)}  spent ${near(m.spent)}/${near(m.allowance)} NEAR`,
+    {
+      t: `  until ${hhmm(Number(BigInt(m.expires_at) / 1_000_000n))}`,
+      c: "dim",
+      title: `tokens: ${m.allowed_tokens.map(tokenName).join(", ") || "any"}; price floor ${m.min_out_per_near ?? "0"} out per NEAR`,
+    },
+  ];
+};
+
+/** Follower box 3: one settled fill, vault NEAR in, token out, the settle tx. */
+export const settledFillCells = (f: SettledFill, model: string | null): Cell[] => [
+  { t: hhmm(f.at_ms), c: "dim" },
+  "  ",
+  ...agentCell(f.agent_pk, model),
+  `  ${near(f.amount_in).padStart(6)} NEAR → ${tokenAmount(f.token, f.amount_out).padStart(9)} ${tokenName(f.token).padEnd(5)}`,
+  "  tx ",
+  {
+    t: short(f.tx, 10),
+    href: txHref(f.tx),
+    title: `settle_follow ${f.tx}, intent nonce ${f.intent_nonce}, swap ${f.swap_tx}`,
+  },
+];
+
+const ACTIVITY_WORD: Record<FollowerActivity["kind"], string> = {
+  follow: "follow",
+  unfollow: "unfollow",
+  deposit: "deposit",
+  request_withdraw: "ask withdraw",
+  withdraw: "withdraw",
+  withdraw_token: "token out",
+};
+/** Follower box 4: one of its own calls that went through. */
+export const activityCells = (a: FollowerActivity, model: string | null): Cell[] => [
+  { t: hhmm(a.at_ms), c: "dim" },
+  "  ",
+  ACTIVITY_WORD[a.kind].padEnd(12),
+  "  ",
+  ...(a.agent_pk
+    ? agentCell(a.agent_pk, model)
+    : [
+        a.kind === "withdraw_token"
+          ? `${tokenAmount(a.token ?? "", a.amount ?? "0")} ${tokenName(a.token ?? "")}`.padEnd(MODEL_W)
+          : `${near(a.amount)} NEAR`.padEnd(MODEL_W),
+      ]),
+  "  tx ",
+  { t: short(a.tx, 10), href: txHref(a.tx), title: a.tx },
+];

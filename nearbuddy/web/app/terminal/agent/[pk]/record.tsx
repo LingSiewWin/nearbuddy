@@ -12,6 +12,7 @@ import {
   boxTitle,
   bps,
   duelHref,
+  followerHref,
   getJson,
   legend,
   meter,
@@ -271,7 +272,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
               r.followers.map(([who, m], i) => (
                 <span key={who}>
                   {rowx(i ? "" : "followers", [
-                    { t: who, href: addrHref(who) },
+                    { t: who, href: followerHref(who), title: `follower page: vault, mandates, fills` },
                     `  cap ${near(m.per_tx_cap)}  spent ${near(m.spent)}/${near(m.allowance)} NEAR`,
                     m.revoked ? { t: "  REVOKED", c: "loss" } : "",
                   ])}
@@ -287,7 +288,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
             {quality.map((q, i) => (
               <span key={q.follower}>
                 {rowx(i ? "" : "execution", [
-                  { t: q.follower, href: addrHref(q.follower) },
+                  { t: q.follower, href: followerHref(q.follower), title: "follower page" },
                   `  ${q.n} fill${q.n === 1 ? "" : "s"}  avg `,
                   vsCell(q.avg),
                   ` vs oracle mid  best ${sbps(q.best)}  worst ${sbps(q.worst)}  last ${age(q.last, Date.now())} ago`,

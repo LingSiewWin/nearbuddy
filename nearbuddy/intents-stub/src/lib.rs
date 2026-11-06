@@ -9,8 +9,10 @@
 //!
 //! The one method `intents.near` does not have is `stub_credit`: it stands in for a solver's
 //! swap landing in an account (on mainnet a signed `token_diff` plus `transfer` intent executed by
-//! `execute_intents`, or an `ft_transfer_call` deposit). Anyone may call it; testnet tokens here
-//! are not money.
+//! `execute_intents`, or an `ft_transfer_call` deposit). Only minters may call it (the solver),
+//! added by the stub account itself with `add_minter`: an open `stub_credit` let anyone fake the
+//! receipt the arena checks. Minters live in raw storage under `m || account_id`, outside the
+//! contract struct, so this deploys over the live stub's state without a migration.
 use near_sdk::json_types::U128;
 use near_sdk::store::LookupMap;
 use near_sdk::{AccountId, assert_one_yocto, env, near, require};
@@ -28,6 +30,10 @@ impl Default for Contract {
             balances: LookupMap::new(b"b"),
         }
     }
+}
+
+fn minter_key(account_id: &AccountId) -> Vec<u8> {
+    [b"m".as_slice(), account_id.as_bytes()].concat()
 }
 
 fn key(account_id: &AccountId, token_id: &str) -> String {
@@ -87,10 +93,9 @@ impl Contract {
     }
 
     /// Stub only: credit `amount` of `token_id` to `receiver_id`, as a solver's swap landing would.
-    /// Caller: anyone. Deposit: none. Panics: "zero amount", "balance overflow".
-    /// ponytail: the stub account pays storage for every new balance, so testnet spam drains it;
-    /// charge a storage deposit if that ever happens.
+    /// Caller: a minter. Deposit: none. Panics: "not minter", "zero amount", "balance overflow".
     pub fn stub_credit(&mut self, receiver_id: AccountId, token_id: String, amount: U128) {
+        require!(self.is_minter(env::predecessor_account_id()), "not minter");
         require!(amount.0 > 0, "zero amount");
         let to = self.get(&receiver_id, &token_id);
         self.balances.insert(
@@ -101,6 +106,22 @@ impl Contract {
             "mt_mint",
             near_sdk::serde_json::json!({"owner_id": receiver_id, "token_ids": [token_id], "amounts": [amount], "memo": "stub_credit"}),
         );
+    }
+
+    /// Allow `account_id` to `stub_credit`. Caller: the stub account itself (private). Deposit: none.
+    #[private]
+    pub fn add_minter(&mut self, account_id: AccountId) {
+        env::storage_write(&minter_key(&account_id), &[]);
+    }
+
+    /// Stop `account_id` from crediting. Caller: the stub account itself (private). Deposit: none.
+    #[private]
+    pub fn remove_minter(&mut self, account_id: AccountId) {
+        env::storage_remove(&minter_key(&account_id));
+    }
+
+    pub fn is_minter(&self, account_id: AccountId) -> bool {
+        env::storage_has_key(&minter_key(&account_id))
     }
 
     fn get(&self, account_id: &AccountId, token_id: &str) -> u128 {
@@ -124,13 +145,46 @@ mod tests {
         s.parse().unwrap()
     }
 
+    const STUB: &str = "stub.testnet";
+
     fn ctx(who: &str, yocto: u128) {
         testing_env!(
             VMContextBuilder::new()
+                .current_account_id(acc(STUB))
                 .predecessor_account_id(acc(who))
                 .attached_deposit(NearToken::from_yoctonear(yocto))
                 .build()
         );
+    }
+
+    /// Stub with `solver.testnet` allowed to mint; the context is left on the solver.
+    fn stub() -> Contract {
+        ctx(STUB, 0);
+        let mut c = Contract::default();
+        c.add_minter(acc("solver.testnet"));
+        ctx("solver.testnet", 0);
+        c
+    }
+
+    #[test]
+    #[should_panic(expected = "not minter")]
+    fn outsider_cannot_credit() {
+        // red team S1: anyone could fake the receipt the arena's settle checks
+        let mut c = stub();
+        ctx("redteam.testnet", 0);
+        c.stub_credit(acc("arena.testnet"), T.into(), U128(1000));
+    }
+
+    #[test]
+    #[should_panic(expected = "not minter")]
+    fn removed_minter_cannot_credit() {
+        let mut c = stub();
+        assert!(c.is_minter(acc("solver.testnet")));
+        ctx(STUB, 0);
+        c.remove_minter(acc("solver.testnet"));
+        assert!(!c.is_minter(acc("solver.testnet")));
+        ctx("solver.testnet", 0);
+        c.stub_credit(acc("arena.testnet"), T.into(), U128(1));
     }
 
     #[test]
@@ -142,8 +196,7 @@ mod tests {
 
     #[test]
     fn credit_then_views_agree() {
-        ctx("solver.testnet", 0);
-        let mut c = Contract::default();
+        let mut c = stub();
         c.stub_credit(acc("arena.testnet"), T.into(), U128(70));
         c.stub_credit(acc("arena.testnet"), T.into(), U128(30));
         assert_eq!(c.mt_balance_of(acc("arena.testnet"), T.into()).0, 100);
@@ -160,8 +213,7 @@ mod tests {
 
     #[test]
     fn token_ids_with_colons_do_not_collide_across_accounts() {
-        ctx("solver.testnet", 0);
-        let mut c = Contract::default();
+        let mut c = stub();
         c.stub_credit(acc("a.testnet"), "nep141:x".into(), U128(1));
         assert_eq!(c.mt_balance_of(acc("a.testnet"), "nep141:x".into()).0, 1);
         assert_eq!(c.mt_balance_of(acc("a.testnet"), "nep141".into()).0, 0);
@@ -169,8 +221,7 @@ mod tests {
 
     #[test]
     fn transfer_moves_the_predecessors_balance() {
-        ctx("solver.testnet", 0);
-        let mut c = Contract::default();
+        let mut c = stub();
         c.stub_credit(acc("arena.testnet"), T.into(), U128(100));
         ctx("arena.testnet", 1);
         c.mt_transfer(acc("follower.testnet"), T.into(), U128(40), None, None);
@@ -189,8 +240,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "insufficient balance")]
     fn transfer_over_balance_panics() {
-        ctx("solver.testnet", 0);
-        let mut c = Contract::default();
+        let mut c = stub();
         c.stub_credit(acc("arena.testnet"), T.into(), U128(5));
         ctx("arena.testnet", 1);
         c.mt_transfer(acc("follower.testnet"), T.into(), U128(6), None, None);
@@ -199,8 +249,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "insufficient balance")]
     fn only_the_owner_can_move_a_balance() {
-        ctx("solver.testnet", 0);
-        let mut c = Contract::default();
+        let mut c = stub();
         c.stub_credit(acc("arena.testnet"), T.into(), U128(5));
         ctx("solver.testnet", 1);
         c.mt_transfer(acc("solver.testnet"), T.into(), U128(5), None, None);
@@ -223,8 +272,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "zero amount")]
     fn zero_credit_panics() {
-        ctx("solver.testnet", 0);
-        let mut c = Contract::default();
+        let mut c = stub();
         c.stub_credit(acc("arena.testnet"), T.into(), U128(0));
     }
 }

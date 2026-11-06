@@ -366,7 +366,11 @@ impl Contract {
             env::panic_str("bad target")
         };
         let key = nonce_key(&i.agent_pk.0, i.nonce.0);
-        require!(!self.used_nonces.contains(&key), "nonce used");
+        // `accepted_at` without borrowing `self` whole: `duel` is borrowed from `self.duels`
+        require!(
+            !self.nonce_times.contains_key(&key) && !self.used_nonces.contains(&key),
+            "nonce used"
+        );
         if let Some(prev) = slot.as_ref() {
             require!(i.nonce.0 > prev.nonce.0, "stale nonce");
         }
@@ -375,12 +379,13 @@ impl Contract {
             "bad signature"
         );
         *slot = Some(i.clone());
-        self.used_nonces.insert(key);
+        self.nonce_times.insert(key, env::block_timestamp());
         if tee_kind != 0 {
             self.used_proofs.insert(i.proof_hash.0.clone());
         }
         self.duels.flush();
-        // includes the used_nonces / used_proofs entries: LookupSet writes at insert
+        self.nonce_times.flush();
+        // includes the nonce_times entry (flushed) and the used_proofs one (LookupSet writes at insert)
         let cost = storage_cost_since(before);
         let agent = self.agents.get_mut(&i.agent_pk.0).expect("agent missing");
         require!(agent.bond.0 > cost, "bond exhausted");

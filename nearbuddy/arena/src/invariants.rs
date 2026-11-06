@@ -2,7 +2,10 @@
 //! mandate limits, duel finality and slash arithmetic; from deploy 15 also verified settlement
 //! (fills credited only against delivered, unaccounted output; sum(holdings) == accounted per token),
 //! `withdraw_token` (debit first, exact re-credit on a failed transfer), the vault delay (never paid
-//! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted).
+//! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted);
+//! from deploy 16 `vault_total == sum(vaults)`, no deposit past `max_vault_per_account`, and no fill
+//! settled for an intent accepted at or after its mandate's revoke or expiry, or before its
+//! latest (re)follow.
 //!
 //! Every operation runs like a transaction on chain: the contract is read from the mocked trie,
 //! the method runs, and on success the struct is written back and the collections flushed. A
@@ -58,6 +61,9 @@ fn agent_owner(i: usize) -> String {
 fn is_tee(i: usize) -> bool {
     i.is_multiple_of(2)
 }
+
+/// `FillSpec.nonce` for the agent's newest posted nonce.
+const LATEST: usize = usize::MAX;
 
 #[derive(Clone, Debug)]
 struct FillSpec {
@@ -278,7 +284,41 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                     units: 5_000_000,
                 },
             ];
-            [r, d, f, o, p, v, deliver].concat()
+            // follower 0 drops agent 0 a second in and follows it again a second later, between the
+            // posts: agent 0's intents fall before, inside and after the unfollowed window, so the
+            // deploy-16 accept-time rules (revoke, re-follow) are reached in every case
+            let third = p.len() / 3;
+            let (p0, rest) = p.split_at(third);
+            let (p1, p2) = rest.split_at(third);
+            let revoke = vec![Op::Advance { secs: 1 }, Op::Unfollow { who: 0, agent: 0 }];
+            let refollow = vec![
+                Op::Advance { secs: 1 },
+                Op::Follow {
+                    who: 0,
+                    agent: 0,
+                    allowance: 2_000,
+                    cap: 1_000,
+                    spent_pct: 0,
+                    only_wrap: false,
+                    ttl_s: 7_200,
+                    revoked: false,
+                    floor: 1,
+                },
+            ];
+            [
+                r,
+                d,
+                f,
+                o,
+                p0.to_vec(),
+                revoke,
+                p1.to_vec(),
+                refollow,
+                p2.to_vec(),
+                v,
+                deliver,
+            ]
+            .concat()
         })
 }
 
@@ -307,7 +347,7 @@ fn op() -> impl Strategy<Value = Op> {
     let ag = 0..AGENTS;
     let fol = 0..3usize;
     let fill = (
-        0..6usize,
+        prop_oneof![3 => 0..6usize, 1 => Just(LATEST)],
         prop_oneof![3 => 0u64..300, 1 => 0u64..1_500],
         any::<bool>(),
         prop_oneof![1 => Just(0u64), 9 => 0u64..3_000_000],
@@ -327,7 +367,7 @@ fn op() -> impl Strategy<Value = Op> {
         4 => (0..3usize, any::<bool>(), 1u16..=120, prop::bool::weighted(0.3)).prop_map(|(who, wrap, pct, fail)| Op::WithdrawToken { who, wrap, pct, fail }),
         1 => (any::<bool>(), 1u16..=120, prop::bool::weighted(0.3)).prop_map(|(wrap, pct, fail)| Op::Sweep { wrap, pct, fail }),
         2 => follow(fol.clone(), followable()),
-        1 => (fol.clone(), followable()).prop_map(|(who, agent)| Op::Unfollow { who, agent }),
+        3 => (fol.clone(), followable()).prop_map(|(who, agent)| Op::Unfollow { who, agent }),
         // b = a + 1..=3 (mod 4): the same-agent refusal is covered by the unit tests
         4 => (ag.clone(), 1..AGENTS, 30u64..600, 0u64..20, prop::bool::weighted(0.85), any::<bool>())
             .prop_map(|(a, off, len_s, milli, open_price, consented)| Op::Open { a, b: (a + off) % AGENTS, len_s, milli, open_price, consented }),
@@ -410,6 +450,7 @@ struct Snap {
     shields: [Option<u32>; AGENTS],
     in_duel: [Option<u64>; AGENTS],
     vaults: [u128; 4],
+    vault_total: u128,
     duels: Vec<Duel>,
     fees: u128,
     open_duels: u64,
@@ -448,6 +489,8 @@ struct Cfg {
     no_reveal_bps: u16,
     commit_reveal: bool,
     require_consent: bool,
+    /// `max_vault_per_account` (deploy 16); `VAULT_CAP` = no tighter than the global cap.
+    account_cap: u128,
 }
 
 /// Intent, salt and TEE proof behind one unrevealed commitment.
@@ -473,6 +516,10 @@ struct World {
     duels: Vec<DuelM>,
     next_nonce: [u64; AGENTS],
     posted: [Vec<u64>; AGENTS],
+    /// Block time each (agent, nonce) was accepted at (deploy 16 `nonce_times`).
+    accepted_at: HashMap<(usize, u64), u64>,
+    /// Block time of each (agent, follower) mandate's latest (re)follow (deploy 16 `V3`).
+    followed: HashMap<(usize, usize), u64>,
     settled: HashSet<(usize, usize, u64)>,
     proofs: u64,
     /// The arena's balance on the intents stub per token (0 wrap.near, 1 usdc.near).
@@ -504,6 +551,8 @@ impl World {
             duels: vec![],
             next_nonce: [1; AGENTS],
             posted: Default::default(),
+            accepted_at: HashMap::new(),
+            followed: HashMap::new(),
             settled: HashSet::new(),
             proofs: 0,
             intents_bal: [0; 2],
@@ -534,6 +583,7 @@ impl World {
         c.add_tee_signer(Base64VecU8(key(TEE_SEED).1), "prop".into());
         c.set_commit_reveal(cfg.commit_reveal, cfg.no_reveal_bps);
         c.set_require_consent(cfg.require_consent);
+        c.set_vault_account_cap(U128(cfg.account_cap));
         env::state_write(&c);
         drop(c);
         w.balance = env::account_balance().as_yoctonear();
@@ -658,6 +708,7 @@ impl World {
                 let id: AccountId = ACCOUNTS[i].parse().unwrap();
                 c.vaults.get(&id).copied().unwrap_or(0)
             }),
+            vault_total: c.vault_total,
             duels: (0..c.next_duel)
                 .map(|d| c.duels.get(&d).expect("duel").clone())
                 .collect(),
@@ -754,8 +805,20 @@ impl World {
             Op::Deposit { who, milli } => {
                 kind = Kind::PaysStorage;
                 let amt = milli as u128 * MILLI;
-                if self.call(ACCOUNTS[who], amt, |c| c.deposit()).is_ok() {
-                    self.vault_in[who] += amt;
+                match self.call(ACCOUNTS[who], amt, |c| c.deposit()) {
+                    Ok(_) => {
+                        self.vault_in[who] += amt;
+                        let v = self.snap().vaults[who];
+                        assert!(
+                            v <= self.cfg.account_cap,
+                            "a deposit left a vault above its cap"
+                        );
+                    }
+                    Err(e) if e == "account cap" => assert!(
+                        pre.vaults[who] + amt > self.cfg.account_cap,
+                        "a deposit inside the account cap was refused"
+                    ),
+                    Err(_) => {}
                 }
             }
             Op::Withdraw { who, milli } => {
@@ -855,6 +918,7 @@ impl World {
                     assert!(r.is_err(), "a follow without a price floor was accepted");
                 }
                 if r.is_ok() {
+                    self.followed.insert((agent, who), self.now);
                     let m = self.snap().mandate(agent, who).cloned().expect("stored");
                     assert_eq!(m.revoked_at.0, 0, "follow resets revoked_at");
                 }
@@ -1112,6 +1176,7 @@ impl World {
     fn accepted(&mut self, ag: usize, nonce: u64) {
         assert!(!self.posted[ag].contains(&nonce), "nonce accepted twice");
         self.posted[ag].push(nonce);
+        self.accepted_at.insert((ag, nonce), self.now);
         self.next_nonce[ag] = self.next_nonce[ag].max(nonce + 1);
     }
 
@@ -1239,11 +1304,15 @@ impl World {
         let fills: Vec<Fill> = specs
             .iter()
             .map(|s| Fill {
-                // one in len+1 is a nonce the agent never posted
-                intent_nonce: U64(self.posted[agent]
-                    .get(s.nonce % (self.posted[agent].len() + 1))
-                    .copied()
-                    .unwrap_or(1_000)),
+                // one in len+1 is a nonce the agent never posted; LATEST is the newest one (often
+                // posted after an unfollow or the expiry: the deploy-16 accept-time rule)
+                intent_nonce: U64(match s.nonce {
+                    LATEST => self.posted[agent].last().copied().unwrap_or(1_000),
+                    n => self.posted[agent]
+                        .get(n % (self.posted[agent].len() + 1))
+                        .copied()
+                        .unwrap_or(1_000),
+                }),
                 token: TOKENS[!s.wrap as usize].into(),
                 amount_in: U128(s.milli as u128 * MILLI),
                 amount_out: U128(s.out as u128),
@@ -1284,9 +1353,14 @@ impl World {
             } else if self.settled.contains(&(agent, who, n)) || accepted.contains(&n) {
                 Err("duplicate fill")
             } else if let Some(m) = m.as_mut() {
-                if m.revoked && self.now >= m.revoked_at.0 + DELAY {
+                // deploy 16: the grace never covers an intent accepted at or after the revoke / expiry
+                let at = self.accepted_at[&(agent, n)];
+                if self.followed.get(&(agent, who)).is_some_and(|t| at < *t) {
+                    Err("intent before follow")
+                } else if m.revoked && (self.now >= m.revoked_at.0 + DELAY || at >= m.revoked_at.0)
+                {
                     Err("mandate revoked")
-                } else if self.now >= m.expires_at.0 + DELAY {
+                } else if self.now >= m.expires_at.0 + DELAY || at >= m.expires_at.0 {
                     Err("mandate expired")
                 } else if !m.allowed_tokens.is_empty() && !m.allowed_tokens.contains(&f.token) {
                     Err("token not allowed")
@@ -1402,7 +1476,19 @@ impl World {
             );
         }
         for f in fills.iter().zip(&expect).filter(|(_, r)| r.is_ok()) {
-            self.settled.insert((agent, who, f.0.intent_nonce.0));
+            let n = f.0.intent_nonce.0;
+            // V3: a settled fill's intent predates the mandate's revoke and expiry
+            let m = pre.mandate(agent, who).expect("settled without a mandate");
+            let at = self.accepted_at[&(agent, n)];
+            assert!(
+                (!m.revoked || at < m.revoked_at.0) && at < m.expires_at.0,
+                "settled an intent accepted after its mandate closed"
+            );
+            assert!(
+                at >= self.followed[&(agent, who)],
+                "settled an intent accepted before the (re)follow"
+            );
+            self.settled.insert((agent, who, n));
         }
         self.vault_out[who] += amt_in + fees;
         self.vault_in[SOLVER_IX] += amt_in;
@@ -1644,6 +1730,12 @@ impl World {
                 "vault {i} above its ledger"
             );
         }
+        // 2b. every vault starts in this deploy's accounting, so the counted total is exact (deploy 16)
+        assert_eq!(
+            post.vault_total,
+            post.vaults.iter().sum::<u128>(),
+            "vault_total != sum(vaults)"
+        );
         // 3. no mandate over its allowance (generated mandates start within it)
         for (a, w, m) in &post.mandates {
             assert!(
@@ -1720,9 +1812,12 @@ proptest! {
 
     #[test]
     fn arena_money_and_mandate_invariants(
-        cfg in (0u16..=10_000, 0u16..=1_000, 0u16..=10_000, any::<bool>(), any::<bool>())
-            .prop_map(|(slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent)| Cfg {
-                slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent,
+        cfg in (
+            (0u16..=10_000, 0u16..=1_000, 0u16..=10_000, any::<bool>(), any::<bool>()),
+            prop_oneof![Just(VAULT_CAP), (500u128..6_000).prop_map(|m| m * MILLI)],
+        )
+            .prop_map(|((slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent), account_cap)| Cfg {
+                slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent, account_cap,
             }),
         ops in (setup(), vec(op(), 1..=40)).prop_map(|(s, t)| [s, t].concat()),
     ) {

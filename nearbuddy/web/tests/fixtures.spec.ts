@@ -746,3 +746,129 @@ test("terminal duel: an open duel is never sent to the verifier", async ({ page 
   await page.waitForTimeout(500);
   expect(asked).toEqual([]);
 });
+
+// ---------------------------------------------------------------- the follower page (values from the live
+// nearbuddy-follower2.testnet, with the delayed withdrawal still queued)
+const USDC = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+const SETTLE_TX = "GBBTWCWevc74eTa24dY26cvpv56qBWGiH7yp5iZ1Nit7";
+const follower = {
+  at: now,
+  account: "nearbuddy-follower2.testnet",
+  arena: "arena.nearbuddy-solver.testnet",
+  deploy15: true,
+  vault: "3596470000000000000000000",
+  pending: { amount: "300000000000000000000000", ready_at: NS(now + 600_000) },
+  holdings: [
+    { token: USDC, amount: "370560" },
+    { token: "nep141:wrap.near", amount: "0" },
+  ],
+  mandates: [
+    {
+      agent_pk: PK_A,
+      model_id: "Qwen/Qwen3.8-27B",
+      mandate: {
+        allowance: "500000000000000000000000",
+        spent: "100000000000000000000000",
+        per_tx_cap: "100000000000000000000000",
+        allowed_tokens: [USDC],
+        expires_at: NS(now + 86_400_000),
+        revoked: false,
+        min_out_per_near: "3520320",
+        revoked_at: "0",
+      },
+    },
+  ],
+  fills: [
+    {
+      tx: SETTLE_TX,
+      at_ms: now - 600_000,
+      follower: "nearbuddy-follower2.testnet",
+      agent_pk: PK_A,
+      solver: "nearbuddy-solver.testnet",
+      intent_nonce: "1793987081039",
+      token: USDC,
+      amount_in: "100000000000000000000000",
+      amount_out: "370560",
+      swap_tx: "stub:1",
+    },
+  ],
+  fills_scan: { from_ms: now - 3_600_000, oldest_ms: now - 4_000_000, txs: 420, complete: true },
+  activity: [
+    { kind: "request_withdraw", tx: "A7JKJaJoYsv69Ju3jVpJVbYNYfPGQLxZ17u9ZxAx2xpj", at_ms: now - 300_000, amount: "300000000000000000000000" },
+    { kind: "withdraw_token", tx: "HG7nez6hggeraoYoPuqnYLmz5uog2kPSyipbaknZS3nK", at_ms: now - 400_000, amount: "370560", token: USDC },
+    { kind: "follow", tx: "4fa2aMQftRpGENqiHPRfGKQRDickmydMYTZRxETYompm", at_ms: now - 3_000_000, agent_pk: PK_A },
+    { kind: "deposit", tx: "3XafUn3eieEcXmGRunEZdemML2Md2DBAfGqxb4Nezu4F", at_ms: now - 3_100_000, amount: "1000000000000000000000000" },
+  ],
+};
+
+test("follower: vault, queued withdrawal countdown, holdings, mandate, settled fill and its own calls", async ({ page }) => {
+  await stub(page, "follower", follower);
+  await page.goto("/follower/nearbuddy-follower2.testnet");
+  const body = page.locator("body");
+  await expect(body).toContainText("NEARBUDDY FOLLOWER nearbuddy-follower2.testnet");
+  await expect(body).toContainText("vault            3.596 NEAR");
+  // the fixture's ready_at is fixed when the spec loads; the countdown runs from then
+  await expect(body).toContainText(/withdrawal {7}0\.300 NEAR queued {3}ready in \d+:\d\d/);
+  await expect(body).toContainText("holding USDC     0.3705 USDC          credited by settled fills");
+  await expect(body).toContainText("holding wNEAR    0.0000 wNEAR         credited by settled fills");
+  await expect(body).toContainText("a refused call (an early withdraw, say) is not listed");
+  await expect(body).toContainText("Qwen3.8-27B             active   cap 0.100  spent 0.100/0.500 NEAR");
+  await expect(page.getByRole("link", { name: "Qwen3.8-27B" }).first()).toHaveAttribute("href", `/agent/${encodeURIComponent(PK_A)}`);
+  await expect(body).toContainText(" 0.100 NEAR →    0.3705 USDC");
+  await expect(page.locator(`a[href$="/txns/${SETTLE_TX}"]`)).toBeVisible();
+  await expect(body).toContainText("arena txs read back to its first follow (420 txs)");
+  await expect(body).toContainText("ask withdraw  0.300 NEAR");
+  await expect(body).toContainText("token out     0.3705 USDC");
+  await shot(page, "follower");
+});
+
+test("follower: a withdrawal past its delay reads ready; an account that follows nobody says so", async ({ page }) => {
+  await stub(page, "follower", {
+    ...follower,
+    pending: { amount: "300000000000000000000000", ready_at: NS(now - 1000) },
+    mandates: [],
+    fills: [],
+    fills_scan: { from_ms: null, oldest_ms: null, txs: 0, complete: true },
+    activity: [],
+  });
+  await page.goto("/follower/nearbuddy-follower2.testnet");
+  const body = page.locator("body");
+  await expect(body).toContainText("ready: withdraw() pays it");
+  await expect(body).toContainText("follows no agent");
+  await expect(body).toContainText("no follow yet: nothing to settle");
+  await expect(body).toContainText("no calls to the arena");
+});
+
+test("follower: a scan that stopped before the first follow shows a warning row", async ({ page }) => {
+  const cut = Date.UTC(2026, 10, 6, 14, 5);
+  await stub(page, "follower", {
+    ...follower,
+    fills_scan: { from_ms: cut - 86_400_000, oldest_ms: cut, txs: 1200, complete: false },
+  });
+  await page.goto("/follower/nearbuddy-follower2.testnet");
+  const warn = page.locator("span.warn", { hasText: "older fills not scanned" });
+  await expect(warn).toHaveText("older fills not scanned: arena txs read back to 11-06 14:05 UTC only (1200 txs)");
+  await expect(page.locator("span.warn", { hasText: /^warning$/ })).toBeVisible(); // the row's label
+  await expect(page.locator("body")).not.toContainText("read back to its first follow");
+});
+
+test("terminal agent: each follower links to its follower page", async ({ page }) => {
+  await stub(page, "agent", {
+    at: now,
+    rpc: "https://fixture.rpc",
+    contract: "arena.nearbuddy-solver.testnet",
+    scanned: 1,
+    next_duel: 412,
+    slash_bps: 1000,
+    min_chaos_deposit: "10000000000000000000000",
+    agent: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
+    followers: [["nearbuddy-follower2.testnet", mandate]],
+    duels: [],
+    execution: null,
+  });
+  await page.goto(`/terminal/agent/${encodeURIComponent(PK_A)}`);
+  await expect(page.getByRole("link", { name: "nearbuddy-follower2.testnet" })).toHaveAttribute(
+    "href",
+    "/follower/nearbuddy-follower2.testnet",
+  );
+});

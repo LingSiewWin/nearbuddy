@@ -90,7 +90,8 @@ impl Contract {
     /// Follower locks NEAR here. Solvers are repaid from it only inside a mandate. A first deposit
     /// also pays for the vault record.
     /// Caller: anyone (follower). Deposit: the amount to lock, above a first vault record's
-    /// storage. Panics: "paused", "deposit required", "vault cap".
+    /// storage. Panics: "paused", "deposit required", "vault cap", "account cap" (the caller's vault
+    /// would pass `max_vault_per_account`).
     #[payable]
     pub fn deposit(&mut self) -> U128 {
         self.not_paused();
@@ -110,6 +111,7 @@ impl Contract {
         let cost = storage_cost_since(before);
         require!(amt > cost, "deposit required");
         let bal = bal - cost;
+        require!(bal <= self.max_vault_per_account, "account cap");
         self.vaults.insert(who, bal);
         self.vault_total += amt - cost;
         U128(bal)
@@ -193,7 +195,8 @@ impl Contract {
     /// vault. `min_out_per_near` must be set (clients derive it from the oracle mid less slippage), so
     /// a solver can never settle a fill for a token amount of output. `revoked_at` is reset to 0.
     /// Panics: "paused", "migrating", "agent missing", "agent unverified", "empty mandate",
-    /// "price floor required", "insufficient".
+    /// "price floor required", "insufficient". The mandate records the follow time: only intents
+    /// accepted from then on settle against it (deploy 16).
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
         self.not_paused();
         self.not_migrating();
@@ -210,20 +213,25 @@ impl Contract {
         };
         let before = env::storage_usage();
         let who = env::predecessor_account_id();
-        self.follows
-            .insert(follow_key(&agent_pk.0, &who), VersionedMandate::V2(mandate));
+        self.follows.insert(
+            follow_key(&agent_pk.0, &who),
+            VersionedMandate::V3(mandate, env::block_timestamp()),
+        );
         self.follows.flush();
         let cost = storage_cost_since(before);
         if cost > 0 {
             let bal = self.vaults.get(&who).copied().unwrap_or(0);
             require!(bal >= cost, "insufficient");
             self.vaults.insert(who.clone(), bal - cost);
+            // the storage NEAR left the vault, so it leaves the counted total too (deploy 16)
+            self.vault_total = self.vault_total.saturating_sub(cost);
         }
         follow_event("follow", &agent_pk.0, &who);
     }
 
     /// Revoke the caller's mandate for `agent_pk`; a no-op when there is none. Open while paused.
-    /// Fills the solver fronted before now stay settleable for `withdraw_delay_s` (see `apply_fill`).
+    /// Fills for intents accepted before now stay settleable for `withdraw_delay_s`; intents
+    /// accepted from now on never settle against this mandate (see `apply_fill`).
     /// Caller: the follower. Deposit: none. Panics: "migrating".
     pub fn unfollow(&mut self, agent_pk: Base64VecU8) {
         self.not_migrating();
@@ -290,7 +298,7 @@ impl Contract {
     /// `amount_out` to the follower's holding.
     /// Batch-wide rejections: "no receipt" (view failed, too long, malformed), "outflow during
     /// view" (a token withdrawal confirmed meanwhile; retry), "solver removed". Per fill: "nonce
-    /// unknown", "duplicate fill", "no mandate", "mandate revoked", "mandate expired",
+    /// unknown", "duplicate fill", "no mandate", "intent before follow", "mandate revoked", "mandate expired",
     /// "token not allowed", "fee overflow", "over cap", "allowance exhausted", "amount overflow",
     /// "below min price", "no receipt", "insufficient".
     /// When no fill settles the call panics with the first reason, so a batch without a receipt is
@@ -360,28 +368,32 @@ impl Contract {
         now: u64,
         surplus: &mut BTreeMap<String, u128>,
     ) -> Result<u128, &'static str> {
-        if !self
-            .used_nonces
-            .contains(&nonce_key(agent_pk, f.intent_nonce.0))
-        {
-            return Err("nonce unknown");
-        }
+        let at = self
+            .accepted_at(&nonce_key(agent_pk, f.intent_nonce.0))
+            .ok_or("nonce unknown")?;
         let fkey = fill_key(agent_pk, follower, f.intent_nonce.0);
         if self.settled_fills.contains(&fkey) {
             return Err("duplicate fill");
         }
         // a swap fronted while the mandate was live may land after an unfollow or the expiry: it stays
-        // settleable for the same delay a vault withdrawal waits, then the mandate is closed
+        // settleable for the same delay a vault withdrawal waits, then the mandate is closed. The grace
+        // covers only intents accepted before the revoke or expiry (`at`; 0 = before deploy 16, unknown).
         let grace = self.withdraw_delay_ns;
-        let m = self
+        let v = self
             .follows
             .get_mut(&follow_key(agent_pk, follower))
-            .ok_or("no mandate")?
-            .current_mut();
-        if m.revoked && now >= m.revoked_at.0.saturating_add(grace) {
+            .ok_or("no mandate")?;
+        // a follower copies only intents accepted from its latest (re)follow on: one accepted while
+        // it was not following (before the first follow, or between an unfollow and a re-follow,
+        // which resets `revoked`) never settles. Same block counts as after. Pre-16 mandates: no time.
+        if v.followed_at().is_some_and(|t| at < t) {
+            return Err("intent before follow");
+        }
+        let m = v.current_mut();
+        if m.revoked && (now >= m.revoked_at.0.saturating_add(grace) || at >= m.revoked_at.0) {
             return Err("mandate revoked");
         }
-        if now >= m.expires_at.0.saturating_add(grace) {
+        if now >= m.expires_at.0.saturating_add(grace) || at >= m.expires_at.0 {
             return Err("mandate expired");
         }
         if !m.allowed_tokens.is_empty() && !m.allowed_tokens.contains(&f.token) {

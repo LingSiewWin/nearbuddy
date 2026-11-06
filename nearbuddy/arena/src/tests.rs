@@ -771,7 +771,8 @@ pub fn fill(nonce: u64, token: &str, amount: u128) -> Fill {
 
 const VAULT: u128 = 10 * NEAR;
 /// `withdraw_delay_ns` default: the grace a fronted fill keeps after unfollow or expiry.
-const GRACE: u64 = 900 * 1_000_000_000;
+const GRACE: u64 = 900 * SEC;
+const SEC: u64 = 1_000_000_000;
 
 /// setup + TEE signer + duel + A posts nonce 1 through its proof + follower deposits 10 NEAR and
 /// follows A (TEE-backed; plain B cannot be followed) with the given mandate.
@@ -1003,12 +1004,12 @@ fn fill_after_revoke_and_its_grace_rejected() {
 fn swap_fronted_before_unfollow_settles_inside_the_grace() {
     // the follower unfollows after the solver fronted the swap; the fill lands 899 s later and settles
     let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
-    ctx(FOLLOWER, 0);
+    ctx_at(FOLLOWER, 0, NOW + 1);
     c.unfollow(Base64VecU8(key(1).1));
     let m = c
         .get_follow(Base64VecU8(key(1).1), FOLLOWER.parse().unwrap())
         .unwrap();
-    assert_eq!((m.revoked, m.revoked_at.0), (true, NOW));
+    assert_eq!((m.revoked, m.revoked_at.0), (true, NOW + 1));
     // a second unfollow does not restart the grace
     ctx_at(FOLLOWER, 0, NOW + 10);
     c.unfollow(Base64VecU8(key(1).1));
@@ -1016,6 +1017,161 @@ fn swap_fronted_before_unfollow_settles_inside_the_grace() {
     let answer = covering(&c, &fills);
     let r = settle_answered(&mut c, 1, fills, answer, NOW + GRACE - 1);
     assert_eq!(r.unwrap().settled, 1);
+}
+
+/// A posts nonce `nonce` through its TEE proof at `ts`.
+fn post_a_at(c: &mut Contract, ska: &SigningKey, tee: &SigningKey, d: u64, nonce: u64, ts: u64) {
+    let pk = ska.verifying_key().to_bytes();
+    let (req, res) = (pk, [nonce as u8; 32]);
+    let mut i = intent(&pk, d, Side::Long, 5_000, nonce);
+    i.proof_hash = Base64VecU8(proof_hash(&req, &res));
+    ctx_at(SOLVER, 0, ts);
+    c.post_intent(sign(ska, &i), Some(tee_proof(tee, 2, MODEL_A, req, res)));
+}
+
+#[test]
+fn intent_accepted_after_unfollow_never_settles_inside_the_grace() {
+    // red team V3: the grace let the solver settle intents posted after the revoke
+    let (mut c, d, _) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let tee = key(7).0;
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.unfollow(Base64VecU8(key(1).1));
+    post_a_at(&mut c, &key(1).0, &tee, d, 2, NOW + 2 * SEC);
+    let fills = vec![fill(2, "usdc", 50), fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 3 * SEC).unwrap();
+    assert_eq!(
+        r.settled, 1,
+        "nonce 1 (before the revoke) is inside the grace"
+    );
+    assert_eq!(r.rejected, vec![(0, "mandate revoked".to_string())]);
+}
+
+#[test]
+fn intent_accepted_at_the_revoke_instant_is_refused() {
+    // same block as the unfollow: the order inside the block is unknown, so the follower wins
+    let (mut c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(FOLLOWER, 0);
+    c.unfollow(Base64VecU8(key(1).1));
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC);
+    assert_eq!(r.unwrap_err(), "mandate revoked");
+}
+
+#[test]
+fn intent_accepted_after_expiry_never_settles_inside_the_grace() {
+    let mut m = mandate(NEAR, VAULT, vec![]);
+    m.expires_at = U64(NOW + 2 * SEC);
+    let (mut c, d, _) = setup_follow(m);
+    post_a_at(&mut c, &key(1).0, &key(7).0, d, 2, NOW + 2 * SEC);
+    let fills = vec![fill(2, "usdc", 50), fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 3 * SEC).unwrap();
+    assert_eq!(r.settled, 1);
+    assert_eq!(r.rejected, vec![(0, "mandate expired".to_string())]);
+}
+
+/// `mandate(NEAR, VAULT, [])` open for an hour (the default one expires 1 ms after `NOW`).
+fn hour_mandate() -> Mandate {
+    let mut m = mandate(NEAR, VAULT, vec![]);
+    m.expires_at = U64(NOW + 3_600 * SEC);
+    m
+}
+
+#[test]
+fn intent_posted_before_the_follow_never_settles() {
+    let (mut c, ska, _) = setup();
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    post_a_at(&mut c, &ska, &tee, d, 1, NOW);
+    ctx_at(FOLLOWER, VAULT, NOW + SEC);
+    c.deposit();
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(Base64VecU8(key(1).1), hour_mandate());
+    post_a_at(&mut c, &ska, &tee, d, 2, NOW + 2 * SEC);
+    let fills = vec![fill(1, "usdc", 50), fill(2, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 3 * SEC).unwrap();
+    assert_eq!(r.settled, 1);
+    assert_eq!(r.rejected, vec![(0, "intent before follow".to_string())]);
+}
+
+#[test]
+fn refollow_does_not_revive_intents_from_the_unfollowed_window() {
+    // re-follow resets `revoked`; the follow time keeps the gap closed
+    let (mut c, d, _) = setup_follow(hour_mandate());
+    let (ska, tee) = (key(1).0, key(7).0);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.unfollow(Base64VecU8(key(1).1));
+    post_a_at(&mut c, &ska, &tee, d, 2, NOW + 2 * SEC);
+    ctx_at(FOLLOWER, 0, NOW + 3 * SEC);
+    c.follow(Base64VecU8(key(1).1), hour_mandate());
+    post_a_at(&mut c, &ska, &tee, d, 3, NOW + 4 * SEC);
+    let fills = vec![
+        fill(1, "usdc", 50),
+        fill(2, "usdc", 50),
+        fill(3, "usdc", 50),
+    ];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 5 * SEC).unwrap();
+    assert_eq!(r.settled, 1, "only nonce 3, posted after the re-follow");
+    let before = "intent before follow".to_string();
+    assert_eq!(r.rejected, vec![(0, before.clone()), (1, before)]);
+}
+
+#[test]
+fn follow_stores_its_time() {
+    let (c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    let k = crate::follow::follow_key(&key(1).1, &FOLLOWER.parse().unwrap());
+    assert_eq!(c.follows.get(&k).unwrap().followed_at(), Some(NOW));
+}
+
+/// Store the follower's mandate for agent `seed` as deploy 15 did: `V2`, no follow time.
+fn as_v15_mandate(c: &mut Contract, seed: u8) {
+    let k = crate::follow::follow_key(&key(seed).1, &FOLLOWER.parse().unwrap());
+    let m = c.follows.get(&k).unwrap().current().clone();
+    c.follows.insert(k, VersionedMandate::V2(m));
+}
+
+#[test]
+fn intent_accepted_before_deploy_16_keeps_the_grace_rule() {
+    // only `used_nonces` knows it: no accept time, so the deploy-15 grace applies as before
+    let mut m = mandate(NEAR, VAULT, vec![]);
+    m.expires_at = U64(NOW + 2 * GRACE);
+    let (mut c, ..) = setup_follow(m);
+    as_v15_mandate(&mut c, 1);
+    c.used_nonces.insert(nonce_key(&key(1).1, 5));
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.unfollow(Base64VecU8(key(1).1));
+    let fills = vec![fill(5, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let late = settle_answered(&mut c, 1, fills.clone(), answer, NOW + SEC + GRACE);
+    assert_eq!(late.unwrap_err(), "mandate revoked");
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC + GRACE - 1);
+    assert_eq!(r.unwrap().settled, 1);
+}
+
+#[test]
+#[should_panic(expected = "nonce used")]
+fn a_pre_deploy_16_nonce_cannot_be_posted_again() {
+    let (mut c, ska, _) = setup();
+    let tee = tee_signer(&mut c);
+    let d = open(&mut c);
+    c.used_nonces.insert(nonce_key(&key(1).1, 3));
+    post_a(&mut c, &ska, &tee, d, Side::Long, 3);
+}
+
+#[test]
+fn post_intent_records_its_accept_time() {
+    let (c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    assert_eq!(c.accepted_at(&nonce_key(&key(1).1, 1)), Some(NOW));
+    assert_eq!(c.accepted_at(&nonce_key(&key(1).1, 2)), None);
+    assert!(
+        !c.used_nonces.contains(&nonce_key(&key(1).1, 1)),
+        "new intents skip used_nonces"
+    );
 }
 
 #[test]
@@ -1524,6 +1680,54 @@ fn deposits_stop_at_the_vault_cap() {
     assert!(c.get_config().vault_total.0 <= 3 * NEAR);
     ctx(OPERATOR, 3 * NEAR);
     c.deposit();
+}
+
+#[test]
+fn follow_storage_leaves_vault_total_with_the_vault() {
+    // red team V2: the vault paid the follow's storage, the total did not move
+    let (c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    assert_eq!(c.get_config().vault_total.0, v);
+}
+
+#[test]
+fn reconcile_vault_total_sets_the_sum_of_the_listed_vaults() {
+    let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    ctx(OPERATOR, 2 * NEAR);
+    let o = c.deposit().0;
+    // deploy-15 drift: pretend the total is off both ways
+    c.vault_total = 1;
+    ctx(OWNER, 1);
+    let accounts: Vec<AccountId> = [FOLLOWER, OPERATOR, SPECTATOR]
+        .iter()
+        .map(|a| a.parse().unwrap())
+        .collect();
+    assert_eq!(c.reconcile_vault_total(accounts).0, v + o);
+    assert_eq!(c.get_config().vault_total.0, v + o);
+    c.vault_total = u128::MAX;
+    assert_eq!(c.reconcile_vault_total(vec![]).0, 0);
+}
+
+#[test]
+fn reconcile_vault_total_refusals() {
+    let mut c = fresh(0);
+    let f: AccountId = FOLLOWER.parse().unwrap();
+    let refuse = |c: &mut Contract, who: &str, yocto: u128, accounts: Vec<AccountId>| {
+        ctx(who, yocto);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.reconcile_vault_total(accounts)
+        }));
+        panic_msg(r.unwrap_err())
+    };
+    assert_eq!(refuse(&mut c, FOLLOWER, 1, vec![]), "not owner");
+    assert!(refuse(&mut c, OWNER, 0, vec![]).contains("exactly 1 yoctoNEAR"));
+    assert_eq!(
+        refuse(&mut c, OWNER, 1, vec![f.clone(), f.clone()]),
+        "duplicate account"
+    );
+    let many: Vec<AccountId> = (0..=crate::state::MAX_RECONCILE)
+        .map(|i| format!("a{i}.testnet").parse().unwrap())
+        .collect();
+    assert_eq!(refuse(&mut c, OWNER, 1, many), "too many accounts");
 }
 
 #[test]
@@ -2119,13 +2323,9 @@ fn mandate_v1(allowance: u128) -> MandateV1 {
 }
 
 #[test]
-fn migrate_v15_rekeys_follows_in_batches_and_keeps_the_rest() {
+fn migrate_follows_rekeys_in_batches() {
     let (mut c, ..) = setup();
     let (a, b) = (key(1).1, key(2).1);
-    let d0 = open(&mut c);
-    ctx(FOLLOWER, VAULT);
-    c.deposit();
-    let vault = c.get_vault(FOLLOWER.parse().unwrap()).0;
     // deploy-14 follower lists under the old `Follows` prefix: two followers of A, one of B
     let (f, o): (AccountId, AccountId) = (FOLLOWER.parse().unwrap(), OPERATOR.parse().unwrap());
     c.follows_v1.insert(
@@ -2134,81 +2334,150 @@ fn migrate_v15_rekeys_follows_in_batches_and_keeps_the_rest() {
     );
     c.follows_v1
         .insert(b.clone(), vec![(f.clone(), mandate_v1(8))]);
-    c.follows_v1.flush();
-    c.duels.flush();
-    c.agents.flush();
-    c.agent_duels.flush();
-    c.vaults.flush();
-    // deploy-14 state: the current layout minus the fields deploy 15 appends
-    let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
-    let tail = near_sdk::borsh::to_vec(&(
-        &c.follows,
-        &c.follows_cursor,
-        &c.intents_account,
-        &c.holdings,
-        &c.accounted,
-        &c.outflow_seq,
-        &c.pending_withdrawals,
-        &c.withdraw_delay_ns,
-        &c.paused,
-        &c.max_vault_total,
-        &c.vault_total,
-        &c.duel_locks,
-        &c.sweeping,
-        &c.self_chaos,
-    ))
-    .unwrap();
-    assert_eq!(raw.split_off(raw.len() - tail.len()), tail);
-    env::storage_write(b"STATE", &raw);
-    ctx(CONTRACT, 0);
-    let mut m = Contract::migrate_v15(INTENTS.parse().unwrap(), U128(VAULT_CAP));
-    let cfg = m.get_config();
-    assert!(cfg.migrating);
-    assert_eq!(
-        (
-            cfg.withdraw_delay_s,
-            cfg.paused,
-            cfg.intents_account.as_str()
-        ),
-        (900, false, INTENTS)
-    );
-    assert_eq!(
-        (cfg.next_duel.0, cfg.open_duels, cfg.intent_lock_s),
-        (1, 1, 10)
-    );
-    assert_eq!(m.get_vault(f.clone()).0, vault, "vaults untouched");
+    c.follows_cursor = Some(0); // as migrate_v15 left it
+    assert!(c.get_config().migrating);
     // follow and settle are refused until the re-key finishes
     ctx(FOLLOWER, 0);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        m.follow(Base64VecU8(a.clone()), mandate(NEAR, VAULT, vec![]))
+        c.follow(Base64VecU8(a.clone()), mandate(NEAR, VAULT, vec![]))
     }));
     assert_eq!(panic_msg(r.unwrap_err()), "migrating");
     ctx(SOLVER, 0);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = m.settle_follow(Base64VecU8(a.clone()), f.clone(), vec![fill(1, "usdc", 1)]);
+        let _ = c.settle_follow(Base64VecU8(a.clone()), f.clone(), vec![fill(1, "usdc", 1)]);
     }));
     assert_eq!(panic_msg(r.unwrap_err()), "migrating");
     // one agent per call
     ctx(OWNER, 1);
-    assert_eq!(m.migrate_follows(1), Some(1));
-    assert_eq!(m.migrate_follows(1), None);
-    assert!(!m.get_config().migrating);
-    let got = |m: &Contract, pk: &[u8], who: &AccountId| {
-        m.get_follow(Base64VecU8(pk.to_vec()), who.clone())
+    assert_eq!(c.migrate_follows(1), Some(1));
+    assert_eq!(c.migrate_follows(1), None);
+    assert!(!c.get_config().migrating);
+    let got = |c: &Contract, pk: &[u8], who: &AccountId| {
+        c.get_follow(Base64VecU8(pk.to_vec()), who.clone())
             .map(|x| (x.allowance.0, x.spent.0, x.min_out_per_near.0))
     };
-    assert_eq!(got(&m, &a, &f), Some((5, 7, 0)));
-    assert_eq!(got(&m, &a, &o), Some((6, 7, 0)));
-    assert_eq!(got(&m, &b, &f), Some((8, 7, 0)));
-    assert_eq!(got(&m, &b, &o), None);
-    assert!(m.follows_v1.get(&a).is_none(), "old lists are drained");
-    // the duel open across the deploy keeps the global lock; it still takes intents
-    assert_eq!(m.lock_of(d0), 10_000_000_000);
+    assert_eq!(got(&c, &a, &f), Some((5, 7, 0)));
+    assert_eq!(got(&c, &a, &o), Some((6, 7, 0)));
+    assert_eq!(got(&c, &b, &f), Some((8, 7, 0)));
+    assert_eq!(got(&c, &b, &o), None);
+    assert!(c.follows_v1.get(&a).is_none(), "old lists are drained");
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ctx(OWNER, 1);
-        m.migrate_follows(1)
+        c.migrate_follows(1)
     }));
     assert_eq!(panic_msg(r.unwrap_err()), "migration done");
+}
+
+/// Deploy-15 state bytes: the current layout minus the fields deploy 16 appends.
+fn v15_state(c: &mut Contract) -> Vec<u8> {
+    c.duels.flush();
+    c.agents.flush();
+    c.agent_duels.flush();
+    c.vaults.flush();
+    c.follows.flush();
+    let mut raw = near_sdk::borsh::to_vec(&*c).unwrap();
+    c.nonce_times.flush();
+    let tail = near_sdk::borsh::to_vec(&(&c.max_vault_per_account, &c.nonce_times)).unwrap();
+    assert_eq!(raw.split_off(raw.len() - tail.len()), tail);
+    raw
+}
+
+#[test]
+fn migrate_v16_keeps_deploy_15_state_and_adds_the_account_cap() {
+    let (mut c, d, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    // deploy 15 recorded the posted nonce in `used_nonces` only, and the mandate as V2
+    as_v15_mandate(&mut c, 1);
+    let k = nonce_key(&key(1).1, 1);
+    c.nonce_times.remove(&k);
+    c.used_nonces.insert(k.clone());
+    let raw = v15_state(&mut c);
+    let before = c.get_config();
+    env::storage_write(b"STATE", &raw);
+    ctx(CONTRACT, 0);
+    let mut m = Contract::migrate_v16(U128(12 * NEAR));
+    let cfg = m.get_config();
+    assert_eq!(cfg.max_vault_per_account.0, 12 * NEAR);
+    assert_eq!(
+        near_sdk::serde_json::to_value(Config {
+            max_vault_per_account: before.max_vault_per_account,
+            ..cfg
+        })
+        .unwrap(),
+        near_sdk::serde_json::to_value(before).unwrap(),
+        "every deploy-15 setting carried over"
+    );
+    let f: AccountId = FOLLOWER.parse().unwrap();
+    assert_eq!(m.get_vault(f.clone()).0, v, "vaults untouched");
+    assert!(m.get_follow(Base64VecU8(key(1).1), f).is_some());
+    assert_eq!(m.lock_of(d), LOCK);
+    assert_eq!(
+        m.accepted_at(&k),
+        Some(0),
+        "a deploy-15 nonce stays known, time unknown"
+    );
+    // the fill posted before the deploy still settles
+    assert_eq!(settle(&mut m, vec![fill(1, "usdc", 50)]).settled, 1);
+    // the follower holds ~10 NEAR: 2 more fit under 12, 1 more after that does not
+    ctx(FOLLOWER, 2 * NEAR);
+    m.deposit();
+    ctx(FOLLOWER, NEAR);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.deposit()));
+    assert_eq!(panic_msg(r.unwrap_err()), "account cap");
+}
+
+#[test]
+#[should_panic(expected = "account cap")]
+fn one_account_cannot_fill_the_global_vault_cap() {
+    // red team V1: one deposit of the whole free cap blocked every later follower
+    let mut c = fresh(0);
+    ctx(OWNER, 1);
+    c.set_vault_cap(U128(10 * NEAR));
+    c.set_vault_account_cap(U128(4 * NEAR));
+    ctx(SPECTATOR, 9 * NEAR);
+    c.deposit();
+}
+
+#[test]
+fn account_cap_leaves_room_for_others_and_spares_existing_vaults() {
+    let mut c = fresh(0);
+    ctx(OWNER, 1);
+    c.set_vault_cap(U128(10 * NEAR));
+    c.set_vault_account_cap(U128(4 * NEAR));
+    ctx(SPECTATOR, 4 * NEAR);
+    let s = c.deposit().0;
+    ctx(FOLLOWER, 4 * NEAR);
+    let f = c.deposit().0;
+    assert_eq!(c.get_config().vault_total.0, s + f);
+    // lowering the cap below a vault keeps that vault and its exit
+    ctx(OWNER, 1);
+    c.set_vault_account_cap(U128(NEAR));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, f);
+    ctx(FOLLOWER, 1);
+    c.request_withdraw(U128(f));
+    // but not a top-up (last: a unit-test panic does not revert the writes before it)
+    ctx(SPECTATOR, NEAR / 10);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.deposit()));
+    assert_eq!(panic_msg(r.unwrap_err()), "account cap");
+}
+
+#[test]
+fn set_vault_account_cap_is_owner_only_with_one_yocto() {
+    let mut c = fresh(0);
+    assert_eq!(
+        c.get_config().max_vault_per_account.0,
+        VAULT_CAP,
+        "init: no tighter than the global cap"
+    );
+    ctx(FOLLOWER, 1);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.set_vault_account_cap(U128(1))
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "not owner");
+    ctx(OWNER, 0);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.set_vault_account_cap(U128(1))
+    }));
+    assert!(panic_msg(r.unwrap_err()).contains("exactly 1 yoctoNEAR"));
 }
 
 #[test]

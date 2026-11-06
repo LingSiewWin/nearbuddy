@@ -2,6 +2,7 @@
 // runner (Python, stub model) against it, with this script playing the Outlayer price oracle.
 //
 //   bun run e2e
+//   E2E_ONLY=0 bun run e2e      (scenario 0 only: setup, then the duplicate broadcast)
 //
 // Needs, once:
 //   - cargo-near: the wasm is built here with `cargo near build non-reproducible-wasm` (E2E_SKIP_BUILD=1 reuses
@@ -40,7 +41,15 @@ import { createServer as httpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Account, actions, JsonRpcProvider, KeyPairEd25519, type KeyPairString } from "near-api-js";
+import {
+  Account,
+  actions,
+  baseEncode,
+  encodeTransaction,
+  JsonRpcProvider,
+  KeyPairEd25519,
+  type KeyPairString,
+} from "near-api-js";
 import { b64 } from "../packages/protocol/src/index.ts";
 import {
   commitMessage,
@@ -451,6 +460,14 @@ async function main() {
   ARENA = id("arena");
   const INTENTS = intents.accountId; // the intents.near stand-in: mt_batch_balance_of, mt_transfer, stub_credit
   await intents.deployContract(new Uint8Array(stubWasm));
+  // only minters the stub account adds may stub_credit: the solver signs as the owner
+  await intents.callFunctionRaw({
+    contractId: INTENTS,
+    methodName: "add_minter",
+    args: { account_id: owner.accountId },
+    deposit: 0n,
+    gas: 30n * 10n ** 12n,
+  });
 
   // 3. deploy + init + config (all owner calls happen before the solver starts: it shares the owner key)
   await arena.deployContract(new Uint8Array(wasm));
@@ -674,6 +691,17 @@ async function main() {
     const sc = "0 duplicate broadcast";
     const dup = acct("dup");
     const signed = await dup.createSignedTransaction({ receiverId: dup.accountId, actions: [actions.transfer(1n)] });
+    // the tx's own id: base58(sha256(borsh(Transaction))), the signature excluded
+    const ownHash = baseEncode(createHash("sha256").update(encodeTransaction(signed.transaction)).digest());
+    const keyNonce = async () =>
+      (
+        await provider.viewAccessKey({
+          accountId: dup.accountId,
+          publicKey: vk.public_key,
+          finalityQuery: { finality: "final" },
+        })
+      ).nonce;
+    const nonceBefore = await keyNonce();
     const send = (w: "NONE" | "FINAL") =>
       provider.sendTransactionUntil(signed, w).then(
         (r) => ({ hash: r.transaction?.hash ?? "", status: r.status, error: "" }),
@@ -695,7 +723,21 @@ async function main() {
       !late.error && late.hash === inFlight.hash,
       late.error || `${late.hash} ${JSON.stringify(late.status)}`,
     );
+    check(
+      sc,
+      "every answer names the signed tx's own hash",
+      inFlight.hash === ownHash && late.hash === ownHash,
+      `signed ${ownHash}, answers ${inFlight.hash} ${late.hash}`,
+    );
+    const nonceAfter = await keyNonce();
+    check(
+      sc,
+      "the access key nonce moved by exactly 1: one execution",
+      BigInt(nonceAfter) - BigInt(nonceBefore) === 1n,
+      `nonce ${nonceBefore} -> ${nonceAfter}`,
+    );
   }
+  if (process.env.E2E_ONLY === "0") return; // scenario 0 alone: the table below the run still prints
 
   // ---- scenario 1: one commit-reveal duel ---------------------------------------------------------
   {
