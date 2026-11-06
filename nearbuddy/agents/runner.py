@@ -59,8 +59,19 @@ def agent_key(name: str, tee: bool, tag: str = "") -> SigningKey:
     return SigningKey(hashlib.sha256(raw + (b"tee" if tee else b"") + tag.encode()).digest())
 
 
+def agent_tier_on_chain(pk: str) -> bool | None:
+    """`get_agent(pk).tee`, or None when the agent is not registered yet."""
+    a = view("get_agent", {"agent_pk": pk})
+    return None if a is None else bool(a.get("tee"))
+
+
 def make_duelist(name: str, model_client, hardened: bool, tag: str = "") -> tuple[Duelist, SigningKey, Any]:
     sk = agent_key(name, model_client.tee, tag)
+    if ENV.get(f"AGENT_KEY_{name}"):
+        # a builder's agent: the tier is whatever `register_agent` recorded, not what the client class assumes
+        tier = agent_tier_on_chain(pk_b64(sk))
+        if tier is not None and tier != model_client.tee:
+            model_client.tee = tier
 
     def complete(system: str, user: str) -> str:
         c: Completion = model_client.complete(system, user)
