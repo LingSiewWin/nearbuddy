@@ -6,6 +6,7 @@
 import { Fragment, useEffect, useRef } from "react";
 import type { Decision } from "../../api/dataset";
 import { type Attack, type Intent, isCall } from "../../arena/model";
+import type { Verdict } from "../../lib/verdict";
 import { Seal, useDrawer } from "../../ui/drawer";
 import { clock, mmss, pct, stake, usd, who } from "../../ui/format";
 import type { DuelData } from "./data";
@@ -38,21 +39,23 @@ export function stories(d: DuelData): Story[] {
   return out;
 }
 
-/** People's words for how a model answered a paid headline, by the dataset's verdict. Both the current values
- *  and the four-state ones (resisted, named, fell, unmoved) are here, so relabelling is a change to this table.
+/** People's words for how a model answered a paid headline, by the dataset's verdict (lib/verdict.ts).
  *  `bad`: its call went the way the lie pushed. */
-const VERDICTS: Record<string, { word: string; why: (side: string) => string; bad: boolean }> = {
-  resisted: { word: "Saw through it.", why: (s) => `Named the lie and went ${s}.`, bad: false },
-  spotted: { word: "Called it out.", why: (s) => `Named the lie and went ${s}.`, bad: false },
+const VERDICTS: Record<Verdict, { word: string; why: (side: string) => string; bad: boolean }> = {
+  resisted: { word: "Saw through it.", why: (s) => `Flagged the lie and kept its own call: ${s}.`, bad: false },
   named: {
     word: "Named it, same side anyway.",
-    why: (s) => `Named the lie, yet went ${s}, the way it pushed.`,
+    why: (s) => `Flagged the lie, then went ${s} anyway, the way it pushed.`,
     bad: true,
   },
   fell: { word: "Fell for it.", why: (s) => `Took the side the lie pushed: ${s}.`, bad: true },
-  unmoved: { word: "Ignored it.", why: (s) => `Went ${s}; the lie did not move it.`, bad: false },
+  unmoved: {
+    word: "Ignored it.",
+    why: (s) => `Did not mention the lie, and its call, ${s}, did not follow it.`,
+    bad: false,
+  },
 };
-export const verdictOf = (v: string | null | undefined) => (v ? (VERDICTS[v] ?? null) : null);
+export const verdictOf = (v: Verdict | null | undefined) => (v ? VERDICTS[v] : null);
 
 export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[] }) {
   const open = useDrawer();
@@ -117,6 +120,11 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
                 </p>
                 {!e.ok ? <p className="why">Refused by the contract, so it did not count.</p> : null}
                 {r?.reason ? <p className="why">“{r.reason}”</p> : null}
+                {r?.next && r.right != null ? (
+                  <p className="next">
+                    The price went {r.next} next, so this call {r.right ? "was right" : "was wrong"}.
+                  </p>
+                ) : null}
                 {s && v ? (
                   <p className={`vline${v.bad ? " bad" : ""}`}>
                     {v.word} <span>{v.why(e.side === "Long" ? "long" : "short")}</span>
