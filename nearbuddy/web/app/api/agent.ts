@@ -8,7 +8,7 @@
 import type { Fill } from "../cells";
 import { calls } from "../lib/rows";
 import { tally } from "../lib/verdict";
-import { type Agent, type Duel, type Mandate, ms, nearOf } from "./arena";
+import { type Agent, type Duel, type Mandate, ms, nearOf, snapshot } from "./arena";
 import { getDecisions } from "./dataset";
 import { ARENA, RPC, SOLVER_URL, viewOn } from "./near";
 
@@ -110,11 +110,28 @@ async function build(pk: string) {
   };
 }
 export type AgentRecord = Awaited<ReturnType<typeof build>>;
+const EMPTY: AgentRecord = {
+  at: 0,
+  rpc: RPC,
+  contract: ARENA,
+  scanned: 0,
+  indexed: false,
+  next_duel: 0,
+  slash_bps: 0,
+  min_chaos_deposit: "0",
+  agent: null,
+  followers: [],
+  duels: [],
+  execution: null,
+};
 
 /** The raw record (contract units) for a key already checked against PK_RE. */
 export async function agentRecord(pk: string): Promise<AgentRecord> {
   const hit = cache.get(pk);
   if (hit && Date.now() - hit.at < TTL) return hit.rec;
+  // the leaderboard lists every registered agent: an unknown key costs no RPC call and evicts nothing
+  if (!hit && !(await snapshot()).leaderboard.some((a) => a.pk === pk))
+    return { ...EMPTY, at: Date.now(), rpc: RPC, contract: ARENA };
   let p = inflight.get(pk); // one scan per agent at a time; pollers share it
   if (!p) {
     p = build(pk)
@@ -126,12 +143,11 @@ export async function agentRecord(pk: string): Promise<AgentRecord> {
       .finally(() => inflight.delete(pk));
     inflight.set(pk, p);
   }
-  try {
-    return await p;
-  } catch (e) {
-    if (hit) return hit.rec; // stale beats a 500 while the RPC is throttled
-    throw e;
+  if (hit) {
+    p.catch(() => {}); // stale beats waiting while the RPC is throttled; the refresh lands for the next poll
+    return hit.rec;
   }
+  return p;
 }
 
 // ---------- v1: human units ----------

@@ -125,6 +125,8 @@ async function build(): Promise<Snap> {
   };
 }
 
+/** The newest snapshot. A stale one is returned at once while a refresh runs in the background, so a slow
+ *  or throttled RPC never holds a page; only the very first call waits for the chain. */
 export async function snapshot(): Promise<Snap> {
   if (cache && Date.now() - cache.at < TTL) return cache.snap;
   if (!inflight)
@@ -136,12 +138,11 @@ export async function snapshot(): Promise<Snap> {
       .finally(() => {
         inflight = null;
       });
-  try {
-    return await inflight;
-  } catch (e) {
-    if (cache) return cache.snap;
-    throw e;
+  if (cache) {
+    inflight.catch(() => {}); // the stale copy stands; the next call retries
+    return cache.snap;
   }
+  return inflight;
 }
 
 // ---------- v1 summary: human units ----------

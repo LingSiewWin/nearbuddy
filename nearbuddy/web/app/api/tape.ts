@@ -11,7 +11,7 @@ import { ARENA } from "./near";
 
 const TX_API = process.env.FASTNEAR_TX_API ?? "https://tx.test.fastnear.com";
 const TTL = 3_000;
-const LIST = 60; // newest transactions per read
+const LIST = 100; // newest transactions decoded (about an hour of arena activity)
 const BATCH = 20; // the transactions endpoint takes at most 20 hashes
 
 import type { Side } from "../lib/verdict";
@@ -188,7 +188,9 @@ async function build(): Promise<ArenaEvent[]> {
     account_id: ARENA,
     max_tx_count: LIST,
   });
-  const missing = account_txs.filter((m) => !seen.has(m.transaction_hash));
+  // the endpoint ignores max_tx_count and returns ~200; decode only the newest LIST
+  const newest = account_txs.slice(0, LIST);
+  const missing = newest.filter((m) => !seen.has(m.transaction_hash));
   const chunks: AccountTx[][] = [];
   for (let i = 0; i < missing.length; i += BATCH) chunks.push(missing.slice(i, i + BATCH));
   await Promise.all(
@@ -207,7 +209,7 @@ async function build(): Promise<ArenaEvent[]> {
     }),
   );
   while (seen.size > 2000) seen.delete(seen.keys().next().value as string);
-  return account_txs
+  return newest
     .map((m) => seen.get(m.transaction_hash))
     .filter((e): e is ArenaEvent => !!e)
     .sort((a, b) => b.block - a.block || b.at - a.at);
@@ -225,11 +227,9 @@ export async function tape(): Promise<{ at: number; events: ArenaEvent[] }> {
       .finally(() => {
         inflight = null;
       });
-  try {
-    const list = await inflight;
-    return { at: cache?.at ?? Date.now(), events: list };
-  } catch (e) {
-    if (cache) return { at: cache.at, events: cache.list };
-    throw e;
+  if (cache) {
+    inflight.catch(() => {}); // serve the stale tape now; the refresh lands for the next poll
+    return { at: cache.at, events: cache.list };
   }
+  return { at: Date.now(), events: await inflight };
 }

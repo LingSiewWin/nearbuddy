@@ -3,7 +3,8 @@
 // Cached 20 s per id; pollers share one in-flight read, and a stale record beats an error while the RPC
 // is throttled. `duelSummary()` is the v1 shape: human units, both sides, the attacks, the decisions with
 // reasoning from the published dataset, and the duel's events when they are still on the live tape.
-import { type Agent, type Duel, type Intent, ms, nearOf, symbolOf, usd, ZERO } from "./arena";
+import { proven } from "../cells";
+import { type Agent, type Duel, type Intent, ms, nearOf, snapshot, symbolOf, usd, ZERO } from "./arena";
 import { attackText, getDecisions } from "./dataset";
 import { ARENA, RPC, viewOn } from "./near";
 import { tape } from "./tape";
@@ -46,7 +47,21 @@ async function build(id: string): Promise<DuelRecord> {
 /** The raw record (contract units) for an id already checked against ID_RE. */
 export async function duelRecord(id: string): Promise<DuelRecord> {
   const hit = cache.get(id);
-  if (hit && Date.now() - hit.at < TTL) return hit.rec;
+  // a resolved duel never changes; an open one is re-read every TTL
+  if (hit && (hit.rec.duel?.resolved || Date.now() - hit.at < TTL)) return hit.rec;
+  // ids at or past next_duel do not exist yet: answer without touching the RPC
+  if (!hit && BigInt(id) >= BigInt((await snapshot()).config.next_duel))
+    return {
+      at: Date.now(),
+      rpc: RPC,
+      contract: ARENA,
+      oracle: ORACLE,
+      config: null,
+      no_reveal: null,
+      duel: null,
+      a: null,
+      b: null,
+    };
   let p = inflight.get(id);
   if (!p) {
     p = build(id)
@@ -58,12 +73,11 @@ export async function duelRecord(id: string): Promise<DuelRecord> {
       .finally(() => inflight.delete(id));
     inflight.set(id, p);
   }
-  try {
-    return await p;
-  } catch (e) {
-    if (hit) return hit.rec;
-    throw e;
+  if (hit) {
+    p.catch(() => {});
+    return hit.rec;
   }
+  return p;
 }
 
 // ---------- v1: human units ----------
@@ -72,7 +86,7 @@ const side = (pk: string, i: Intent | null, a: Agent | null, pnl: number | null)
   model: a?.model_id ?? "unregistered",
   side: i?.side ?? null,
   size_pct: i ? i.size_bps / 100 : null,
-  verified: !!i && i.proof_hash !== ZERO,
+  verified: proven(i, ZERO),
   return_pct: pnl == null ? null : pnl / 100,
 });
 
