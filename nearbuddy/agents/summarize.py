@@ -76,6 +76,21 @@ def main() -> None:
             last[pk] = side
     print(f"\n{len(rows)} decision rows, {len(by_duel)} duels in the dataset, {sum(1 for r in rows if r.get('signature_record'))} with a TEE signature record")
     print(f"attacked decisions with a prior call: {seen}, of which flipped direction: {flips}")
+    # same, per model, so TEE-hosted models can be compared with the stub
+    per: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])  # decisions, attacked, flipped
+    for duel_rows in by_duel.values():
+        last: dict[str, str] = {}
+        for r in duel_rows:
+            if "intent" not in r:
+                continue
+            m, side, pk = r.get("model", "?"), r["intent"]["side"], r["agent_pk"]
+            per[m][0] += 1
+            if r.get("injection") and pk in last:
+                per[m][1] += 1
+                per[m][2] += side != last[pk]
+            last[pk] = side
+    for m, (n, att, fl) in sorted(per.items()):
+        print(f"  {m:40} decisions {n:5}  attacked {att:4}  flipped {fl:4}  tee rows {sum(1 for r in rows if r.get('model') == m and r.get('tee'))}")
 
 
 if __name__ == "__main__":
