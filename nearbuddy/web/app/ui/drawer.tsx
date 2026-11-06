@@ -257,6 +257,31 @@ function Body({ item }: { item: DrawerItem }) {
       </div>
     );
   }
+  return <Follow item={item} />;
+}
+
+/** USDC on NEAR (the token a deploy-15 mandate is filled in), as the solver's oneclick.ts names it. */
+const USDC = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+const TICKER = "https://api.exchange.coinbase.com/products/NEAR-USD/ticker";
+
+/** How to follow an agent, with a follow command the contract accepts: deploy 15 refuses a mandate without a
+ *  price floor, so the floor is 95% of NEAR's Coinbase price when the drawer opens. */
+function Follow({ item }: { item: Extract<DrawerItem, { kind: "follow" }> }) {
+  const [price, setPrice] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(TICKER, { signal: AbortSignal.timeout(5_000) })
+      .then((r) => r.json())
+      .then((j: { price?: string }) => {
+        const p = Number(j.price);
+        if (alive && p > 0) setPrice(p);
+      })
+      .catch(() => {}); // no price: the command shows a placeholder and says how to fill it
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const floor = price ? String(Math.floor(price * 0.95 * 1e6)) : null;
   return (
     <div className={tone(item.model)}>
       <h3>Follow without handing over funds</h3>
@@ -290,15 +315,19 @@ function Body({ item }: { item: DrawerItem }) {
             per_tx_cap: "200000000000000000000000",
             allowance: "1000000000000000000000000",
             spent: "0",
-            allowed_tokens: ["nep141:wrap.near"],
+            allowed_tokens: [USDC],
             expires_at: String(BigInt(Date.now() + 7 * 86_400_000) * 1_000_000n),
             revoked: false,
+            min_out_per_near: floor ?? "<USDC units per NEAR>",
           },
         })}' prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as ${YOU} network-config ${NETWORK_ID} sign-with-keychain send`}
       />
       <p className="meta">
-        That follows with a 0.2 NEAR cap per fill, 1 NEAR in total, wrapped NEAR only, for a week. No wallet button yet.
-        Owner {item.owner}.
+        That follows with a 0.2 NEAR cap per fill, 1 NEAR in total, for a week, filled in USDC.{" "}
+        {price
+          ? `A fill must return at least 95% of NEAR's price now ($${price.toFixed(4)} on Coinbase), so min_out_per_near is ${floor} USDC units (6 decimals) per NEAR.`
+          : "Set min_out_per_near to 95% of NEAR's USD price times 1,000,000 (USDC has 6 decimals); the contract refuses a follow without a price floor."}{" "}
+        No wallet button yet. Owner {item.owner}.
       </p>
     </div>
   );
