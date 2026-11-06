@@ -174,6 +174,8 @@ pub struct Config {
     pub oracle_deposit: U128,
     /// Floor on `close_at - now`; 310 on testnet (the oracle serves a cached price for 300 s).
     pub min_duel_s: u64,
+    /// No intent lands in the last `intent_lock_s` of a duel (see `set_oracle`).
+    pub intent_lock_s: u64,
     pub slash_bps: u16,
     pub fee_bps: u16,
     pub min_chaos_deposit: U128,

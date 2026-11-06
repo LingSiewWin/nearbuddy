@@ -1,7 +1,8 @@
-//! Sandbox run of the real wasm: a TEE-backed agent posts enclave-proved intents (and one tampered
-//! proof is refused), the duel takes the maximum 32 injections, a follower follows the TEE agent
-//! (the plain one is refused) and settles 10 fills, and
-//! the duel is resolved through the oracle callback with the oracle account playing Outlayer.
+//! Sandbox run of the real wasm: agents register with a key-possession signature (a squatter is
+//! refused), a TEE-backed agent posts enclave-proved intents (and one tampered proof is refused),
+//! a bystander relays one intent, the duel takes the maximum 32 injections, a follower follows the
+//! TEE agent (the plain one is refused) and settles 10 fills, and the duel is resolved through the
+//! oracle callback with the oracle account playing Outlayer.
 //! Prints gas burnt per call so the README can quote it.
 //!   cargo test --test test_arena_sandbox -- --ignored --nocapture
 //! Ignored by default: it needs the cargo-near binary and downloads near-sandbox on first run.
@@ -10,7 +11,7 @@ use near_api::{AccountId, NearGas, NearToken};
 use near_sdk::base64::{prelude::BASE64_STANDARD, Engine};
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::serde_json::{json, Value};
-use nearbuddy_arena::{intent_message, tee_text, Intent, Side};
+use nearbuddy_arena::{intent_message, register_bytes, tee_text, Intent, Side};
 use sha2::{Digest, Sha256};
 
 const MODEL_A: &str = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
@@ -76,18 +77,25 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     let zero = NearToken::from_yoctonear(0);
 
     call("add_solver", json!({"account_id": solver.account_id()}), &solver, zero).await?.assert_success();
+    // 60 s duel floor, 30 s intent lock: the duel below is 120 s, intents must land in its first 90 s
+    call("set_oracle", json!({"oracle_account": oracle.account_id(), "oracle_deposit": NearToken::from_millinear(20).as_yoctonear().to_string(), "min_duel_s": 60, "intent_lock_s": 30}), &solver, zero).await?.assert_success();
     call("add_tee_signer", json!({"signer": b64(&tee.verifying_key().to_bytes()), "label": "sandbox enclave"}), &solver, zero).await?.assert_success();
-    for (pk, model, is_tee) in [(&pka, MODEL_A, true), (&pkb, "Qwen/Qwen3.8-27B", false)] {
-        let r = call("register_agent", json!({"agent_pk": b64(pk), "model_id": model, "tee": is_tee}), &solver, NearToken::from_near(1)).await?.assert_success();
-        println!("GAS register_agent {:.2} TGas", gas_of(&r) as f64 / 1e12);
+    // a squatter who knows A's public key but not its secret cannot register it
+    let squat_sig = skb.sign(&register_bytes(spectator.account_id())).to_bytes().to_vec();
+    call("register_agent", json!({"agent_pk": b64(&pka), "model_id": MODEL_A, "tee": false, "register_sig": b64(&squat_sig)}), &spectator, NearToken::from_near(1)).await?.assert_failure();
+    println!("register_agent without the agent key's signature: refused");
+    for (sk, pk, model, is_tee) in [(&ska, &pka, MODEL_A, true), (&skb, &pkb, "Qwen/Qwen3.8-27B", false)] {
+        let sig = sk.sign(&register_bytes(solver.account_id())).to_bytes().to_vec();
+        let r = call("register_agent", json!({"agent_pk": b64(pk), "model_id": model, "tee": is_tee, "register_sig": b64(&sig)}), &solver, NearToken::from_near(1)).await?.assert_success();
+        println!("GAS register_agent (signed) {:.2} TGas", gas_of(&r) as f64 / 1e12);
     }
     let bond_a0: u128 = contract.call_function("get_agent", json!({"agent_pk": b64(&pka)})).read_only::<Value>().fetch_from(&net).await?.data["bond"].as_str().unwrap().parse()?;
     assert!(bond_a0 < NearToken::from_near(1).as_yoctonear(), "registration storage is paid from the bond");
 
-    // close in ~40 blocks (sandbox blocks are ~1 s; fast_forward below jumps past it)
+    // close in 120 s; the fast_forward loop below jumps past it
     let block = near_api::Chain::block().at(near_api::types::Reference::Final).fetch_from(&net).await?;
     let now: u64 = block.header.timestamp;
-    let close_at = now + 40_000_000_000;
+    let close_at = now + 120_000_000_000;
     let r = call("open_duel", json!({"a": b64(&pka), "b": b64(&pkb), "symbol": "wrap.near", "close_at": close_at.to_string()}), &solver, NearToken::from_millinear(50)).await?.assert_success();
     println!("GAS open_duel (incl. oracle_call to a missing contract) {:.2} TGas", gas_of(&r) as f64 / 1e12);
     let duel_id: u64 = r.json::<U64>()?.0;
@@ -141,9 +149,11 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     println!("GAS follow (TEE agent) {:.2} TGas", gas_of(&r) as f64 / 1e12);
     let duels: Vec<U64> = contract.call_function("agent_duels", json!({"agent_pk": b64(&pka), "from": 0, "limit": 10})).read_only().fetch_from(&net).await?.data;
     assert_eq!(duels, vec![U64(duel_id)], "per-agent duel index");
-    for n in 3..=11u64 {
+    for n in 3..=10u64 {
         call("post_intent", mk_a(n, Side::Long, [n as u8; 32], [0xbb; 32], false), &solver, zero).await?.assert_success();
     }
+    let r = call("post_intent", mk_a(11, Side::Long, [11u8; 32], [0xbb; 32], false), &spectator, zero).await?.assert_success();
+    println!("GAS post_intent (relayed by a non-solver) {:.2} TGas", gas_of(&r) as f64 / 1e12);
     let fills: Vec<Value> = [1u64].iter().chain((3..=11u64).collect::<Vec<_>>().iter()).map(|n| json!({"intent_nonce": n.to_string(), "token": "nep141:wrap.near", "amount_in": NearToken::from_millinear(100).as_yoctonear().to_string(), "amount_out": "1", "swap_tx": format!("sim-{n}")})).collect();
     let r = call("settle_follow", json!({"agent_pk": b64(&pka), "follower": follower.account_id(), "fills": fills}), &solver, zero).await?.assert_success();
     println!("GAS settle_follow x10 {:.2} TGas", gas_of(&r) as f64 / 1e12);
@@ -153,7 +163,14 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
 
     // past close_at: resolve_duel asks the oracle; the oracle delivers the close price and the duel
     // finishes. A (Long) wins on a 0.5% rise and survives 32 injections.
-    sandbox.fast_forward(60).await?;
+    // fast-forwarded blocks carry short timestamps: skip ahead until the chain clock passes close_at
+    for _ in 0..40 {
+        let ts = near_api::Chain::block().at(near_api::types::Reference::Final).fetch_from(&net).await?.header.timestamp;
+        if ts >= close_at {
+            break;
+        }
+        sandbox.fast_forward(200).await?;
+    }
     let r = call("resolve_duel", json!({"duel_id": duel_id.to_string()}), &spectator, NearToken::from_millinear(20)).await?.assert_success();
     println!("GAS resolve_duel (permissionless, oracle_call) {:.2} TGas", gas_of(&r) as f64 / 1e12);
     let block = near_api::Chain::block().at(near_api::types::Reference::Final).fetch_from(&net).await?;

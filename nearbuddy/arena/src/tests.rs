@@ -11,6 +11,7 @@ pub const OPERATOR: &str = "operator.testnet";
 pub const FOLLOWER: &str = "follower.testnet";
 pub const NOW: u64 = 1_700_000_000_000_000_000;
 pub const CLOSE: u64 = NOW + 60_000_000_000; // +60 s
+pub const LOCK: u64 = 10_000_000_000; // intent lock set by `fresh`, 10 s
 pub const NEAR: u128 = 1_000_000_000_000_000_000_000_000;
 pub const BOND: u128 = NEAR;
 pub const MIN_CHAOS: u128 = NEAR / 10;
@@ -55,19 +56,34 @@ pub fn sign(sk: &SigningKey, i: &Intent) -> SignedIntent {
     SignedIntent { intent: i.clone(), signature: Base64VecU8(sk.sign(&intent_message(i)).to_bytes().to_vec()) }
 }
 
+/// Contract with the solver registered, a 60 s duel floor and a 10 s intent lock (`LOCK`).
+pub fn fresh(fee_bps: u16) -> Contract {
+    ctx(OWNER, 0);
+    let mut c = Contract::init(OWNER.parse().unwrap(), ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 1_000, fee_bps, U128(MIN_CHAOS));
+    c.add_solver(SOLVER.parse().unwrap());
+    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, LOCK / 1_000_000_000);
+    c
+}
+
+/// `sk`'s proof of possession for `register_agent` called by `owner`.
+pub fn register_sig(sk: &SigningKey, owner: &str) -> Base64VecU8 {
+    Base64VecU8(sk.sign(&register_bytes(&owner.parse().unwrap())).to_bytes().to_vec())
+}
+
+/// OPERATOR registers key `seed` with BOND, signing the register message with that key.
+pub fn register(c: &mut Contract, seed: u8, model: &str, tee: bool) -> AgentView {
+    let (sk, pk) = key(seed);
+    ctx(OPERATOR, BOND);
+    c.register_agent(Base64VecU8(pk), model.into(), tee, register_sig(&sk, OPERATOR))
+}
+
 /// Contract with solver registered and agents A (seed 1, TEE-backed) and B (seed 2, plain) bonded.
 pub fn setup() -> (Contract, SigningKey, SigningKey) {
-    let (ska, pka) = key(1);
-    let (skb, pkb) = key(2);
+    let mut c = fresh(0);
+    register(&mut c, 1, MODEL_A, true);
+    register(&mut c, 2, MODEL_B, false);
     ctx(OWNER, 0);
-    let mut c = Contract::init(OWNER.parse().unwrap(), ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 1_000, 0, U128(MIN_CHAOS));
-    c.add_solver(SOLVER.parse().unwrap());
-    ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(pka), MODEL_A.into(), true);
-    ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(pkb), MODEL_B.into(), false);
-    ctx(OWNER, 0);
-    (c, ska, skb)
+    (c, key(1).0, key(2).0)
 }
 
 fn price_data(asset: &str, price8: u64, ts: u64) -> PriceData {
@@ -264,8 +280,7 @@ fn register_charges_storage_from_bond() {
 #[should_panic(expected = "agent exists")]
 fn register_twice_panics() {
     let (mut c, ..) = setup();
-    ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(key(1).1), "again".into(), false);
+    register(&mut c, 1, "again", false);
 }
 
 #[test]
@@ -273,7 +288,56 @@ fn register_twice_panics() {
 fn register_without_bond_panics() {
     let (mut c, ..) = setup();
     ctx(OPERATOR, 1);
-    c.register_agent(Base64VecU8(key(3).1), "m".into(), false);
+    c.register_agent(Base64VecU8(key(3).1), "m".into(), false, register_sig(&key(3).0, OPERATOR));
+}
+
+#[test]
+#[should_panic(expected = "bad register signature")]
+fn register_without_key_possession_panics() {
+    // squatter knows B's public key but not its secret: signs with another key
+    let mut c = fresh(0);
+    ctx(FOLLOWER, BOND);
+    c.register_agent(Base64VecU8(key(2).1), MODEL_B.into(), false, register_sig(&key(3).0, FOLLOWER));
+}
+
+#[test]
+#[should_panic(expected = "bad register signature")]
+fn register_sig_is_bound_to_the_caller() {
+    // a valid proof made for OPERATOR cannot be replayed by FOLLOWER
+    let mut c = fresh(0);
+    ctx(FOLLOWER, BOND);
+    c.register_agent(Base64VecU8(key(2).1), MODEL_B.into(), false, register_sig(&key(2).0, OPERATOR));
+}
+
+#[test]
+fn register_message_view_matches_signed_bytes() {
+    let c = fresh(0);
+    let m = c.register_message(OPERATOR.parse().unwrap()).0;
+    assert_eq!(m, [REGISTER_DOMAIN, OPERATOR.as_bytes()].concat());
+    assert!(verify(&key(1).1, &m, &register_sig(&key(1).0, OPERATOR).0));
+}
+
+#[test]
+#[should_panic(expected = "model_id too long")]
+fn register_model_id_too_long_panics() {
+    let mut c = fresh(0);
+    register(&mut c, 1, &"m".repeat(65), false);
+}
+
+#[test]
+#[should_panic(expected = "symbol too long")]
+fn open_duel_symbol_too_long_panics() {
+    let (mut c, ..) = setup();
+    ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
+    c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "s".repeat(65), U64(CLOSE));
+}
+
+#[test]
+#[should_panic(expected = "label too long")]
+fn tee_signer_label_too_long_panics() {
+    let (mut c, ..) = setup();
+    ctx(OWNER, 0);
+    c.add_tee_signer(Base64VecU8(key(7).1), "l".repeat(65));
 }
 
 #[test]
@@ -397,12 +461,39 @@ fn post_intent_bad_sig_panics() {
 }
 
 #[test]
-#[should_panic(expected = "not solver")]
-fn non_solver_cannot_post() {
+fn anyone_may_relay_a_signed_intent() {
     let (mut c, _, skb) = setup();
     let d = open(&mut c);
     ctx(OPERATOR, 0);
     c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+    assert_eq!(c.get_duel(U64(d)).unwrap().last_intent_b.unwrap().nonce.0, 1);
+}
+
+#[test]
+#[should_panic(expected = "intent lock")]
+fn post_intent_inside_lock_panics() {
+    let (mut c, _, skb) = setup();
+    let d = open(&mut c);
+    ctx_at(SOLVER, 0, CLOSE - LOCK);
+    c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+}
+
+#[test]
+fn post_intent_just_before_lock_ok() {
+    let (mut c, _, skb) = setup();
+    assert_eq!(c.get_config().intent_lock_s, 10);
+    let d = open(&mut c);
+    ctx_at(SOLVER, 0, CLOSE - LOCK - 1);
+    c.post_intent(sign(&skb, &intent(&key(2).1, d, Side::Long, 5_000, 1)), None);
+    assert!(c.get_duel(U64(d)).unwrap().last_intent_b.is_some());
+}
+
+#[test]
+#[should_panic(expected = "intent_lock_s too large")]
+fn set_oracle_bounds_lock_to_half_the_floor() {
+    let (mut c, ..) = setup();
+    ctx(OWNER, 0);
+    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 60, 31);
 }
 
 #[test]
@@ -580,6 +671,16 @@ fn allowance_exhausted_rejected() {
 }
 
 #[test]
+fn absurd_follower_spent_is_rejected_not_panicked() {
+    let mut m = mandate(NEAR, u128::MAX, vec![]);
+    m.spent = U128(u128::MAX);
+    let (mut c, _, v) = setup_follow(m);
+    let r = settle(&mut c, vec![fill(1, "usdc", 50)]);
+    assert_eq!((r.settled, r.rejected[0].1.as_str()), (0, "allowance exhausted"));
+    assert_eq!(c.get_vault(FOLLOWER.parse().unwrap()).0, v);
+}
+
+#[test]
 fn list_followers_and_withdraw() {
     let (mut c, _, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
     assert_eq!(c.list_followers(Base64VecU8(key(1).1)).len(), 1);
@@ -641,6 +742,15 @@ fn inject_33rd_panics() {
     for _ in 0..33 {
         inject(&mut c, d, &key(1).1, MIN_CHAOS);
     }
+}
+
+#[test]
+#[should_panic(expected = "kind too long")]
+fn inject_kind_too_long_panics() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    ctx(OPERATOR, MIN_CHAOS);
+    c.inject_chaos(U64(d), Base64VecU8(key(1).1), "k".repeat(33), Base64VecU8(vec![3u8; 32]));
 }
 
 #[test]
@@ -773,8 +883,8 @@ fn resolve_without_deposit_panics() {
 fn open_duel_respects_min_length() {
     let (mut c, ..) = setup();
     ctx(OWNER, 0);
-    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 330);
-    assert_eq!(c.get_config().min_duel_s, 330);
+    c.set_oracle(ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 330, 60);
+    assert_eq!((c.get_config().min_duel_s, c.get_config().intent_lock_s), (330, 60));
     ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
     c.open_duel(Base64VecU8(key(1).1), Base64VecU8(key(2).1), "wrap.near".into(), U64(NOW + 329_000_000_000));
 }
@@ -828,7 +938,7 @@ fn void_duel_after_a_day_frees_agents_without_slashing() {
     inject(&mut c, d, &key(1).1, MIN_CHAOS + 1);
     let (bond_a, bond_b) = (bond(&c, 1), bond(&c, 2));
     let pool = c.get_duel(U64(d)).unwrap().pool.0;
-    ctx_at(OWNER, 0, CLOSE + VOID_AFTER_NS);
+    ctx_at(FOLLOWER, 0, CLOSE + VOID_AFTER_NS); // permissionless: a bystander voids it
     c.void_duel(U64(d));
     assert_eq!(bond(&c, 1), bond_a + pool / 2 + pool % 2);
     assert_eq!(bond(&c, 2), bond_b + pool / 2);
@@ -876,15 +986,10 @@ fn withdraw_bond_after_resolve_ok() {
 fn same_nonce_on_two_agents_settles_both() {
     // follower follows A and B (both TEE-backed here); both post nonce 1; both fills settle
     // (fill key is agent-scoped)
-    let (ska, pka) = key(1);
-    let (skb, pkb) = key(2);
-    ctx(OWNER, 0);
-    let mut c = Contract::init(OWNER.parse().unwrap(), ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 1_000, 0, U128(MIN_CHAOS));
-    c.add_solver(SOLVER.parse().unwrap());
-    ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(pka), MODEL_A.into(), true);
-    ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(pkb), MODEL_B.into(), true);
+    let (ska, skb) = (key(1).0, key(2).0);
+    let mut c = fresh(0);
+    register(&mut c, 1, MODEL_A, true);
+    register(&mut c, 2, MODEL_B, true);
     let tee = tee_signer(&mut c);
     let d = open(&mut c);
     post_a(&mut c, &ska, &tee, d, Side::Long, 1);
@@ -904,13 +1009,9 @@ fn same_nonce_on_two_agents_settles_both() {
 
 #[test]
 fn owner_withdraws_fees() {
-    ctx(OWNER, 0);
-    let mut c = Contract::init(OWNER.parse().unwrap(), ORACLE.parse().unwrap(), U128(ORACLE_DEPOSIT), 1_000, 100, U128(MIN_CHAOS)); // fee 1%
-    c.add_solver(SOLVER.parse().unwrap());
-    ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(key(1).1), MODEL_A.into(), true);
-    ctx(OPERATOR, BOND);
-    c.register_agent(Base64VecU8(key(2).1), "m".into(), false);
+    let mut c = fresh(100); // fee 1%
+    register(&mut c, 1, MODEL_A, true);
+    register(&mut c, 2, "m", false);
     let tee = tee_signer(&mut c);
     let d = open(&mut c);
     post_a(&mut c, &key(1).0, &tee, d, Side::Long, 1);
@@ -1003,7 +1104,8 @@ fn migrate_v10_adds_empty_index_and_keeps_state() {
     let d0 = open(&mut c);
     resolve_at_close(&mut c, d0, UP);
     // Flush cached writes (the real wrapper does this when the call ends), then write deploy-9 state:
-    // the current layout minus the trailing `agent_duels` prefix (borsh Vec<u8>: len 1 + key byte).
+    // the current layout minus the trailing `agent_duels` prefix (borsh Vec<u8>: len 1 + key byte)
+    // and `intent_lock_ns` (u64).
     c.duels.flush();
     c.agents.flush();
     // deploy 9 had no index entries: drop the ones this test's open_duel wrote
@@ -1012,15 +1114,40 @@ fn migrate_v10_adds_empty_index_and_keeps_state() {
     }
     c.agent_duels.flush();
     let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
-    let tail = raw.split_off(raw.len() - 5);
-    assert_eq!(tail, near_sdk::borsh::to_vec(&near_sdk::borsh::to_vec(&StorageKey::AgentDuels).unwrap()).unwrap());
+    let tail = raw.split_off(raw.len() - 13);
+    assert_eq!(tail[..5], near_sdk::borsh::to_vec(&near_sdk::borsh::to_vec(&StorageKey::AgentDuels).unwrap()).unwrap());
+    assert_eq!(tail[5..], LOCK.to_le_bytes());
     env::storage_write(b"STATE", &raw);
     ctx(CONTRACT, 0);
     let mut m = Contract::migrate_v10();
     assert_eq!(m.get_config().next_duel.0, 1);
+    assert_eq!(m.get_config().intent_lock_s, 60, "lock takes the default until set_oracle");
     assert!(m.get_agent(Base64VecU8(key(1).1)).unwrap().tee);
     assert!(m.get_duel(U64(d0)).unwrap().resolved);
     assert!(m.agent_duels(Base64VecU8(key(1).1), 0, 10).is_empty(), "old duels are not back-filled");
     let d1 = open(&mut m);
     assert_eq!(ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)), vec![d1]);
+}
+
+#[test]
+fn migrate_v11_adds_default_lock_and_keeps_index() {
+    let (mut c, ..) = setup();
+    let d0 = open(&mut c);
+    resolve_at_close(&mut c, d0, UP);
+    // deploy-10 state: the current layout minus the trailing `intent_lock_ns` (u64)
+    c.duels.flush();
+    c.agents.flush();
+    c.agent_duels.flush();
+    let mut raw = near_sdk::borsh::to_vec(&c).unwrap();
+    assert_eq!(raw.split_off(raw.len() - 8), LOCK.to_le_bytes());
+    env::storage_write(b"STATE", &raw);
+    ctx(CONTRACT, 0);
+    let mut m = Contract::migrate_v11();
+    let cfg = m.get_config();
+    assert_eq!((cfg.next_duel.0, cfg.min_duel_s, cfg.intent_lock_s), (1, 60, 60));
+    assert!(m.get_duel(U64(d0)).unwrap().resolved);
+    assert_eq!(ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)), vec![d0], "index survives");
+    assert_eq!(bond(&m, 1), bond(&c, 1));
+    let d1 = open(&mut m);
+    assert_eq!(ids(m.agent_duels(Base64VecU8(key(1).1), 0, 10)), vec![d1, d0]);
 }

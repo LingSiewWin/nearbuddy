@@ -29,9 +29,13 @@ use near_sdk::store::{IterableMap, LookupMap, LookupSet};
 use near_sdk::{env, ext_contract, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise};
 
 pub const INTENT_DOMAIN: &[u8] = b"nearbuddy-intent-v1";
+/// Prefix of the bytes an agent key signs to prove possession at `register_agent`.
+pub const REGISTER_DOMAIN: &[u8] = b"nearbuddy-register-v1";
+/// `intent_lock_ns` until the owner sets it through `set_oracle`.
+pub const DEFAULT_INTENT_LOCK_NS: u64 = 60 * 1_000_000_000;
 /// Cap on `Duel.injections` so a duel record cannot grow without bound.
 pub const MAX_INJECTIONS: usize = 32;
-/// After this long past `close_at` with no oracle answer the owner may void the duel.
+/// After this long past `close_at` with no oracle answer anyone may void the duel.
 pub const VOID_AFTER_NS: u64 = 24 * 3600 * 1_000_000_000;
 const ORACLE_GAS: Gas = Gas::from_tgas(150);
 
@@ -93,6 +97,36 @@ pub struct Contract {
     /// on are here (`migrate_v10` does not back-fill). ponytail: one Vec per agent, read and
     /// rewritten whole on every open_duel; a `Vector` per agent when an agent has more duels than
     /// fit in one read.
+    agent_duels: LookupMap<Vec<u8>, Vec<u64>>,
+    /// No intent lands in the last `intent_lock_ns` before `close_at`, so the final decision is made
+    /// before the close price is knowable. Bounded to `min_duel_ns / 2` by `set_oracle`.
+    intent_lock_ns: u64,
+}
+
+/// State layout of deploy 10 (before `intent_lock_ns`). Read once by `migrate_v11`.
+#[allow(dead_code)]
+#[derive(near_sdk::borsh::BorshDeserialize)]
+#[borsh(crate = "near_sdk::borsh")]
+pub struct ContractV10 {
+    owner: AccountId,
+    oracle_account: AccountId,
+    oracle_deposit: u128,
+    slash_bps: u16,
+    fee_bps: u16,
+    min_chaos_deposit: u128,
+    agents: IterableMap<Vec<u8>, Agent>,
+    duels: LookupMap<u64, Duel>,
+    next_duel: u64,
+    used_nonces: LookupSet<Vec<u8>>,
+    solvers: LookupSet<AccountId>,
+    vaults: LookupMap<AccountId, u128>,
+    follows: LookupMap<Vec<u8>, Vec<(AccountId, Mandate)>>,
+    settled_fills: LookupSet<Vec<u8>>,
+    owner_fees: u128,
+    tee_signers: LookupSet<Vec<u8>>,
+    tee_agents: LookupSet<Vec<u8>>,
+    used_proofs: LookupSet<Vec<u8>>,
+    min_duel_ns: u64,
     agent_duels: LookupMap<Vec<u8>, Vec<u64>>,
 }
 
@@ -170,6 +204,13 @@ pub struct ContractV7 {
 pub fn intent_message(i: &Intent) -> Vec<u8> {
     let mut out = INTENT_DOMAIN.to_vec();
     out.extend(near_sdk::borsh::to_vec(i).expect("borsh"));
+    out
+}
+
+/// The exact bytes `agent_pk` signs so `owner` may register it: `REGISTER_DOMAIN || owner`.
+pub fn register_bytes(owner: &AccountId) -> Vec<u8> {
+    let mut out = REGISTER_DOMAIN.to_vec();
+    out.extend_from_slice(owner.as_bytes());
     out
 }
 
@@ -279,10 +320,42 @@ impl Contract {
             used_proofs: LookupSet::new(StorageKey::UsedProofs),
             min_duel_ns: 0,
             agent_duels: LookupMap::new(StorageKey::AgentDuels),
+            intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
         }
     }
 
     // ---------------------------------------------------------------- migration
+
+    /// Deploy 10 → 11: add `intent_lock_ns` (60 s; `set_oracle` changes it). Collections keep
+    /// their prefixes.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate_v11() -> Self {
+        let old: ContractV10 = env::state_read().expect("no state");
+        Self {
+            owner: old.owner,
+            oracle_account: old.oracle_account,
+            oracle_deposit: old.oracle_deposit,
+            slash_bps: old.slash_bps,
+            fee_bps: old.fee_bps,
+            min_chaos_deposit: old.min_chaos_deposit,
+            agents: old.agents,
+            duels: old.duels,
+            next_duel: old.next_duel,
+            used_nonces: old.used_nonces,
+            solvers: old.solvers,
+            vaults: old.vaults,
+            follows: old.follows,
+            settled_fills: old.settled_fills,
+            owner_fees: old.owner_fees,
+            tee_signers: old.tee_signers,
+            tee_agents: old.tee_agents,
+            used_proofs: old.used_proofs,
+            min_duel_ns: old.min_duel_ns,
+            agent_duels: old.agent_duels,
+            intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
+        }
+    }
 
     /// Deploy 9 → 10: add `agent_duels`. Duels opened before this deploy are not back-filled;
     /// `agent_duels` lists only duels opened from deploy 10 on. Collections keep their prefixes.
@@ -311,6 +384,7 @@ impl Contract {
             used_proofs: old.used_proofs,
             min_duel_ns: old.min_duel_ns,
             agent_duels: LookupMap::new(StorageKey::AgentDuels),
+            intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
         }
     }
 
@@ -340,6 +414,7 @@ impl Contract {
             used_proofs: LookupSet::new(StorageKey::UsedProofs),
             min_duel_ns: duel_floor_ns(min_duel_s),
             agent_duels: LookupMap::new(StorageKey::AgentDuels),
+            intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
         }
     }
 
@@ -370,6 +445,7 @@ impl Contract {
             used_proofs: LookupSet::new(StorageKey::UsedProofs),
             min_duel_ns: 0,
             agent_duels: LookupMap::new(StorageKey::AgentDuels),
+            intent_lock_ns: DEFAULT_INTENT_LOCK_NS,
         }
     }
 
@@ -426,12 +502,15 @@ impl Contract {
         self.solvers.insert(account_id);
     }
 
-    /// Point at another price oracle account, change the deposit it needs, or the duel length floor.
-    pub fn set_oracle(&mut self, oracle_account: AccountId, oracle_deposit: U128, min_duel_s: u64) {
+    /// Point at another price oracle account, change the deposit it needs, the duel length floor, or
+    /// the intent lock (no intent in the last `intent_lock_s` of a duel; at most half the floor).
+    pub fn set_oracle(&mut self, oracle_account: AccountId, oracle_deposit: U128, min_duel_s: u64, intent_lock_s: u64) {
         self.only_owner();
+        require!(intent_lock_s <= min_duel_s / 2, "intent_lock_s too large");
         self.oracle_account = oracle_account;
         self.oracle_deposit = oracle_deposit.0;
         self.min_duel_ns = duel_floor_ns(min_duel_s);
+        self.intent_lock_ns = intent_lock_s * 1_000_000_000;
     }
 
     /// Accept intents signed by this NEAR AI Cloud enclave key. The owner takes it from
@@ -440,6 +519,7 @@ impl Contract {
     pub fn add_tee_signer(&mut self, signer: Base64VecU8, label: String) {
         self.only_owner();
         require!(signer.0.len() == 32, "signer length");
+        require!(label.len() <= 64, "label too long");
         self.tee_signers.insert(signer.0.clone());
         env::log_str(&format!(
             r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"tee_signer","data":{{"signer":"{}","label":"{}"}}}}"#,
@@ -465,11 +545,15 @@ impl Contract {
     // ---------------------------------------------------------------- agents
 
     /// Register an agent. The attached deposit is its bond, minus the storage its record costs.
-    /// `tee = true` commits the agent to a verified `TeeProof` on every intent.
+    /// `tee = true` commits the agent to a verified `TeeProof` on every intent. `register_sig` is
+    /// `agent_pk`'s ed25519 signature over `register_message(caller)`, so nobody can squat a
+    /// published key.
     #[payable]
-    pub fn register_agent(&mut self, agent_pk: Base64VecU8, model_id: String, tee: bool) -> AgentView {
+    pub fn register_agent(&mut self, agent_pk: Base64VecU8, model_id: String, tee: bool, register_sig: Base64VecU8) -> AgentView {
         require!(agent_pk.0.len() == 32, "agent_pk length");
+        require!(model_id.len() <= 64, "model_id too long");
         require!(!self.agents.contains_key(&agent_pk.0), "agent exists");
+        require!(verify(&agent_pk.0, &register_bytes(&env::predecessor_account_id()), &register_sig.0), "bad register signature");
         let before = env::storage_usage();
         let deposit = env::attached_deposit().as_yoctonear();
         let agent = Agent {
@@ -512,6 +596,7 @@ impl Contract {
     pub fn open_duel(&mut self, a: Base64VecU8, b: Base64VecU8, symbol: String, close_at: U64) -> U64 {
         self.only_owner();
         require!(a.0 != b.0, "same agent");
+        require!(symbol.len() <= 64, "symbol too long");
         require!(close_at.0 > env::block_timestamp(), "close_at in the past");
         require!(close_at.0 - env::block_timestamp() >= self.min_duel_ns, "duel too short");
         let before = env::storage_usage();
@@ -569,12 +654,11 @@ impl Contract {
             .oracle_call(env::current_account_id(), Some(vec![asset.to_string()]), msg, None)
     }
 
-    /// Record an agent-signed intent for an open duel. Submitted by the solver on the agent's
-    /// behalf; the signature is what binds the decision to the agent. A TEE-backed agent must also
-    /// present the enclave signature over the completion that produced the decision; its storage is
-    /// paid from the agent's bond.
+    /// Record an agent-signed intent for an open duel. Anyone may relay it: the signature is what
+    /// binds the decision to the agent and the agent's bond pays its storage. Refused inside the
+    /// last `intent_lock_ns` of the duel. A TEE-backed agent must also present the enclave signature
+    /// over the completion that produced the decision.
     pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
-        self.only_solver();
         let before = env::storage_usage();
         let i = &signed.intent;
         require!(i.agent_pk.0.len() == 32, "agent_pk length");
@@ -594,6 +678,7 @@ impl Contract {
         };
         let duel = self.duels.get_mut(&i.duel_id.0).expect("duel missing");
         require!(!duel.resolved && env::block_timestamp() < duel.close_at.0, "duel closed");
+        require!(env::block_timestamp() + self.intent_lock_ns < duel.close_at.0, "intent lock");
         let slot = if i.agent_pk.0 == duel.a.0 {
             &mut duel.last_intent_a
         } else if i.agent_pk.0 == duel.b.0 {
@@ -645,6 +730,7 @@ impl Contract {
         let deposit = env::attached_deposit().as_yoctonear();
         require!(deposit >= self.min_chaos_deposit, "chaos deposit too small");
         require!(payload_hash.0.len() == 32, "payload_hash length");
+        require!(kind.len() <= 32, "kind too long");
         let duel = self.duels.get_mut(&duel_id.0).expect("duel missing");
         require!(!duel.resolved && env::block_timestamp() < duel.close_at.0, "duel closed");
         require!(target.0 == duel.a.0 || target.0 == duel.b.0, "bad target");
@@ -710,10 +796,9 @@ impl Contract {
         }
     }
 
-    /// Owner escape hatch when the oracle never answers: a day after `close_at`, free both agents,
-    /// split the pool between them, no slashing, no score. Recorded as a tie with no prices.
+    /// Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both
+    /// agents, split the pool between them, no slashing, no score. Recorded as a tie with no prices.
     pub fn void_duel(&mut self, duel_id: U64) {
-        self.only_owner();
         let d = self.duels.get_mut(&duel_id.0).expect("duel missing");
         require!(!d.resolved, "resolved");
         require!(env::block_timestamp() >= d.close_at.0 + VOID_AFTER_NS, "too early");
@@ -876,16 +961,15 @@ impl Contract {
         if f.amount_in.0 > m.per_tx_cap.0 {
             return Err("over cap");
         }
-        if m.spent.0 + f.amount_in.0 > m.allowance.0 {
-            return Err("allowance exhausted");
-        }
+        // checked: `spent` is follower-supplied, so one absurd mandate must not panic the batch
+        let spent = m.spent.0.checked_add(f.amount_in.0).filter(|s| *s <= m.allowance.0).ok_or("allowance exhausted")?;
         let fee = f.amount_in.0 * self.fee_bps as u128 / 10_000;
         let debit = f.amount_in.0 + fee;
         let bal = self.vaults.get(follower).copied().unwrap_or(0);
         if bal < debit {
             return Err("insufficient");
         }
-        m.spent = U128(m.spent.0 + f.amount_in.0);
+        m.spent = U128(spent);
         self.vaults.insert(follower.clone(), bal - debit);
         let sbal = self.vaults.get(solver).copied().unwrap_or(0);
         self.vaults.insert(solver.clone(), sbal + f.amount_in.0);
@@ -927,6 +1011,7 @@ impl Contract {
             oracle_account: self.oracle_account.clone(),
             oracle_deposit: U128(self.oracle_deposit),
             min_duel_s: self.min_duel_ns / 1_000_000_000,
+            intent_lock_s: self.intent_lock_ns / 1_000_000_000,
             slash_bps: self.slash_bps,
             fee_bps: self.fee_bps,
             min_chaos_deposit: U128(self.min_chaos_deposit),
@@ -959,6 +1044,11 @@ impl Contract {
         let mut v: Vec<AgentView> = self.agents.values().map(|a| self.view_of(a)).collect();
         v.sort_by(|x, y| (y.alpha_bps, y.shield).cmp(&(x.alpha_bps, x.shield)));
         v
+    }
+
+    /// The exact bytes an agent key signs to be registered by `owner`.
+    pub fn register_message(&self, owner: AccountId) -> Base64VecU8 {
+        Base64VecU8(register_bytes(&owner))
     }
 
     pub fn intent_message_hex(&self, intent: Intent) -> String {
