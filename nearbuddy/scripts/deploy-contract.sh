@@ -154,7 +154,7 @@ loop_pid() { local p; p=$(cat "$1" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2
 restart_line() {
   local pid=$1 stop=$2 drv=$3 cmdf=$4 cpid cwd env argv k v
   if [ -r "$cmdf" ] && { read -r cpid && read -r cwd && read -r env && read -r argv; } < "$cmdf" && [ "$cpid" = "$pid" ]; then
-    echo "cd $cwd && rm -f $stop && ${env:+$env }nohup $argv > $drv 2>&1 &"
+    echo "cd $cwd && rm -f $(printf %q "$stop") && ${env:+$env }nohup $argv > $(printf %q "$drv") 2>&1 &"
     return
   fi
   argv=$(ps -o args= -p "$pid" | sed -E 's/ --start-batch [0-9]+//')
@@ -164,7 +164,7 @@ restart_line() {
     v=$(ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n "s/^$k=//p" | head -1)
     [ -n "$v" ] && env+="$(printf '%q' "$k=$v") "
   done
-  echo "cd ${cwd:-$PWD} && rm -f $stop && ${env}nohup $argv > $drv 2>&1 &"
+  echo "cd $(printf %q "${cwd:-$PWD}") && rm -f $(printf %q "$stop") && ${env}nohup $argv > $(printf %q "$drv") 2>&1 &"
 }
 restart_lines=()
 print_restart() {

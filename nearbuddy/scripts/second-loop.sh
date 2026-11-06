@@ -126,6 +126,11 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'log "pair 2 loop stopped by signal"; exit 130' INT TERM
+if [ -e "$STOP_FILE" ]; then # a fresh start with the stop file present runs nothing; say so where the operator looks
+  echo "stop file $STOP_FILE present; remove it to start" >&2
+  log "stop file $STOP_FILE present; remove it to start"
+  exit 0
+fi
 write_loop_cmd "$CMD_FILE" "$LAUNCH_CWD" "${LAUNCH_ARGS[@]}"
 busy=$(other_runners)
 [ -n "$busy" ] && die "another pair $PAIR runner is running (pids $busy); stop it first"
@@ -140,6 +145,10 @@ stop_spectator() { [ -n "$spec" ] && kill "$spec" 2>/dev/null; [ -n "$spec" ] &&
 log "pair 2 loop pid $$ until $until_hhmm, first #$start_batch: A $model_a B $model_b rounds $rounds duel ${duel_s}s variants ${variants:-none} payload $payload_set"
 i=$start_batch
 while [ "$(date +%s)" -lt "$deadline" ]; do
+  if [ -e "$STOP_FILE" ]; then # checked first on every pass (and every wait): deploy-contract.sh --at-boundary
+    log "stopping at boundary ($STOP_FILE present), next would be #$i"
+    exit 0
+  fi
   busy=$(other_runners)
   if [ -n "$busy" ]; then
     log "another pair $PAIR runner is running (pids $busy); waiting ${BACKOFF_S}s"
@@ -150,10 +159,6 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     log "batch $i solver not answering on :$SOLVER_PORT; backing off ${BACKOFF_S}s"
     sleep "$BACKOFF_S"
     continue
-  fi
-  if [ -e "$STOP_FILE" ]; then # checked right before a batch starts: deploy-contract.sh --at-boundary
-    log "stopping at boundary ($STOP_FILE present), next would be #$i"
-    exit 0
   fi
   log "batch $i A $model_a B $model_b variants ${variants:-none} payload $payload_set"
   batch_log=$RUN/nearbuddy-pair2-batch$i.log

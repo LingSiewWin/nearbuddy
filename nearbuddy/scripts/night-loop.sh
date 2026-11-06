@@ -120,6 +120,11 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'log "night loop stopped by signal"; exit 130' INT TERM
+if [ -e "$STOP_FILE" ]; then # a fresh start with the stop file present runs nothing; say so where the operator looks
+  echo "stop file $STOP_FILE present; remove it to start" >&2
+  log "stop file $STOP_FILE present; remove it to start"
+  exit 0
+fi
 write_loop_cmd "$CMD_FILE" "$LAUNCH_CWD" "${LAUNCH_ARGS[@]}"
 busy=$(other_drivers)
 [ -n "$busy" ] && die "another driver is running (pids $busy); stop it first"

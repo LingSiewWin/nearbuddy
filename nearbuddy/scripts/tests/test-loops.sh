@@ -86,12 +86,36 @@ for spec in "night-loop.sh|nearbuddy-night-loop.stop|nearbuddy-night.log|nearbud
 
   setup
   touch "$T/run/$stop"
-  bash "$T/scripts/$script" --until "$(far_until)" > "$T/run/driver.log" 2>&1
+  bash "$T/scripts/$script" --until "$(far_until)" > "$T/run/driver.log" 2> "$T/run/driver.err"
   rc=$?
   expect "$script with the stop file already present exits 0" '[ "$rc" = 0 ]'
   expect "$script with the stop file present runs no batch" '! grep -q -- "--rounds" "$T/run/python-calls" 2>/dev/null'
+  expect "$script with the stop file present says so on stderr and in its log" 'grep -qx "stop file $T/run/$stop present; remove it to start" "$T/run/driver.err" && grep -q "stop file $T/run/$stop present; remove it to start" "$T/run/$log"'
   teardown
 done
+
+# second-loop.sh with the solver down: the stop file is seen anyway (it is checked first on every pass, not only after
+# the solver answers). sleep is cut to 0.05 s so the two-minute solver wait and the backoff take seconds.
+setup
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/curl"
+printf '#!/bin/sh\nexec /bin/sleep 0.05\n' > "$T/bin/sleep"
+chmod +x "$T/bin/curl" "$T/bin/sleep"
+bash "$T/scripts/second-loop.sh" --until "$(far_until)" > "$T/run/driver.log" 2>&1 &
+loop=$!
+if wait_for 30 'grep -q "solver not answering" "$T/run/nearbuddy-pair2-night.log" 2>/dev/null'; then
+  touch "$T/run/nearbuddy-pair2-loop.stop"
+  rc=still-running
+  if wait_for 30 '! kill -0 $loop 2>/dev/null'; then
+    wait "$loop"
+    rc=$?
+  fi
+  expect "second-loop.sh with the solver down still stops at the stop file" '[ "$rc" = 0 ] && grep -q "stopping at boundary" "$T/run/nearbuddy-pair2-night.log"'
+  expect "second-loop.sh with the solver down ran no batch" '! grep -q -- "--rounds" "$T/run/python-calls" 2>/dev/null'
+else
+  fail "second-loop.sh never reported the solver down: $(tail -3 "$T/run/driver.log")"
+fi
+kill "$loop" 2>/dev/null
+teardown
 
 # deploy-contract.sh --at-boundary against a fake RPC and two fake loops
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
