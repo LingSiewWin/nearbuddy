@@ -111,7 +111,8 @@ const PAD = 64;
 const textOf = (spans: Span[]) => spans.map((s) => (typeof s === "string" ? s : s.t)).join(" ");
 
 export async function drawCard(card: Card, size = OG) {
-  const [fonts, mark] = await (assets ??= load());
+  assets ??= load();
+  const [fonts, mark] = await assets;
   // wide Archivo 800 runs about 0.58 em per character: size the headline so its longest sentence fits one
   // line; a longer one still wraps
   const longest = Math.max(...card.title.map((p) => textOf(p).length), 1);

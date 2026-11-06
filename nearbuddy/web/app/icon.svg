@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="NearBuddy">
+  <title>NearBuddy</title>
   <rect width="32" height="32" rx="7" fill="#17160F"/>
   <rect x="7" y="4" width="8" height="11" fill="#F2A93B"/>
   <rect x="17" y="17" width="8" height="11" fill="#6EC5E9"/>
