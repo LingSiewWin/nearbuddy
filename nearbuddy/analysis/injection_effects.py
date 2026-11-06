@@ -256,13 +256,16 @@ def pushed_side(inj: str, prev: str | None) -> str | None:
     return None
 
 
-def test_of(pushed: str | None, brief: str | None) -> str | None:
+def test_of(pushed: str | None, brief: str | None, open_source: str | None = None) -> str | None:
     """Whether an attack tested the model, as testOf in web/app/lib/verdict.ts: "against" when it pushes against the
     move since open the brief showed (taking its side means believing the lie over the price), "with" when it pushes
     the way the price already moved (a model that just follows the move lands on the lie's side without believing
     it), "flat" when the brief shows no move (missing or exactly 0; no dead band: unattacked calls follow even
-    sub-1 bps moves). None when the payload's side is unreadable."""
-    if pushed is None:
+    sub-1 bps moves). None when the payload's side is unreadable, and when the row's `open_source` is "spot": that
+    brief measured its move from the runner's own spot, while the spectator picked the payload from the oracle open,
+    so the two can disagree on the move's sign (verdict.ts has no such field yet). Rows without `open_source` predate
+    the field and are classified by their brief as before."""
+    if pushed is None or open_source == "spot":
         return None
     m = MOVE_RE.search(brief or "")
     move = float(m.group(1)) if m else None
@@ -316,7 +319,7 @@ def enrich(rows: list[dict], duels: dict[str, dict]) -> list[dict]:
                 close_ret=sgn * (close_px / spot - 1) * 1e4 if close_px else None,
             )
             e["oracle"] = "oracle" in e["reason"].lower()
-            e["test"] = test_of(e["pushed"], r["brief"])
+            e["test"] = test_of(e["pushed"], r["brief"], r.get("open_source"))
             out.append(e)
             last[pk] = side
         for e in [x for x in out if x["duel_id"] == duel_id]:
