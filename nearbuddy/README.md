@@ -79,6 +79,7 @@ gateway, so their signature proves the gateway's output, not that the weights ra
 | Enclave attestation checked by a third party: the DeepSeek enclave's `nvidia_payload` (nonce-bound) → NVIDIA NRAS `x-nvidia-overall-att-result: true`, GPU-0 cert chain validated, GH100; its `signing_address` `236f5a6b…` is the signer pinned on chain | `agents/data/attestations/nras-*.json` (exported with the dataset) |
 | **Tampered proof refused**: the real enclave signature with one flipped byte in the response hash (intent re-signed to match) → `Smart contract panicked: bad tee signature` | [`4rmFo38n…PPSt`](https://testnet.nearblocks.io/txns/4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt) |
 | Agent A bond 0.1 → 0.09278 NEAR after registration and three intents: **storage paid from the bond** | `get_agent(Ul+W6UJK…)` |
+| Deploy 8 + `migrate_v8`: oracle requests paid by the caller, one enclave proof per intent (`proof used`), `min_duel_s` 310, `set_oracle` | [`5LVSUqg5…RDYMn`](https://testnet.nearblocks.io/txns/5LVSUqg5oT5DLZGhBgCvxbboPpvE1ueSYR2VKtARDYMn) |
 | **Duel 258 resolved by the TEE oracle, called by anyone**: Outlayer close 3.69016666 vs open 3.69380000; Qwen (Short) +4 bps wins, DeepSeek (Long) −4 bps slashed 10% (0.0911 → 0.0820 NEAR), injections pruned, `outcome` recorded | [`9Hf33mxh…xZWB`](https://testnet.nearblocks.io/txns/9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB) |
 
 Counts move while the runner is on: as of 2026-11-06 13:50 (UTC+8) 259 duels, 980+ signed intents (the newest with enclave proofs) and 7 chaos injections
@@ -92,7 +93,7 @@ Gas, measured on near-sandbox with the real wasm (`cd arena && cargo test --test
 | `register_agent` (storage charged from the bond) | 2.52 |
 | `open_duel` incl. the `oracle_call` to the price oracle | 4.26 |
 | `oracle_on_call` storing the open price | 2.27 |
-| `post_intent` with a TEE proof (two ed25519 verifies, sha256, nonce burn) | 3.37 |
+| `post_intent` with a TEE proof (two ed25519 verifies, sha256, nonce + proof burn) | 3.54 |
 | `post_intent` plain | 3.02 |
 | `inject_chaos` (32nd of 32) | 2.97 |
 | `settle_follow` with 10 fills | 5.01 |
@@ -105,7 +106,8 @@ vault shrink by the bytes they add. Known limits, on purpose for the hackathon: 
 the solver carries exposure between its swap and `settle_follow` (the vault contract's delayed withdraw is the
 upgrade); the solver's POST routes are gated by a shared secret, not per-agent keys; the on-chain check proves an
 enclave produced the response whose hash is in the intent, while the link "that response says Long" lives in the
-dataset row (request and response bytes are published there, so anyone can recompute both hashes).
+dataset row (request and response bytes are published there, so anyone can recompute both hashes); the open price may be up to
+300 s old because the oracle serves its cache with a fresh timestamp, which is why duels are at least 310 s.
 
 Not yet proven: one real 1Click swap reported through `settle_follow` (needs a funded mainnet account). The seam is
 built and tested offline; the README will carry its hash when it runs.
@@ -340,10 +342,11 @@ IOU signing bytes: `"nearbuddy-iou-v1" || borsh(Iou{owner, agent_pk, payee, amou
 | `register_agent(agent_pk, model_id, tee)` payable | agent operator | bond = deposit minus storage; `tee` commits the agent to a verified enclave proof on every intent; `withdraw_bond(agent_pk, amount)` when not in a duel |
 | `add_tee_signer(signer, label)` / `remove_tee_signer` | contract owner | ed25519 `signing_address` from a NEAR AI Cloud attestation report (`GET /v1/attestation/report?model=…`) |
 | `open_duel(a, b, symbol, close_at)` payable | contract owner (solver) | pair two idle agents on an oracle asset (`wrap.near`); sends `oracle_call` for the open price; returns `duel_id` |
-| `request_open_price(duel_id)` | anyone | ask the oracle again if the open price never landed |
-| `post_intent(signed, tee)` | registered solver | agent-signed `Intent{agent_pk, duel_id, side, size_bps, nonce, expires_at, proof_hash}` plus `TeeProof{kind, request_hash, response_hash, signer, signature}`; enclave signature verified on chain, `proof_hash == sha256(req \|\| res)`; nonce burned; storage from the bond |
+| `request_open_price(duel_id)` payable | anyone, attaches `oracle_deposit` | ask the oracle again if the open price never landed |
+| `post_intent(signed, tee)` | registered solver | agent-signed `Intent{agent_pk, duel_id, side, size_bps, nonce, expires_at, proof_hash}` plus `TeeProof{kind, request_hash, response_hash, signer, signature}`; enclave signature verified on chain, `proof_hash == sha256(req \|\| res)`; nonce and proof burned (one completion backs one intent); storage from the bond |
 | `inject_chaos(duel_id, target, kind, payload_hash)` payable | anyone (≥ `min_chaos_deposit`) | attack one agent; deposit minus storage joins the pool; 32 per duel |
-| `resolve_duel(duel_id)` | anyone, after `close_at` | asks the oracle for the close price |
+| `resolve_duel(duel_id)` payable | anyone, after `close_at`, attaches `oracle_deposit` | asks the oracle for the close price |
+| `set_oracle(oracle_account, oracle_deposit, min_duel_s)` | contract owner | oracle account, its deposit, and the duel length floor (310 s on testnet: Outlayer serves a cached price for 300 s with a fresh timestamp, so shorter duels would close on their own open price) |
 | `oracle_on_call(sender_id, data, msg)` | `price-oracle.*` only | stores the open price (`open:<id>`) or scores, slashes, pays the pool, counts shield, prunes injections, records `outcome` (`close:<id>`) |
 | `void_duel(duel_id)` | contract owner, 24 h after `close_at` | oracle never answered: free both agents, split the pool, no slash |
 | `deposit()` payable / `withdraw(amount)` | follower | arena vault |
