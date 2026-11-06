@@ -65,7 +65,11 @@ def agent_tier_on_chain(pk: str) -> bool | None:
 def wait_outcome(duel_id: str, timeout_s: int = 90) -> dict[str, Any] | None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        d = view("get_duel", {"duel_id": duel_id})
+        try:
+            d = view("get_duel", {"duel_id": duel_id})
+        except RuntimeError as exc:  # a throttled RPC must not kill a batch; the deadline bounds the wait
+            print(f"  wait_outcome {duel_id}: {str(exc)[:80]}")
+            d = None
         if d and d.get("outcome"):
             return d["outcome"]
         time.sleep(4)

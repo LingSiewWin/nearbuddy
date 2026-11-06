@@ -163,6 +163,9 @@ def post_decision(
     if sig_record:
         try:
             tee = tee_proof(sig_record, model.model_id, c.request_hash, c.response_hash)
+            if tee is not None and tee.get("kind") != 2:
+                print(f"  {pk[:8]}: gateway-signed completion, the contract wants the provider enclave; skipping")
+                tee = None
         except TeeProofError as e:
             print(f"  {pk[:8]} enclave record rejected locally: {e}")
     if model.tee and not tee:
@@ -210,11 +213,12 @@ def post_decision(
     try:
         posted = solver.post("/intent", {"signed": sign_intent(sk, intent), "tee": tee})
     except RuntimeError as e:
-        if "duel closed" not in str(e):
+        late = next((w for w in ("duel closed", "intent lock") if w in str(e)), None)
+        if late is None:
             raise
-        # chain clock passed close_at: keep the paid decision in the dataset, stop prompting this duel
-        record({**row, "tx": None, "error": "duel closed"})
-        print(f"  late intent for {pk[:8]} not posted (duel closed)")
+        # chain clock passed close_at or entered the intent lock: keep the paid decision, stop prompting this duel
+        record({**row, "tx": None, "error": late})
+        print(f"  late intent for {pk[:8]} not posted ({late})")
         return nonce, "closed"
     if inj:
         solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
@@ -262,7 +266,17 @@ def run_single(
     d, sk, comp = make_duelist(name, model, hardened=hardened)
     pk = pk_b64(sk)
     if agent_tier_on_chain(pk) is None:
-        solver.post("/register", {"agent_pk": pk, "model_id": model.model_id, "bond": bond, "tee": model.tee})
+        solver_id = ENV.get("SOLVER_ID", "nearbuddy-solver.testnet")
+        solver.post(
+            "/register",
+            {
+                "agent_pk": pk,
+                "model_id": model.model_id,
+                "bond": bond,
+                "tee": model.tee,
+                "register_sig": register_sig(sk, solver_id),
+            },
+        )
         print(f"registered {pk[:8]} as {model.model_id} tee={model.tee}")
     else:
         print(f"{pk[:8]} already registered (tee={model.tee}); not re-registering")
@@ -302,11 +316,12 @@ def run_single(
         # permissionless on chain; the solver pays the oracle deposit. Once: the other side or the operator may
         # already have asked.
         try:
-            r = solver.post("/resolve", {"duel_id": duel_id})
-            print(f"[duel {duel_id}] resolve tx {r.get('tx')}")
+            res = resolve_duel(solver, duel_id)
+            print(f"[duel {duel_id}] resolve tx {res.get('tx')}")
+            o = res.get("outcome")
         except RuntimeError as e:
             print(f"[duel {duel_id}] resolve not sent ({str(e)[:100]}); waiting for someone else's")
-        o = wait_outcome(duel_id)
+            o = wait_outcome(duel_id)
         if o:
             print(
                 f"[duel {duel_id}] oracle {int(o['open_price']) / 1e8:,.4f} -> {int(o['close_price']) / 1e8:,.4f}  "
@@ -315,6 +330,22 @@ def run_single(
         else:
             print(f"[duel {duel_id}] oracle callback not yet landed; the next pairing waits for it")
         last = duel_id
+
+
+def free_agents(solver: Solver, pks: list[str]) -> None:
+    """After a crash an agent can still be `in_duel`; wait for that duel to close and resolve it before opening."""
+    for pk in pks:
+        a = view("get_agent", {"agent_pk": pk})
+        stuck = a and a.get("in_duel") is not None
+        if not stuck:
+            continue
+        duel_id = str(a["in_duel"])
+        d = view("get_duel", {"duel_id": duel_id}) or {}
+        wait_ns = int(d.get("close_at", "0")) + 2_000_000_000 - time.time_ns()
+        print(f"{pk[:8]} still in duel {duel_id}; resolving it first ({max(0, wait_ns) // 1_000_000_000} s to close)")
+        if wait_ns > 0:
+            time.sleep(wait_ns / 1e9)
+        resolve_duel(solver, duel_id)
 
 
 def run(
@@ -363,6 +394,7 @@ def run(
     results = []
     nonce = int(time.time() * 1000)
     for rnd in range(rounds):
+        free_agents(solver, [pk_b64(ska), pk_b64(skb)])
         close_at_ns = (time.time_ns() // 1_000_000_000 + duel_seconds) * 1_000_000_000
         opened = solver.post(
             "/duel", {"a": pk_b64(ska), "b": pk_b64(skb), "symbol": asset, "close_at": str(close_at_ns)}
