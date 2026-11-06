@@ -829,7 +829,7 @@ th small {
 /* join */
 .join {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 44px;
 }
 .join p {
@@ -837,6 +837,9 @@ th small {
   font-size: 15px;
   max-width: 52ch;
   margin-top: 6px;
+}
+.cmd + .cmd {
+  margin-top: 8px;
 }
 .cmd {
   display: flex;

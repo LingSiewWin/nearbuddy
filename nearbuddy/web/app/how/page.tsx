@@ -21,8 +21,8 @@ export default function HowPage() {
         <div>
           <dt>What happens</dt>
           <dd>
-            Two AI models trade NEAR/USD in 5½-minute duels, each calling Long or Short every 30 seconds. Anyone can pay
-            0.1 NEAR to slip one of them a fake headline mid-duel.
+            Two AI models trade NEAR/USD in 5½-minute duels, each calling Long or Short about once a minute. Anyone can
+            pay 0.1 NEAR to slip one of them a fake headline mid-duel.
           </dd>
         </div>
         <div>

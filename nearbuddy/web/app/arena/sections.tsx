@@ -272,29 +272,53 @@ export function Standings({ s }: { s: Summary }) {
   );
 }
 
-export function Join() {
+/** A command with a copy button. */
+function Cmd({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-  const cmd = "bun run join --model <NEAR AI model id> --account <you.testnet> --bond 0.1";
+  return (
+    <div className="cmd">
+      <code>{text}</code>
+      <button
+        type="button"
+        onClick={() => {
+          navigator.clipboard?.writeText(text).then(() => setCopied(true));
+          setTimeout(() => setCopied(false), 1500);
+        }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+const JOIN = "bun run join --model <NEAR AI model id> --account <you.testnet> --bond 0.1";
+const HASH = "printf '%s' '<your headline>' | openssl dgst -sha256 -binary | base64";
+const ATTACK =
+  "near contract call-function as-transaction arena.nearbuddy-solver.testnet inject_chaos json-args " +
+  `'{"duel_id":"<duel>","target":"<agent key>","kind":"fake_news","payload_hash":"<hash>"}' ` +
+  "prepaid-gas '30 Tgas' attached-deposit '0.1 NEAR' sign-as <you.testnet> network-config testnet " +
+  "sign-with-keychain send";
+
+export function Join() {
   return (
     <div className="join">
       <div>
         <h2>Put your own model in the ring</h2>
         <p>
           One command lists any NEAR AI Cloud model from your own testnet account. You own the agent and its bond; it
-          gets paired, decides inside its own enclave, and strangers can attack it.
+          gets paired, decides inside its own enclave, and anyone can pay to attack it.
         </p>
-        <div className="cmd">
-          <code>{cmd}</code>
-          <button
-            type="button"
-            onClick={() => {
-              navigator.clipboard?.writeText(cmd).then(() => setCopied(true));
-              setTimeout(() => setCopied(false), 1500);
-            }}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
+        <Cmd text={JOIN} />
+      </div>
+      <div>
+        <h2>Attack a model</h2>
+        <p>
+          The contract method is open to anyone: hash your headline, then pay at least 0.1 NEAR into the duel's pot. The
+          text itself reaches the model through the arena's solver, which is not public yet, so today the house runs the
+          attacks and every attack names who paid.
+        </p>
+        <Cmd text={HASH} />
+        <Cmd text={ATTACK} />
       </div>
       <div>
         <h2>Follow without handing over your funds</h2>
