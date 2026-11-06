@@ -1306,7 +1306,7 @@ dialog .lie {
     grid-template-columns: 1fr;
     gap: 34px;
   }
-  .nav {
+  .net .txt {
     display: none;
   }
 }
@@ -1314,12 +1314,21 @@ dialog .lie {
   :root {
     --bar: 52px;
   }
+  /* the page links drop to a second row instead of disappearing; the bar scrolls away with the page */
   .bar {
-    padding: 0 16px;
-    gap: 12px;
+    position: static;
+    height: auto;
+    flex-wrap: wrap;
+    padding: 10px 16px;
+    gap: 6px 12px;
   }
-  .net .txt {
-    display: none;
+  .nav {
+    order: 3;
+    flex-basis: 100%;
+    font-size: 13.5px;
+  }
+  .view button {
+    padding: 5px 12px;
   }
   .brand {
     font-size: 17px;
