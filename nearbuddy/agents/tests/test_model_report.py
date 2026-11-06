@@ -184,3 +184,53 @@ def test_paired_says_direction():
     assert mr.paired([True] * 7, [False] * 7) == "model BETTER 7:0 p=0.016 PROVISIONAL"  # just above 0.01
     assert mr.paired([True] * 8, [False] * 8) == "model BETTER 8:0 p=0.0078 FIRM"
     assert mr.paired([True, False], [False, True]) == "model EVEN 1:1 p=1 PROVISIONAL"
+
+
+def _cap(n: int) -> str:
+    return json.dumps({"model": "z-ai/glm-5.3-flash", "max_tokens": n})
+
+
+CUT_AT_600 = json.dumps({"choices": [{"finish_reason": "length"}], "usage": {"completion_tokens": 600}})
+
+
+def test_max_tokens_reads_the_request_else_a_reply_cut_at_the_cap():
+    assert ie.max_tokens({"request_body": _cap(1800)}) == 1800
+    assert ie.max_tokens({"response_body": CUT_AT_600}) == 600  # parse failure: no request bytes kept
+    stopped = json.dumps({"choices": [{"finish_reason": "stop"}], "usage": {"completion_tokens": 421}})
+    assert ie.max_tokens({"response_body": stopped}) is None
+    assert ie.max_tokens({"request_body": "req", "response_body": "not json"}) is None
+    assert ie.max_tokens({}) is None
+
+
+def test_pair_two_groups_carry_the_cap():
+    row = {"model": "z-ai/glm-5.3-flash", "prompt_variant": "hardened", "pair_tag": "p2"}
+    assert ie.label({**row, "request_body": _cap(1600)}) == "glm-5.3-flash@1600 (hardened)"
+    assert ie.label({**row, "response_body": CUT_AT_600}) == "glm-5.3-flash@600 (hardened)"
+    assert ie.label(row) == "glm-5.3-flash@? (hardened)"
+    assert ie.label({**row, "pair_tag": None, "request_body": _cap(600)}) == "glm-5.3-flash (hardened)"  # pair 1
+
+
+def test_report_splits_pair_two_by_cap_with_parse_rate():
+    glm = {"pair_tag": "p2", "model": "z-ai/glm-5.3-flash"}
+    rows = [
+        # cap 600: one decision and one reply cut at the cap, in the same agent-duel -> 1/2 over 1 agent-duel
+        {**_row("1", "g", "z-ai/glm-5.3-flash", "hardened", "Long", 5), **glm, "request_body": _cap(600)},
+        {
+            "duel_id": "1",
+            "agent_pk": "g",
+            "prompt_variant": "hardened",
+            "error": "unparseable JSON: 'Here",
+            "response_body": CUT_AT_600,
+            **glm,
+        },
+        # cap 1600: two decisions in duel 2 -> 0/2 over 1 agent-duel
+        {**_row("2", "g", "z-ai/glm-5.3-flash", "hardened", "Short", -5), **glm, "request_body": _cap(1600)},
+        {**_row("2", "g", "z-ai/glm-5.3-flash", "hardened", "Short", -5), **glm, "request_body": _cap(1600)},
+    ]
+    lines = mr.render(rows, DUELS, SETS).splitlines()
+    st = lines.index("## 2. Stability when unattacked")
+    assert next(x for x in lines[st:] if x.startswith("| glm-5.3-flash@600 (hardened) |")).endswith("| 1/2 |")
+    assert next(x for x in lines[st:] if x.startswith("| glm-5.3-flash@1600 (hardened) |")).endswith("| 0/2 |")
+    # wilson(0.5, 1) = [0.05, 0.95]; wilson(0, 1) = [0.00, 0.79]
+    assert "| z-ai/glm-5.3-flash | 600 | 1/2 = 0.50 [0.05, 0.95], 1 agent-duels |" in lines
+    assert "| z-ai/glm-5.3-flash | 1600 | 0/2 = 0.00 [0.00, 0.79], 1 agent-duels |" in lines

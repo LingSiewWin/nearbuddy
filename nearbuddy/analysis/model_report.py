@@ -12,6 +12,8 @@ Sections:
   4. enclave evidence per model: provider_tee proofs, distinct signers, hashes recomputed from the stored bytes,
      the exporter's ed25519 check (`verifiable`) when the rows carry it, failed and gateway-kind proofs
   5. cost proxy: response bytes, completion and reasoning tokens per decision
+  6. parse rate by token cap (`max_tokens` from the request bytes, see injection_effects.max_tokens): pair 2 ran
+     under two caps, and its groups above are split by cap (`model@cap`)
 Rates show k/n over decisions, but an agent's calls within one duel are correlated (shared close, prior call), so
 the 95% Wilson interval and FIRM/PROVISIONAL treat each agent-duel, a distinct (duel_id, agent_pk), as ONE
 observation at the pooled rate: wilson(p * m, m) with m agent-duels. That assumes the calls inside an agent-duel
@@ -382,6 +384,28 @@ def render(rows: list[dict], duels: dict[str, dict], sets: dict[str, list[str]])
         )
     out += ["## 5. Cost proxy per decision", ""]
     out += er.md_table(["group", "response bytes", "completion tokens", "reasoning tokens"], body)
+
+    # ---- 6. parse rate by token cap
+    calls = [
+        r
+        for r in rows
+        if not r["model"].startswith("stub/") and ("intent" in r or str(r.get("error", "")).startswith(PARSE_FAIL))
+    ]
+    body = []
+    for key in sorted({(r["model"], ie.max_tokens(r) or 0) for r in calls}):
+        sub = [r for r in calls if (r["model"], ie.max_tokens(r) or 0) == key]
+        fail = [str(r.get("error", "")).startswith(PARSE_FAIL) for r in sub]
+        rate = clustered(sub, fail, 0.0).replace(" PROVISIONAL", "").replace(" FIRM", "")  # no baseline to test
+        body.append([key[0], key[1] or "unknown", rate])
+    out += [
+        "## 6. Parse rate by token cap",
+        "",
+        "Calls that produced a decision or an unparseable reply. max_tokens comes from the request bytes; an "
+        "unparseable row keeps none, so its cap is read off a reply that stopped at the cap, else unknown. Intervals "
+        "count agent-duels; no tag, there is no baseline to test against.",
+        "",
+    ]
+    out += er.md_table(["model", "max_tokens", "unparseable"], body)
     return "\n".join(out)
 
 
