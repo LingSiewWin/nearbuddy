@@ -241,11 +241,17 @@ function Head({ d, price, open, now }: { d: DuelData; price: number | null; open
       );
     } else {
       const same = !!d.a.side && d.a.side === d.b.side;
+      // a commitment never revealed is slashed to the protocol even when the score ties
+      const forfeits = d.events.some((e) => e.kind === "resolve" && e.noReveal.length > 0);
       h1 = same
         ? `Tie: both bet ${d.a.side === "Long" ? "up" : "down"}, nobody paid.`
         : !d.a.side && !d.b.side
-          ? "Tie: no calls, nobody paid."
-          : "Tie: nobody paid.";
+          ? forfeits
+            ? "No call revealed: the sealed calls were forfeited."
+            : "Tie: no calls, nobody paid."
+          : forfeits
+            ? "Tie on the score; a sealed call was forfeited."
+            : "Tie: nobody paid.";
       sub = (
         <>
           {same && d.a.size_pct === d.b.size_pct ? (

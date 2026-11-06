@@ -211,6 +211,8 @@ export function Trail({ d, now, list }: { d: DuelData; now: number; list: Story[
                   <>
                     {name(d.winner === d.a.agent ? d.b.agent : d.a.agent)} paid {Number(d.slashed.toFixed(4))} NEAR.
                   </>
+                ) : e.noReveal.length ? (
+                  "Tied on the score."
                 ) : (
                   "Tied, so nobody paid."
                 )}
