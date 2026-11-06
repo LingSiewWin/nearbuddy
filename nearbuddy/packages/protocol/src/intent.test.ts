@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { KeyPair } from "near-api-js";
 import {
-  INTENT_DOMAIN, RESOLVE_DOMAIN, ZERO_PROOF, intentMessage, resolutionMessage, signIntent, verifyIntent,
-  signResolution, verifyResolution, type Intent, type Resolution,
+  INTENT_DOMAIN, ZERO_PROOF, intentMessage, proofHash, signIntent, teeText, verifyIntent, verifyTeeProof,
+  type Intent, type TeeProof,
 } from "./intent.ts";
 import { b64, hex } from "./index.ts";
 
@@ -12,7 +12,6 @@ export const fixture: Intent = {
   agent_pk: b64.enc(new Uint8Array(32).fill(1)), duel_id: "7", side: "Short", size_bps: 5000,
   nonce: "3", expires_at: "1700000000000000000", proof_hash: ZERO_PROOF,
 };
-const resolution: Resolution = { duel_id: "7", open_price: "10000000000000", close_price: "10050000000000" };
 
 test("intent bytes: domain prefix and borsh length", () => {
   const m = intentMessage(fixture);
@@ -28,11 +27,6 @@ test("intent bytes match the Rust contract byte for byte", () => {
   assert.equal(hex(intentMessage({ ...fixture, expires_at: "1700000000000000000" })), RUST_HEX);
 });
 
-test("resolution bytes length", () => {
-  const m = resolutionMessage(resolution);
-  assert.equal(m.length, RESOLVE_DOMAIN.length + 8 + 8 + 8);
-});
-
 test("intent sign/verify and tamper", () => {
   const kp = KeyPair.fromRandom("ed25519");
   const i = { ...fixture, agent_pk: b64.enc(kp.getPublicKey().data) };
@@ -43,19 +37,41 @@ test("intent sign/verify and tamper", () => {
   assert.ok(!verifyIntent({ ...s, intent: { ...s.intent, size_bps: 5001 } }));
 });
 
-test("resolution sign/verify", () => {
-  const kp = KeyPair.fromRandom("ed25519");
-  const pk = b64.enc(kp.getPublicKey().data);
-  const sig = signResolution(kp, resolution);
-  assert.ok(verifyResolution(resolution, sig, pk));
-  assert.ok(!verifyResolution({ ...resolution, close_price: "1" }, sig, pk));
+// Real record from NEAR AI Cloud, 2026-11-06 (deepseek-ai/DeepSeek-V4.1-Flash-1017, provider_tee, ed25519).
+const REAL = {
+  model: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  request_hash: "eddd4548b2b35d65de9b8617c6632b09d487606c74c02fbab9bac1ee349901e3",
+  response_hash: "c4f9c6e53487a744f1687c06d00d09735e7f2a8c4215a019f97150ff6c2dc09f",
+  signature: "3b24456ee898ba8e684c10e7ad373d42e88d9c26ce4cf1a47187f2112dd66eac6aea43f8df942829c3836b3cedc1119ad7efc48c3d12b29056129a366fbe620b",
+  signing_address: "236f5a6b91dd47dc3b7b36e43d4eb531a042ffb8f8fbf3a1555b78cef4fdda4c",
+};
+const fromHex = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
+const realProof: TeeProof = {
+  kind: 2, request_hash: b64.enc(fromHex(REAL.request_hash)), response_hash: b64.enc(fromHex(REAL.response_hash)),
+  signer: b64.enc(fromHex(REAL.signing_address)), signature: b64.enc(fromHex(REAL.signature)),
+};
+
+test("tee text matches the cloud's signed text", () => {
+  const t = new TextDecoder().decode(teeText(2, REAL.model, fromHex(REAL.request_hash), fromHex(REAL.response_hash)));
+  assert.equal(t, `${REAL.model}:${REAL.request_hash}:${REAL.response_hash}`);
+  const g = new TextDecoder().decode(teeText(1, REAL.model, fromHex(REAL.request_hash), fromHex(REAL.response_hash)));
+  assert.equal(g, `${REAL.request_hash}:${REAL.response_hash}`);
+});
+
+test("a real NEAR AI Cloud enclave signature verifies, a flipped byte does not", () => {
+  const ph = proofHash(fromHex(REAL.request_hash), fromHex(REAL.response_hash));
+  assert.ok(verifyTeeProof(realProof, REAL.model, ph));
+  assert.ok(!verifyTeeProof(realProof, "Qwen/Qwen3.8-27B", ph), "other model id");
+  assert.ok(!verifyTeeProof(realProof, REAL.model, ZERO_PROOF), "intent commits to another completion");
+  const res = fromHex(REAL.response_hash); res[0] ^= 1;
+  assert.ok(!verifyTeeProof({ ...realProof, response_hash: b64.enc(res) }, REAL.model, proofHash(fromHex(REAL.request_hash), res)));
 });
 
 // On-chain parity: the deployed arena contract must produce the same bytes. Set ARENA_DEPLOYED=1.
-test("intent and resolution bytes match the deployed arena contract", { skip: !process.env.ARENA_DEPLOYED }, async () => {
+test("intent bytes and tee text match the deployed arena contract", { skip: !process.env.ARENA_DEPLOYED }, async () => {
   const { arenaView } = await import("./chain.ts");
   const onChain = await arenaView<string>("intent_message_hex", { intent: fixture });
   assert.equal(onChain, hex(intentMessage(fixture)));
-  const onChainR = await arenaView<string>("resolution_message_hex", { resolution });
-  assert.equal(onChainR, hex(resolutionMessage(resolution)));
+  const onChainText = await arenaView<string>("tee_text_utf8", { kind: 2, model_id: REAL.model, request_hash: realProof.request_hash, response_hash: realProof.response_hash });
+  assert.equal(onChainText, new TextDecoder().decode(teeText(2, REAL.model, fromHex(REAL.request_hash), fromHex(REAL.response_hash))));
 });

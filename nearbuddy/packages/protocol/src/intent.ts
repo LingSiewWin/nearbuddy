@@ -1,12 +1,13 @@
-// Arena intents and resolutions. Byte-identical to `Intent` / `Resolution` in arena/src/types.rs
-// (borsh, prefixed by the domain). An agent signs intents; the oracle signs resolutions.
+// Arena intents and TEE proofs. `Intent` is byte-identical to arena/src/types.rs (borsh, prefixed by
+// the domain); an agent signs intents. `TeeProof` carries the NEAR AI Cloud enclave signature the
+// contract verifies over `teeText(...)`; the intent's `proof_hash` is `proofHash(request, response)`.
+import { createHash } from "node:crypto";
 import { serialize } from "borsh";
 import { KeyPair, KeyType, PublicKey } from "near-api-js";
-import { b64 } from "./index.ts";
+import { b64, hex } from "./index.ts";
 
 export const INTENT_DOMAIN = new TextEncoder().encode("nearbuddy-intent-v1");
-export const RESOLVE_DOMAIN = new TextEncoder().encode("nearbuddy-resolve-v1");
-/** proof_hash when the decision came from the stub model (no TEE signature). */
+/** proof_hash when the agent is not TEE-backed (stub model, demo keys). */
 export const ZERO_PROOF = b64.enc(new Uint8Array(32));
 
 export type Side = "Long" | "Short";
@@ -17,10 +18,18 @@ export interface Intent {
   size_bps: number;    // u16, 1..=10000
   nonce: string;       // u64 decimal
   expires_at: string;  // unix ns decimal
-  proof_hash: string;  // base64, 32 bytes: sha256 of the NEAR AI Cloud signature record
+  proof_hash: string;  // base64, 32 bytes: sha256(request_hash || response_hash), or ZERO_PROOF
 }
 export interface SignedIntent { intent: Intent; signature: string }
-export interface Resolution { duel_id: string; open_price: string; close_price: string } // prices u64, 8 dp
+
+/** NEAR AI Cloud signature record, re-encoded for the contract. kind 1 = gateway TEE, 2 = model TEE. */
+export interface TeeProof {
+  kind: 1 | 2;
+  request_hash: string;   // base64, 32 bytes
+  response_hash: string;  // base64, 32 bytes
+  signer: string;         // base64, 32-byte ed25519 signing_address
+  signature: string;      // base64, 64 bytes
+}
 
 const INTENT_SCHEMA = {
   struct: {
@@ -28,7 +37,6 @@ const INTENT_SCHEMA = {
     nonce: "u64", expires_at: "u64", proof_hash: { array: { type: "u8" } },
   },
 } as const;
-const RESOLVE_SCHEMA = { struct: { duel_id: "u64", open_price: "u64", close_price: "u64" } } as const;
 
 function withDomain(domain: Uint8Array, body: Uint8Array): Uint8Array {
   const out = new Uint8Array(domain.length + body.length);
@@ -45,11 +53,15 @@ export function intentMessage(i: Intent): Uint8Array {
   return withDomain(INTENT_DOMAIN, body);
 }
 
-export function resolutionMessage(r: Resolution): Uint8Array {
-  const body = serialize(RESOLVE_SCHEMA, {
-    duel_id: BigInt(r.duel_id), open_price: BigInt(r.open_price), close_price: BigInt(r.close_price),
-  });
-  return withDomain(RESOLVE_DOMAIN, body);
+/** The exact bytes a NEAR AI Cloud enclave signs (`text` in GET /v1/signature/{chat_id}). */
+export function teeText(kind: 1 | 2, modelId: string, requestHash: Uint8Array, responseHash: Uint8Array): Uint8Array {
+  const body = `${hex(requestHash)}:${hex(responseHash)}`;
+  return new TextEncoder().encode(kind === 1 ? body : `${modelId}:${body}`);
+}
+
+/** `Intent.proof_hash` for a TEE-proved decision. */
+export function proofHash(requestHash: Uint8Array, responseHash: Uint8Array): string {
+  return b64.enc(createHash("sha256").update(requestHash).update(responseHash).digest());
 }
 
 function verify(pkB64: string, msg: Uint8Array, sigB64: string): boolean {
@@ -64,9 +76,9 @@ export function signIntent(kp: KeyPair, intent: Intent): SignedIntent {
 export function verifyIntent(s: SignedIntent): boolean {
   return verify(s.intent.agent_pk, intentMessage(s.intent), s.signature);
 }
-export function signResolution(kp: KeyPair, r: Resolution): string {
-  return b64.enc(kp.sign(resolutionMessage(r)).signature);
-}
-export function verifyResolution(r: Resolution, sigB64: string, oraclePkB64: string): boolean {
-  return verify(oraclePkB64, resolutionMessage(r), sigB64);
+/** Same check the contract runs: enclave signature over the rebuilt text, and the intent commits to it. */
+export function verifyTeeProof(p: TeeProof, modelId: string, intentProofHash: string): boolean {
+  const req = b64.dec(p.request_hash), res = b64.dec(p.response_hash);
+  if (req.length !== 32 || res.length !== 32) return false;
+  return verify(p.signer, teeText(p.kind, modelId, req, res), p.signature) && proofHash(req, res) === intentProofHash;
 }
