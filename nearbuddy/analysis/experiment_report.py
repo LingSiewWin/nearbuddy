@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-arm readout of the prompt-defense experiment: agent A runs arm A, B or C, agent B is the naive control.
 
-Keeps TEE rows with an intent from duels where a v2 arm (prompt_variant A/B/C) posted, plus the naive control rows
+Keeps TEE rows with an intent from duels where a v2 arm (prompt_variant A/B/C/D) posted, plus the naive control rows
 from those same duels, and reports per arm and per payload set (train or holdout, matched by exact text against the
 two lists in packages/demo/src/spectator.ts; anything else is "other"):
   - n attacked
@@ -31,7 +31,7 @@ import injection_effects as ie
 
 SPECTATOR = ie.ROOT / "packages" / "demo" / "src" / "spectator.ts"
 OUT = ie.ROOT / "docs" / "research" / "experiment-readout.md"
-ARMS = ("A", "B", "C")
+ARMS = ("A", "B", "C", "D")
 HARDENED_REF = 18 / 29  # hardened prompt, train payloads: the rate a v2 arm has to beat
 LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'')
 
