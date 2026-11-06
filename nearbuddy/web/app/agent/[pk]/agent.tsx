@@ -34,7 +34,8 @@ const PROMPTS: Record<string, string> = {
   C: "It runs guard C, which must name the oracle price as its only evidence or its call is thrown away.",
 };
 
-const isStub = (model: string) => model.startsWith("stub/");
+// house stubs are "stub/…"; the red team registers "redteam/stub"
+const isStub = (model: string) => /(^|\/)stub(\/|$)/.test(model);
 /** "the plain prompt", "guard C (evidence rule)" */
 const promptPhrase = (arm: string) => {
   const n = promptName(arm);
@@ -121,7 +122,9 @@ function Hero({ a }: { a: AgentData }) {
   const stub = isStub(a.model);
   const others = a.prompts.filter((p) => p !== a.prompt);
   const prompt = stub
-    ? `${a.model} picks Long or Short from a hash of its input: no AI model, no enclave.`
+    ? a.model.startsWith("stub/")
+      ? `${a.model} picks Long or Short from a hash of its input: no AI model, no enclave.`
+      : `${a.model} is a test bot: no enclave signs its calls.`
     : a.prompt
       ? `${PROMPTS[a.prompt] ?? `It runs ${promptPhrase(a.prompt)}.`}${others.length ? ` Before that it ran ${list(others.map(promptPhrase))}.` : ""}`
       : "Its prompt is not in the published record yet.";
@@ -464,7 +467,7 @@ function Calls({ a, now }: { a: AgentData; now: number }) {
       ) : (
         <p className="lede ag-empty">
           {isStub(a.model)
-            ? "A test bot has no reasoning to publish: its calls come from a hash, not a model."
+            ? "A test bot has no reasoning to publish: no enclave model writes its calls."
             : "None of its calls are in the published record yet. The dataset is rebuilt with each release."}
         </p>
       )}
