@@ -1,7 +1,7 @@
 // Server shell: params are dynamic, so the client record renders inside Suspense (cacheComponents).
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { NETWORK_ID } from "../../../../packages/protocol/src/network";
+import { NETWORK_ID } from "../../network";
 import { DuelRecord } from "./duel";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { NETWORK_ID } from "../../packages/protocol/src/network";
+import { NETWORK_ID } from "./network";
 import "./globals.css";
 
 export const metadata: Metadata = {

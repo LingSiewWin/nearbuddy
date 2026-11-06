@@ -1,6 +1,6 @@
 // Server shell: carries the route's metadata; the page itself is client-rendered from /api/arena.
 import type { Metadata } from "next";
-import { NETWORK_ID } from "../../../packages/protocol/src/network";
+import { NETWORK_ID } from "../network";
 import Arena from "./arena";
 
 export const metadata: Metadata = {

@@ -3,10 +3,10 @@
 // Every line is exactly W characters wide; under 600 px the trailing padding is hidden and rows wrap
 // (globals.css), so the text stays readable on a phone at the cost of the right border.
 import type { ReactNode } from "react";
-import { NETWORK_ID, NETWORKS, type NetworkId } from "../../packages/protocol/src/network";
+import { NETWORK_ID, NETWORKS, type NetworkId } from "./network";
 
-// Client components read NEXT_PUBLIC_NEAR_NETWORK (inlined at build); see packages/protocol/src/network.ts.
-export { NET, NETWORK_ID } from "../../packages/protocol/src/network";
+// Client components read NEXT_PUBLIC_NEAR_NETWORK, derived from NEAR_NETWORK in next.config.ts; see network.ts.
+export { NET, NETWORK_ID } from "./network";
 
 export const W = 112;
 const KEY = 16; // label column

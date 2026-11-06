@@ -1,6 +1,6 @@
 // Shared by the API routes: one public-RPC provider, contract views, and the JSON response shape.
 import { FailoverRpcProvider, JsonRpcProvider } from "near-api-js";
-import { NET } from "../../../packages/protocol/src/network";
+import { NET } from "../network";
 
 export const RPC = process.env.NEAR_RPC ?? NET.rpc; // NEAR_NETWORK picks the row in network.ts
 export const CONTRACT = process.env.NEARBUDDY_CONTRACT ?? "nearbuddy-vault.testnet"; // clearinghouse vault: testnet only

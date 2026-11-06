@@ -6,10 +6,11 @@
 // and the rest is fetched on the next scan. Any failure backs the next scan off to TTL/2, so an outage
 // costs one attempt per 10 s, not one per poll. Older duels fall outside the window (`oldest_ms`).
 import type { ChainEvent, Opened } from "../../cells";
+import { NET } from "../../network";
 import { ARENA, json } from "../near";
-import { eventsOf, fastnearTxApi, opensOf, type Tx } from "./chain";
+import { eventsOf, opensOf, type Tx } from "./chain";
 
-const TX_API = process.env.FASTNEAR_TX_API ?? fastnearTxApi(process.env.NEAR_NETWORK);
+const TX_API = process.env.FASTNEAR_TX_API ?? NET.txApi;
 const TTL = 20_000;
 const BACKOFF = TTL / 2;
 const ID_RE = /^\d{1,12}$/;

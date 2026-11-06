@@ -2,6 +2,7 @@
 // with the method it was opened by, and the contract's `commit` / `intent` EVENT_JSON logs with the method
 // that emitted them. No fetch, so bun test checks them on fixture txs (app/__tests__).
 import type { ChainEvent, Opened } from "../../cells";
+import { NETWORKS } from "../../network";
 
 /** The slice of a FastNEAR tx this file reads. Block timestamps are ns, a string or a (lossy) JSON number. */
 export type Tx = {
@@ -18,9 +19,9 @@ export type Tx = {
   }[];
 };
 
-/** FastNEAR tx API host for a NEAR_NETWORK value: mainnet or, by default, testnet. */
+/** FastNEAR tx API host for a NEAR_NETWORK value: mainnet or, by default, testnet (the `txApi` column). */
 export const fastnearTxApi = (network: string | undefined) =>
-  `https://tx.${network === "mainnet" ? "main" : "test"}.fastnear.com/v0`;
+  NETWORKS[network === "mainnet" ? "mainnet" : "testnet"].txApi;
 
 const OPEN_METHODS = new Set(["open_duel", "open_duel_consented"]);
 /** The receipt's own outcome succeeded. The tx-level status is never read: FastNEAR reports SuccessReceiptId

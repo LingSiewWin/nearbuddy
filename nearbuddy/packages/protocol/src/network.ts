@@ -1,8 +1,9 @@
 // Everything that differs between NEAR testnet and mainnet, in one table. NEAR_NETWORK picks the row
-// (default testnet); the web's client components read NEXT_PUBLIC_NEAR_NETWORK, which Next inlines at build.
-// A single-value env var (NEAR_RPC, ARENA_CONTRACT, SOLVER_ID, ...) still overrides its column.
-// agents/config.py holds the same table; agents/tests/test_network.py fails when the two drift.
-// No node imports: client components import this file.
+// (default testnet); the web's client components read NEXT_PUBLIC_NEAR_NETWORK, which web/next.config.ts derives
+// from NEAR_NETWORK and Next inlines at build. A single-value env var (NEAR_RPC, ARENA_CONTRACT, SOLVER_ID, ...)
+// still overrides its column. Copies: web/app/network.ts is this file byte for byte (Vercel builds web/ alone),
+// agents/config.py holds the same table; web/app/__tests__/network.test.ts and agents/tests/test_network.py fail
+// when either drifts. No imports: client components load the web copy.
 
 export type NetworkId = "testnet" | "mainnet";
 export interface Network {

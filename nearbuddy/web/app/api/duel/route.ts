@@ -1,7 +1,7 @@
 // One duel read from the arena contract on the public RPC: the duel record plus both agents' views, the
 // config (commit-reveal fields when the contract has them) and get_no_reveal (null before commit-reveal).
 // Cached 20 s per id; a stale body beats a 500 while the RPC is throttled.
-import { NET } from "../../../../packages/protocol/src/network";
+import { NET } from "../../network";
 import { ARENA, json, jsonBody, RPC, viewOn } from "../near";
 
 const ORACLE = process.env.ORACLE_ACCOUNT ?? NET.oracle;
