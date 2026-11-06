@@ -220,7 +220,9 @@ export function Standings({ s }: { s: Summary }) {
             <th className="r hide-s">Won · lost · tied</th>
             <th className="r hide-s">At stake</th>
             <th className="hide-s">Now</th>
-            <th className="hide-xs" />
+            <th className="hide-xs">
+              <span className="sr">Follow</span>
+            </th>
           </tr>
         </thead>
         <tbody>
