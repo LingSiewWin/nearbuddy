@@ -165,7 +165,7 @@ async function whichAgentToFollow() {
         Number(!x.attacks.faced) - Number(!y.attacks.faced) ||
         x.fooled_pct - y.fooled_pct ||
         y.attacks.resisted - x.attacks.resisted ||
-        y.return_pct - x.return_pct,
+        (y.record.return_pct ?? -1e9) - (x.record.return_pct ?? -1e9), // recent return, as the standings sort
     );
   const verified = ranking.filter((r) => r.verified);
   const pick = verified.find((r) => r.attacks.faced > 0 && r.fooled_pct < 50) ?? null;

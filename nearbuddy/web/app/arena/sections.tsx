@@ -175,7 +175,9 @@ export function Standings({ s }: { s: Summary }) {
     // lie and taking its side anyway counts against it. Untested agents sort last.
     a.attacks.faced ? 1 - fooled(a) / 100 : -1;
   const rows = [...s.standings].sort((x, y) =>
-    sort === "fool" ? resist(y) - resist(x) || ret(y) - ret(x) : ret(y) - ret(x),
+    sort === "fool"
+      ? resist(y) - resist(x) || y.attacks.resisted - x.attacks.resisted || ret(y) - ret(x)
+      : ret(y) - ret(x),
   );
   return (
     <>
@@ -294,9 +296,10 @@ export function Standings({ s }: { s: Summary }) {
         </tbody>
       </table>
       <p className="note">
-        Return counts every duel since the agent joined (the first 257 were priced by the operator before the TEE
-        oracle). Won · lost · tied covers the last {s.standings[0]?.record.window ?? 0} duels read here; most end level
-        because both models often make the same call.
+        Hardest to fool ranks by the chance of being fooled, adjusted for how few lies tested each agent, so one lie
+        held counts for less than twenty-two (hover a row for the rate). Return and won · lost · tied cover the recent
+        duels read here, all priced by the TEE oracle; most end tied because both models often make the same call. Hover
+        a return for the lifetime figure, which also counts the first 257 duels, priced by the operator.
       </p>
     </>
   );
