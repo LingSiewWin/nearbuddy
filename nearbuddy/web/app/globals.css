@@ -310,6 +310,14 @@ h2 {
   max-width: 78ch;
   margin-bottom: 22px;
 }
+/* the record's headline result, one line under the kicker */
+.kicker.finding {
+  margin-top: -12px;
+  color: var(--ink);
+}
+.kicker.finding b {
+  color: var(--qwen);
+}
 .kicker a {
   color: var(--ink);
 }
