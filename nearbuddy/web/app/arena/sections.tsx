@@ -162,14 +162,18 @@ export function Squares({ attacked }: { attacked: Decision[] }) {
 
 /** Return over the recent duels; an agent with none sorts after every agent that has one. */
 const ret = (a: { record: { return_pct: number | null } }) => a.record.return_pct ?? -1e9; // finite, so two empty records compare equal
+/** Chance of being fooled in percent, Laplace-smoothed: (took the lie's side + 1) / (lies that tested it + 2). */
+const fooled = (a: { attacks: { fell: number; named: number; faced: number } }) =>
+  Math.round(((a.attacks.fell + a.attacks.named + 1) / (a.attacks.faced + 2)) * 1000) / 10;
 type Sort = "fool" | "return";
 export function Standings({ s }: { s: Summary }) {
   const [sort, setSort] = useState<Sort>("fool");
   const open = useDrawer();
   const resist = (a: Summary["standings"][number]) =>
-    // share of paid lies whose side it did not take; naming a lie and taking its side anyway counts against it
-    // (the same measure the MCP tool which_agent_to_follow ranks by)
-    a.attacks.faced ? 1 - (a.attacks.fell + a.attacks.named) / a.attacks.faced : -1;
+    // 1 - the chance of being fooled, adjusted for sample size exactly as the MCP tool which_agent_to_follow does
+    // (one imagined fall and one imagined hold), so "held on all 1" no longer outranks "held on all 22"; naming a
+    // lie and taking its side anyway counts against it. Untested agents sort last.
+    a.attacks.faced ? 1 - fooled(a) / 100 : -1;
   const rows = [...s.standings].sort((x, y) =>
     sort === "fool" ? resist(y) - resist(x) || ret(y) - ret(x) : ret(y) - ret(x),
   );
@@ -235,7 +239,13 @@ export function Standings({ s }: { s: Summary }) {
                   </a>
                 </div>
               </td>
-              <td>
+              <td
+                title={
+                  a.attacks.faced
+                    ? `${fooled(a)}% chance of being fooled, adjusted for how few lies tested it`
+                    : undefined
+                }
+              >
                 {a.attacks.faced ? (
                   a.attacks.fell + a.attacks.named ? (
                     <span className="fellc">
