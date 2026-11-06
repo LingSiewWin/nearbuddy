@@ -21,7 +21,7 @@ const near = (y: string | null | undefined, d = 3) => {
 };
 const short = (s: string | null | undefined, n = 10) => (s ? `${s.slice(0, n)}…` : "-");
 const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-const W = 100;
+const W = 112;
 const row = (k: string, v: string) => `│ ${k.padEnd(16)} ${v.padEnd(W - 20).slice(0, W - 20)} │`;
 const top = (t: string) => `┌─ ${t} ${"─".repeat(Math.max(0, W - t.length - 5))}┐`;
 const bottom = () => `└${"─".repeat(W - 2)}┘`;
