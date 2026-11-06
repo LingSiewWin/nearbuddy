@@ -11,6 +11,7 @@ import { attackText, type Decision, getDecisions } from "../../api/dataset";
 import { ARENA, viewOn } from "../../api/near";
 import { type ArenaEvent, decode, tape } from "../../api/tape";
 import type { Focus } from "../../arena/model";
+import { proven } from "../../cells";
 
 export type DuelSide = Focus["a"] & { score: number | null };
 export type DuelData = Focus & {
@@ -175,7 +176,7 @@ export async function loadDuel(id: string): Promise<DuelData | null> {
     model: ag?.model_id ?? "unknown",
     side: i?.side ?? null,
     size_pct: i ? i.size_bps / 100 : null,
-    verified: !!i && i.proof_hash !== ZERO,
+    verified: proven(i, ZERO),
     bond: ag ? nearOf(ag.bond) : null,
     score: pnl == null ? null : pnl / 100,
   });
@@ -193,6 +194,9 @@ export async function loadDuel(id: string): Promise<DuelData | null> {
     slashed: nearOf(o?.slashed, 4),
     lockS: c.intent_lock_s,
     slashPct: c.slash_bps / 100,
+    sealed: !!c.commit_reveal,
+    forfeitPct: (c.no_reveal_bps ?? 0) / 100,
+    consent: !!c.require_consent,
     attacks: o ? (o.injections ?? null) : d.injections.length,
     events,
     decisions,
