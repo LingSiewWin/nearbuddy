@@ -1,7 +1,7 @@
 // Arena routes for the solver. The solver account is the arena contract's owner and its only
 // registered solver: it opens duels for the runner, posts agent-signed intents (with their TEE
 // proofs), relays chaos, asks the oracle to resolve and settles follower fills.
-//   POST /register {agent_pk, model_id, bond, tee}           -> {tx, agent}
+//   POST /register {agent_pk, model_id, bond, tee, register_sig} -> {tx, agent}
 //   POST /duel     {a, b, symbol, close_at}                  -> {duel_id, tx}   (symbol = oracle asset id, e.g. wrap.near)
 //   POST /intent   {signed: SignedIntent, tee?: TeeProof}    -> {tx, quotes:[{follower, amount, quote}]}
 //   POST /chaos    {payload}  (open)                         -> {payload_hash}; spectator then calls inject_chaos on chain
@@ -117,8 +117,8 @@ export class Arena {
 
   /** Register an agent with a bond paid by the solver account (the runner has no NEAR account).
    *  `tee` commits the agent to a verified enclave proof on every intent. */
-  async register(agent_pk: string, model_id: string, bond: string, tee = false) {
-    const r = await this.call("register_agent", { agent_pk, model_id, tee }, BigInt(bond));
+  async register(agent_pk: string, model_id: string, bond: string, tee = false, register_sig?: string) {
+    const r = await this.call("register_agent", { agent_pk, model_id, tee, register_sig }, BigInt(bond));
     return { tx: r.tx, agent: r.value };
   }
 
@@ -311,8 +311,8 @@ export class Arena {
       return { code: 200, body: await this.openDuel(q.a, q.b, q.symbol, q.close_at) };
     }
     if (method === "POST" && url === "/register") {
-      const q = JSON.parse(body) as { agent_pk: string; model_id: string; bond: string; tee?: boolean };
-      return { code: 200, body: await this.register(q.agent_pk, q.model_id, q.bond, q.tee === true) };
+      const q = JSON.parse(body) as { agent_pk: string; model_id: string; bond: string; tee?: boolean; register_sig?: string };
+      return { code: 200, body: await this.register(q.agent_pk, q.model_id, q.bond, q.tee === true, q.register_sig) };
     }
     if (method === "POST" && url === "/intent") {
       const q = JSON.parse(body) as { signed?: SignedIntent; tee?: TeeProof } & Partial<SignedIntent>;
