@@ -59,12 +59,22 @@ const ORACLE_DEPOSIT = 20n * MILLI;
 const FEE_BPS = 50n;
 const OFFLINE = process.env.E2E_OFFLINE === "1";
 const SPOT_USD = 3.66;
+const SPOT_CENTS = 366n;
+const WNEAR = "nep141:wrap.near";
+
+/** USDC base units (6 dp) for `yocto` wNEAR at `centsPerNear`, and back: the conversion a quote must agree with. */
+const usdcForYocto = (yocto: bigint, centsPerNear = SPOT_CENTS) => (yocto * centsPerNear) / 100n / 10n ** 18n;
+const yoctoForUsdc = (usdc: bigint, centsPerNear = SPOT_CENTS) => (usdc * 100n * 10n ** 18n) / centsPerNear;
 
 /** E2E_OFFLINE stand-in for the two third parties: Coinbase spot (GET /v2/prices/<BASE>-USD/spot) and the 1Click
- *  dry quote (POST /v0/quote, answered at SPOT_USD per NEAR whichever way the swap goes). */
+ *  dry quote (POST /v0/quote at SPOT_USD per NEAR). `amount` is the fixed leg: the origin for EXACT_INPUT (a Short
+ *  sells exactly that much wNEAR), the destination for EXACT_OUTPUT (a Long buys exactly that much wNEAR). */
 function offlineThirdParties(): Promise<string> {
-  const decimals = (asset: string) => (asset === "nep141:wrap.near" ? 24 : 6);
+  const decimals = (asset: string) => (asset === WNEAR ? 24 : 6);
   const fmt = (raw: bigint, d: number) => (Number(raw) / 10 ** d).toString();
+  const convert = (amount: bigint, from: string) => (from === WNEAR ? usdcForYocto(amount) : yoctoForUsdc(amount));
+  const usd = (amount: bigint, asset: string) =>
+    (Number(asset === WNEAR ? usdcForYocto(amount) : amount) / 1e6).toFixed(4);
   const srv = httpServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -77,29 +87,32 @@ function offlineThirdParties(): Promise<string> {
         return send(200, { data: { amount: SPOT_USD.toFixed(4), base: "NEAR", currency: "USD" } });
       if (req.method === "POST" && req.url === "/v0/quote") {
         const q = JSON.parse(body) as {
+          swapType: string;
           amount: string;
           originAsset: string;
           destinationAsset: string;
           deadline: string;
         };
+        const exactOut = q.swapType === "EXACT_OUTPUT";
+        const fixed = BigInt(q.amount);
+        const amountIn = exactOut ? convert(fixed, q.destinationAsset) : fixed;
+        const out = exactOut ? fixed : convert(fixed, q.originAsset);
         const [din, dout] = [decimals(q.originAsset), decimals(q.destinationAsset)];
-        const amountIn = BigInt(q.amount);
-        const usdIn = din === 24 ? (Number(amountIn) / 1e24) * SPOT_USD : Number(amountIn) / 1e6;
-        const out = BigInt(Math.floor((dout === 24 ? usdIn / SPOT_USD : usdIn) * 10 ** dout));
         const now = new Date().toISOString();
         return send(200, {
           timestamp: now,
           signature: "e2e-offline",
           quoteRequest: q,
           quote: {
-            amountIn: q.amount,
+            amountIn: amountIn.toString(),
             amountInFormatted: fmt(amountIn, din),
-            amountInUsd: usdIn.toFixed(4),
-            minAmountIn: q.amount,
+            amountInUsd: usd(amountIn, q.originAsset),
+            minAmountIn: amountIn.toString(),
             amountOut: out.toString(),
             amountOutFormatted: fmt(out, dout),
-            amountOutUsd: usdIn.toFixed(4),
+            amountOutUsd: usd(out, q.destinationAsset),
             minAmountOut: ((out * 99n) / 100n).toString(),
+            timeEstimate: 10,
             deadline: q.deadline,
             timestamp: now,
           },
@@ -297,6 +310,16 @@ class Oracle {
   }
   halt() {
     this.stop = true;
+  }
+}
+
+/** NEAR/USD in cents from Coinbase spot (the live run's reference for the 1Click quote), or 0n when unreachable. */
+async function liveSpotCents(): Promise<bigint> {
+  try {
+    const r = await fetch("https://api.coinbase.com/v2/prices/NEAR-USD/spot", { signal: AbortSignal.timeout(5000) });
+    return BigInt(Math.round(Number(((await r.json()) as { data: { amount: string } }).data.amount) * 100));
+  } catch {
+    return 0n;
   }
 }
 
@@ -740,6 +763,22 @@ async function main() {
           : `quote error: ${String(q.error).slice(0, 80)}`
         : JSON.stringify(revealed.quotes),
     );
+    if (q?.quote) {
+      // quote_out is the USDC leg in 6 dp whichever the side (paid on a Long, received on a Short): within 5% of
+      // amount (yocto wNEAR) at the reference price, or a leg was read in the wrong unit
+      const cents = OFFLINE ? SPOT_CENTS : await liveSpotCents();
+      if (cents) {
+        const want = usdcForYocto(BigInt(q.amount), cents);
+        const got = BigInt(q.quote_out ?? "0");
+        const off = got > want ? got - want : want - got;
+        check(
+          sc,
+          "follower quote_out is the USDC leg at the spot price (within 5%)",
+          want > 0n && off * 100n <= want * 5n,
+          `${q.quote.quoteRequest?.swapType} quote_out ${got} USDC units, want ~${want} (${q.amount} yocto at ${cents} cents)`,
+        );
+      } else log(`${sc}: live spot price unavailable; quote_out plausibility not checked`);
+    }
     const amountIn = q ? BigInt(q.amount) : cap;
     const fill = {
       intent_nonce: "1",
