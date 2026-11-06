@@ -16,12 +16,20 @@ pre + pre.wrap { margin: 1.45em 0 0; }
 .ok { color: var(--ok); } .unv { color: var(--unv); }
 a { color: var(--fg); }
 a.hi, a.ok, a.win { text-decoration-color: var(--dim); }
+a:focus-visible, button.lnk:focus-visible { outline: 2px solid var(--num); outline-offset: 1px; border-radius: 2px; }
+button.lnk { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-color: var(--dim); }
 .cursor::after { content: "█"; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
-@media (max-width: 600px) { body { font-size: 11.5px; padding: 10px; } }
+@media (max-width: 600px) {
+  body { font-size: 11.5px; padding: 10px; }
+  /* rows wrap instead of scrolling: the right padding and border go, box rules clip at the viewport */
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; }
+  .pad { display: none; }
+  .rule { display: block; white-space: pre; overflow: hidden; }
+}
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f4fbf4; --fg: #163816; --dim: #5f8a5f; --hi: #000; --warn: #8a6d00; --bad: #b3261e; --num: #b35900;
+    --bg: #f4fbf4; --fg: #163816; --dim: #4a6e4a; --hi: #000; --warn: #8a6d00; --bad: #b3261e; --num: #b35900;
     --win: #1a7f37; --loss: #b3261e; --tie: #5c6b5c; --open: #8a6d00; --ok: #1a7f37; --unv: #8a6d00;
   }
 }
