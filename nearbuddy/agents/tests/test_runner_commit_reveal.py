@@ -385,8 +385,10 @@ def test_a_hanging_rpc_with_a_short_lock_still_reveals_before_the_deadline(env, 
         if clock.ns < hang_from:  # answers at once, but the chain's final block lags far behind
             lagging = {"result": {"header": {"timestamp_nanosec": str(clock.ns - 100 * S)}}}
             return type("R", (), {"status_code": 200, "json": lambda self: lagging})()
-        attempts.append(timeout)  # from here every attempt hangs for its whole timeout
-        clock.ns += int(timeout * S)
+        # from here every attempt hangs for requests' worst case: connect + read, a scalar applying to each
+        cost = sum(timeout) if isinstance(timeout, tuple) else 2 * timeout
+        attempts.append(cost)
+        clock.ns += int(cost * S)
         raise requests.Timeout("read timed out")
 
     monkeypatch.setattr(chain.requests, "post", hanging)

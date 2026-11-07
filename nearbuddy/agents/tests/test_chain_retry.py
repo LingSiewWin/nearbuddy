@@ -57,7 +57,7 @@ def test_chain_now_reads_the_final_block_time_as_an_exact_int(monkeypatch):
 
 
 def test_chain_now_is_one_short_attempt_and_alternates_endpoints(monkeypatch):
-    calls: list[tuple[str, float]] = []
+    calls: list[tuple[str, tuple[float, float]]] = []
     sleeps: list[float] = []
 
     def fake_post(url, json=None, headers=None, timeout=None):
@@ -69,5 +69,7 @@ def test_chain_now_is_one_short_attempt_and_alternates_endpoints(monkeypatch):
     for _ in range(2):
         with pytest.raises(RuntimeError, match="after 1 attempts"):
             chain.chain_now_ns(timeout=1.5)
-    assert [t for _, t in calls] == [1.5, 1.5] and sleeps == [], "one attempt per call, no backoff"
+    assert sleeps == [] and len(calls) == 2, "one attempt per call, no backoff"
+    # requests applies a scalar timeout to connect and to each read, so one call could take 2x the budget
+    assert [t for _, t in calls] == [(0.75, 0.75)] * 2, "the budget is split across connect and read"
     assert {u for u, _ in calls} == {chain.RPC, chain.RPC_FALLBACK}, "successive reads alternate endpoints"
