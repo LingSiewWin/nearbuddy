@@ -5,7 +5,9 @@
 //! before `withdraw_delay`) and `sweep_surplus` (bounded to the surplus, never touches accounted);
 //! from deploy 16 `vault_total == sum(vaults)`, no deposit past `max_vault_per_account`, and no fill
 //! settled for an intent accepted at or after its mandate's revoke or expiry, or while the follower
-//! was not following (a mandate update keeps the window; a closed window keeps its grace).
+//! was not following (a mandate update keeps the window; a closed window keeps its grace); from
+//! deploy 17 every settled fill meets the terms in force when its intent was accepted (a tightening
+//! update binds later intents, the replaced terms bind earlier ones for the grace and no longer).
 //!
 //! Every operation runs like a transaction on chain: the contract is read from the mocked trie,
 //! the method runs, and on success the struct is written back and the collections flushed. A
@@ -309,16 +311,24 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                     agent: 0,
                     fills: vec![spec(0)],
                 },
+                // follower 1 tightened its cap below these fills mid-way (`tighten1`): intents
+                // before the update settle on the old terms inside its grace, later ones are over
+                // the cap, and the rest are refused past the grace ("mandate updated")
                 Op::Settle {
                     who: 1,
                     agent: 0,
-                    fills: (0..6).map(spec).collect(),
+                    fills: (0..6).step_by(2).map(spec).collect(),
                 },
                 Op::Advance { secs: DELAY / SEC },
                 Op::Settle {
                     who: 0,
                     agent: 0,
                     fills: (1..6).map(spec).collect(),
+                },
+                Op::Settle {
+                    who: 1,
+                    agent: 0,
+                    fills: (1..6).step_by(2).map(spec).collect(),
                 },
             ];
             // follower 0 drops agent 0 a second in and follows it again a second later, between the
@@ -366,6 +376,27 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
             };
             let first1 = vec![follow1(&refollow_op)];
             let update1 = vec![follow1(&refollow_op)];
+            // then it tightens the cap below the late fills (deploy 17): earlier intents keep the
+            // old terms for the grace; a second tightening inside it is "update too soon"; a
+            // loosening (same cap, later expiry) never waits
+            let cap1 = |cap, ttl_s| Op::Follow {
+                who: 1,
+                agent: 0,
+                allowance: 2_000,
+                cap,
+                spent_pct: 0,
+                only_wrap: false,
+                ttl_s,
+                revoked: false,
+                floor: 1,
+            };
+            let tighten1 = vec![
+                Op::Advance { secs: 1 },
+                cap1(5, 7_200),
+                Op::Advance { secs: 1 },
+                cap1(4, 7_200),
+                cap1(5, 7_300),
+            ];
             // a second unfollow and re-follow inside the first gap's grace is refused (two windows fit)
             let cycle = vec![
                 Op::Advance { secs: 1 },
@@ -391,6 +422,7 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                 p1.to_vec(),
                 refollow,
                 update1,
+                tighten1,
                 p2.to_vec(),
                 cycle,
                 v,
@@ -591,6 +623,9 @@ struct Cfg {
 /// A follow window `(start, end)`; `end` is `None` while it is the current one.
 type Window = (u64, Option<u64>);
 
+/// A mandate version `(terms, from)`; `terms` is `None` for the current one (see `World.versions`).
+type Version = (Option<Mandate>, u64);
+
 /// Intent, salt and TEE proof behind one unrevealed commitment.
 type Pending = (Intent, Vec<u8>, Option<TeeProof>);
 
@@ -619,6 +654,11 @@ struct World {
     /// Per (agent, follower): the windows the follower was following, `(start, end)`, end `None`
     /// for the current one (closed by the unfollow or expiry a re-follow found).
     windows: HashMap<(usize, usize), Vec<Window>>,
+    /// Per (agent, follower): the mandate's versions `(terms, from)`, oldest first. Version `i`
+    /// binds intents accepted in `[from_i, from_i+1)`, and only until `from_i+1 + DELAY` when a
+    /// later one exists. The last is the current one; its terms are `None` (read from the
+    /// contract: they carry the live `spent` and revoke stamp).
+    versions: HashMap<(usize, usize), Vec<Version>>,
     settled: HashSet<(usize, usize, u64)>,
     proofs: u64,
     /// The arena's balance on the intents stub per token (0 wrap.near, 1 usdc.near).
@@ -655,6 +695,7 @@ impl World {
             posted: Default::default(),
             accepted_at: HashMap::new(),
             windows: HashMap::new(),
+            versions: HashMap::new(),
             settled: HashSet::new(),
             proofs: 0,
             intents_bal: [0; 2],
@@ -1068,6 +1109,33 @@ impl World {
                         .any(|(_, e)| e.is_some_and(|e| now < e + DELAY));
                     wins.push((now, None));
                 }
+                // model of the terms: new terms bind intents accepted from now on. A tightening
+                // opens a version at now and keeps the replaced terms for earlier intents; only
+                // one earlier version may still be in its grace. Nothing earlier can settle after a
+                // fresh window, so the versions restart with it.
+                let mut vers = self
+                    .versions
+                    .get(&(agent, who))
+                    .cloned()
+                    .unwrap_or_default();
+                let mut update_too_soon = false;
+                match pre.mandate(agent, who) {
+                    Some(cur) if closed.is_none_or(|c| now < c + DELAY) => {
+                        if !looser_or_equal(&m, cur) {
+                            if let Some(&(_, u)) = vers.last().filter(|_| vers.len() >= 2) {
+                                update_too_soon = now < u + DELAY;
+                                // the version before `u` is past its grace for good: its intents
+                                // stay refused, so the windows start no earlier than `u`
+                                for w in wins.iter_mut() {
+                                    w.0 = w.0.max(u);
+                                }
+                            }
+                            vers.last_mut().expect("a version per mandate").0 = Some(cur.clone());
+                            vers.push((None, now));
+                        }
+                    }
+                    _ => vers = vec![(None, now)],
+                }
                 let r = self.call(ACCOUNTS[who], 0, |c| c.follow(pk, m));
                 if floor == 0 {
                     assert!(r.is_err(), "a follow without a price floor was accepted");
@@ -1077,9 +1145,18 @@ impl World {
                         e != "refollow too soon" || too_soon,
                         "refused a re-follow it could keep"
                     );
+                    assert!(
+                        e != "update too soon" || update_too_soon,
+                        "refused an update it could keep"
+                    );
                 }
                 if r.is_ok() {
                     assert!(!too_soon, "a re-follow dropped a window still in its grace");
+                    assert!(
+                        !update_too_soon,
+                        "a tightening update dropped terms still in their grace"
+                    );
+                    self.versions.insert((agent, who), vers);
                     self.windows.insert((agent, who), wins);
                     let m = self.snap().mandate(agent, who).cloned().expect("stored");
                     assert_eq!(m.revoked_at.0, 0, "follow resets revoked_at");
@@ -1398,6 +1475,19 @@ impl World {
         })
     }
 
+    /// The version of `who`'s mandate for `ag` in force when an intent was accepted at `at`:
+    /// `Ok(None)` for the current one, `Ok(Some(terms))` for an earlier one inside its grace (it
+    /// ends `DELAY` after the next version opened), "mandate updated" past it.
+    fn terms_at(&self, ag: usize, who: usize, at: u64) -> Result<Option<Mandate>, &'static str> {
+        let v = &self.versions[&(ag, who)];
+        let i = v.iter().rposition(|(_, from)| *from <= at).unwrap_or(0);
+        match (&v[i].0, v.get(i + 1)) {
+            (Some(t), Some((_, next))) if self.now < next + DELAY => Ok(Some(t.clone())),
+            (Some(_), _) => Err("mandate updated"),
+            (None, _) => Ok(None),
+        }
+    }
+
     /// Records an accepted intent (posted or revealed) of agent `ag`.
     fn accepted(&mut self, ag: usize, nonce: u64) {
         assert!(!self.posted[ag].contains(&nonce), "nonce accepted twice");
@@ -1601,31 +1691,45 @@ impl World {
             } else if let Some(m) = m.as_mut() {
                 // deploy 16: the grace never covers an intent accepted at or after the revoke / expiry
                 let at = self.accepted_at[&(agent, n)];
-                if !self.following(agent, who, at) {
+                // the terms in force at `at` (`b`); `spent` stays one ledger in the current mandate
+                let b = if !self.following(agent, who, at) {
                     Err("intent before follow")
-                } else if m.revoked && (self.now >= m.revoked_at.0 + DELAY || at >= m.revoked_at.0)
-                {
-                    Err("mandate revoked")
-                } else if self.now >= m.expires_at.0 + DELAY || at >= m.expires_at.0 {
-                    Err("mandate expired")
-                } else if !m.allowed_tokens.is_empty() && !m.allowed_tokens.contains(&f.token) {
-                    Err("token not allowed")
-                } else if debit > m.per_tx_cap.0 {
-                    Err("over cap")
-                } else if m.spent.0 + debit > m.allowance.0 {
-                    Err("allowance exhausted")
-                } else if m.min_out_per_near.0 > 0 && out * NEAR < amt * m.min_out_per_near.0 {
-                    Err("below min price")
-                } else if out == 0 || out > surplus[t] {
-                    Err("no receipt")
-                } else if vault < debit {
-                    Err("insufficient")
                 } else {
-                    m.spent.0 += debit;
-                    vault -= debit;
-                    surplus[t] -= out;
-                    accepted.insert(n);
-                    Ok((amt, out))
+                    self.terms_at(agent, who, at)
+                        .map(|t| t.unwrap_or_else(|| m.clone()))
+                };
+                match b {
+                    Err(e) => Err(e),
+                    Ok(b)
+                        if b.revoked
+                            && (self.now >= b.revoked_at.0 + DELAY || at >= b.revoked_at.0) =>
+                    {
+                        Err("mandate revoked")
+                    }
+                    Ok(b) if self.now >= b.expires_at.0 + DELAY || at >= b.expires_at.0 => {
+                        Err("mandate expired")
+                    }
+                    Ok(b)
+                        if !b.allowed_tokens.is_empty() && !b.allowed_tokens.contains(&f.token) =>
+                    {
+                        Err("token not allowed")
+                    }
+                    Ok(b) if debit > b.per_tx_cap.0 => Err("over cap"),
+                    Ok(b) if m.spent.0 + debit > b.allowance.0 => Err("allowance exhausted"),
+                    Ok(b)
+                        if b.min_out_per_near.0 > 0 && out * NEAR < amt * b.min_out_per_near.0 =>
+                    {
+                        Err("below min price")
+                    }
+                    Ok(_) if out == 0 || out > surplus[t] => Err("no receipt"),
+                    Ok(_) if vault < debit => Err("insufficient"),
+                    Ok(_) => {
+                        m.spent.0 += debit;
+                        vault -= debit;
+                        surplus[t] -= out;
+                        accepted.insert(n);
+                        Ok((amt, out))
+                    }
                 }
             } else {
                 Err("no mandate")
@@ -1722,10 +1826,26 @@ impl World {
             );
         }
         for f in fills.iter().zip(&expect).filter(|(_, r)| r.is_ok()) {
-            let n = f.0.intent_nonce.0;
-            // V3: a settled fill's intent predates the mandate's revoke and expiry
-            let m = pre.mandate(agent, who).expect("settled without a mandate");
+            let (f, n) = (f.0, f.0.intent_nonce.0);
             let at = self.accepted_at[&(agent, n)];
+            // a settled fill meets the terms in force when its intent was accepted, within the
+            // grace of a later update (deploy 17)
+            let m = match self.terms_at(agent, who, at) {
+                Ok(Some(t)) => t,
+                Ok(None) => pre
+                    .mandate(agent, who)
+                    .expect("settled without a mandate")
+                    .clone(),
+                Err(e) => panic!("settled an intent past its terms' grace: {e}"),
+            };
+            let debit = f.amount_in.0 + f.amount_in.0 * fee_bps / 10_000;
+            assert!(
+                debit <= m.per_tx_cap.0
+                    && (m.allowed_tokens.is_empty() || m.allowed_tokens.contains(&f.token))
+                    && f.amount_out.0 * NEAR >= f.amount_in.0 * m.min_out_per_near.0,
+                "settled a fill outside the terms in force when its intent was accepted"
+            );
+            // V3: a settled fill's intent predates its terms' revoke and expiry
             assert!(
                 (!m.revoked || at < m.revoked_at.0) && at < m.expires_at.0,
                 "settled an intent accepted after its mandate closed"
@@ -2027,6 +2147,26 @@ impl World {
         }
         assert_eq!(post.open_duels, open, "open_duels counter");
     }
+}
+
+/// The model's reading of "no tighter on every term", written apart from the contract's
+/// `Mandate::no_tighter_than`: an empty token list allows any token, so a restricted list is looser
+/// or equal only over a restricted list it contains.
+fn looser_or_equal(new: &Mandate, old: &Mandate) -> bool {
+    let tokens = match (new.allowed_tokens.is_empty(), old.allowed_tokens.is_empty()) {
+        (true, _) => true,
+        (false, true) => false,
+        (false, false) => old
+            .allowed_tokens
+            .iter()
+            .collect::<HashSet<_>>()
+            .is_subset(&new.allowed_tokens.iter().collect()),
+    };
+    tokens
+        && new.allowance.0 >= old.allowance.0
+        && new.per_tx_cap.0 >= old.per_tx_cap.0
+        && new.min_out_per_near.0 <= old.min_out_per_near.0
+        && new.expires_at.0 >= old.expires_at.0
 }
 
 /// Bytes of new records plus growth of existing ones between two tries, as the runtime counts

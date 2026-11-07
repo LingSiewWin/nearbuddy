@@ -197,10 +197,12 @@ impl Contract {
     /// `spent` is ignored: the stored one is kept (0 for a new mandate). `revoked: true` is exactly
     /// `unfollow` (stamped now, grace applies; no other term changes, open while paused).
     /// Panics: "paused", "migrating", "agent missing", "agent unverified", "empty mandate",
-    /// "price floor required", "refollow too soon", "insufficient". The record keeps when the
-    /// follower followed: an update while the mandate is live keeps the window (fronted fills stay
-    /// settleable); a re-follow after an unfollow or the expiry refuses only intents of the gap
-    /// (see `VersionedMandate::refollowed`).
+    /// "price floor required", "refollow too soon", "update too soon", "insufficient". The record
+    /// keeps when the follower followed: an update while the mandate is live keeps the window
+    /// (fronted fills stay settleable); a re-follow after an unfollow or the expiry refuses only
+    /// intents of the gap. New terms bind intents accepted from now on: a tighter term keeps the
+    /// old terms for earlier intents for `withdraw_delay_s`, and a second tightening inside that
+    /// time is "update too soon" (see `VersionedMandate::refollowed`).
     pub fn follow(&mut self, agent_pk: Base64VecU8, mandate: Mandate) {
         // a revoking "update" is an unfollow: stamped now, so fronted fills keep their grace
         if mandate.revoked {
@@ -316,7 +318,8 @@ impl Contract {
     /// `amount_out` to the follower's holding.
     /// Batch-wide rejections: "no receipt" (view failed, too long, malformed), "outflow during
     /// view" (a token withdrawal confirmed meanwhile; retry), "solver removed". Per fill: "nonce
-    /// unknown", "duplicate fill", "no mandate", "intent before follow", "mandate revoked", "mandate expired",
+    /// unknown", "duplicate fill", "no mandate", "intent before follow", "mandate updated" (the
+    /// intent predates a tightening update whose grace ended), "mandate revoked", "mandate expired",
     /// "token not allowed", "fee overflow", "over cap", "allowance exhausted", "amount overflow",
     /// "below min price", "no receipt", "insufficient".
     /// When no fill settles the call panics with the first reason, so a batch without a receipt is
@@ -408,7 +411,9 @@ impl Contract {
         if !v.covers(at, now, grace) {
             return Err("intent before follow");
         }
-        let m = v.current_mut();
+        // the terms in force when the intent was accepted: an update binds only later intents, and
+        // the terms before it bind earlier ones for the grace (see `VersionedMandate::terms_at`)
+        let m = v.terms_at(at, now)?;
         if m.revoked && (now >= m.revoked_at.0.saturating_add(grace) || at >= m.revoked_at.0) {
             return Err("mandate revoked");
         }
@@ -429,8 +434,10 @@ impl Contract {
         if debit > m.per_tx_cap.0 {
             return Err("over cap");
         }
-        // checked: `spent` is follower-supplied, so one absurd mandate must not panic the batch
-        let spent = m
+        // checked: `spent` is follower-supplied, so one absurd mandate must not panic the batch.
+        // One ledger per pair, in the current mandate, against the binding terms' allowance.
+        let spent = v
+            .current()
             .spent
             .0
             .checked_add(debit)
@@ -454,7 +461,7 @@ impl Contract {
         if bal < debit {
             return Err("insufficient");
         }
-        m.spent = U128(spent);
+        v.current_mut().spent = U128(spent);
         self.set_vault(follower, bal - debit);
         let sbal = self.vaults.get(solver).copied().unwrap_or(0);
         self.set_vault(solver, sbal + f.amount_in.0);

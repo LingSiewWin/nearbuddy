@@ -171,6 +171,65 @@ pub enum VersionedMandate {
     /// settleable until `gap_start + grace`, like any closed mandate's; intents outside both windows
     /// are refused ("intent before follow").
     V4(Mandate, u64, u64, u64),
+    /// From deploy 17, written by a follow that tightens a term while earlier intents can still
+    /// settle: the `V4` windows plus the previous terms (see `MandateRecord`). A record without
+    /// previous terms is still written as `V2` / `V3` / `V4`, so a loosening update adds no bytes.
+    V5(MandateRecord),
+}
+
+/// A `V5` record: the mandate, its follow windows and the terms before its last tightening update.
+#[near(serializers = [borsh])]
+#[derive(Clone, Debug)]
+pub struct MandateRecord {
+    pub current: Mandate,
+    pub windows: FollowWindows,
+    pub prev: PrevTerms,
+}
+
+/// `V4`'s follow windows: the follower followed over `[prev_start, gap_start)` and again from
+/// `followed_at`. A `V3` record's are `(0, 0, followed_at)` and a `V2` one's `(0, 0, 0)`, so
+/// `gap_start > 0` means there is a closed window.
+#[near(serializers = [borsh])]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FollowWindows {
+    pub prev_start: u64,
+    pub gap_start: u64,
+    pub followed_at: u64,
+}
+
+/// The terms in force before the last tightening update. They bind fills for intents accepted
+/// before `updated_at` at most until `binds_until` (`updated_at + withdraw_delay_s` as set at the
+/// update), then those fills are refused. `binds_until` caps the old terms only: the follow
+/// windows (`covers`, `refollowed`) still use the live withdraw delay, like the revoke and expiry
+/// graces, so a later `set_withdraw_delay` can close a window, or let a re-follow drop `prev`,
+/// before `binds_until`.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug)]
+pub struct PrevTerms {
+    /// `spent` here is the snapshot at the update and is never read: the pair's one ledger is the
+    /// current mandate's `spent`.
+    pub terms: Mandate,
+    pub updated_at: U64,
+    pub binds_until: U64,
+}
+
+impl Mandate {
+    /// Whether `self` binds a fill no tighter than `old` on every term: allowance, cap and expiry
+    /// at least as high, price floor at most as high, and `allowed_tokens` empty (any token) or,
+    /// with `old` restricted too, a superset of `old`'s. A restricted set replacing an empty one is
+    /// tighter. `spent` and the revoke stamps are not terms.
+    pub fn no_tighter_than(&self, old: &Mandate) -> bool {
+        self.allowance.0 >= old.allowance.0
+            && self.per_tx_cap.0 >= old.per_tx_cap.0
+            && self.min_out_per_near.0 <= old.min_out_per_near.0
+            && self.expires_at.0 >= old.expires_at.0
+            && (self.allowed_tokens.is_empty()
+                || (!old.allowed_tokens.is_empty()
+                    && old
+                        .allowed_tokens
+                        .iter()
+                        .all(|t| self.allowed_tokens.contains(t))))
+    }
 }
 
 impl VersionedMandate {
@@ -179,6 +238,7 @@ impl VersionedMandate {
             VersionedMandate::V2(m)
             | VersionedMandate::V3(m, _)
             | VersionedMandate::V4(m, _, _, _) => m,
+            VersionedMandate::V5(r) => &r.current,
         }
     }
     pub fn current_mut(&mut self) -> &mut Mandate {
@@ -186,13 +246,51 @@ impl VersionedMandate {
             VersionedMandate::V2(m)
             | VersionedMandate::V3(m, _)
             | VersionedMandate::V4(m, _, _, _) => m,
+            VersionedMandate::V5(r) => &mut r.current,
+        }
+    }
+    /// The follow windows in `MandateRecord`'s encoding.
+    fn windows(&self) -> FollowWindows {
+        let w = |prev_start, gap_start, followed_at| FollowWindows {
+            prev_start,
+            gap_start,
+            followed_at,
+        };
+        match self {
+            VersionedMandate::V2(_) => w(0, 0, 0),
+            VersionedMandate::V3(_, f) => w(0, 0, *f),
+            VersionedMandate::V4(_, s, g, f) => w(*s, *g, *f),
+            VersionedMandate::V5(r) => r.windows,
         }
     }
     /// Start of the current following window; `None` for a mandate stored before deploy 16.
     pub fn followed_at(&self) -> Option<u64> {
         match self {
             VersionedMandate::V2(_) => None,
-            VersionedMandate::V3(_, t) | VersionedMandate::V4(_, _, _, t) => Some(*t),
+            VersionedMandate::V5(r) if r.windows.followed_at == 0 => None,
+            _ => Some(self.windows().followed_at),
+        }
+    }
+    /// The terms before the last tightening update, if any.
+    pub fn prev(&self) -> Option<&PrevTerms> {
+        match self {
+            VersionedMandate::V5(r) => Some(&r.prev),
+            _ => None,
+        }
+    }
+
+    /// The smallest variant that holds these fields: `V5` only with previous terms.
+    fn pack(current: Mandate, w: FollowWindows, prev: Option<PrevTerms>) -> VersionedMandate {
+        use VersionedMandate::*;
+        match (prev, w.prev_start, w.gap_start, w.followed_at) {
+            (Some(prev), ..) => V5(MandateRecord {
+                current,
+                windows: w,
+                prev,
+            }),
+            (None, 0, 0, 0) => V2(current),
+            (None, 0, 0, f) => V3(current, f),
+            (None, s, g, f) => V4(current, s, g, f),
         }
     }
 
@@ -208,42 +306,85 @@ impl VersionedMandate {
     }
 
     /// The record `follow` stores when the follower sends `m` over this one at `now`.
-    /// - Still live: only the mandate changes. The window keeps its start, so a mandate update can
-    ///   never void a fill the solver already fronted.
-    /// - Closed (revoke or expiry) less than `grace` ago: `V4`, so intents of the closed window keep
-    ///   their grace and only the gap `[closed, now)` is refused.
+    /// - Still live: the window keeps its start, so fronted fills keep their window.
+    /// - Closed (revoke or expiry) less than `grace` ago: a `V4` window, so intents of the closed
+    ///   window keep their grace and only the gap `[closed, now)` is refused.
     /// - Closed longer ago: `V3(m, now)`; every earlier intent is past its grace anyway.
     ///
     /// Two windows fit in a record, so a re-follow while an older window is still in its grace
     /// panics "refollow too soon"; it succeeds once that grace (at most `grace`) has passed.
+    ///
+    /// Terms: an `m` no tighter than the stored mandate on every term only replaces it. A tighter
+    /// `m` keeps the stored mandate as `prev` with `U = now` and `binds_until = U + grace`, so
+    /// intents accepted before `U` are judged by the terms in force when they were accepted until
+    /// then (see `terms_at`). One previous version fits, so a tightening before the last one's
+    /// `binds_until` panics "update too soon". The version it replaces no longer binds, so the
+    /// windows then start no earlier than that version's `U`: its intents stay refused instead of
+    /// meeting newer terms.
     pub fn refollowed(&self, m: Mandate, now: u64, grace: u64) -> VersionedMandate {
-        use VersionedMandate::*;
-        let Some(closed) = self.closed_at(now) else {
-            return match self {
-                V2(_) => V2(m),
-                V3(_, f) => V3(m, *f),
-                V4(_, s, g, f) => V4(m, *s, *g, *f),
-            };
+        let w = self.windows();
+        let mut windows = match self.closed_at(now) {
+            None => w,
+            Some(closed) => {
+                if w.gap_start > 0 {
+                    near_sdk::require!(
+                        now >= w.gap_start.saturating_add(grace),
+                        "refollow too soon"
+                    );
+                }
+                if now >= closed.saturating_add(grace) {
+                    return VersionedMandate::V3(m, now);
+                }
+                FollowWindows {
+                    prev_start: w.followed_at,
+                    gap_start: closed,
+                    followed_at: now,
+                }
+            }
         };
-        if let V4(_, _, g, _) = self {
-            near_sdk::require!(now >= g.saturating_add(grace), "refollow too soon");
+        let mut prev = self.prev().cloned();
+        if !m.no_tighter_than(self.current()) {
+            if let Some(p) = &prev {
+                near_sdk::require!(now >= p.binds_until.0, "update too soon");
+                // `prev_start` matters only with a closed window (`gap_start > 0`); a live record's
+                // `[0, 0)` window is empty either way
+                let u = p.updated_at.0;
+                windows.prev_start = windows.prev_start.max(u);
+                windows.followed_at = windows.followed_at.max(u);
+            }
+            prev = Some(PrevTerms {
+                terms: self.current().clone(),
+                updated_at: U64(now),
+                binds_until: U64(now.saturating_add(grace)),
+            });
         }
-        if now >= closed.saturating_add(grace) {
-            V3(m, now)
-        } else {
-            V4(m, self.followed_at().unwrap_or(0), closed, now)
-        }
+        Self::pack(m, windows, prev)
     }
 
     /// Whether a fill for an intent accepted at `at` may settle against this record's follow
     /// windows at `now` (the mandate's own revoke and expiry are checked separately).
     pub fn covers(&self, at: u64, now: u64, grace: u64) -> bool {
-        match self {
-            VersionedMandate::V2(_) => true,
-            VersionedMandate::V3(_, f) => at >= *f,
-            VersionedMandate::V4(_, s, g, f) => {
-                at >= *f || (at >= *s && at < *g && now < g.saturating_add(grace))
+        let w = self.windows();
+        at >= w.followed_at
+            || (at >= w.prev_start && at < w.gap_start && now < w.gap_start.saturating_add(grace))
+    }
+
+    /// The terms that bind a fill for an intent accepted at `at`: the ones before the last
+    /// tightening update when the intent predates it (a pre-16 intent, `at = 0`, always does),
+    /// and only until their `binds_until` ("mandate updated"); else the current mandate.
+    pub fn terms_at(&self, at: u64, now: u64) -> Result<&Mandate, &'static str> {
+        match self.prev() {
+            // like the revoke and expiry graces, a pause does not stop this clock. `binds_until`
+            // caps the old terms; `covers` checks the window with the live withdraw delay first
+            // (see `PrevTerms`)
+            Some(p) if at < p.updated_at.0 => {
+                if now < p.binds_until.0 {
+                    Ok(&p.terms)
+                } else {
+                    Err("mandate updated")
+                }
             }
+            _ => Ok(self.current()),
         }
     }
 }

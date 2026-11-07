@@ -1334,6 +1334,296 @@ fn deploy_15_mandate_update_keeps_v2() {
     assert!(matches!(record(&c, 1), VersionedMandate::V2(_)));
 }
 
+// ---------------------------------------------------------------- mandate updates (deploy 17)
+
+/// The follower waits for a fronted swap's output, then tightens one term to void it. A's nonce 1
+/// is accepted at NOW, the follower applies `tighten` at NOW + SEC, A's nonce 2 is accepted after
+/// it. Nonce 2 is judged by the new terms and refused with `reason`; nonce 1 by the old terms: it
+/// settles inside the update's grace and is refused "mandate updated" after it.
+fn update_after_the_front(tighten: fn(&mut Mandate), reason: &str) {
+    let (mut c, d, _) = setup_follow(hour_mandate());
+    let (pk, who) = (Base64VecU8(key(1).1), || {
+        FOLLOWER.parse::<AccountId>().unwrap()
+    });
+    let old = c.get_follow(pk.clone(), who()).unwrap();
+    let mut m = hour_mandate();
+    tighten(&mut m);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(pk.clone(), m);
+    let prev = c
+        .get_follow_prev(pk, who())
+        .expect("the old terms are kept");
+    assert_eq!(
+        near_sdk::borsh::to_vec(&prev.terms).unwrap(),
+        near_sdk::borsh::to_vec(&old).unwrap()
+    );
+    assert_eq!(
+        (prev.updated_at, prev.binds_until),
+        (U64(NOW + SEC), U64(NOW + SEC + GRACE))
+    );
+    post_a_at(&mut c, &key(1).0, &key(7).0, d, 2, NOW + 2 * SEC);
+    let after = vec![fill(2, "usdc", 50)];
+    let answer = covering(&c, &after);
+    let r = settle_answered(&mut c, 1, after, answer, NOW + 3 * SEC);
+    assert_eq!(
+        r.unwrap_err(),
+        reason,
+        "accepted after the update: new terms"
+    );
+    let front = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &front);
+    let late = settle_answered(&mut c, 1, front.clone(), answer, NOW + SEC + GRACE);
+    assert_eq!(late.unwrap_err(), "mandate updated");
+    let answer = covering(&c, &front);
+    let r = settle_answered(&mut c, 1, front, answer, NOW + SEC + GRACE - 1);
+    assert_eq!(
+        r.unwrap().settled,
+        1,
+        "fronted before the update: old terms"
+    );
+}
+
+#[test]
+fn raising_the_price_floor_after_the_front() {
+    update_after_the_front(
+        |m| m.min_out_per_near = U128(10u128.pow(30)),
+        "below min price",
+    );
+}
+
+#[test]
+fn lowering_the_cap_after_the_front() {
+    update_after_the_front(|m| m.per_tx_cap = U128(10), "over cap");
+}
+
+#[test]
+fn lowering_the_allowance_after_the_front() {
+    update_after_the_front(|m| m.allowance = U128(10), "allowance exhausted");
+}
+
+#[test]
+fn narrowing_the_tokens_after_the_front() {
+    update_after_the_front(
+        |m| m.allowed_tokens = vec!["wbtc".into()],
+        "token not allowed",
+    );
+}
+
+#[test]
+fn moving_the_expiry_to_now_after_the_front() {
+    update_after_the_front(|m| m.expires_at = U64(NOW + SEC), "mandate expired");
+}
+
+#[test]
+fn loosening_updates_keep_no_old_terms_and_never_wait() {
+    let mut m = hour_mandate();
+    m.allowed_tokens = vec!["usdc".into()];
+    m.min_out_per_near = U128(5);
+    let (mut c, ..) = setup_follow(m.clone());
+    let pk = Base64VecU8(key(1).1);
+    // each step is no tighter than the one before on any term, a second apart
+    let steps: [fn(&mut Mandate); 7] = [
+        |m| m.allowance = U128(m.allowance.0 + 1),
+        |m| m.per_tx_cap = U128(m.per_tx_cap.0 * 2),
+        |m| m.min_out_per_near = U128(1),
+        |m| m.expires_at = U64(m.expires_at.0 + SEC),
+        |m| m.allowed_tokens.push("wbtc".into()), // a superset
+        |m| m.allowed_tokens.clear(),             // any token
+        |_| {},                                   // equal terms
+    ];
+    for (i, step) in steps.iter().enumerate() {
+        step(&mut m);
+        ctx_at(FOLLOWER, 0, NOW + (i as u64 + 1) * SEC);
+        c.follow(pk.clone(), m.clone());
+        assert!(
+            matches!(record(&c, 1), VersionedMandate::V3(_, NOW)),
+            "step {i}"
+        );
+        assert!(
+            c.get_follow_prev(pk.clone(), FOLLOWER.parse().unwrap())
+                .is_none()
+        );
+    }
+    // a restricted list replacing "any token" is tighter, whatever it lists
+    m.allowed_tokens = vec!["usdc".into(), "wbtc".into()];
+    ctx_at(FOLLOWER, 0, NOW + 10 * SEC);
+    c.follow(pk, m);
+    assert!(matches!(record(&c, 1), VersionedMandate::V5(_)));
+}
+
+#[test]
+fn second_tightening_waits_for_the_first_ones_grace() {
+    let (mut c, d, _) = setup_follow(hour_mandate());
+    let (pk, who) = (Base64VecU8(key(1).1), || {
+        FOLLOWER.parse::<AccountId>().unwrap()
+    });
+    let cap_at = |c: &mut Contract, cap: u128, ts: u64| {
+        let mut m = hour_mandate();
+        m.per_tx_cap = U128(cap);
+        ctx_at(FOLLOWER, 0, ts);
+        c.follow(Base64VecU8(key(1).1), m);
+    };
+    cap_at(&mut c, NEAR / 2, NOW + SEC);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cap_at(&mut c, NEAR / 4, NOW + SEC + GRACE - 1)
+    }));
+    assert_eq!(panic_msg(r.unwrap_err()), "update too soon");
+    // loosening inside the grace never waits and keeps the old terms
+    cap_at(&mut c, NEAR, NOW + 2 * SEC);
+    assert_eq!(
+        c.get_follow_prev(pk.clone(), who()).unwrap().updated_at,
+        U64(NOW + SEC)
+    );
+    post_a_at(&mut c, &key(1).0, &key(7).0, d, 2, NOW + 3 * SEC);
+    // once that grace is over a tightening replaces them
+    cap_at(&mut c, NEAR / 4, NOW + SEC + GRACE);
+    let prev = c.get_follow_prev(pk, who()).unwrap();
+    assert_eq!(
+        (prev.terms.per_tx_cap, prev.updated_at),
+        (U128(NEAR), U64(NOW + SEC + GRACE))
+    );
+    // nonce 1 predates the first update, whose grace is over: it stays refused instead of meeting
+    // newer terms. Nonce 2 is judged by the cap it was accepted under (NEAR, not NEAR / 4).
+    let fills = vec![fill(1, "usdc", 50), fill(2, "usdc", NEAR / 2)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC + GRACE + SEC).unwrap();
+    assert_eq!(r.settled, 1);
+    assert_eq!(r.rejected, vec![(0, "intent before follow".to_string())]);
+}
+
+#[test]
+fn pre_deploy_16_intent_keeps_the_old_terms_only_for_the_grace() {
+    // no accept time (`at = 0`): always before any update, so it uses the old terms in their grace
+    let (mut c, ..) = setup_follow(hour_mandate());
+    let (pk, who) = (Base64VecU8(key(1).1), || {
+        FOLLOWER.parse::<AccountId>().unwrap()
+    });
+    as_v15_mandate(&mut c, 1);
+    c.used_nonces.insert(nonce_key(&key(1).1, 5));
+    let mut m = hour_mandate();
+    m.per_tx_cap = U128(10);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(pk.clone(), m);
+    assert!(matches!(record(&c, 1), VersionedMandate::V5(_)));
+    assert_eq!(c.get_follow_time(pk, who()), None, "still no follow time");
+    let fills = vec![fill(5, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let late = settle_answered(&mut c, 1, fills.clone(), answer, NOW + SEC + GRACE);
+    assert_eq!(late.unwrap_err(), "mandate updated");
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC + GRACE - 1);
+    assert_eq!(r.unwrap().settled, 1);
+}
+
+#[test]
+fn tightening_update_pays_its_storage_from_the_vault() {
+    let (mut c, _, v) = setup_follow(hour_mandate());
+    let pk = Base64VecU8(key(1).1);
+    let vault = |c: &Contract| c.get_vault(FOLLOWER.parse().unwrap()).0;
+    let len = |c: &Contract| near_sdk::borsh::to_vec(&record(c, 1)).unwrap().len() as u128;
+    let before = len(&c);
+    // loosening adds no bytes and costs nothing
+    let mut m = hour_mandate();
+    m.per_tx_cap = U128(2 * NEAR);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(pk.clone(), m);
+    assert_eq!((len(&c), vault(&c)), (before, v));
+    // tightening keeps the old terms beside the new ones: the measured growth, from the vault and
+    // out of the counted total
+    ctx_at(FOLLOWER, 0, NOW + 2 * SEC);
+    c.follow(pk, hour_mandate());
+    let cost = (len(&c) - before) * near_sdk::env::storage_byte_cost().as_yoctonear();
+    assert!(cost > 0);
+    assert_eq!(vault(&c), v - cost);
+    assert_eq!(c.get_config().vault_total.0, v - cost);
+}
+
+#[test]
+fn v5_is_appended_after_v4() {
+    let m = hour_mandate();
+    let v5 = VersionedMandate::V5(MandateRecord {
+        current: m.clone(),
+        windows: FollowWindows {
+            prev_start: 1,
+            gap_start: 2,
+            followed_at: 3,
+        },
+        prev: PrevTerms {
+            terms: m,
+            updated_at: U64(4),
+            binds_until: U64(5),
+        },
+    });
+    assert_eq!(near_sdk::borsh::to_vec(&v5).unwrap()[0], 3);
+}
+
+#[test]
+fn shorter_delay_keeps_old_terms_while_following() {
+    // while the follow window stays open, the old terms bind until the `binds_until` set at the
+    // update, not until `U` + a delay shortened later (the windows themselves use the live delay)
+    let (mut c, ..) = setup_follow(hour_mandate());
+    let mut m = hour_mandate();
+    m.per_tx_cap = U128(10);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(Base64VecU8(key(1).1), m);
+    ctx(OWNER, 1);
+    c.set_withdraw_delay(60);
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + SEC + GRACE - 1);
+    assert_eq!(
+        r.unwrap().settled,
+        1,
+        "binds until NOW + SEC + 900 s, not + 60 s"
+    );
+}
+
+#[test]
+fn intent_accepted_at_the_update_instant_meets_the_new_terms() {
+    // same block as the tightening follow: `at == U` counts as after it
+    let (mut c, d, _) = setup_follow(hour_mandate());
+    let mut m = hour_mandate();
+    m.per_tx_cap = U128(10);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(Base64VecU8(key(1).1), m);
+    post_a_at(&mut c, &key(1).0, &key(7).0, d, 2, NOW + SEC);
+    assert_eq!(c.accepted_at(&nonce_key(&key(1).1, 2)), Some(NOW + SEC));
+    let fills = vec![fill(2, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 2 * SEC);
+    assert_eq!(r.unwrap_err(), "over cap");
+}
+
+#[test]
+fn closed_window_starts_after_an_update_past_its_grace() {
+    // tighten at U1, wait past its grace, unfollow at R, re-follow tighter inside R's grace: the
+    // closed window keeps intents from after U1 only, so nonce 1 (before U1) is not revived by the
+    // newer terms
+    let (mut c, d, _) = setup_follow(hour_mandate());
+    let pk = Base64VecU8(key(1).1);
+    let allowance_at = |c: &mut Contract, allowance: u128, ts: u64| {
+        let mut m = hour_mandate();
+        m.allowance = U128(allowance);
+        ctx_at(FOLLOWER, 0, ts);
+        c.follow(Base64VecU8(key(1).1), m);
+    };
+    let u1 = NOW + SEC;
+    allowance_at(&mut c, VAULT - 1, u1);
+    post_a_at(&mut c, &key(1).0, &key(7).0, d, 2, u1 + SEC);
+    let r = u1 + GRACE + SEC;
+    ctx_at(FOLLOWER, 0, r);
+    c.unfollow(pk);
+    allowance_at(&mut c, VAULT - 2, r + SEC);
+    let fills = vec![fill(1, "usdc", 50), fill(2, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let got = settle_answered(&mut c, 1, fills, answer, r + 2 * SEC).unwrap();
+    assert_eq!(
+        got.settled, 1,
+        "nonce 2 (after U1, before the unfollow) keeps its grace"
+    );
+    assert_eq!(got.rejected, vec![(0, "intent before follow".to_string())]);
+}
+
 #[test]
 fn follow_stores_its_time() {
     let (c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));

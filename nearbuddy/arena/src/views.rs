@@ -3,8 +3,8 @@ use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::{AccountId, env, near};
 
 use crate::{
-    Agent, AgentView, Config, Contract, ContractExt, Duel, Intent, Mandate, commit_bytes,
-    consent_bytes,
+    Agent, AgentView, Config, Contract, ContractExt, Duel, Intent, Mandate, PrevTerms,
+    commit_bytes, consent_bytes,
     follow::{follow_key, holding_key},
     hex, intent_message, register_bytes, tee_text,
 };
@@ -37,6 +37,20 @@ impl Contract {
         self.follows
             .get(&follow_key(&agent_pk.0, &follower))
             .map(|v| v.current().clone())
+    }
+
+    /// The terms before the follower's last tightening update for `agent_pk`: `{terms, updated_at,
+    /// binds_until}` (unix ns); `None` if no update tightened a term since the follow (or since a
+    /// re-follow that opened a fresh window). Fills for intents accepted before `updated_at` are
+    /// judged by `terms` until `binds_until`, then refused ("mandate updated"); later intents by
+    /// `get_follow`. The view keeps returning them after `binds_until`. `terms.spent` is the
+    /// snapshot at the update and is not used: the ledger is `get_follow`'s `spent`.
+    /// View: anyone, no deposit. Panics: "migrating".
+    pub fn get_follow_prev(&self, agent_pk: Base64VecU8, follower: AccountId) -> Option<PrevTerms> {
+        self.not_migrating();
+        self.follows
+            .get(&follow_key(&agent_pk.0, &follower))
+            .and_then(|v| v.prev().cloned())
     }
 
     /// Start of `follower`'s current follow window for `agent_pk` (unix ns): fills for intents
