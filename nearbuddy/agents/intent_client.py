@@ -190,13 +190,16 @@ class Solver:
 
     def _send(self, method: str, url: str, cap: float | None = None, **kw: Any) -> requests.Response:
         """Retry a refused connection for `restart_wait_s`. `cap` (monotonic) bounds the retries and each attempt's
-        timeout, so nothing waits past it."""
+        timeout, so nothing waits past it. The capped timeout is split between connect and read: requests applies a
+        scalar to each phase, so one attempt could take twice the time left."""
         retry_until = time.monotonic() + self.restart_wait_s
+        limit = kw.get("timeout", 300.0)
         if cap is not None:
             retry_until = min(retry_until, cap)
         while True:
             if cap is not None:
-                kw["timeout"] = max(0.5, min(kw.get("timeout", 300.0), cap - time.monotonic()))
+                t = max(0.5, min(limit, cap - time.monotonic()))
+                kw["timeout"] = (t / 2, t / 2)
             try:
                 return requests.request(method, url, **kw)
             except requests.ConnectionError as e:
