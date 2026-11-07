@@ -391,13 +391,36 @@ def test_a_hanging_rpc_with_a_short_lock_still_reveals_before_the_deadline(env, 
         clock.ns += int(cost * S)
         raise requests.Timeout("read timed out")
 
-    monkeypatch.setattr(chain.requests, "post", hanging)
+    monkeypatch.setattr(requests, "post", hanging)
     solver = FakeSolver(clock)
     play(solver, players)
     deadline = CLOSE_NS - runner.REVEAL_MARGIN_S * S
     assert attempts and all(a <= 5 for a in attempts), attempts
     assert reveal_times(solver) and all(t < deadline for t in reveal_times(solver)), reveal_times(solver)
     assert not [r for r in rows() if r.get("error")], "no deadline miss"
+
+
+def test_a_chain_read_stuck_past_its_timeout_cannot_hold_the_reveal(monkeypatch):
+    # real local clock, real chain_now_ns, a transport that ignores its timeout (DNS, a trickling server) and blocks
+    # far past the backstop: hold_until_lock must stop waiting on that read and return by the backstop
+    import threading
+
+    release = threading.Event()
+
+    def stuck(url, json=None, headers=None, timeout=None):
+        release.wait(10)
+        raise requests.Timeout("read timed out")
+
+    monkeypatch.setattr(requests, "post", stuck)
+    now = time.time_ns()
+    close_at = now + runner.BACKSTOP_BEFORE_CLOSE_NS + int(0.6 * S)  # backstop 0.6 s from now
+    try:
+        runner.hold_until_lock(now + int(0.2 * S), close_at)
+        returned = time.time_ns()
+    finally:
+        release.set()  # let the abandoned read thread finish
+    assert returned < close_at - runner.REVEAL_MARGIN_S * S, (returned - now) / S
+    assert returned - now < 1.5 * S, (returned - now) / S
 
 
 def test_a_slow_last_cycle_never_sleeps_past_the_commit_window(env, monkeypatch):

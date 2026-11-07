@@ -632,23 +632,46 @@ def require_lock_for_commit_reveal(commit_reveal: bool, lock_s: int) -> None:
         )
 
 
+def _chain_now_within(wait_s: float) -> int | None:
+    """chain_now_ns on a fresh daemon thread, waited for at most `wait_s` seconds of local time. None when the read
+    is still running then (DNS, a trickling server): it is abandoned, and since every read gets its own thread a
+    stuck one never holds up the next. The read's own errors are raised here."""
+    box: list[Any] = []
+    done = threading.Event()
+
+    def read() -> None:
+        try:
+            box.append(chain_now_ns(timeout=max(0.5, wait_s)))
+        except BaseException as e:  # handed to the waiting thread, which raises it
+            box.append(e)
+        done.set()
+
+    threading.Thread(target=read, name="chain-now", daemon=True).start()
+    if not done.wait(wait_s):
+        return None
+    if isinstance(box[0], BaseException):
+        raise box[0]
+    return box[0]
+
+
 def hold_until_lock(lock_at_ns: int, close_at_ns: int) -> None:
     """Wait until the chain clock reaches `lock_at_ns` (close_at minus the intent lock). From there no agent can
     commit again, so revealing the scored call cannot be answered by a counter-call; reveals stay open up to
     close_at. Reads the latest final block's time, which trails the head by a block or two, so the reveal always
     lands inside the lock. Hard backstop by the local clock, whatever the chain reads do: reveal once it reaches
     halfway through the lock, and never later than REVEAL_MARGIN_S + 2 s before close_at (the reveal's own deadline
-    is close_at - REVEAL_MARGIN_S, so the POST still gets 2 s). Each chain read gets only the time left to the
-    backstop, so a slow or throttled RPC cannot hold the reveal past it: an unrevealed commitment is slashed, an early
-    reveal only leaks the call."""
+    is close_at - REVEAL_MARGIN_S, so the POST still gets 2 s). Each chain read is waited for only the time left to the
+    backstop on the local clock, on its own thread, so a slow, throttled or hung RPC cannot hold the reveal past it:
+    an unrevealed commitment is slashed, an early reveal only leaks the call."""
     give_up = max(lock_at_ns, min(lock_at_ns + (close_at_ns - lock_at_ns) // 2, close_at_ns - BACKSTOP_BEFORE_CLOSE_NS))
     while True:
         left = (give_up - time.time_ns()) / S_NS
-        if left <= 0:
+        if left < 0.05:  # at most 50 ms early, and no read is started only to be abandoned
             print("  chain clock not past the intent lock by the local backstop; revealing now")
             return
         try:
-            if chain_now_ns(timeout=max(0.5, min(5.0, left))) >= lock_at_ns:
+            now = _chain_now_within(min(5.0, left))
+            if now is not None and now >= lock_at_ns:
                 return
         except RuntimeError as e:
             print(f"  chain clock unreadable ({str(e)[:80]}); retrying")
