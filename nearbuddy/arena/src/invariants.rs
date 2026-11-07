@@ -126,7 +126,9 @@ enum Op {
         cap: u64,
         spent_pct: u8,
         only_wrap: bool,
-        ttl_s: u64,
+        /// `expires_at - now` in seconds; 0 or below is an expiry at or before now (a backdated
+        /// update closes the mandate at once).
+        ttl_s: i64,
         revoked: bool,
         /// `min_out_per_near`; 0 is refused by `follow`.
         floor: u64,
@@ -207,7 +209,12 @@ fn follow(
     agent: impl Strategy<Value = usize>,
 ) -> impl Strategy<Value = Op> {
     let spent_pct = prop_oneof![Just(0u8), 0u8..=100];
-    let ttl_s = prop_oneof![1 => 0u64..300, 4 => 300u64..7_200];
+    let ttl_s = prop_oneof![
+        1 => -3_000i64..0,
+        1 => Just(0i64),
+        2 => 1i64..300,
+        8 => 300i64..7_200,
+    ];
     (
         who,
         agent,
@@ -319,6 +326,11 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                     agent: 0,
                     fills: (0..6).step_by(2).map(spec).collect(),
                 },
+                Op::Settle {
+                    who: 2,
+                    agent: 0,
+                    fills: (0..6).map(spec).collect(),
+                },
                 Op::Advance { secs: DELAY / SEC },
                 Op::Settle {
                     who: 0,
@@ -379,8 +391,8 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
             // then it tightens the cap below the late fills (deploy 17): earlier intents keep the
             // old terms for the grace; a second tightening inside it is "update too soon"; a
             // loosening (same cap, later expiry) never waits
-            let cap1 = |cap, ttl_s| Op::Follow {
-                who: 1,
+            let terms = |who, cap, ttl_s| Op::Follow {
+                who,
                 agent: 0,
                 allowance: 2_000,
                 cap,
@@ -392,10 +404,19 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
             };
             let tighten1 = vec![
                 Op::Advance { secs: 1 },
-                cap1(5, 7_200),
+                terms(1, 5, 7_200),
                 Op::Advance { secs: 1 },
-                cap1(4, 7_200),
-                cap1(5, 7_300),
+                terms(1, 4, 7_200),
+                terms(1, 5, 7_300),
+            ];
+            // follower 2 follows agent 0 from the start, then (red team, deploy 17) moves the
+            // expiry before its fronted intents and restores it in the same block: the window
+            // still closes no earlier than that update, so the late fills settle in its grace
+            let first2 = vec![terms(2, 1_000, 7_200)];
+            let backdate2 = vec![
+                Op::Advance { secs: 1 },
+                terms(2, 1_000, -3_000),
+                terms(2, 1_000, 7_200),
             ];
             // a second unfollow and re-follow inside the first gap's grace is refused (two windows fit)
             let cycle = vec![
@@ -417,12 +438,14 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                 f,
                 o,
                 first1,
+                first2,
                 p0.to_vec(),
                 revoke,
                 p1.to_vec(),
                 refollow,
                 update1,
                 tighten1,
+                backdate2,
                 p2.to_vec(),
                 cycle,
                 v,
@@ -438,6 +461,16 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                     Op::ReconcilePage { n: 1, repeat: true },
                 ],
                 late_fills,
+                // past `tighten1`'s grace, follower 1 tightens again: intents from before the
+                // first update stay refused instead of meeting the second one's old terms
+                vec![
+                    terms(1, 4, 7_200),
+                    Op::Settle {
+                        who: 1,
+                        agent: 0,
+                        fills: (0..6).map(spec).collect(),
+                    },
+                ],
                 vec![Op::ReconcileFinish],
             ]
             .concat()
@@ -1051,7 +1084,7 @@ impl World {
                     } else {
                         vec![]
                     },
-                    expires_at: U64(self.now + ttl_s * SEC),
+                    expires_at: U64(self.now.saturating_add_signed(ttl_s * SEC as i64)),
                     revoked,
                     min_out_per_near: U128(floor as u128),
                     revoked_at: U64(12_345), // ignored on input: `follow` stores 0
@@ -1090,12 +1123,20 @@ impl World {
                 // (or expiry) and a new one opens now, unless an older window is still in its grace
                 let now = self.now;
                 let mut wins = self.windows.get(&(agent, who)).cloned().unwrap_or_default();
+                // ... but never before the last update: a backdated expiry binds only later intents
+                let last_update = self
+                    .versions
+                    .get(&(agent, who))
+                    .filter(|v| v.len() >= 2)
+                    .and_then(|v| v.last())
+                    .map_or(0, |v| v.1);
                 let closed = pre.mandate(agent, who).and_then(|m| {
                     if m.revoked {
                         Some(m.revoked_at.0)
                     } else {
                         (now >= m.expires_at.0).then_some(m.expires_at.0)
                     }
+                    .map(|c| c.max(last_update))
                 });
                 let mut too_soon = false;
                 if pre.mandate(agent, who).is_none() {
@@ -1824,6 +1865,23 @@ impl World {
                     && a.per_tx_cap.0 == b.per_tx_cap.0
                     && a.revoked == b.revoked
             );
+            // 3. after every accepted fill, in batch order, the ledger is within the allowance of
+            // the terms that bound that fill
+            let mut spent = a.spent.0;
+            for (f, _) in fills.iter().zip(&expect).filter(|(_, r)| r.is_ok()) {
+                spent += f.amount_in.0 + f.amount_in.0 * fee_bps / 10_000;
+                let at = self.accepted_at[&(agent, f.intent_nonce.0)];
+                let allowance = match self.terms_at(agent, who, at) {
+                    Ok(Some(t)) => t.allowance.0,
+                    Ok(None) => a.allowance.0,
+                    Err(e) => panic!("settled a fill past its terms' grace: {e}"),
+                };
+                assert!(
+                    spent <= allowance,
+                    "mandate {agent}/{who} spent over the allowance that bound a fill"
+                );
+            }
+            assert_eq!(spent, b.spent.0, "the ledger is the sum of accepted debits");
         }
         for f in fills.iter().zip(&expect).filter(|(_, r)| r.is_ok()) {
             let (f, n) = (f.0, f.0.intent_nonce.0);
@@ -2102,13 +2160,10 @@ impl World {
             post.vaults.iter().sum::<u128>(),
             "vault_total != sum(vaults)"
         );
-        // 3. no mandate over its allowance (generated mandates start within it)
-        for (a, w, m) in &post.mandates {
-            assert!(
-                m.spent.0 <= m.allowance.0,
-                "mandate {a}/{w} spent over allowance"
-            );
-        }
+        // 3. no settle takes a mandate over the allowance that bound it: checked in `settle`. A
+        // follow may store an allowance below `spent` (the ledger is kept), and from deploy 17 a fill
+        // under the previous terms counts against their allowance, so `spent <= allowance` of the
+        // current terms is not a state-wide property.
         // 3b. every credited output is someone's holding, and never more than the arena holds
         for t in 0..2 {
             let held: u128 = post.holdings.iter().map(|h| h[t]).sum::<u128>() + self.in_flight[t];

@@ -311,6 +311,9 @@ impl VersionedMandate {
     ///   window keep their grace and only the gap `[closed, now)` is refused.
     /// - Closed longer ago: `V3(m, now)`; every earlier intent is past its grace anyway.
     ///
+    /// The window closes no earlier than the last update: an expiry it moved into the past binds
+    /// only intents accepted after it.
+    ///
     /// Two windows fit in a record, so a re-follow while an older window is still in its grace
     /// panics "refollow too soon"; it succeeds once that grace (at most `grace`) has passed.
     ///
@@ -326,6 +329,10 @@ impl VersionedMandate {
         let mut windows = match self.closed_at(now) {
             None => w,
             Some(closed) => {
+                // an update binds only intents accepted from its `updated_at` on, so an expiry it
+                // backdated does not close the window before it: the previous terms covered every
+                // earlier intent until then
+                let closed = closed.max(self.prev().map_or(0, |p| p.updated_at.0));
                 if w.gap_start > 0 {
                     near_sdk::require!(
                         now >= w.gap_start.saturating_add(grace),

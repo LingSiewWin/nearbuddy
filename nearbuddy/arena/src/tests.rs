@@ -1624,6 +1624,71 @@ fn closed_window_starts_after_an_update_past_its_grace() {
     assert_eq!(got.rejected, vec![(0, "intent before follow".to_string())]);
 }
 
+/// Red team (deploy 17): nonce 1 is accepted at NOW and fronted. The follower moves the expiry
+/// into the past (before the intent), then restores the old terms in the same block. The stored
+/// mandate counts as expired since `1`, so without the clamp `refollowed` took the "closed long
+/// ago" branch, wrote `V3(m, now)` and dropped `prev`: the window started after the intent.
+#[test]
+fn backdated_expiry_then_restore_keeps_the_front() {
+    let (mut c, ..) = setup_follow(hour_mandate());
+    let pk = Base64VecU8(key(1).1);
+    let mut m = hour_mandate();
+    m.expires_at = U64(1);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(pk.clone(), m);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(pk.clone(), hour_mandate());
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 2 * SEC);
+    assert_eq!(
+        r.map(|r| r.settled),
+        Ok(1),
+        "fronted under the terms in force, inside grace"
+    );
+}
+
+/// Same, without the long-ago branch: the expiry set one ns before the intent's accept time. The
+/// re-follow wrote a gap `[NOW - 1, now)` that contained the intent.
+#[test]
+fn expiry_moved_before_the_intent_then_restored_keeps_the_front() {
+    let (mut c, ..) = setup_follow(hour_mandate());
+    let pk = Base64VecU8(key(1).1);
+    let mut m = hour_mandate();
+    m.expires_at = U64(NOW - 1);
+    ctx_at(FOLLOWER, 0, NOW + SEC);
+    c.follow(pk.clone(), m);
+    ctx_at(FOLLOWER, 0, NOW + 2 * SEC);
+    c.follow(pk.clone(), hour_mandate());
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 3 * SEC);
+    assert_eq!(
+        r.map(|r| r.settled),
+        Ok(1),
+        "fronted under the terms in force, inside grace"
+    );
+}
+
+/// The expiry moved to just after the intent (still in the past at U), then restored: the fill
+/// keeps `U + grace`, not only `E + grace`.
+#[test]
+fn expiry_moved_after_the_intent_then_restored_keeps_the_update_grace() {
+    let (mut c, ..) = setup_follow(hour_mandate());
+    let pk = Base64VecU8(key(1).1);
+    let mut m = hour_mandate();
+    m.expires_at = U64(NOW + 1);
+    ctx_at(FOLLOWER, 0, NOW + 600 * SEC);
+    c.follow(pk.clone(), m);
+    ctx_at(FOLLOWER, 0, NOW + 600 * SEC);
+    c.follow(pk.clone(), hour_mandate());
+    let fills = vec![fill(1, "usdc", 50)];
+    let answer = covering(&c, &fills);
+    // U + grace = NOW + 1500 s; still inside it
+    let r = settle_answered(&mut c, 1, fills, answer, NOW + 1000 * SEC);
+    assert_eq!(r.map(|r| r.settled), Ok(1), "inside U + grace");
+}
+
 #[test]
 fn follow_stores_its_time() {
     let (c, ..) = setup_follow(mandate(NEAR, VAULT, vec![]));
