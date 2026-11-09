@@ -13,10 +13,14 @@ call never sees the telemetry, and when there is telemetry a sizer call may only
 carries the proof of the last call (the sizer when it ran; its signed request quotes the side and sha256 of the
 side call's output); both calls are kept in the row's `arm_d`, and an unproven side call means no post.
 
-Profiles (`--profile naive|hardened|hardened-v2`, agent A's or the `--only` agent's; every row carries `profile`):
+Profiles (`--profile naive|hardened|hardened-v2|hardened-v3`, agent A's or the `--only` agent's; rows carry `profile`):
 hardened-v2 runs the injection through cue_guard, puts it in a block labelled "paid third-party injection, unverified"
 next to the trusted price-feed and mandate blocks, and caps the size in code while that block is present. Rows gain
 `guard` (cues removed, stated size, cap, votes). `--judgments K` asks K times and takes the majority side.
+hardened-v3 is hardened-v2 plus a fact-check: before the duelist's call, prompts.JUDGE_MODEL (on the same NEAR AI key,
+so its call is enclave-signed too) reads the cleaned headline alone, and its verdict joins the duelist's request and
+sets the cap. `guard.judge` keeps that call's bytes, enclave record and parsed verdict; an unproven judge call means
+no post, like arm D's side call.
 
 Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this process finds it via GET /agent_duel):
 
@@ -68,7 +72,7 @@ from nacl.signing import SigningKey
 
 from chain import ARENA, ASSETS, agent_tier_on_chain, chain_now_ns, view, wait_outcome, warn_if_arena_missing
 from config import ATTEST_DIR, DATA, ENV, NET
-from duelist import Duelist, DuelistError
+from duelist import GUARDED, Duelist, DuelistError
 from intent_client import (
     DeadlineError,
     Solver,
@@ -84,7 +88,7 @@ from intent_client import (
 from keys import agent_key, key_tag, pk_b64, register_sig
 from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
-from prompts import HARDENED_V2, PROFILES, VARIANTS, pick_variant
+from prompts import HARDENED_V3, JUDGE_MODEL, PROFILES, VARIANTS, pick_variant
 
 
 class Tracked:
@@ -115,6 +119,17 @@ def make_duelist(
     complete = Tracked(model_client)
     d = Duelist(address=pk_b64(sk), hardened=hardened, model=model_client.model_id, complete_fn=complete)
     return d, sk, complete
+
+
+def attach_judge(d: Duelist, attestations: dict[str, str | None] | None = None) -> None:
+    """hardened-v3: give the duelist its fact-check model, JUDGE_MODEL on the same NEAR AI key (a stub without one,
+    whose replies are unverifiable), and keep that enclave's attestation next to the duelists'."""
+    if d.variant != HARDENED_V3:
+        return
+    judge = Tracked(client_from_env({**ENV, "NEAR_AI_MODEL_J": JUDGE_MODEL}, "J"))
+    d.judge = judge
+    if attestations is not None:
+        attestations[judge.client.model_id] = save_attestation(judge.client)
 
 
 PAIR_TAG = ""  # `--pair-tag`: which agent pair this process drives; "" = the main pair
@@ -204,6 +219,9 @@ def prepare_decision(
     inj = [i for i in pending.get(pk, []) if i["duel_id"] == duel_id]
     injection_text = "\n".join(i["payload"] for i in inj) or None
     comp.calls.clear()
+    judge = d.judge if isinstance(d.judge, Tracked) else None
+    if judge:
+        judge.calls.clear()
     try:
         decision = d.decide(symbol, brief(symbol, px, open_px), injection_text)
     except DuelistError as e:
@@ -283,8 +301,8 @@ def prepare_decision(
             "size_asked": decision.size_asked,
             "size_note": decision.size_note,
         }
-    guard = None
-    if d.variant == HARDENED_V2:
+    guard: dict[str, Any] | None = None
+    if d.variant in GUARDED:
         guard = {
             "cues_removed": decision.cues_removed,
             "size_stated": decision.size_asked,
@@ -299,6 +317,19 @@ def prepare_decision(
             if len(comp.calls) > 1
             else None,
         }
+    if d.variant == HARDENED_V3 and guard is not None:
+        guard["judge"] = None  # no paid text, no judge call
+        if judge and judge.calls and decision.verdict is not None:
+            jc = judge.calls[-1]
+            j_sig, j_tee, j_error = _prove(judge.client, jc, pk)
+            if model.tee and not j_tee:
+                tee = None  # the duelist's signed request quotes the judge's reply; an unproven judge breaks that link
+                sig_error = sig_error or j_error or f"judge: no tee proof for {jc.chat_id}"
+            guard["judge"] = {
+                **_call_record(jc, j_sig, j_tee),
+                "verdict": decision.verdict,
+                "attestation_file": attestations.get(judge.client.model_id),
+            }
     if model.tee and not tee:
         record(
             {
@@ -896,6 +927,7 @@ def run_single(
     else:
         print(f"{pk[:8]} already registered (tee={model.tee}); not re-registering")
     attestations = {model.model_id: save_attestation(model)}
+    attach_judge(d, attestations)
     nonce = int(time.time() * 1000)
     last: str | None = None
     while True:
@@ -1043,6 +1075,7 @@ def run(
             if "agent exists" not in str(e):
                 raise
     attestations = {m.model_id: save_attestation(m) for m in (model_a, model_b)}
+    attach_judge(a, attestations)
     results = []
     nonce = int(time.time() * 1000)
     for rnd in range(rounds):
@@ -1142,7 +1175,7 @@ if __name__ == "__main__":
         type=int,
         default=1,
         metavar="K",
-        help="hardened-v2: K independent calls per decision, majority side; each decision costs K calls",
+        help="hardened-v2/v3: K independent calls per decision, majority side; each decision costs K calls",
     )
     p.add_argument("--poll-seconds", type=int, default=10)
     p.add_argument(
@@ -1170,8 +1203,8 @@ if __name__ == "__main__":
     arms = "".join(args.variants.upper().split(","))
     if arms and (len(set(arms)) != len(arms) or not set(arms) <= set(VARIANTS)):
         p.error(f"--variants takes distinct arms from {','.join(VARIANTS)}; got {args.variants!r}")
-    if args.judgments < 1 or (args.judgments > 1 and args.profile != HARDENED_V2):
-        p.error("--judgments takes K >= 1, and K > 1 only with --profile hardened-v2")
+    if args.judgments < 1 or (args.judgments > 1 and args.profile not in GUARDED):
+        p.error("--judgments takes K >= 1, and K > 1 only with --profile hardened-v2 or hardened-v3")
     if arms and args.profile not in (None, "hardened"):
         p.error("--variants sets agent A's prompt per duel; it runs on the hardened profile")
     if args.only and args.hardened and args.profile not in (None, "hardened"):
