@@ -101,8 +101,55 @@
         ]
       },
       {
+        "name": "chaos_fee",
+        "doc": " The deposit the next paid `inject_chaos` in this duel needs (the price before storage).\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "claim_chaos",
+        "doc": " Pay the caller everything its injections in a finished duel are owed (`Chaos.payout`), once.\n Caller: the injector. Deposit: 1 yoctoNEAR. Panics: \"duel missing\", \"duel open\",\n \"nothing to claim\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
         "name": "commit_intent",
-        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"agent missing\",\n \"bond exhausted\".",
+        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n While a headline planted at this agent after its held commitment is pending, that\n commitment must be revealed before it is replaced.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"reveal first\",\n \"agent missing\", \"bond exhausted\".",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -329,6 +376,31 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      {
+        "name": "get_chaos",
+        "doc": " Every headline planted in a duel, in `Duel.injections` order, with its arm, outcome and\n payout; empty for an unknown duel or one with none. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/Chaos"
+            }
           }
         }
       },
@@ -666,7 +738,7 @@
       },
       {
         "name": "inject_chaos",
-        "doc": " Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver\n delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool;\n when the payer owns either agent it goes to `owner_fees` instead and the injection earns no\n shield, so an owner cannot buy shield or recycle chaos through its own pairing.\n Caller: anyone (spectator). Deposit: at least `min_chaos_deposit` and above the record's\n storage. Panics: \"paused\", \"chaos deposit too small\", \"payload_hash length\", \"kind too long\",\n \"duel missing\", \"duel closed\", \"bad target\", \"chaos full\".",
+        "doc": " Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes\n toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with\n no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the\n stake, escrowed in the pool until the duel finishes. When the payer owns either agent the\n stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).\n The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the\n injection's index in `get_chaos(duel_id)`.\n Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the\n record's storage. Panics: \"paused\", \"headline empty\", \"headline too long\", \"headline control\n character\", \"placebo is system-run\", \"duel missing\", \"chaos deposit too small\", \"duel\n closed\", \"bad target\", \"chaos full\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -689,16 +761,24 @@
             {
               "name": "kind",
               "type_schema": {
-                "type": "string"
+                "$ref": "#/definitions/ChaosKind"
               }
             },
             {
-              "name": "payload_hash",
+              "name": "headline",
               "type_schema": {
-                "$ref": "#/definitions/Base64VecU8"
+                "type": "string"
               }
             }
           ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
         }
       },
       {
@@ -844,8 +924,8 @@
         }
       },
       {
-        "name": "migrate_v16",
-        "doc": " Deploy 15 → 16: a per-account vault cap (`max_vault_per_account`) and the accept time of\n each new intent (`nonce_times`; intents accepted before keep only `used_nonces`, so their\n fills keep the deploy-15 grace rule). Every deploy-15 field is\n carried over unchanged, so existing vaults, mandates, holdings and duels read as before.\n `vault_total` keeps its deploy-15 value; `reconcile_vault_total` clears its drift.\n Caller: the contract itself (private), once after the deploy-16 code lands. Deposit:\n none. Panics: \"no state\", or the SDK private-method panic for any other caller.",
+        "name": "migrate_v17",
+        "doc": " Deploy 16.1 → 17 (\"Fool the AI\"): planted headlines with a rising price, a random arm, the\n outcome read from the target's next revealed TEE decision and a payout per injection at\n finish (`chaos`, `chaos_config`). Every deploy-16 field is carried over unchanged. Run only at\n a batch boundary (no open duel): `Duel.injections` keeps its layout, but the stakes of a duel\n open across the deploy would have no `chaos` records to settle them.\n Caller: the contract itself (private), once after the deploy-17 code lands. Deposit: none.\n Panics: \"no state\", as `set_chaos_config` on bad terms, or the SDK private-method panic for\n any other caller.",
         "kind": "call",
         "modifiers": [
           "init",
@@ -855,9 +935,9 @@
           "serialization_type": "json",
           "args": [
             {
-              "name": "max_vault_per_account",
+              "name": "chaos",
               "type_schema": {
-                "type": "string"
+                "$ref": "#/definitions/ChaosConfig"
               }
             }
           ]
@@ -1463,7 +1543,7 @@
       },
       {
         "name": "reveal_intent",
-        "doc": " Open a commitment: the intent and salt must hash to the stored commitment for\n `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,\n except that the reveal may land inside the intent lock (the decision was fixed when it was\n committed, before the lock) up to `close_at`. The commitment is deleted.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"no commitment\", \"commitment mismatch\", then as `post_intent` minus \"intent lock\" and\n \"commit first\".",
+        "doc": " Open a commitment: the intent and salt must hash to the stored commitment for\n `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,\n except that the reveal may land inside the intent lock (the decision was fixed when it was\n committed, before the lock) up to `close_at`. The commitment is deleted. The decision counts\n as made at its commit time, which is what decides planted headlines (see `Chaos`).\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"no commitment\", \"commitment mismatch\", then as `post_intent` minus \"intent lock\" and\n \"commit first\".",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -1491,6 +1571,25 @@
                     "type": "null"
                   }
                 ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_chaos_config",
+        "doc": " `inject_chaos` terms (see `ChaosConfig`). The price applies to later injections; `fee_bps`\n and `share_bps` decide the payouts of stakes already escrowed, so they may not change while\n a duel is open. Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"chaos r out of\n range\" (outside 10_000..=40_000), \"chaos cap below base\" (cap under base or\n `min_chaos_deposit`), \"bps out of range\" (fee over 1_000 or share over 10_000), \"duels open\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "chaos",
+              "type_schema": {
+                "$ref": "#/definitions/ChaosConfig"
               }
             }
           ]
@@ -1798,7 +1897,7 @@
       },
       {
         "name": "void_duel",
-        "doc": " Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both\n agents, split the pool between them, no slashing, no score. Recorded as a tie with no prices.\n Caller: anyone. Deposit: none. Panics: \"duel missing\", \"resolved\", \"too early\",\n \"agent missing\".",
+        "doc": " Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both\n agents, no slashing, no score. Recorded as a tie with no prices: the injections settle as on a\n tie (see `settle_records`) and what is left of the pool is split between the agents.\n Caller: anyone. Deposit: none. Panics: \"duel missing\", \"resolved\", \"too early\",\n \"agent missing\".",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -1954,6 +2053,15 @@
             }
           }
         },
+        "Arm": {
+          "description": "How the runner must deliver the headline: `Cue` as written, `Clean` after the cue guard strips its credibility cues, `Placebo` as written (a placebo carries no cues). The contract draws `Cue` or `Clean` from the block's random seed; the injector does not choose.",
+          "type": "string",
+          "enum": [
+            "Cue",
+            "Clean",
+            "Placebo"
+          ]
+        },
         "AssetOptionalPrice": {
           "type": "object",
           "required": [
@@ -1984,9 +2092,173 @@
             "minimum": 0.0
           }
         },
+        "Chaos": {
+          "description": "One planted headline (deploy 17). `Duel.injections[i]` and `get_chaos(duel)[i]` are the same injection.\n\n`prev` is the side of the target's last decision made at or before `at` (a decision's time is its commit time when revealed, else its accept time), updated while the injection is pending. The first decision made after `at` that is revealed from a commitment and carries a verified provider-TEE proof (kind 2) decides the outcome, once; direct posts never decide, since their side is readable before they land.",
+          "type": "object",
+          "required": [
+            "arm",
+            "at",
+            "claimed",
+            "headline",
+            "injector",
+            "kind",
+            "outcome",
+            "payout",
+            "stake",
+            "target"
+          ],
+          "properties": {
+            "arm": {
+              "$ref": "#/definitions/Arm"
+            },
+            "at": {
+              "description": "Block time of the injection (ns).",
+              "type": "string"
+            },
+            "claimed": {
+              "type": "boolean"
+            },
+            "decided_by": {
+              "description": "Nonce of the revealed intent that decided the outcome.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "headline": {
+              "description": "UTF-8, 1..=280 bytes, no control or invisible format characters.",
+              "type": "string"
+            },
+            "injector": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/definitions/ChaosKind"
+            },
+            "next": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Side"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "outcome": {
+              "$ref": "#/definitions/ChaosOutcome"
+            },
+            "payout": {
+              "description": "Owed to `injector` once the duel finished: the stake back (no trial, expired, or flipped less the fee) plus, for a flip at the duel's loser, a share of its slash.",
+              "type": "string"
+            },
+            "prev": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Side"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stake": {
+              "description": "Escrowed in the duel pool until it finishes. 0 when the contract owner (placebo) or the owner of either agent paid: that deposit went to `owner_fees` at injection.",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/definitions/Base64VecU8"
+            }
+          }
+        },
+        "ChaosConfig": {
+          "description": "Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At finish `fee_bps` of a decided stake (flipped or held) goes to `owner_fees`, and `share_bps` of the loser's slash is split pro rata by stake among the injections that flipped it.",
+          "type": "object",
+          "required": [
+            "base",
+            "cap",
+            "fee_bps",
+            "r_bps",
+            "share_bps"
+          ],
+          "properties": {
+            "base": {
+              "type": "string"
+            },
+            "cap": {
+              "type": "string"
+            },
+            "fee_bps": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            "r_bps": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            "share_bps": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          }
+        },
+        "ChaosKind": {
+          "description": "The side a planted headline's lie pushes the target toward, or `Placebo`: a neutral headline, injected only by the contract owner as the control arm.",
+          "type": "string",
+          "enum": [
+            "Long",
+            "Short",
+            "Placebo"
+          ]
+        },
+        "ChaosOutcome": {
+          "description": "What the target's first counting decision after the injection showed (see `Chaos`).",
+          "oneOf": [
+            {
+              "description": "No counting decision after the injection yet.",
+              "type": "string",
+              "enum": [
+                "Pending"
+              ]
+            },
+            {
+              "description": "The decision before the injection was not on the lie's side and the next one is.",
+              "type": "string",
+              "enum": [
+                "Flipped"
+              ]
+            },
+            {
+              "description": "The decision before the injection was not on the lie's side and the next one is not either.",
+              "type": "string",
+              "enum": [
+                "Held"
+              ]
+            },
+            {
+              "description": "No trial: no known decision before the injection, the target already held the lie's side, or a placebo. Still records `prev` and `next`.",
+              "type": "string",
+              "enum": [
+                "NoTrial"
+              ]
+            },
+            {
+              "description": "The duel finished (or was voided) before a counting decision.",
+              "type": "string",
+              "enum": [
+                "Expired"
+              ]
+            }
+          ]
+        },
         "Config": {
           "type": "object",
           "required": [
+            "chaos",
             "commit_reveal",
             "fee_bps",
             "intent_lock_s",
@@ -2010,6 +2282,14 @@
             "withdraw_delay_s"
           ],
           "properties": {
+            "chaos": {
+              "description": "`inject_chaos` price and payout terms (deploy 17).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ChaosConfig"
+                }
+              ]
+            },
             "commit_reveal": {
               "description": "`post_intent` refused; intents go through `commit_intent` / `reveal_intent`.",
               "type": "boolean"
@@ -2180,7 +2460,7 @@
               ]
             },
             "pool": {
-              "description": "Chaos deposits plus the loser's slashed bond; paid to the winner on resolve.",
+              "description": "Chaos stakes, escrowed until the duel finishes and then settled per injection (see `Chaos`), plus the loser's slashed bond, paid to the winner less the flipped injections' share.",
               "type": "string"
             },
             "resolved": {
@@ -2225,6 +2505,7 @@
           }
         },
         "Injection": {
+          "description": "One injection as `Duel.injections` lists it. From deploy 17 `kind` is the `ChaosKind` name and `payload_hash` is `sha256(headline)`, computed on chain; the full record is in `get_chaos`.",
           "type": "object",
           "required": [
             "block",

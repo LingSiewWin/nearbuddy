@@ -3,8 +3,9 @@
 import type { AgentView, Config, Duel } from "../../protocol/src/abi/arena.ts";
 import type { ArenaConfigAnyDeploy } from "../../protocol/src/chain.ts";
 
-/** `get_config` of a current arena (deploy 16). */
+/** `get_config` of a current arena (deploy 17). */
 export const config = (over: Partial<Config> = {}): Config => ({
+  chaos: { base: "0", cap: "0", fee_bps: 0, r_bps: 10_000, share_bps: 0 },
   commit_reveal: false,
   fee_bps: 0,
   intent_lock_s: 300,

@@ -31,6 +31,12 @@ class AgentView(TypedDict):
     tee: bool
 
 
+# How the runner must deliver the headline: `Cue` as written, `Clean` after the cue guard strips its credibility cues,
+# `Placebo` as written (a placebo carries no cues). The contract draws `Cue` or `Clean` from the block's random seed;
+# the injector does not choose.
+type Arm = Literal["Cue", "Clean", "Placebo"]
+
+
 class AssetOptionalPrice(TypedDict):
     asset_id: str
     price: OraclePrice | None
@@ -40,7 +46,74 @@ class AssetOptionalPrice(TypedDict):
 type Base64VecU8 = str
 
 
+# One planted headline (deploy 17). `Duel.injections[i]` and `get_chaos(duel)[i]` are the same injection.
+#
+# `prev` is the side of the target's last decision made at or before `at` (a decision's time is its commit time when
+# revealed, else its accept time), updated while the injection is pending. The first decision made after `at` that is
+# revealed from a commitment and carries a verified provider-TEE proof (kind 2) decides the outcome, once; direct posts
+# never decide, since their side is readable before they land.
+class Chaos(TypedDict):
+    arm: Arm
+    # Block time of the injection (ns).
+    at: str
+    claimed: bool
+    # Nonce of the revealed intent that decided the outcome.
+    decided_by: str | None
+    # UTF-8, 1..=280 bytes, no control or invisible format characters.
+    headline: str
+    # NEAR Account Identifier.
+    #
+    # This is a unique, syntactically valid, human-readable account identifier on the NEAR network.
+    #
+    # [See the crate-level docs for information about validation.](index.html#account-id-rules)
+    #
+    # Also see [Error kind precedence](AccountId#error-kind-precedence).
+    #
+    # ## Examples
+    #
+    # ``` use near_account_id::AccountId;
+    #
+    # let alice: AccountId = "alice.near".parse().unwrap();
+    #
+    # assert!("ƒelicia.near".parse::<AccountId>().is_err()); // (ƒ is not f) ```
+    injector: str
+    kind: ChaosKind
+    next: Side | None
+    outcome: ChaosOutcome
+    # Owed to `injector` once the duel finished: the stake back (no trial, expired, or flipped less the fee) plus, for a
+    # flip at the duel's loser, a share of its slash.
+    payout: str
+    prev: Side | None
+    # Escrowed in the duel pool until it finishes. 0 when the contract owner (placebo) or the owner of either agent
+    # paid: that deposit went to `owner_fees` at injection.
+    stake: str
+    target: Base64VecU8
+
+
+# Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs
+# a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At
+# finish `fee_bps` of a decided stake (flipped or held) goes to `owner_fees`, and `share_bps` of the loser's slash is
+# split pro rata by stake among the injections that flipped it.
+class ChaosConfig(TypedDict):
+    base: str
+    cap: str
+    fee_bps: int
+    r_bps: int
+    share_bps: int
+
+
+# The side a planted headline's lie pushes the target toward, or `Placebo`: a neutral headline, injected only by the
+# contract owner as the control arm.
+type ChaosKind = Literal["Long", "Short", "Placebo"]
+
+
+# What the target's first counting decision after the injection showed (see `Chaos`).
+type ChaosOutcome = Literal["Pending"] | Literal["Flipped"] | Literal["Held"] | Literal["NoTrial"] | Literal["Expired"]
+
+
 class Config(TypedDict):
+    # `inject_chaos` price and payout terms (deploy 17).
+    chaos: ChaosConfig
     # `post_intent` refused; intents go through `commit_intent` / `reveal_intent`.
     commit_reveal: bool
     fee_bps: int
@@ -110,7 +183,8 @@ class Duel(TypedDict):
     # Filled by the oracle callback: scored pnl per side and the slashed amount, so a page can show the outcome without
     # parsing logs.
     outcome: Outcome | None
-    # Chaos deposits plus the loser's slashed bond; paid to the winner on resolve.
+    # Chaos stakes, escrowed until the duel finishes and then settled per injection (see `Chaos`), plus the loser's
+    # slashed bond, paid to the winner less the flipped injections' share.
     pool: str
     resolved: bool
     # Oracle asset id, e.g. `wrap.near` (NEAR/USD).
@@ -131,6 +205,8 @@ class Fill(TypedDict):
     token: str
 
 
+# One injection as `Duel.injections` lists it. From deploy 17 `kind` is the `ChaosKind` name and `payload_hash` is
+# `sha256(headline)`, computed on chain; the full record is in `get_chaos`.
 class Injection(TypedDict):
     block: str
     kind: str
@@ -279,6 +355,14 @@ class BeginReconcileArgs(TypedDict):
     pass
 
 
+class ChaosFeeArgs(TypedDict):
+    duel_id: str
+
+
+class ClaimChaosArgs(TypedDict):
+    duel_id: str
+
+
 class CommitIntentArgs(TypedDict):
     duel_id: str
     agent_pk: Base64VecU8
@@ -325,6 +409,10 @@ class GetAccountedArgs(TypedDict):
 
 class GetAgentArgs(TypedDict):
     agent_pk: Base64VecU8
+
+
+class GetChaosArgs(TypedDict):
+    duel_id: str
 
 
 class GetConfigArgs(TypedDict):
@@ -516,8 +604,8 @@ class InitArgs(TypedDict):
 class InjectChaosArgs(TypedDict):
     duel_id: str
     target: Base64VecU8
-    kind: str
-    payload_hash: Base64VecU8
+    kind: ChaosKind
+    headline: str
 
 
 class IntentAcceptedAtArgs(TypedDict):
@@ -657,6 +745,10 @@ class RevealIntentArgs(TypedDict):
     tee: TeeProof | None
 
 
+class SetChaosConfigArgs(TypedDict):
+    chaos: ChaosConfig
+
+
 class SetCommitRevealArgs(TypedDict):
     enabled: bool
     no_reveal_bps: int
@@ -786,6 +878,11 @@ class ArenaView(Protocol):
     @overload
     def __call__(self, method: Literal["agent_duels"], args: AgentDuelsArgs) -> list[str]: ...
 
+    # The deposit the next paid `inject_chaos` in this duel needs (the price before storage).
+    # View: anyone, no deposit, no panics.
+    @overload
+    def __call__(self, method: Literal["chaos_fee"], args: ChaosFeeArgs) -> str: ...
+
     # The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig)`.
     # View: anyone, no deposit, no panics.
     @overload
@@ -816,6 +913,11 @@ class ArenaView(Protocol):
     # deposit, no panics.
     @overload
     def __call__(self, method: Literal["get_agent"], args: GetAgentArgs) -> AgentView | None: ...
+
+    # Every headline planted in a duel, in `Duel.injections` order, with its arm, outcome and
+    # payout; empty for an unknown duel or one with none. View: anyone, no deposit, no panics.
+    @overload
+    def __call__(self, method: Literal["get_chaos"], args: GetChaosArgs) -> list[Chaos]: ...
 
     # Owner, oracle and fee settings plus the next duel id. View: anyone, no deposit, no panics.
     @overload
@@ -926,14 +1028,23 @@ class ArenaCall(Protocol):
     @overload
     def __call__(self, method: Literal["begin_reconcile"], args: BeginReconcileArgs) -> None: ...
 
+    # Pay the caller everything its injections in a finished duel are owed (`Chaos.payout`), once.
+    # Caller: the injector. Deposit: 1 yoctoNEAR. Panics: "duel missing", "duel open",
+    # "nothing to claim".
+    # modifiers: payable
+    @overload
+    def __call__(self, method: Literal["claim_chaos"], args: ClaimChaosArgs) -> Any: ...
+
     # Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for
     # this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
     # signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
     # should be 32 random bytes: the intent space is small enough to brute-force without it.
+    # While a headline planted at this agent after its held commitment is pending, that
+    # commitment must be revealed before it is replaced.
     # Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     # "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
-    # "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
-    # "bond exhausted".
+    # "duel closed", "intent lock", "bad target", "commitment used", "reveal first",
+    # "agent missing", "bond exhausted".
     @overload
     def __call__(self, method: Literal["commit_intent"], args: CommitIntentArgs) -> None: ...
 
@@ -982,16 +1093,20 @@ class ArenaCall(Protocol):
     @overload
     def __call__(self, method: Literal["init"], args: InitArgs) -> None: ...
 
-    # Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver
-    # delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool;
-    # when the payer owns either agent it goes to `owner_fees` instead and the injection earns no
-    # shield, so an owner cannot buy shield or recycle chaos through its own pairing.
-    # Caller: anyone (spectator). Deposit: at least `min_chaos_deposit` and above the record's
-    # storage. Panics: "paused", "chaos deposit too small", "payload_hash length", "kind too long",
-    # "duel missing", "duel closed", "bad target", "chaos full".
+    # Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes
+    # toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with
+    # no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the
+    # stake, escrowed in the pool until the duel finishes. When the payer owns either agent the
+    # stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).
+    # The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the
+    # injection's index in `get_chaos(duel_id)`.
+    # Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the
+    # record's storage. Panics: "paused", "headline empty", "headline too long", "headline control
+    # character", "placebo is system-run", "duel missing", "chaos deposit too small", "duel
+    # closed", "bad target", "chaos full".
     # modifiers: payable
     @overload
-    def __call__(self, method: Literal["inject_chaos"], args: InjectChaosArgs) -> None: ...
+    def __call__(self, method: Literal["inject_chaos"], args: InjectChaosArgs) -> int: ...
 
     # Move the deploy-14 follower lists of agents `[cursor, cursor + limit)` (in `agents` order)
     # into per-pair records, emitting a `follow` event for each so an indexer can backfill.
@@ -1122,12 +1237,22 @@ class ArenaCall(Protocol):
     # Open a commitment: the intent and salt must hash to the stored commitment for
     # `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,
     # except that the reveal may land inside the intent lock (the decision was fixed when it was
-    # committed, before the lock) up to `close_at`. The commitment is deleted.
+    # committed, before the lock) up to `close_at`. The commitment is deleted. The decision counts
+    # as made at its commit time, which is what decides planted headlines (see `Chaos`).
     # Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     # "no commitment", "commitment mismatch", then as `post_intent` minus "intent lock" and
     # "commit first".
     @overload
     def __call__(self, method: Literal["reveal_intent"], args: RevealIntentArgs) -> None: ...
+
+    # `inject_chaos` terms (see `ChaosConfig`). The price applies to later injections; `fee_bps`
+    # and `share_bps` decide the payouts of stakes already escrowed, so they may not change while
+    # a duel is open. Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "chaos r out of
+    # range" (outside 10_000..=40_000), "chaos cap below base" (cap under base or
+    # `min_chaos_deposit`), "bps out of range" (fee over 1_000 or share over 10_000), "duels open".
+    # modifiers: payable
+    @overload
+    def __call__(self, method: Literal["set_chaos_config"], args: SetChaosConfigArgs) -> None: ...
 
     # Turn commit-reveal on or off and set the no-reveal slash. With it on, `post_intent` is
     # refused and intents go through `commit_intent` / `reveal_intent`. `enabled` may not change
@@ -1208,7 +1333,8 @@ class ArenaCall(Protocol):
     def __call__(self, method: Literal["unfollow"], args: UnfollowArgs) -> None: ...
 
     # Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both
-    # agents, split the pool between them, no slashing, no score. Recorded as a tie with no prices.
+    # agents, no slashing, no score. Recorded as a tie with no prices: the injections settle as on a
+    # tie (see `settle_records`) and what is left of the pool is split between the agents.
     # Caller: anyone. Deposit: none. Panics: "duel missing", "resolved", "too early",
     # "agent missing".
     @overload
