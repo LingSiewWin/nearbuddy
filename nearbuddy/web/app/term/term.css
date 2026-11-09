@@ -1,0 +1,232 @@
+/* The terminal screen. Every rule sits under .term: production merges client CSS into shared chunks, so an
+   unscoped rule here would restyle /arena and the record pages. Colours come from the tokens in globals.css. */
+.term {
+  --sel: color-mix(in srgb, var(--fg) 16%, transparent);
+  --edge: var(--dim);
+  position: relative;
+  padding-bottom: 5.5em;
+  line-height: 1.25; /* box characters touch from line to line */
+}
+.term .probe {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+}
+.term .sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.term h2 {
+  font: inherit;
+  margin: 0;
+}
+.term .ln {
+  white-space: pre;
+  display: flex;
+}
+.term .edge {
+  color: var(--edge);
+}
+.term .box.on .edge {
+  color: var(--hi);
+}
+.term .box:focus {
+  outline: none;
+}
+.term .row {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  white-space: pre;
+}
+.term button.row {
+  cursor: pointer;
+}
+.term button.row:hover,
+.term .ln.sel .row,
+.term .item.sel .ln:first-child .row {
+  background: var(--sel);
+}
+.term button:focus-visible,
+.term a:focus-visible,
+.term textarea:focus-visible,
+.term input:focus-visible {
+  outline: 2px solid var(--num);
+  outline-offset: -1px;
+}
+.term .flash {
+  animation: term-flash 1.4s ease-out;
+}
+@keyframes term-flash {
+  0%,
+  30% {
+    background: var(--warn);
+    color: var(--bg);
+  }
+  100% {
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term .flash {
+    animation: none;
+    text-decoration: underline wavy var(--warn);
+  }
+}
+.term .grid {
+  display: flex;
+  gap: 2ch;
+  margin: 1em 0;
+}
+.term .col {
+  display: flex;
+  flex-direction: column;
+  gap: 1em;
+}
+.term .bar,
+.term .status {
+  display: flex;
+  white-space: pre;
+  overflow: hidden;
+}
+.term .bar {
+  background: var(--fg);
+  color: var(--bg);
+}
+.term .bar .barbtn {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: pre;
+  text-decoration: underline;
+}
+.term .grow {
+  flex: 1;
+}
+.term .headline {
+  font: inherit;
+  color: var(--hi);
+  background: var(--sel);
+  border: 0;
+  padding: 0;
+  margin: 0;
+  resize: none;
+  line-height: inherit;
+  display: block;
+}
+.term .headline::placeholder {
+  color: var(--dim);
+}
+.term .foot {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg);
+  padding: 0 16px 6px;
+}
+.term .status .mode {
+  background: var(--num);
+  color: var(--bg);
+  font-weight: bold;
+}
+.term .cmd {
+  display: flex;
+  border-top: 1px solid var(--dim);
+}
+.term .cmd .colon {
+  color: var(--num);
+  font-weight: bold;
+  padding-right: 1ch;
+}
+.term .cmd input {
+  flex: 1;
+  font: inherit;
+  color: var(--hi);
+  background: none;
+  border: 0;
+  padding: 0;
+  outline: none;
+}
+.term .cmd input::placeholder {
+  color: var(--dim);
+}
+.term .palette {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dim);
+  border-bottom: 0;
+  max-height: 50vh;
+  overflow: auto;
+}
+.term .opt {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 1ch;
+  text-align: left;
+  white-space: pre;
+  cursor: pointer;
+}
+.term .opt:hover,
+.term .opt:focus-visible {
+  background: var(--sel);
+}
+.term .keys {
+  display: none;
+}
+.term .help {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 3em 16px;
+  overflow: auto;
+  z-index: 2;
+}
+.term .help .box {
+  background: var(--bg);
+}
+@media (max-width: 700px) {
+  .term {
+    padding-bottom: 8.5em;
+  }
+  .term .foot {
+    padding: 0 10px 4px;
+  }
+  .term .keys {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+    padding-top: 4px;
+  }
+  .term .keys button {
+    font: inherit;
+    color: var(--fg);
+    background: var(--sel);
+    border: 1px solid var(--dim);
+    padding: 0.6em 0;
+    min-height: 44px;
+  }
+  .term .keys button[aria-pressed="true"] {
+    color: var(--bg);
+    background: var(--fg);
+  }
+  .term .help {
+    padding: 1em 10px;
+  }
+}

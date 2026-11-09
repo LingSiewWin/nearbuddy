@@ -14,8 +14,7 @@ const nextConfig: NextConfig = {
   partialPrefetching: true,
   reactCompiler: true,
   env: { NEXT_PUBLIC_NEAR_NETWORK: network },
-  // the arena is the product; the clearinghouse dashboard stays reachable at /clearinghouse
-  redirects: async () => [{ source: "/", destination: "/arena", permanent: false }],
+  // "/" is the Fool-the-AI terminal; the full record stays at /arena, the clearinghouse dashboard at /clearinghouse
 };
 
 export default nextConfig;
