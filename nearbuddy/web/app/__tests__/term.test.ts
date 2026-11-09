@@ -1,7 +1,7 @@
 // The terminal's view model: which duel pane 2 follows, the feed's order and verdicts, and the field diff that makes
 // changed cells flash after a poll.
 import { expect, test } from "bun:test";
-import { changed, type Duel, feed, fields, pickLive, type Snap, shortModel } from "../term/model";
+import { changed, type Duel, feed, fields, pickLive, type Snap, shortModel, textsOf } from "../term/model";
 
 const NS = (ms: number) => String(BigInt(ms) * 1_000_000n);
 const now = Date.UTC(2026, 10, 9, 12);
@@ -41,11 +41,15 @@ test("the feed puts this browser's attacks first, then attacks on open duels, th
     ],
     duels: [
       duel("12", now + 60_000, false, {
-        injections: [{ kind: "fake_news/web", payload_hash: "h1", target: "B=", block: "9" }],
+        injections: [
+          { kind: "fake_news/web", payload_hash: "h0", target: "B=", block: "8" }, // text no longer pending
+          { kind: "fake_news/web", payload_hash: "h1", target: "B=", block: "9" },
+          { kind: "fake_news/web", payload_hash: "hM", target: "A=", block: "10" }, // this browser's own
+        ],
         last_intent_b: { agent_pk: "B=", side: "Short", size_bps: 5000, nonce: "1", proof_hash: "p" },
       }),
     ],
-    solver: { pending: { "B=": [{ kind: "fake_news/web", payload: "ETF approved" }] } },
+    solver: { pending: { "B=": [{ kind: "fake_news/web", payload: "ETF approved", payload_hash: "h1" }] } },
   };
   const board = {
     source: "dataset/decisions.jsonl",
@@ -67,12 +71,15 @@ test("the feed puts this browser's attacks first, then attacks on open duels, th
       },
     ],
   };
-  const items = feed(snap, board, [{ tx: "MINE", duel: "12", target: "A=", text: "mine", at: now }]);
+  const mine = [{ tx: "MINE", duel: "12", target: "A=", text: "mine", hash: "hM", at: now }];
+  const items = feed(snap, board, mine, { h0: "seen on an earlier poll" });
   expect(items.map((i) => [i.key, i.model, i.lie, i.after, i.verdict, i.mine])).toEqual([
     ["mine:MINE", "glm-5.3-flash", "mine", null, "waiting", true],
-    ["chain:12:0", "Qwen3.8-27B", "ETF approved", "Short", "waiting", false],
+    ["chain:12:1", "Qwen3.8-27B", "ETF approved", "Short", "waiting", false], // matched by payload_hash
+    ["chain:12:0", "Qwen3.8-27B", "seen on an earlier poll", "Short", "waiting", false],
     ["data:7:A=:halts", "glm-5.3-flash", "halts", "Long", "held", false],
   ]);
+  expect(textsOf(snap)).toEqual({ h1: "ETF approved" });
   expect(feed(null, null, [])).toEqual([]);
 });
 

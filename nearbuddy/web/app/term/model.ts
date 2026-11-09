@@ -34,14 +34,23 @@ export type Snap = {
   config: { next_duel: string; min_chaos_deposit: string; commit_reveal?: boolean };
   leaderboard: Agent[];
   duels: (Duel | null)[];
-  solver: null | { pending?: Record<string, { kind: string; payload: string }[]> };
+  solver: null | { pending?: Record<string, { kind: string; payload: string; payload_hash?: string }[]> };
 };
 /** GET /api/board. */
 export type Board = { source: string; rows: number; models: Score[]; recent: Attack[] };
 /** GET /api/duel, normalised to what pane 2 needs. */
 export type DuelRec = { duel: Duel | null; a: Agent | null; b: Agent | null };
 /** An attack this browser signed, kept for the session. */
-export type Mine = { tx: string; duel: string; target: string; text: string; at: number };
+export type Mine = { tx: string; duel: string; target: string; text: string; hash: string; at: number };
+
+/** Headlines by payload_hash from the solver's pending list. The solver drops an injection from it once the runner has
+ *  read it, so the page keeps every text it has seen (see Term) instead of losing it the moment the model sees it. */
+export const textsOf = (s: Snap | null): Record<string, string> =>
+  Object.fromEntries(
+    Object.values(s?.solver?.pending ?? {}).flatMap((l) =>
+      l.flatMap((p) => (p.payload_hash ? [[p.payload_hash, p.payload]] : [])),
+    ),
+  );
 
 const nsToMs = (ns: string) => Number(BigInt(ns) / 1_000_000n);
 /** "z-ai/glm-5.3-flash" -> "glm-5.3-flash". */
@@ -71,8 +80,10 @@ export type FeedItem = {
   mine: boolean;
 };
 
-/** Newest first: this browser's own attacks, then attacks on open duels (on chain now), then the dataset's. */
-export function feed(s: Snap | null, b: Board | null, mine: Mine[]): FeedItem[] {
+/** Newest first: this browser's own attacks, then the other attacks on open duels (on chain now), then the dataset's.
+ *  `texts` maps payload_hash to headline for attacks whose text this page has seen. */
+export function feed(s: Snap | null, b: Board | null, mine: Mine[], texts: Record<string, string> = {}): FeedItem[] {
+  const ownHashes = new Set(mine.map((m) => `${m.duel}:${m.hash}`));
   const model = (pk: string) => {
     const id = s?.leaderboard.find((a) => a.pk === pk)?.model_id;
     return id ? shortModel(id) : pk.slice(0, 8);
@@ -85,7 +96,7 @@ export function feed(s: Snap | null, b: Board | null, mine: Mine[]): FeedItem[] 
     duel: m.duel,
     model: model(m.target),
     lie: m.text,
-    hash: null,
+    hash: m.hash,
     pushed: null,
     after: call(
       duels.find((d) => d.id === m.duel),
@@ -99,19 +110,25 @@ export function feed(s: Snap | null, b: Board | null, mine: Mine[]): FeedItem[] 
   const live: FeedItem[] = duels
     .filter((d) => !d.resolved)
     .flatMap((d) =>
-      d.injections.map((j, i) => ({
-        key: `chain:${d.id}:${i}`,
-        duel: d.id,
-        model: model(j.target),
-        lie: s?.solver?.pending?.[j.target]?.[0]?.payload ?? null,
-        hash: j.payload_hash,
-        pushed: null,
-        after: call(d, j.target),
-        reply: null,
-        verdict: "waiting" as const,
-        tx: null,
-        mine: false,
-      })),
+      d.injections.flatMap((j, i) =>
+        ownHashes.has(`${d.id}:${j.payload_hash}`)
+          ? [] // already listed as this browser's own
+          : [
+              {
+                key: `chain:${d.id}:${i}`,
+                duel: d.id,
+                model: model(j.target),
+                lie: texts[j.payload_hash] ?? textsOf(s)[j.payload_hash] ?? null,
+                hash: j.payload_hash,
+                pushed: null,
+                after: call(d, j.target),
+                reply: null,
+                verdict: "waiting" as const,
+                tx: null,
+                mine: false,
+              },
+            ],
+      ),
     )
     .reverse();
   const past: FeedItem[] = (b?.recent ?? []).map((a) => ({

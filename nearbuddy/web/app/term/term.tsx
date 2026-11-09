@@ -23,6 +23,7 @@ import {
   pickLive,
   type Snap,
   shortModel,
+  textsOf,
 } from "./model";
 
 type Pane = 1 | 2 | 3 | 4;
@@ -96,6 +97,7 @@ export default function Term() {
   const [busy, setBusy] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [mine, setMine] = useState<Mine[]>([]);
+  const [texts, setTexts] = useState<Record<string, string>>({});
   const [share, setShare] = useState<string | null>(null);
   const [flash, setFlash] = useState<ReadonlyMap<string, number>>(new Map());
   const [mode, setMode] = useState<"NORMAL" | "COMMAND" | "INSERT">("NORMAL");
@@ -112,6 +114,7 @@ export default function Term() {
         .then((j) => {
           if (!alive) return;
           setSnap(j);
+          setTexts((t) => ({ ...t, ...textsOf(j) })); // keep a headline after the solver stops listing it
           setSnapErr(null);
         })
         .catch((e) => alive && setSnapErr(e instanceof Error ? e.message : String(e)));
@@ -175,7 +178,7 @@ export default function Term() {
   const closeMs = duel ? Number(BigInt(duel.close_at) / 1_000_000n) : 0;
   const open = !!duel && !duel.resolved && closeMs > now;
   const left = duel && open ? countdown(duel.close_at, now) : null;
-  const items = feed(snap, board, mine);
+  const items = feed(snap, board, mine, texts);
   const models = board?.models ?? [];
   const solverDown = offline || snap?.solver === null;
   const price = snap
@@ -255,7 +258,17 @@ export default function Term() {
     setBusy(`sign in your wallet: ${near(call.deposit)} NEAR to ${call.receiverId}`);
     try {
       const tx = await wallet.send(call);
-      setMine((m) => [...m, { tx, duel: id, target: side === "A" ? d.a : d.b, text: headline, at: Date.now() }]);
+      setMine((m) => [
+        ...m,
+        {
+          tx,
+          duel: id,
+          target: side === "A" ? d.a : d.b,
+          text: headline,
+          hash: String(call.args.payload_hash),
+          at: Date.now(),
+        },
+      ]);
       setShare(`${location.origin}/i/${tx}?t=${encodeURIComponent(headline)}`);
       setText("");
       say(`planted in duel #${id}, side ${side}: tx ${short(tx, 10)} · type copy for the share link`, "ok");

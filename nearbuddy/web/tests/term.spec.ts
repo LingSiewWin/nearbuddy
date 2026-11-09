@@ -44,7 +44,7 @@ const arena = (sideB: "Long" | "Short", solver: boolean) => ({
   duels: [duel(sideB)],
   stats: { scanned: 40, verified_decisions: 70, attacks: 9 },
   followers: {},
-  solver: solver ? { intents: [], pending: { [PK_B]: [{ kind: "fake_news/web", payload: "ETF approved at dawn" }] }, fills: [] } : null,
+  solver: solver ? { intents: [], pending: { [PK_B]: [{ kind: "fake_news/web", payload: "ETF approved at dawn", payload_hash: PROOF }] }, fills: [] } : null,
 });
 const board = {
   source: "dataset/decisions.jsonl",
