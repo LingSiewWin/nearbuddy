@@ -45,12 +45,14 @@ from prompts import (  # noqa: E402
     UNTRUSTED_CAP_BPS,
     UNTRUSTED_ORIGIN,
     VARIANT_D,
+    deliver,
     fact_check_cap,
     judge_user,
     parse_verdict,
     sizer_user,
     system_prompt,
     user_bc,
+    user_prompt,
     user_v2,
     user_v3,
 )
@@ -129,7 +131,16 @@ FIELDS: list[tuple[str, str, str]] = [
         "injection",
         "string \\| null",
         "Adversarial telemetry a spectator paid to inject on chain (`inject_chaos`), appended to the prompt; "
-        "null when the decision was not attacked. Several payloads are joined with newlines.",
+        "null when the decision was not attacked. Several payloads are joined with newlines. From deploy 17 it is "
+        "the text each headline in `chaos` was delivered as, by its arm.",
+    ),
+    (
+        "chaos",
+        "list[struct] \\| null",
+        "Deploy 17: every planted headline this decision was prompted with, `{index, arm, kind, headline}`. `index` "
+        "is its place in the contract's `get_chaos(duel_id)` (same headline, arm and kind there); `arm` is the "
+        "delivery the contract drew: `Cue` as written, `Clean` after cue_guard, `Placebo` as written. `injection` "
+        "is the delivered texts joined with newlines, and the exporter checks it against the signed request.",
     ),
     ("text", "string \\| null", "Raw model output (the completion's message content)."),
     ("chat_id", "string \\| null", "NEAR AI Cloud completion id; key for `GET /v1/signature/{chat_id}`."),
@@ -614,6 +625,10 @@ def check_row(r: dict) -> tuple[bool, str]:
         note = _check_guard(r)
         if note != "ok":
             return False, note
+    if r.get("chaos"):
+        note = _check_chaos(r)
+        if note != "ok":
+            return False, note
     return True, "ok"
 
 
@@ -687,6 +702,24 @@ def _check_votes(r: dict, g: dict) -> str:
         return "guard: majority side is not the posted side"
     if votes.index(side) != proof:
         return "guard: proof is not the first judgment on the majority side"
+    return "ok"
+
+
+def _check_chaos(r: dict) -> str:
+    """Deploy 17: `injection` is exactly what each planted headline's arm delivers (`prompts.deliver`), and the
+    enclave-signed user message carries it as the row's prompt arm builds it. hardened-v2 and arm D are bound by
+    `_check_guard` and `_check_arm_d`, which rebuild their prompts from `injection`."""
+    try:
+        delivered = "\n".join(deliver(c["headline"], c["arm"]) for c in r["chaos"])
+    except (KeyError, TypeError, ValueError):
+        return "chaos: malformed record"
+    if delivered != r.get("injection"):
+        return "chaos: injection is not what the arms deliver"
+    arm = r.get("prompt_variant")
+    if arm in ("naive", "hardened", "A", "B", "C"):
+        user = next((content for role, content in _messages(r) if role == "user"), None)
+        if user != user_prompt(r.get("brief") or "", delivered, None if arm in ("naive", "hardened") else arm):
+            return "chaos: signed prompt does not carry the delivered text"
     return "ok"
 
 

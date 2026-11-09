@@ -30,13 +30,21 @@ Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this 
 
 Commit-reveal (`--commit-reveal`, or on by itself when get_config says `commit_reveal: true`): each cycle an agent
 commits its call (POST /commit: sha256(intent bytes || salt) signed over commit_message) when the side or size
-changed; the contract keeps one commitment per agent per duel, so a new commit replaces the held one and nothing is
-revealed during the duel. The one commitment left is revealed (POST /reveal: intent, salt, tee; followers are
-quoted then) once the chain clock is inside the intent lock, where nobody can commit a counter-call, and before
-close_at. Ctrl-C and SIGTERM reveal at once, since an unrevealed commitment is slashed. Rows gain
-`commitment`, `committed_tx`, `revealed_tx`. `--consent` (two-sided runs only) has both agents sign the duel terms
-so the solver opens it with open_duel_consented; a self-hosted `--only` runner holds one key, so it gets
-commit-reveal but never consent.
+changed; the contract keeps one commitment per agent per duel, so a new commit replaces the held one. The one
+commitment left is revealed (POST /reveal: intent, salt, tee; followers are quoted then) once the chain clock is
+inside the intent lock, where nobody can commit a counter-call, and before close_at. Ctrl-C and SIGTERM reveal at
+once, since an unrevealed commitment is slashed. Rows gain `commitment`, `committed_tx`, `revealed_tx`. `--consent`
+(two-sided runs only) has both agents sign the duel terms so the solver opens it with open_duel_consented; a
+self-hosted `--only` runner holds one key, so it gets commit-reveal but never consent.
+
+Injections come from GET /arena `pending`. Deploy 16.1: the text the solver holds for each on-chain hash, delivered
+once as written and then consumed (POST /consume). Deploy 17 (chaos v2; the solver switches on get_config.chaos and
+each entry then carries the contract's `arm`): the headlines still `Pending` on chain (get_chaos); every decision of
+their target delivers each by its arm (`prompts.deliver`: `Cue` as written, `Clean` after cue_guard), until a revealed
+TEE decision committed after the headline decides it. Rows carry `chaos` (index, arm, kind, headline of every headline
+delivered). A headline planted after the held commitment is that call's "before": the held commitment is revealed
+first (the contract refuses to replace it, "reveal first"), then the agent decides with the headline and always
+commits, so the call that saw it is the one revealed next.
 
 Second pair (`--pair-tag p2`, scripts/second-loop.sh): the same seeds derive a distinct key set per tag
 (keys.key_tag), so two loops with other NEAR_AI_MODEL_A/B never share an agent; every row carries `pair_tag`
@@ -90,7 +98,7 @@ from intent_client import (
 from keys import agent_key, key_tag, pk_b64, register_sig
 from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
-from prompts import HARDENED_V3, JUDGE_MODEL, PROFILES, VARIANTS, pick_variant
+from prompts import HARDENED_V3, JUDGE_MODEL, PROFILES, VARIANTS, deliver, pick_variant
 
 
 class Tracked:
@@ -214,12 +222,17 @@ def prepare_decision(
     model: ModelClient,
     attestations: dict[str, str | None],
 ) -> Prepared | None:
-    """Prompt the model with the brief and any pending injection and re-encode the enclave signature as the
-    `TeeProof`. Returns (intent with this `nonce`, tee, injections used, dataset row), or None when there is no
-    decision or no proof (that row is already recorded)."""
+    """Prompt the model with the brief and every headline still pending at this agent, each delivered by its arm, and
+    re-encode the enclave signature as the `TeeProof`. Returns (intent with this `nonce`, tee, headlines delivered,
+    dataset row), or None when there is no decision or no proof (that row is already recorded)."""
     pk = pk_b64(sk)
     inj = [i for i in pending.get(pk, []) if i["duel_id"] == duel_id]
-    injection_text = "\n".join(i["payload"] for i in inj) or None
+    # deploy 17 entries carry the arm the contract drew; a 16.1 payload goes out as the solver stored it
+    injection_text = "\n".join(deliver(i["payload"], i["arm"]) if "arm" in i else i["payload"] for i in inj) or None
+    # what a verifier needs to recompute the delivered text from chain: get_chaos(duel)[index] has the same headline
+    chaos = [
+        {"index": i["index"], "arm": i["arm"], "kind": i["kind"], "headline": i["payload"]} for i in inj if "arm" in i
+    ] or None
     comp.calls.clear()
     judge = d.judge if isinstance(d.judge, Tracked) else None
     if judge:
@@ -238,6 +251,7 @@ def prepare_decision(
                 "profile": d.profile,
                 "error": str(e),
                 "injection": injection_text,
+                "chaos": chaos,
                 "brief": brief(symbol, px, open_px),
                 "text": failed.text,
                 "chat_id": failed.chat_id,
@@ -262,6 +276,7 @@ def prepare_decision(
                 "profile": d.profile,
                 "error": f"transient: model {str(e)[:200]}",
                 "injection": injection_text,
+                "chaos": chaos,
                 "brief": brief(symbol, px, open_px),
             }
         )
@@ -278,6 +293,7 @@ def prepare_decision(
                 "profile": d.profile,
                 "error": f"model body not UTF-8: {str(e)[:200]}",
                 "injection": injection_text,
+                "chaos": chaos,
                 "brief": brief(symbol, px, open_px),
             }
         )
@@ -368,6 +384,7 @@ def prepare_decision(
         "profile": d.profile,
         "brief": brief(symbol, px, open_px),
         "injection": injection_text,
+        "chaos": chaos,
         **_call_record(c, sig_record, tee),
         "attestation_file": attestations.get(model.model_id),
         "intent": intent,
@@ -492,14 +509,21 @@ def post_decision(
         record({**row, "tx": None, "error": late})
         print(f"  late intent for {pk[:8]} not posted ({late})")
         return nonce, "closed"
-    if inj:
-        solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
+    consume(solver, pk, duel_id, inj)
     record({**row, "tx": posted["tx"], "quotes": _quotes(posted)})
     print(
         f"  {label} {intent['side']} nonce {nonce} tee={'kind ' + str(tee['kind']) if tee else 'none'} "
         f"tx {posted['tx']} quotes {len(posted.get('quotes', []))}"
     )
     return nonce, "posted"
+
+
+def consume(solver: Solver, pk: str, duel_id: str, inj: list[dict[str, Any]]) -> None:
+    """Deploy 16.1: the model has seen these payloads, so the solver stops listing them. A deploy-17 headline is never
+    consumed: it stays pending on chain until a revealed TEE decision decides it."""
+    blocks = [i["block"] for i in inj if "arm" not in i]
+    if blocks:
+        solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": blocks})
 
 
 @dataclass
@@ -512,6 +536,8 @@ class Commitment:
     tee: dict[str, Any] | None
     row: dict[str, Any]
     deadline_ns: int | None = None  # close_at minus REVEAL_MARGIN_S: no solver wait for this reveal runs past it
+    saw: frozenset[int] = frozenset()  # get_chaos indices of the headlines this call was decided with
+    at: int | None = None  # chain time of the commit (ns), from the solver; None while unknown
 
 
 S_NS = 1_000_000_000
@@ -547,32 +573,47 @@ def commit_decision(
     attestations: dict[str, str | None],
 ) -> tuple[int, str]:
     """Commit-reveal, step 1: decide as `post_decision` does, then post only sha256(intent bytes || salt), signed by
-    the agent over `commit_message`. Nothing is revealed here: the contract stores one commitment per agent per duel
-    and a new commit replaces it, so only the last one is ever opened (`reveal_held`, inside the intent lock).
+    the agent over `commit_message`. The contract stores one commitment per agent per duel and a new commit replaces
+    it, so only the last one is opened (`reveal_held`, inside the intent lock), unless a headline planted after it
+    makes it the headline's `prev` (below).
 
     `held[label]` lists the commitments that may be the one on chain, oldest first. A call with the same side and
     size as a confirmed held commitment is not committed again (its row says `kept_commitment`): replacing it would
     only spend bond storage. A new commitment joins the list before the POST; a confirmed commit leaves it alone in
     the list (the older ones are replaced on chain, their rows say `replaced_by`), a verifiable refusal takes it out,
     and a commit that may have landed (timeout, dropped RPC wait) keeps both, so the final reveal can try each.
+
+    Deploy 16.1 payloads are delivered once and consumed with the call, kept or committed. Planted headlines (deploy
+    17): a pending headline the held call was not decided with is new. When one was planted at or after the held
+    commit (or the commit time is unknown), the held call is that headline's `prev`: it is revealed now, before the
+    model is asked, since the contract refuses to replace it ("reveal first"). An enclave agent's reveal decides every
+    headline the held call saw, so only the new ones are delivered then. With a new headline the call is always
+    committed, never kept: the call that saw the headline must be the one revealed next. The pending list is read
+    again right before a commit that replaces a held call, so a headline that landed while the model decided gets its
+    `prev` revealed too (a replaced prev voids the trial); a contract that still refuses ("reveal first") gets the
+    same reveal, then this commit again.
     Returns (nonce, status): "committed", "kept", "skipped" or "closed" (inside the intent lock)."""
+    pk = pk_b64(sk)
+    mine = [i for i in pending.get(pk, []) if i["duel_id"] == duel_id]
+    held_top = held[label][-1] if held.get(label) else None
+    new = [i for i in mine if "arm" in i and (held_top is None or i["index"] not in held_top.saw)]
+    if held_top is not None and new and (held_top.at is None or any(int(i["at"]) >= held_top.at for i in new)):
+        print(f"  {label} reveals its held call first: headline {[i['index'] for i in new]} planted after it")
+        if reveal_now(solver, held, label) and model.tee:
+            mine = new  # the reveal decided every headline the held call saw
     prep = prepare_decision(
-        duel_id, symbol, px, open_px, close_at_ns, pending, nonce + 1, d, sk, comp, model, attestations
+        duel_id, symbol, px, open_px, close_at_ns, {pk: mine}, nonce + 1, d, sk, comp, model, attestations
     )
     if prep is None:
         return nonce, "skipped"
     nonce += 1
     intent, tee, inj, row = prep
-    pk = intent["agent_pk"]
     cands = held.setdefault(label, [])
-
-    def consume() -> None:
-        if inj:  # the model has seen the injection; it is consumed with the call, like a posted intent
-            solver.post("/consume", {"target": pk, "duel_id": duel_id, "blocks": [i["block"] for i in inj]})
 
     top = cands[-1] if cands else None
     if (
-        top is not None
+        not new
+        and top is not None
         and top.row.get("committed_tx")
         and (top.signed["intent"]["side"], top.signed["intent"]["size_bps"]) == (intent["side"], intent["size_bps"])
     ):
@@ -586,7 +627,7 @@ def commit_decision(
                 "kept_commitment": top.row["commitment"],
             }
         )
-        consume()
+        consume(solver, pk, duel_id, inj)
         print(f"  {label} keeps its commitment (same {intent['side']} {intent['size_bps']} bps), nonce {nonce} unused")
         return nonce, "kept"
     salt = secrets.token_bytes(32)
@@ -598,19 +639,44 @@ def commit_decision(
         tee,
         {**row, "commitment": base64.b64encode(c).decode()},
         close_at_ns - REVEAL_MARGIN_S * 1_000_000_000,
+        frozenset(i["index"] for i in inj if "arm" in i),
     )
     p.row["committed_tx"] = None  # unknown until the solver answers
     cands.append(p)
+    body = {
+        "duel_id": duel_id,
+        "agent_pk": pk,
+        "commitment": p.row["commitment"],
+        "sig": sign_b64(sk, commit_message(ARENA, duel_id, c)),
+    }
+
+    def reveal_older() -> bool:
+        """Reveal the held commitment(s) under `p`, keeping `p` as the next candidate."""
+        nonlocal cands
+        held[label] = cands[:-1]
+        revealed = reveal_now(solver, held, label)
+        cands = held.setdefault(label, [])
+        cands.append(p)
+        return revealed
+
+    # the model call takes seconds: a headline planted at or after the held commit meanwhile needs that call revealed
+    # as its `prev` before this one replaces it (a replaced prev voids the trial). ponytail: GET /arena is memoised for
+    # 3 s and trails the chain, so a headline landing in the last seconds before the commit can still be missed.
+    if len(cands) > 1 and _planted_after(solver, pk, duel_id, cands[-2], p.saw):
+        print(f"  {label} headline planted while deciding: revealing the held call first")
+        reveal_older()
     try:
-        committed = solver.post(
-            "/commit",
-            {
-                "duel_id": duel_id,
-                "agent_pk": pk,
-                "commitment": p.row["commitment"],
-                "sig": sign_b64(sk, commit_message(ARENA, duel_id, c)),
-            },
-        )
+        try:
+            committed = solver.post("/commit", body)
+        except RuntimeError as e:
+            if "reveal first" not in str(e) or len(cands) < 2:
+                raise
+            # a headline landed at or after the held commit after the last read of the pending list: reveal the held
+            # call (the headline's `prev`), then commit this one; the next cycle sees the headline as new
+            print(f"  {label} commit refused (reveal first): revealing the held call, then committing again")
+            if not reveal_older():
+                raise
+            committed = solver.post("/commit", body)
     except RuntimeError as e:
         if not _refused(e):
             raise  # may have landed: stays a candidate next to the older one, the final reveal settles it
@@ -622,12 +688,26 @@ def commit_decision(
         print(f"  late commitment for {pk[:8]} not posted ({late}); the held one is revealed inside the lock")
         return nonce, "closed"
     p.row["committed_tx"] = committed["tx"]
+    p.at = int(committed["at"]) if committed.get("at") else None
     for old in cands[:-1]:  # replaced on chain by this commit: never revealed, recorded as replaced
         record({**old.row, "revealed_tx": None, "tx": None, "replaced_by": committed["tx"]})
     cands[:] = [p]
-    consume()
+    consume(solver, pk, duel_id, inj)
     print(f"  {label} committed nonce {nonce} tx {committed['tx']}")
     return nonce, "committed"
+
+
+def _planted_after(solver: Solver, pk: str, duel_id: str, top: Commitment, saw: frozenset[int]) -> bool:
+    """A deploy-17 headline pending at `pk` that the new call did not see, planted at or after the held commitment
+    `top` (or `top`'s commit time is unknown). False when the pending list cannot be read."""
+    try:
+        fresh = solver.get("/arena")["pending"].get(pk, [])
+    except (requests.RequestException, RuntimeError, KeyError):
+        return False
+    return any(
+        "arm" in i and i["duel_id"] == duel_id and i["index"] not in saw and (top.at is None or int(i["at"]) >= top.at)
+        for i in fresh
+    )
 
 
 def reveal(solver: Solver, p: Commitment) -> str:
@@ -656,7 +736,17 @@ def reveal(solver: Solver, p: Commitment) -> str:
 NOT_ON_CHAIN = ("commitment mismatch", "no commitment")
 
 
-def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> None:
+def reveal_now(solver: Solver, held: dict[str, list[Commitment]], label: str) -> bool:
+    """Reveal `label`'s held commitment during the duel (a headline was planted after it). True when it was revealed;
+    False puts the candidates back in `held`, so the next commit's "reveal first" or the final reveal tries again."""
+    cands = held.pop(label, [])
+    if reveal_held(solver, {label: cands}):
+        held[label] = cands
+        return False
+    return True
+
+
+def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> list[str]:
     """Reveal the commitment each agent has on chain (an unrevealed one is slashed), all agents at once: each /reveal
     waits for its follower quotes, so in a row the last agent could miss the window while the first one waits out a
     solver restart. Per agent the candidates go newest first; one the contract does not hold ("commitment mismatch",
@@ -665,10 +755,10 @@ def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> None:
     safe (the contract refuses it unless it is the stored one), while stopping could forfeit the duel when the newest
     commit never landed. One failure, transport errors included, must not strand another agent. A reveal whose
     deadline (close_at minus REVEAL_MARGIN_S) passes is reported loudly: that commitment forfeits the duel and pays
-    no_reveal_bps."""
+    no_reveal_bps. Returns the labels none of whose candidates was revealed (or refused as late)."""
     batch = [(label, held.pop(label)) for label in list(held)]
 
-    def one(label: str, cands: list[Commitment]) -> None:
+    def one(label: str, cands: list[Commitment]) -> bool:
         for i, p in enumerate(reversed(cands)):
             try:
                 reveal(solver, p)
@@ -688,16 +778,15 @@ def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> None:
             # revealed, or refused as late: an older candidate was replaced by this one if it landed
             for older in list(reversed(cands))[i + 1 :]:
                 record({**older.row, "revealed_tx": None, "tx": None, "replaced_by": p.row.get("committed_tx")})
-            return
+            return True
+        return False
 
     batch = [(label, cands) for label, cands in batch if cands]
     if len(batch) <= 1:
-        for label, cands in batch:
-            one(label, cands)
-        return
+        return [label for label, cands in batch if not one(label, cands)]
     with ThreadPoolExecutor(max_workers=len(batch)) as pool:
-        for f in [pool.submit(one, label, cands) for label, cands in batch]:
-            f.result()
+        futures = [(label, pool.submit(one, label, cands)) for label, cands in batch]
+        return [label for label, f in futures if not f.result()]
 
 
 Player = tuple[str, Duelist, SigningKey, Tracked, ModelClient]
@@ -775,7 +864,8 @@ def play_duel(
 ) -> int:
     """Every `cycle_seconds` until `stop_ns` (the intent lock plus a margin for model, signature and chain) each
     player decides once. Plain mode posts the intent. Commit-reveal mode commits the call when it changed
-    (`commit_decision`; a new commit replaces the held one on chain) and reveals nothing during the duel: the one
+    (`commit_decision`; a new commit replaces the held one on chain) and reveals nothing during the duel except a held
+    call a newer planted headline needs as its `prev`: the one
     commitment per player left at the end is the scored call, revealed only once the chain clock is inside the
     contract's intent lock (`close_at - lock_s`, see `hold_until_lock`), where nobody can commit a counter-call, and
     before close_at. A commit refused inside the lock ends the duel for that player with its held commitment still
