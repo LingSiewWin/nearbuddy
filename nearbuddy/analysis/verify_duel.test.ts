@@ -548,6 +548,52 @@ test("a deploy-16 duel whose close state is unreadable is not judged by today's 
   assert.deepEqual(result(checkDuel(recordsOnly), "chaos records"), ["PASS"]);
 });
 
+test("owner fees: a mismatch fails, unless another arena receipt ran in the closing block (then INFO)", () => {
+  const off = () => {
+    const e = asDeploy17(load("401")); // fees > 0: every stake pays fee_bps
+    e.after!.config.owner_fees = String(BigInt(e.after!.config.owner_fees) + 1n);
+    return e;
+  };
+  assert.deepEqual(fails(checkDuel(off())), ["payout"]);
+  assert.deepEqual(result(checkDuel(off()), "owner fees"), []);
+  const e = off();
+  const close = receipts(e, "oracle_on_call").find((r) => args(r).msg === `close:${e.duel_id}`)!;
+  e.txs.push({
+    transaction: { hash: "another-duel-finish" },
+    receipts: [
+      {
+        receipt: {
+          predecessor_id: "relayer.testnet",
+          receiver_id: e.arena,
+          receipt: {
+            Action: {
+              signer_id: "relayer.testnet",
+              actions: [
+                {
+                  FunctionCall: {
+                    method_name: "claim_owner_fees",
+                    args: Buffer.from("{}").toString("base64"),
+                    deposit: "0",
+                  },
+                },
+              ],
+            },
+          },
+        },
+        execution_outcome: { ...close.execution_outcome, outcome: { logs: [], status: { SuccessValue: "" } } },
+      },
+    ],
+  });
+  const lines = checkDuel(e);
+  assert.deepEqual(fails(lines), []);
+  assert.deepEqual(result(lines, "payout"), ["PASS"]);
+  assert.deepEqual(result(lines, "owner fees"), ["INFO"]);
+  assert.ok(lines.find((l) => l.check === "owner fees")!.detail.includes("1 other arena receipts"));
+  // the bonds are still judged: a bond one yocto off fails whatever else ran in the block
+  e.after!.a!.bond = String(BigInt(e.after!.a!.bond) + 1n);
+  assert.deepEqual(fails(checkDuel(e)), ["payout"]);
+});
+
 test("deploy 17 arithmetic: the contract's own settlement tests, restated", () => {
   const terms = { fee_bps: 500, share_bps: 5_000 };
   const pks: [string, string] = ["A", "B"];

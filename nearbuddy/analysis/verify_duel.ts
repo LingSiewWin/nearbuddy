@@ -573,7 +573,23 @@ export function checkDuel(e: Evidence): Line[] {
     const bonds: [bigint, bigint] = [BigInt(b.a.bond), BigInt(b.b.bond)];
     const pool = BigInt(b.duel.pool);
     const got: [bigint, bigint] = [BigInt(a.a.bond), BigInt(a.b.bond)];
-    const feesOk = (fees: bigint) => !fees || BigInt(a.config.owner_fees) - BigInt(b.config.owner_fees) === fees;
+    // owner_fees is global: another arena receipt in the closing block (a second duel's finish, a fee claim, a
+    // placebo) moves it too, so a mismatch there is not this duel's to judge
+    const fin = calls.closing;
+    const others = fin
+      ? arenaCalls(e.txs, e.arena).filter((c) => c.ok && c.block_hash === fin.block_hash).length - 1
+      : 0;
+    const feesOk = (fees: bigint) => {
+      const gain = BigInt(a.config.owner_fees) - BigInt(b.config.owner_fees);
+      if (!fees || gain === fees) return true;
+      if (others <= 0) return false;
+      add(
+        "INFO",
+        "owner fees",
+        `+${near(gain)} NEAR in the closing block, this duel's share ${near(fees)} not derivable (${others} other arena receipts in the closing block)`,
+      );
+      return true;
+    };
     const bondsLine = (m: { after: [bigint, bigint]; fees: bigint }) =>
       `A ${near(bonds[0])} -> ${near(got[0])} (expected ${near(m.after[0])}), B ${near(bonds[1])} -> ${near(got[1])} (expected ${near(m.after[1])}), owner fees +${near(m.fees)} NEAR`;
     if (voided) {
