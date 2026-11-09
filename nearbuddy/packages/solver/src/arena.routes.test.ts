@@ -20,7 +20,7 @@ import {
   teeText,
   ZERO_PROOF,
 } from "../../protocol/src/intent.ts";
-import { agent, config, configV14 } from "./arena.fixture.ts";
+import { agent, config, configV14, configV16 } from "./arena.fixture.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "arena-routes-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
@@ -315,16 +315,8 @@ test("POST /commit verifies the agent's commit signature and relays commit_inten
   assert.equal(calls.length, 1);
 });
 
-test("POST /commit answers the block time of the arena receipt, the time the contract holds the commitment under", async () => {
-  const kp = KeyPair.fromRandom("ed25519");
-  const s = signed(kp);
-  const c = commitment(s.intent, new Uint8Array(32).fill(8));
-  const body = {
-    duel_id: "3",
-    agent_pk: s.intent.agent_pk,
-    commitment: b64.enc(c),
-    sig: b64.enc(kp.sign(commitMessage(ARENA_ID, "3", c)).signature),
-  };
+/** A solver account whose commit_intent receipt ran in ARENA_BLOCK, and an RPC that times blocks; `blocks` logs reads. */
+function timedCommit() {
   const blocks: unknown[] = [];
   const account = {
     callFunctionRaw: async () => ({
@@ -342,10 +334,30 @@ test("POST /commit answers the block time of the arena receipt, the time the con
       },
     },
   };
-  const arena = new Arena(account as never, "s.testnet");
+  return { blocks, account: account as never };
+}
+
+test("POST /commit answers the block time of the arena receipt, the time the contract holds the commitment under", async () => {
+  const kp = KeyPair.fromRandom("ed25519");
+  const s = signed(kp);
+  const c = commitment(s.intent, new Uint8Array(32).fill(8));
+  const body = {
+    duel_id: "3",
+    agent_pk: s.intent.agent_pk,
+    commitment: b64.enc(c),
+    sig: b64.enc(kp.sign(commitMessage(ARENA_ID, "3", c)).signature),
+  };
+  const { blocks, account } = timedCommit();
+  const arena = new Arena(account, "s.testnet", { config: async () => config() });
   const r = (await arena.route("POST", "/commit", JSON.stringify(body), KEY))!;
   assert.deepEqual(r.body, { tx: "TXC", at: "1700000000123456789" });
   assert.deepEqual(blocks, ["ARENA_BLOCK"]);
+  // deploy 16.1 plants no headlines a commit could void: no block read, at is null
+  const old = timedCommit();
+  const v16 = new Arena(old.account, "s.testnet", { config: async () => configV16() });
+  const r16 = (await v16.route("POST", "/commit", JSON.stringify(body), KEY))!;
+  assert.deepEqual(r16.body, { tx: "TXC", at: null });
+  assert.deepEqual(old.blocks, []);
 });
 
 test("POST /reveal relays reveal_intent with the salt and quotes followers then, not at commit", async () => {

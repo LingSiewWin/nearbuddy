@@ -419,8 +419,9 @@ export class Arena {
   }
 
   /** Commit-reveal, step 1: relay the agent's signed commitment. Nothing about the call is public yet: no quotes.
-   *  `at` is the commit's block time: from deploy 17 a headline planted at or after it makes the contract ask for this
-   *  commitment's reveal before another replaces it ("reveal first"), so the runner compares the two. */
+   *  `at` is the commit's block time, deploy 17 only (null before, and when unreadable): a commit that replaces this
+   *  one voids every headline planted at or after it, so the runner reveals it first when a headline that late is
+   *  pending. Deploy 16.1 has no planted headlines and skips the block read. */
   async commitIntent(duel_id: string, agent_pk: string, commitment: string, sig: string) {
     let c: Uint8Array;
     try {
@@ -430,7 +431,8 @@ export class Arena {
     }
     if (!verify(agent_pk, commitMessage(ARENA, duel_id, c), sig)) throw new Error("bad commit signature");
     const r = await this.call("commit_intent", { duel_id, agent_pk, commitment, sig });
-    return { tx: r.tx, at: await this.blockTime(r.block) };
+    const cfg = r.block ? await this.config() : null;
+    return { tx: r.tx, at: cfg && isChaosV2(cfg) ? await this.blockTime(r.block) : null };
   }
 
   /** Commit-reveal, step 2: the contract checks sha256(intent bytes || salt) against the stored commitment, then
