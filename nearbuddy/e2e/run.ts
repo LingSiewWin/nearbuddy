@@ -1494,12 +1494,32 @@ async function main() {
             `shield A +${post.shieldA - pre.shieldA} (want ${shieldA}) B +${post.shieldB - pre.shieldB}`,
         );
         const balance = async (id: string) =>
-          BigInt(
-            (await rpc<J>("query", { request_type: "view_account", finality: "optimistic", account_id: id })).amount,
-          );
+          BigInt((await rpc<J>("query", { request_type: "view_account", finality: "final", account_id: id })).amount);
         const b0 = await balance(spec1.accountId);
         const claimed = await call(spec1, "claim_chaos", { duel_id: duelId }, 1n).catch((e) => String(e));
+        // `call` returns at EXECUTED_OPTIMISTIC, before the gas refunds land: the claim prepays its 300 Tgas at the
+        // receipt gas price (10x the block price here, about 0.3 NEAR) and gets the unused part back in refund
+        // receipts a block or two later. At FINAL every receipt has landed, so the balance moves by exactly
+        // payout - 1 yoctoNEAR deposit - the tokens the transaction and its receipts burnt.
+        const fin =
+          typeof claimed === "string"
+            ? null
+            : await rpc<J>("EXPERIMENTAL_tx_status", {
+                tx_hash: claimed.hash,
+                sender_account_id: spec1.accountId,
+                wait_until: "FINAL",
+              });
         const b1 = await balance(spec1.accountId);
+        const burnt = fin
+          ? sum([fin.transaction_outcome, ...fin.receipts_outcome].map((x: J) => BigInt(x.outcome.tokens_burnt)))
+          : 0n;
+        const transfers: bigint[] = fin
+          ? (fin.receipts as J[])
+              .filter((x) => x.predecessor_id === ARENA && x.receiver_id === spec1.accountId)
+              .flatMap((x) => (x.receipt.Action?.actions ?? []) as J[])
+              .filter((a) => a.Transfer)
+              .map((a) => BigInt(a.Transfer.deposit))
+          : [];
         const again = await call(spec1, "claim_chaos", { duel_id: duelId }, 1n).catch((e) => String(e));
         const heldClaim = await call(spec2, "claim_chaos", { duel_id: duelId }, 1n).catch((e) => String(e));
         const after = await view<J[]>("get_chaos", { duel_id: duelId });
@@ -1508,12 +1528,16 @@ async function main() {
           sc,
           "claim_chaos pays the flip's injector its payout, once",
           typeof claimed !== "string" &&
-            b1 - b0 > payout - 10n * MILLI &&
-            b1 - b0 <= payout &&
+            claimed.value === true && // on_claim_chaos: the transfer landed
+            transfers.length === 1 &&
+            transfers[0] === payout &&
+            b1 - b0 === payout - 1n - burnt &&
             after[0].claimed === true &&
             typeof again === "string" &&
             again.includes("nothing to claim"),
-          `balance +${b1 - b0} for payout ${payout}; second claim: ${String(again).slice(0, 80)}`,
+          `transfers [${transfers}] for payout ${payout}; balance ${b1 - b0} = payout - 1 - burnt ${burnt}: ` +
+            `${b1 - b0 === payout - 1n - burnt}; tx ${typeof claimed === "string" ? claimed.slice(0, 80) : claimed.hash}; ` +
+            `second claim: ${String(again).slice(0, 80)}`,
         );
         check(
           sc,
