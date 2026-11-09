@@ -5,16 +5,23 @@ not its claim, makes a trading agent act on it: removing a "BREAKING" tag or a n
 to 0% attack success while the claim stayed the same. This module removes those cues and keeps the claim:
 
 - urgency tags: BREAKING, JUST IN, URGENT, ALERT, EXCLUSIVE, DEVELOPING, a leading "NEWS:", siren and other emoji;
-- source and authority attributions: named outlets and agencies, "according to ...", "per ...", "... reports",
-  "sources say", "confirmed by ...";
+- source and authority attributions: named outlets and agencies, "according to ...", "per <named source>",
+  "citing ...", "... reports", "sources say", "confirmed by ...";
 - emphasis: ALL-CAPS shouting, "!!!", markdown bold, italics and headers.
 
-Numbers, tickers and asset names are never changed. Hedges ("unconfirmed", "reportedly", "rumor") are kept: they lower
-a claim's credibility, and removing them would raise it.
+Numbers, units, tickers and asset names are never changed: digits, superscripts and fractions keep the form they are
+written in (10⁹, 1½, m²), "per" stays when a unit follows it ("$1 per trader"), and a leading ">" before a number
+stays. Direction arrows (⬆ ⬇ 📈 📉 ↑ ↓ ↗ ↘ 🔺 🔻) become the words "up" and "down" instead of being dropped as emoji.
+Hedges ("unconfirmed", "reportedly", "rumor") are kept: they lower a claim's credibility, and removing them would
+raise it.
 
-Evasions it undoes first (`fold`): NFKC (fullwidth, mathematical bold, circled letters), Greek and Cyrillic look-alikes
-and small capitals inside a Latin word, zero-width and other invisible characters, combining overlays, and spaced
-letters ("B R E A K I N G", "B.R.E.A.K.I.N.G") that spell a cue word.
+Evasions it undoes first (`fold`): NFKC on everything but numbers (fullwidth, mathematical bold, circled letters,
+fullwidth punctuation), Greek and Cyrillic look-alikes and small capitals inside a Latin word, zero-width and other
+invisible characters, combining overlays, and spaced letters ("B R E A K I N G", "B.R.E.A.K.I.N.G") that spell a cue
+word.
+
+Version 2. Version 1 (cue_guard_v1.py, frozen) applied NFKC to digits too (10⁹ became 109), dropped "per <unit>" and
+direction emoji, and stripped a leading ">" before a number.
 
 Deterministic and model-free: the same input gives the same output on any machine, so the clean arm of an experiment
 can be recomputed from the signed request bytes, and a TS or Rust port is checked against
@@ -35,7 +42,7 @@ import cue_guard_v1
 # Recorded on every guarded dataset row (`guard.cue_guard`), so the row is re-checked with the cue_guard that cleaned
 # its headline. Any change to what `normalize` returns is a new version: copy this file to cue_guard_v<N>.py unchanged,
 # add it to VERSIONS and bump this number.
-CUE_GUARD_VERSION = 1
+CUE_GUARD_VERSION = 2
 
 # Letters that render like Latin ones: Greek, Cyrillic, and small capitals (mapped to capitals, which they look like).
 # Applied only to a word whose every non-ASCII letter is in this table, so a genuine Greek or Russian word is kept.
@@ -232,6 +239,8 @@ def _alt(words: tuple[str, ...]) -> str:
 
 _TAG = _alt(STRONG + WEAK)
 _SRC = rf"(?:the{_GAP})?(?<![\w@])(?:{_alt(SOURCES)})(?![\w])"
+# a source named as written or in capitals, never in lower case: "per ft" and "per sec" are units
+_NAMED = rf"(?:the{_GAP})?(?<![\w@])(?-i:{_alt(SOURCES + tuple(w.upper() for w in SOURCES))})(?![\w])"
 _WHO = rf"(?:{_SRC}|(?:the{_GAP})?{GENERIC}\b)"
 _VERB = (
     r"(?:reports?|reported|reporting|says?|said|saying|confirms?|confirmed|tells|told|writes|wrote|has[ \t]+learned"
@@ -250,6 +259,12 @@ _SPACED_ONE = re.compile("|".join(sorted(_SPACED_PHRASES, key=len, reverse=True)
 _EMOJI = "[\U0001f000-\U0001faff\u2300-\u23ff\u2600-\u27bf\u2b00-\u2bff\u3030\u303d\u3297\u3299][\ufe0e\ufe0f]?"
 # a run of emoji (siren, fire, rocket, warning sign, ...), with the blanks and joiners between them
 _EMOJI_RUN = re.compile(rf"{_EMOJI}(?:[ \t\u200b-\u200f]*{_EMOJI})*")
+# direction arrows (⬆ 📈 ↑ ↗ 🔺 up, ⬇ 📉 ↓ ↘ 🔻 down) carry the claim: a run becomes one word before emoji are cut
+_UP, _DOWN = "\u2b06\U0001f4c8\u2191\u2197\U0001f53a", "\u2b07\U0001f4c9\u2193\u2198\U0001f53b"
+_ARROWS = [
+    (re.compile(rf"[{arrows}][\ufe0e\ufe0f]?(?:[ \t]*[{arrows}][\ufe0e\ufe0f]?)*"), f" {word} ")
+    for arrows, word in ((_UP, "up"), (_DOWN, "down"))
+]
 
 # (pattern, replacement) in order; every match is a cue. A removal leaves a blank that `_tidy` folds away.
 _EMPHASIS = [
@@ -273,9 +288,12 @@ _CUTS = [
         re.I,
     ),
     re.compile(rf"[,;]?[ \t]*\baccording[ \t]+to[ \t]+(?:{_SRC}|{_OBJECT}{_CLAUSE_END})", re.I),
+    # "per" is also a unit ("$1 per trader", "50 NEAR per person"): cut only before a named source
+    re.compile(rf"[,;]?[ \t]*\bper[ \t]+(?:(?:{_NAME}[ \t]+){{1,4}}?(?:by|from)[ \t]+{_SRC}|{_NAMED})", re.I),
+    # "citing" never precedes a unit, so it also takes an unnamed authority or a report
     re.compile(
-        rf"[,;]?[ \t]*\b(?:per|citing)[ \t]+(?:(?:{_NAME}[ \t]+){{1,4}}?(?:by|from)[ \t]+{_SRC}|an?[ \t]+report"
-        rf"|reports|{_SRC}|(?:the[ \t]+)?{GENERIC}\b|@\w+)",
+        rf"[,;]?[ \t]*\bciting[ \t]+(?:(?:{_NAME}[ \t]+){{1,4}}?(?:by|from)[ \t]+{_SRC}|an?[ \t]+report|reports"
+        rf"|{_SRC}|(?:the[ \t]+)?{GENERIC}\b|@\w+)",
         re.I,
     ),
     re.compile(
@@ -322,11 +340,33 @@ def _join_spaced(m: re.Match[str]) -> str:
     return " ".join(words)
 
 
+def _keeps_form(ch: str) -> bool:
+    """A number keeps the form it is written in: NFKC would read 10⁹ as 109, 1½ as 11⁄2, ㎡ as m2 and ⁻ as −."""
+    if any(unicodedata.category(c)[0] == "N" for c in unicodedata.normalize("NFKC", ch)):
+        return True
+    return not ch.isalpha() and unicodedata.decomposition(ch).startswith(("<super>", "<sub>"))
+
+
+def _nfkc(s: str) -> str:
+    """NFKC on everything but numbers (fullwidth and styled letters, fullwidth punctuation); NFC first, so a letter
+    written with a combining accent is composed as whole-text NFKC would compose it."""
+    if s.isascii():
+        return s
+    s = unicodedata.normalize("NFC", s)
+    return "".join(ch if ch.isascii() or _keeps_form(ch) else unicodedata.normalize("NFKC", ch) for ch in s)
+
+
+def _direction(s: str) -> str:
+    for pattern, word in _ARROWS:
+        s = pattern.sub(word, s)
+    return s
+
+
 def fold(text: str) -> str:
-    """Undo the evasions: NFKC, invisible characters and leftover combining marks removed, emoji blanked, look-alike
-    letters mapped to Latin inside Latin-looking words, and spaced letters joined when they spell a cue word or a
-    source name."""
-    s = unicodedata.normalize("NFKC", text)
+    """Undo the evasions: NFKC on everything but numbers, direction arrows spelled out, invisible characters and
+    leftover combining marks removed, emoji blanked, look-alike letters mapped to Latin inside Latin-looking words, and
+    spaced letters joined when they spell a cue word or a source name."""
+    s = _direction(_nfkc(text))
     s = "".join(ch for ch in s if unicodedata.category(ch) != "Cf")
     s = _MARKS.sub("", s)
     s = _EMOJI_RUN.sub(" ", s)  # normalize cuts them first, as cues; here they are blanks between words
@@ -384,7 +424,8 @@ def _tidy(s: str) -> str:
         line = re.sub(r" +([,.;:!?])(?!\d)", r"\1", line)
         line = re.sub(r"([,;:])(?: *[,;:])+", r"\1", line)
         line = re.sub(r"[,;:] *([.!?])", r"\1", line)
-        line = re.sub(r"^(?:[ ,;:|/!?*_~>\u2013\u2014]|[-.](?!\d))+", "", line)
+        # leftover separators and a markdown quote mark; "> 5%" and "-8%" are comparisons and signs, and stay
+        line = re.sub(r"^(?:[ ,;:|/!?*_~\u2013\u2014]|>(?!=?[ \t]*\$?\d)|[-.](?!\d))+", "", line)
         line = re.sub(r"[ ,;:|/\u2013\u2014-]+$", "", line)
         line = line.strip()
         if line:
@@ -402,7 +443,7 @@ def normalize(text: str) -> tuple[str, list[str]]:
     s = text
     for _ in range(32):  # each pass only removes or lowercases, so it reaches a fixed point in a few passes
         before = s
-        s = fold(_cut(_EMOJI_RUN, "", s, cues))
+        s = fold(_cut(_EMOJI_RUN, "", _direction(s), cues))  # arrows first: they are words, not cues
         for pattern, repl in _EMPHASIS:
             s = _cut(pattern, repl, s, cues)
         for pattern in _CUTS:

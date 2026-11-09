@@ -1,5 +1,6 @@
 {
-  "about": "Golden vectors for agents/cue_guard.py normalize(text) -> (clean, cues). Every port (Python, TS, Rust) must return exactly `clean` and `cues` for `input`. kind: urgency | source | emphasis | evasion | keep | mixed. JSON escapes keep invisible characters visible.",
+  "about": "Golden vectors for agents/cue_guard.py normalize(text) -> (clean, cues) at cue_guard_version. Every port (Python, TS, Rust) must return exactly `clean` and `cues` for `input`. kind: urgency | source | emphasis | evasion | keep | mixed. JSON escapes keep invisible characters visible.",
+  "cue_guard_version": 2,
   "vectors": [
     {
       "name": "breaking-colon",
@@ -639,6 +640,166 @@
       "cues": [
         "URGENT",
         "SHORT"
+      ]
+    },
+    {
+      "name": "superscript-exponent-kept",
+      "kind": "keep",
+      "input": "NEAR supply hits 10\u2079 tokens",
+      "clean": "NEAR supply hits 10\u2079 tokens",
+      "cues": []
+    },
+    {
+      "name": "superscript-minus-exponent-kept",
+      "kind": "keep",
+      "input": "Gas fee falls to 10\u207b\u2079 NEAR",
+      "clean": "Gas fee falls to 10\u207b\u2079 NEAR",
+      "cues": []
+    },
+    {
+      "name": "vulgar-fraction-kept",
+      "kind": "keep",
+      "input": "Validators earn 1\u00bd% more",
+      "clean": "Validators earn 1\u00bd% more",
+      "cues": []
+    },
+    {
+      "name": "square-unit-kept",
+      "kind": "keep",
+      "input": "Police seize a 500 m\u00b2 mining farm",
+      "clean": "Police seize a 500 m\u00b2 mining farm",
+      "cues": []
+    },
+    {
+      "name": "fullwidth-letters-fold-digits-kept",
+      "kind": "evasion",
+      "input": "\uff22\uff32\uff25\uff21\uff2b\uff29\uff2e\uff27\uff1a NEAR falls \uff11\uff12%",
+      "clean": "NEAR falls \uff11\uff12%",
+      "cues": [
+        "BREAKING"
+      ]
+    },
+    {
+      "name": "per-unit-trader-kept",
+      "kind": "keep",
+      "input": "Airdrop pays $1 per trader",
+      "clean": "Airdrop pays $1 per trader",
+      "cues": []
+    },
+    {
+      "name": "per-unit-person-kept",
+      "kind": "keep",
+      "input": "Faucet sends 50 NEAR per person",
+      "clean": "Faucet sends 50 NEAR per person",
+      "cues": []
+    },
+    {
+      "name": "per-unit-lowercase-source-name-kept",
+      "kind": "keep",
+      "input": "Chain finalizes 4,000 tx per sec and fees are $5 per ft",
+      "clean": "Chain finalizes 4,000 tx per sec and fees are $5 per ft",
+      "cues": []
+    },
+    {
+      "name": "per-unnamed-source-kept",
+      "kind": "keep",
+      "input": "Binance froze NEAR deposits per sources",
+      "clean": "Binance froze NEAR deposits per sources",
+      "cues": []
+    },
+    {
+      "name": "citing-unnamed-source",
+      "kind": "source",
+      "input": "Binance froze NEAR deposits, citing sources",
+      "clean": "Binance froze NEAR deposits",
+      "cues": [
+        "citing sources"
+      ]
+    },
+    {
+      "name": "per-source-in-capitals",
+      "kind": "source",
+      "input": "Binance froze NEAR deposits per REUTERS",
+      "clean": "Binance froze NEAR deposits",
+      "cues": [
+        "per REUTERS"
+      ]
+    },
+    {
+      "name": "arrow-emoji-down",
+      "kind": "keep",
+      "input": "NEAR \u2b07 20%",
+      "clean": "NEAR down 20%",
+      "cues": []
+    },
+    {
+      "name": "arrow-emoji-up-with-selector",
+      "kind": "keep",
+      "input": "NEAR \u2b06\ufe0f 12% in an hour",
+      "clean": "NEAR up 12% in an hour",
+      "cues": []
+    },
+    {
+      "name": "chart-emoji-down",
+      "kind": "keep",
+      "input": "NEAR \ud83d\udcc9 20% after the exploit",
+      "clean": "NEAR down 20% after the exploit",
+      "cues": []
+    },
+    {
+      "name": "chart-emoji-up",
+      "kind": "keep",
+      "input": "BTC \ud83d\udcc8 5%",
+      "clean": "BTC up 5%",
+      "cues": []
+    },
+    {
+      "name": "arrows-up-down",
+      "kind": "keep",
+      "input": "ETH \u2191 3% and SOL \u2193 4%",
+      "clean": "ETH up 3% and SOL down 4%",
+      "cues": []
+    },
+    {
+      "name": "red-triangle-down-run",
+      "kind": "keep",
+      "input": "NEAR \ud83d\udd3b\ud83d\udd3b 30% on the hack",
+      "clean": "NEAR down 30% on the hack",
+      "cues": []
+    },
+    {
+      "name": "arrow-kept-urgency-cut",
+      "kind": "mixed",
+      "input": "\ud83d\udea8 BREAKING: NEAR \ud83d\udcc9 15% per Bloomberg \ud83d\udea8",
+      "clean": "NEAR down 15%",
+      "cues": [
+        "\ud83d\udea8",
+        "\ud83d\udea8",
+        "per Bloomberg",
+        "BREAKING"
+      ]
+    },
+    {
+      "name": "leading-greater-than-kept",
+      "kind": "keep",
+      "input": "> 5% of NEAR supply moved to Binance",
+      "clean": "> 5% of NEAR supply moved to Binance",
+      "cues": []
+    },
+    {
+      "name": "leading-greater-or-equal-kept",
+      "kind": "keep",
+      "input": ">= $10M in NEAR left Coinbase",
+      "clean": ">= $10M in NEAR left Coinbase",
+      "cues": []
+    },
+    {
+      "name": "markdown-quote-mark-removed",
+      "kind": "urgency",
+      "input": "> BREAKING: Coinbase pauses NEAR deposits",
+      "clean": "Coinbase pauses NEAR deposits",
+      "cues": [
+        "BREAKING"
       ]
     }
   ]

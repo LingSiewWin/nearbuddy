@@ -33,6 +33,27 @@ def test_vectors_cover_every_kind_and_the_evasions():
     assert len({v["name"] for v in VECTORS["vectors"]}) == len(VECTORS["vectors"])
 
 
+# facts cue_guard v1 changed: 10⁹ -> 109, 1½ -> 11⁄2, "$1 per trader" -> "$1", "NEAR ⬇ 20%" -> "NEAR 20%", "> 5%"
+V1_CHANGED = [
+    "superscript-exponent-kept",
+    "vulgar-fraction-kept",
+    "per-unit-trader-kept",
+    "per-unit-person-kept",
+    "arrow-emoji-down",
+    "chart-emoji-down",
+    "leading-greater-than-kept",
+]
+
+
+def test_the_vectors_are_this_version_and_v1_still_gives_its_own_output():
+    assert VECTORS["cue_guard_version"] == CUE_GUARD_VERSION == 2
+    vectors = {v["name"]: v for v in VECTORS["vectors"]}
+    for name in V1_CHANGED:
+        v = vectors[name]
+        assert v["clean"] == v["input"].replace("⬇", "down").replace("📉", "down") and v["cues"] == [], name
+        assert cue_guard_v1.normalize(v["input"]) != (v["clean"], v["cues"]), name  # so v1 rows verify only as v1
+
+
 # claims with numbers and tickers; none carries a cue, so normalize must leave each one as written
 CLAIMS = [
     "Binance halts {T} withdrawals after a {N}% drop",
@@ -43,6 +64,7 @@ CLAIMS = [
     "{T} breaking resistance at ${P} as funding flips to {N}%",
     "Unconfirmed reports suggest {T} bridge lost ${P}M",
     "Kraken delists {T} on 2026-11-{D} at 14:00 UTC",
+    "Airdrop pays {I} {T} per trader, 1½% of supply, fees at 10⁻⁹ per tx",
 ]
 TICKERS = ["NEAR", "BTC", "ETH", "SOL", "USDT", "$NEAR", "NEAR/USD", "AURORA"]
 PREFIXES = [
@@ -142,7 +164,7 @@ def test_v1_is_frozen_for_the_rows_it_cleaned():
     # rows without guard.cue_guard are re-checked with this file; editing it would make them unverifiable
     v1 = Path(cue_guard_v1.__file__).read_bytes()
     assert hashlib.sha256(v1).hexdigest() == "706d1e8d5eb2890dfd5853464c9d5053f4520f3540af8a677ddbd069783f0a72"
-    assert VERSIONS[CUE_GUARD_VERSION] is normalize and set(VERSIONS) == {1, CUE_GUARD_VERSION}
+    assert (VERSIONS[1], VERSIONS[CUE_GUARD_VERSION], len(VERSIONS)) == (cue_guard_v1.normalize, normalize, 2)
 
 
 def test_deterministic():

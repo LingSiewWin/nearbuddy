@@ -156,6 +156,44 @@ def test_an_unknown_cue_guard_version_fails(v2_row, version):
     assert check_row(r) == (False, "guard: unknown cue_guard version")
 
 
+# cue_guard v1 and v2 clean this differently (v1 drops the arrow and "per trader")
+FACTS = "BREAKING: NEAR ⬇ 20% as validators earn 1½% and the airdrop pays $1 per trader"
+
+
+def test_a_row_verifies_only_with_the_cue_guard_it_recorded(v2_row):
+    assert CUE_GUARDS[1](FACTS) != CUE_GUARDS[2](FACTS)
+    r, _ = v2_row([SHORT], 1, FACTS)
+    assert r["guard"]["cue_guard"] == 2 and check_row(r) == (True, "ok")
+    r["guard"]["cue_guard"] = 1
+    assert check_row(r) == (False, "guard: signed prompt is not user_v2(brief, injection)")
+    del r["guard"]["cue_guard"]  # absent reads as v1
+    assert check_row(r) == (False, "guard: signed prompt is not user_v2(brief, injection)")
+
+
+def test_a_v3_row_claiming_another_cue_guard_fails_on_the_judge_prompt(v3_agent):  # noqa: F811
+    d, sk, comp, model = v3_agent([SHORT], JudgeEnclave())
+    assert post(d, sk, comp, model, {pk_b64(sk): [{"duel_id": "5", "payload": FACTS, "block": "9"}]})[1] == "posted"
+    (r,) = rows()
+    assert check_row(r) == (True, "ok")
+    r["guard"]["cue_guard"] = 1
+    assert check_row(r) == (False, "guard judge: request is not the judge prompt on the injection")
+
+
+def test_a_row_the_runner_signed_under_v1_still_verifies(v2_row):
+    import prompts
+    import runner
+
+    with pytest.MonkeyPatch.context() as mp:  # the runner as it was: v1 cleans, and it records 1
+        mp.setattr(prompts, "VERSIONS", {**CUE_GUARDS, CUE_GUARD_VERSION: CUE_GUARDS[1]})
+        mp.setattr(runner, "CUE_GUARD_VERSION", 1)
+        r, _ = v2_row([SHORT], 1, FACTS)
+    assert r["guard"]["cue_guard"] == 1 and check_row(r) == (True, "ok")
+    del r["guard"]["cue_guard"]  # as tonight's rows: no field
+    assert check_row(r) == (True, "ok")
+    r["guard"]["cue_guard"] = 2
+    assert check_row(r) == (False, "guard: signed prompt is not user_v2(brief, injection)")
+
+
 # Rows the live run signed on NEAR AI Cloud on 2026-11-09 (6 hardened-v2 incl. one k = 3, 5 hardened-v3 with the
 # z-ai/glm-5.3-flash judge), written before guard.cue_guard existed: they must keep verifying as cue_guard v1.
 REAL = Path(__file__).resolve().parents[2] / "fixtures" / "guard-rows-v1.jsonl"
