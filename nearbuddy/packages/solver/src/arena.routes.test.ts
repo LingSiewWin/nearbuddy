@@ -302,7 +302,7 @@ test("POST /commit verifies the agent's commit signature and relays commit_inten
     },
   });
   const r = (await arena.route("POST", "/commit", JSON.stringify(body), KEY))!;
-  assert.deepEqual(r.body, { tx: "TX1" });
+  assert.deepEqual(r.body, { tx: "TX1", at: null }, "no receipt to time: at is null");
   assert.equal(calls[0]!.methodName, "commit_intent");
   assert.deepEqual(calls[0]!.args, body);
   assert.equal(quoted, 0, "a commitment hides the call: nothing to quote");
@@ -313,6 +313,39 @@ test("POST /commit verifies the agent's commit signature and relays commit_inten
     /bad commit signature/,
   );
   assert.equal(calls.length, 1);
+});
+
+test("POST /commit answers the block time of the arena receipt, the time the contract holds the commitment under", async () => {
+  const kp = KeyPair.fromRandom("ed25519");
+  const s = signed(kp);
+  const c = commitment(s.intent, new Uint8Array(32).fill(8));
+  const body = {
+    duel_id: "3",
+    agent_pk: s.intent.agent_pk,
+    commitment: b64.enc(c),
+    sig: b64.enc(kp.sign(commitMessage(ARENA_ID, "3", c)).signature),
+  };
+  const blocks: unknown[] = [];
+  const account = {
+    callFunctionRaw: async () => ({
+      status: { SuccessValue: "" },
+      transaction: { hash: "TXC" },
+      receipts_outcome: [
+        { block_hash: "OTHER", outcome: { executor_id: "s.testnet" } },
+        { block_hash: "ARENA_BLOCK", outcome: { executor_id: ARENA_ID } },
+      ],
+    }),
+    provider: {
+      viewBlock: async (q: { blockId: string }) => {
+        blocks.push(q.blockId);
+        return { header: { timestamp_nanosec: "1700000000123456789" } };
+      },
+    },
+  };
+  const arena = new Arena(account as never, "s.testnet");
+  const r = (await arena.route("POST", "/commit", JSON.stringify(body), KEY))!;
+  assert.deepEqual(r.body, { tx: "TXC", at: "1700000000123456789" });
+  assert.deepEqual(blocks, ["ARENA_BLOCK"]);
 });
 
 test("POST /reveal relays reveal_intent with the salt and quotes followers then, not at commit", async () => {

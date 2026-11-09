@@ -6,14 +6,17 @@
 //                  with both sigs: open_duel_consented, each agent's ed25519 over consentMessage)
 //   POST /intent   {signed: SignedIntent, tee?: TeeProof}    -> {tx, quotes:[{follower, amount, quote}]}
 //                  once the intent landed the route answers 200; a quote failure comes back as quote_error
-//   POST /commit   {duel_id, agent_pk, commitment, sig}      -> {tx}  (commit_intent; no quotes, the call is still hidden)
+//   POST /commit   {duel_id, agent_pk, commitment, sig}      -> {tx, at}  (commit_intent; no quotes, the call is still hidden;
+//                  `at` = the commit's block time in ns, the time the contract holds it under, null when unread)
 //   POST /reveal   {signed, salt, tee?}                      -> {tx, quotes}  (reveal_intent; followers are quoted here)
 //   POST /chaos    {payload}  (open)                         -> {payload_hash}; spectator then calls inject_chaos on chain
+//                  (deploy 16.1 only: from deploy 17 the headline itself is on chain)
 //   POST /resolve  {duel_id}                                 -> {tx, sent}  (permissionless on chain; the oracle callback finishes the duel)
 //   POST /open_price {duel_id}                               -> {tx}  (re-ask the oracle for a missing open price)
 //   POST /settle_follow {agent_pk, follower, fills}          -> {tx, report}  (deploy 15: no dry-quote fills; testnet
 //                  stand-in: stub_credit the outputs to the arena first)
-//   GET  /arena                                              -> snapshot incl. pending injections with payloads
+//   GET  /arena                                              -> snapshot incl. pending injections with payloads (deploy 17:
+//                  the headlines get_chaos still lists as Pending, with index, arm and time)
 //   GET  /pairing                                            -> {every_s, next_at, last:[{duel_id, a, b, tx, at}]}  (PAIR_EVERY_S loop)
 //   GET  /agent_duel?pk=<base64>                             -> {agent_pk, registered, duel_id|null}  (a self-hosted runner finds its duel)
 //   GET  /followers?pk=<base64>                              -> [[follower, mandate]]  (list_followers, or get_follow per known follower)
@@ -21,12 +24,13 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Account, teraToGas } from "near-api-js";
-import type { AgentView, Duel, Fill, Mandate } from "../../protocol/src/abi/arena.ts";
+import type { AgentView, Arm, Chaos, Duel, Fill, Mandate } from "../../protocol/src/abi/arena.ts";
 import {
   ARENA,
   type ArenaConfigAnyDeploy,
   arenaConfigAnyDeploy,
   arenaView,
+  isChaosV2,
   NEAR,
   provider,
 } from "../../protocol/src/chain.ts";
@@ -57,6 +61,10 @@ import {
   variableLeg,
 } from "./rfq.ts";
 
+/** An injection the runner has to deliver. Deploy 16.1: `payload` is the text this solver holds for the on-chain
+ *  `payload_hash`, until the runner consumes it. Deploy 17: a headline whose outcome is still `Pending` on chain
+ *  (`get_chaos`); `payload` is the headline as stored there, `index` its place in `get_chaos` and `Duel.injections`,
+ *  `arm` the delivery the contract drew and `at` the injection's block time (ns). */
 export interface Injection {
   duel_id: string;
   target: string;
@@ -64,6 +72,9 @@ export interface Injection {
   payload: string;
   payload_hash: string;
   block: string;
+  index?: number;
+  arm?: Arm;
+  at?: string;
 }
 /** With BATCH_RFQ (default) `quote` is the one batch quote shared by every follower of the intent (its USDC leg is
  *  the batch total); `quote_out` is this follower's pro rata share of the USDC leg (received on a Short, paid on a
@@ -244,6 +255,7 @@ export class Arena {
       /** `get_follow` (deploy 15 reads followers one by one). */
       getFollow?: (agent_pk: string, follower: string) => Promise<Mandate | null>;
       getDuel?: (duel_id: string) => Promise<Duel | null>;
+      getChaos?: (duel_id: string) => Promise<Chaos[]>;
       getAgent?: (agent_pk: string) => Promise<AgentView | null>;
       leaderboard?: () => Promise<AgentView[]>;
       config?: () => Promise<ArenaConfigAnyDeploy>;
@@ -321,7 +333,7 @@ export class Arena {
     deposit = 0n,
     gas = GAS,
     contractId = ARENA,
-  ): Promise<{ tx: string; value: unknown }> {
+  ): Promise<{ tx: string; value: unknown; block: string | undefined }> {
     // Public RPCs rate-limit (-429); retry with backoff before failing the route.
     let r!: Awaited<ReturnType<Account["callFunctionRaw"]>>;
     for (let attempt = 0; ; attempt++) {
@@ -337,7 +349,19 @@ export class Arena {
     if (st.SuccessValue === undefined)
       throw new Error(`${methodName} failed: ${JSON.stringify(st.Failure ?? r.status).slice(0, 300)}`);
     const raw = Buffer.from(st.SuccessValue, "base64").toString();
-    return { tx: r.transaction.hash, value: raw ? JSON.parse(raw) : null };
+    // the block the contract's receipt ran in: its env::block_timestamp is the time the call took effect
+    const block = r.receipts_outcome?.find((o) => o.outcome.executor_id === contractId)?.block_hash;
+    return { tx: r.transaction.hash, value: raw ? JSON.parse(raw) : null, block };
+  }
+
+  /** Block time (ns) of `hash`, or null when it cannot be read. */
+  private async blockTime(hash: string | undefined): Promise<string | null> {
+    if (!hash) return null;
+    try {
+      return String((await this.solver.provider.viewBlock({ blockId: hash })).header.timestamp_nanosec);
+    } catch {
+      return null;
+    }
   }
 
   /** Register an agent with a bond paid by the solver account (the runner has no NEAR account).
@@ -394,7 +418,9 @@ export class Arena {
     return this.landIntent("post_intent", signed, tee);
   }
 
-  /** Commit-reveal, step 1: relay the agent's signed commitment. Nothing about the call is public yet: no quotes. */
+  /** Commit-reveal, step 1: relay the agent's signed commitment. Nothing about the call is public yet: no quotes.
+   *  `at` is the commit's block time: from deploy 17 a headline planted at or after it makes the contract ask for this
+   *  commitment's reveal before another replaces it ("reveal first"), so the runner compares the two. */
   async commitIntent(duel_id: string, agent_pk: string, commitment: string, sig: string) {
     let c: Uint8Array;
     try {
@@ -403,7 +429,8 @@ export class Arena {
       throw new Error("bad commit signature");
     }
     if (!verify(agent_pk, commitMessage(ARENA, duel_id, c), sig)) throw new Error("bad commit signature");
-    return { tx: (await this.call("commit_intent", { duel_id, agent_pk, commitment, sig })).tx };
+    const r = await this.call("commit_intent", { duel_id, agent_pk, commitment, sig });
+    return { tx: r.tx, at: await this.blockTime(r.block) };
   }
 
   /** Commit-reveal, step 2: the contract checks sha256(intent bytes || salt) against the stored commitment, then
@@ -692,12 +719,24 @@ export class Arena {
   }
 
   private pendingMemo: { at: number; v: Record<string, Injection[]> } | null = null;
-  /** Injections on chain for open duels whose payload this solver holds and the runner has not prompted yet.
-   *  One view per open duel, in parallel, memoised for 3 s; an RPC error skips that duel for this call. */
+  /** Injections on chain for open duels the runner has to deliver. Deploy 16.1: those whose payload this solver holds
+   *  and the runner has not prompted yet. Deploy 17 (`get_config.chaos`): the headlines `get_chaos` lists as Pending,
+   *  each until the target's next revealed TEE decision decides it. One `get_duel` per open duel (plus `get_chaos` on
+   *  17), in parallel, memoised for 3 s; an RPC error skips that duel for this call, an unreadable config the call. */
   async pending(): Promise<Record<string, Injection[]>> {
     if (this.pendingMemo && Date.now() - this.pendingMemo.at < 3000) return this.pendingMemo.v;
+    if (this.openDuels.size === 0) return {};
+    const cfg = await this.config();
+    if (!cfg) return this.pendingMemo?.v ?? {};
+    const v2 = isChaosV2(cfg);
     const getDuel = this.deps.getDuel ?? ((id: string) => arenaView("get_duel", { duel_id: id }));
+    const getChaos = this.deps.getChaos ?? ((id: string) => arenaView("get_chaos", { duel_id: id }));
     const out: Record<string, Injection[]> = {};
+    const add = (j: Injection) => {
+      const list = out[j.target] ?? [];
+      out[j.target] = list;
+      list.push(j);
+    };
     await Promise.all(
       [...this.openDuels].map(async (duel_id) => {
         let d: Awaited<ReturnType<typeof getDuel>>;
@@ -711,19 +750,34 @@ export class Arena {
           this.openDuels.delete(duel_id);
           return;
         }
+        if (v2) {
+          let list: Chaos[];
+          try {
+            list = await getChaos(duel_id);
+          } catch {
+            return;
+          }
+          list.forEach((c, index) => {
+            const j = d.injections[index];
+            if (c.outcome !== "Pending" || !j) return;
+            add({
+              duel_id,
+              target: c.target,
+              kind: c.kind,
+              payload: c.headline,
+              payload_hash: j.payload_hash,
+              block: j.block,
+              index,
+              arm: c.arm,
+              at: c.at,
+            });
+          });
+          return;
+        }
         for (const j of d.injections) {
           const payload = this.payloads.get(j.payload_hash);
           if (payload === undefined || this.consumed.has(`${duel_id}:${j.target}:${j.block}`)) continue;
-          const list = out[j.target] ?? [];
-          out[j.target] = list;
-          list.push({
-            duel_id,
-            target: j.target,
-            kind: j.kind,
-            payload,
-            payload_hash: j.payload_hash,
-            block: j.block,
-          });
+          add({ duel_id, target: j.target, kind: j.kind, payload, payload_hash: j.payload_hash, block: j.block });
         }
       }),
     );

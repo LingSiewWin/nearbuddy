@@ -30,6 +30,12 @@ export const config = (over: Partial<Config> = {}): Config => ({
   ...over,
 });
 
+/** `get_config` of deploy 16.1, which has no `chaos` terms (headlines held by the solver, sha256 on chain). */
+export const configV16 = (over: Partial<Config> = {}): ArenaConfigAnyDeploy => {
+  const { chaos: _, ...v16 } = config(over);
+  return v16;
+};
+
 /** `get_config` of deploy 14, which has no `intents_account`. */
 export const configV14 = (over: Partial<Config> = {}): ArenaConfigAnyDeploy => {
   const { intents_account: _, ...v14 } = config(over);

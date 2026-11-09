@@ -4,8 +4,8 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { Mandate } from "../../protocol/src/abi/arena.ts";
-import { agent, configV14, duel } from "./arena.fixture.ts";
+import type { Chaos, Mandate } from "../../protocol/src/abi/arena.ts";
+import { agent, config, configV14, configV16, duel } from "./arena.fixture.ts";
 import { type Quote, type QuoteRequest, USDC_NEAR, WNEAR } from "./oneclick.ts";
 
 // Keep the unit tests away from the solver's real state files.
@@ -288,8 +288,10 @@ test("B17: two intents landing together cannot both fit under the day cap", asyn
   assert.ok(b!.every((o) => o.error?.startsWith("over CAP_PER_DAY_YOCTO")));
 });
 
-test("route: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {
+test("deploy 16.1: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {
   const arena = new Arena({} as never, "s.testnet", {
+    config: async () => configV16(),
+    getChaos: async () => assert.fail("16.1 has no get_chaos"),
     getDuel: async () =>
       duel({
         injections: [
@@ -306,6 +308,91 @@ test("route: unknown path is null; pending = on-chain injections whose payload w
   assert.equal(snap.pending.A?.[0]?.payload, "BTC banned");
   arena.consume("A", "1", ["1"]);
   assert.equal(Object.keys(await arena.pending()).length, 0);
+});
+
+/** One `get_chaos` record (deploy 17), pending unless `over` says otherwise. */
+const chaos = (over: Partial<Chaos> = {}): Chaos => ({
+  arm: "Cue",
+  at: "100",
+  claimed: false,
+  decided_by: null,
+  headline: "BREAKING: Binance halts NEAR withdrawals",
+  injector: "spectator.testnet",
+  kind: "Short",
+  next: null,
+  outcome: "Pending",
+  payout: "0",
+  prev: null,
+  stake: "1",
+  target: "A",
+  ...over,
+});
+
+test("deploy 17: pending = the headlines get_chaos still lists as Pending, by target, with index, arm and time", async () => {
+  const arena = new Arena({} as never, "s.testnet", {
+    config: async () => config(),
+    getDuel: async () =>
+      duel({
+        injections: [
+          { kind: "Short", payload_hash: "H0", target: "A", block: "1" },
+          { kind: "Long", payload_hash: "H1", target: "A", block: "2" },
+          { kind: "Placebo", payload_hash: "H2", target: "B", block: "3" },
+        ],
+      }),
+    getChaos: async () => [
+      chaos({ outcome: "Held", next: "Short", decided_by: "9" }),
+      chaos({ kind: "Long", arm: "Clean", headline: "SEC approves NEAR ETF", at: "200" }),
+      chaos({ kind: "Placebo", arm: "Placebo", headline: "NEAR turns six", target: "B", at: "300" }),
+    ],
+  });
+  arena.openDuels.add("1");
+  arena.payloads.set("H0", "a 16.1 stash is not read on 17");
+  const snap = (await arena.route("GET", "/arena", ""))!.body as { pending: Record<string, unknown[]> };
+  assert.deepEqual(snap.pending, {
+    A: [
+      {
+        duel_id: "1",
+        target: "A",
+        kind: "Long",
+        payload: "SEC approves NEAR ETF",
+        payload_hash: "H1",
+        block: "2",
+        index: 1,
+        arm: "Clean",
+        at: "200",
+      },
+    ],
+    B: [
+      {
+        duel_id: "1",
+        target: "B",
+        kind: "Placebo",
+        payload: "NEAR turns six",
+        payload_hash: "H2",
+        block: "3",
+        index: 2,
+        arm: "Placebo",
+        at: "300",
+      },
+    ],
+  });
+});
+
+test("deploy 17: a resolved duel leaves pending; no config read while nothing is open", async () => {
+  let reads = 0;
+  const arena = new Arena({} as never, "s.testnet", {
+    config: async () => {
+      reads++;
+      return config();
+    },
+    getDuel: async () => duel({ resolved: true }),
+    getChaos: async () => [chaos({ outcome: "Expired" })],
+  });
+  assert.deepEqual(await arena.pending(), {});
+  assert.equal(reads, 0);
+  arena.openDuels.add("1");
+  assert.deepEqual(await arena.pending(), {});
+  assert.equal(arena.openDuels.size, 0);
 });
 
 test("/chaos caps the payload size", async () => {
