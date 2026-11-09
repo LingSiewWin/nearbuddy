@@ -33,7 +33,32 @@ const IOU_SCHEMA = {
 export const b64 = {
   enc: (b: Uint8Array) => Buffer.from(b).toString("base64"),
   dec: (s: string) => new Uint8Array(Buffer.from(s, "base64")),
+  /** near-sdk `Base64VecU8`: standard alphabet, padded, canonical. Node's decoder also takes url-safe, unpadded,
+   *  whitespace and non-canonical input; anything that does not re-encode to itself is refused here. */
+  strict: (s: unknown): Uint8Array => {
+    const b = typeof s === "string" ? Buffer.from(s, "base64") : null;
+    if (!b || b.toString("base64") !== s) throw new RangeError(`bad base64: ${JSON.stringify(s)}`);
+    return new Uint8Array(b);
+  },
 };
+
+/** Hex with an optional `0x` prefix, as Python's `bytes.fromhex(s.removeprefix("0x"))`. Node's `Buffer.from(s, "hex")`
+ *  stops at the first non-hex character, so `"0x.."` would decode to 0 bytes. */
+export function unhex(s: string): Uint8Array {
+  const h = s.replace(/^0x/i, "");
+  if (!/^(?:[0-9a-fA-F]{2})*$/.test(h)) throw new RangeError(`bad hex: ${JSON.stringify(s)}`);
+  return new Uint8Array(Buffer.from(h, "hex"));
+}
+
+/** A contract `EVENT_JSON:` log. The contract writes u64 fields (`duel_id`, `nonce`) as bare JSON numbers, which
+ *  `JSON.parse` rounds past 2^53; integers of 16+ digits are kept as decimal strings instead. */
+export function parseEventJson(log: string): unknown {
+  const body = log.startsWith("EVENT_JSON:") ? log.slice("EVENT_JSON:".length) : log;
+  // strings match first and stay as they are, so digits inside a memo or label are never touched
+  return JSON.parse(
+    body.replace(/"(?:[^"\\]|\\.)*"|([:,[]\s*)(\d{16,})(?=\s*[,}\]])/g, (m, p, d) => (d ? `${p}"${d}"` : m)),
+  );
+}
 
 /** Bytes the agent signs: IOU_DOMAIN || borsh(iou). */
 export function iouMessage(iou: Iou): Uint8Array {

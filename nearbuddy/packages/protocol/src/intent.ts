@@ -51,22 +51,43 @@ const INTENT_SCHEMA = {
 function concat(...parts: Uint8Array[]): Uint8Array {
   return new Uint8Array(Buffer.concat(parts));
 }
+
+// The contract's JSON ingress is the reference (fixtures/wire-vectors.json "edges"): anything it refuses, these
+// refuse too, so an agent never signs bytes for a call the contract reads differently. The borsh library would
+// otherwise wrap 2^64 to 0 and 70000 to 4464 silently.
+const U64_MAX = (1n << 64n) - 1n;
+/** near-sdk `U64`: a decimal string, optional "+", leading zeros allowed, at most 2^64 - 1. */
+export function parseU64(v: unknown): bigint {
+  const n = typeof v === "string" && /^\+?[0-9]+$/.test(v) ? BigInt(v.replace(/^\+/, "")) : -1n;
+  if (n < 0n || n > U64_MAX) throw new RangeError(`bad u64: ${JSON.stringify(v)}`);
+  return n;
+}
+function parseU16(v: unknown): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 0xffff) {
+    throw new RangeError(`bad u16: ${JSON.stringify(v)}`);
+  }
+  return v;
+}
+function sideByte(v: unknown): number {
+  if (v !== "Long" && v !== "Short") throw new RangeError(`bad side: ${JSON.stringify(v)}`);
+  return v === "Long" ? 0 : 1;
+}
 const u64le = (v: string | bigint) => {
   const b = Buffer.alloc(8);
-  b.writeBigUInt64LE(BigInt(v));
+  b.writeBigUInt64LE(typeof v === "bigint" ? v : parseU64(v));
   return new Uint8Array(b);
 };
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
 export function intentMessage(i: Intent): Uint8Array {
   const body = serialize(INTENT_SCHEMA, {
-    agent_pk: b64.dec(i.agent_pk),
-    duel_id: BigInt(i.duel_id),
-    side: i.side === "Long" ? 0 : 1,
-    size_bps: i.size_bps,
-    nonce: BigInt(i.nonce),
-    expires_at: BigInt(i.expires_at),
-    proof_hash: b64.dec(i.proof_hash),
+    agent_pk: b64.strict(i.agent_pk),
+    duel_id: parseU64(i.duel_id),
+    side: sideByte(i.side),
+    size_bps: parseU16(i.size_bps),
+    nonce: parseU64(i.nonce),
+    expires_at: parseU64(i.expires_at),
+    proof_hash: b64.strict(i.proof_hash),
   });
   return concat(INTENT_DOMAIN, body);
 }
@@ -83,7 +104,7 @@ export function commitMessage(contractId: string, duelId: string, c: Uint8Array)
 
 /** Bytes each agent signs for `open_duel_consented`: domain || contract id || a || b || symbol || close_at u64 LE. */
 export function consentMessage(contractId: string, a: string, b: string, symbol: string, closeAt: string): Uint8Array {
-  return concat(CONSENT_DOMAIN, utf8(contractId), b64.dec(a), b64.dec(b), utf8(symbol), u64le(closeAt));
+  return concat(CONSENT_DOMAIN, utf8(contractId), b64.strict(a), b64.strict(b), utf8(symbol), u64le(closeAt));
 }
 
 /** The exact bytes a NEAR AI Cloud enclave signs (`text` in GET /v1/signature/{chat_id}). */
@@ -98,9 +119,13 @@ export function proofHash(requestHash: Uint8Array, responseHash: Uint8Array): st
 }
 
 export function verify(pkB64: string, msg: Uint8Array, sigB64: string): boolean {
-  const pk = b64.dec(pkB64);
-  if (pk.length !== 32) return false;
-  return new PublicKey({ keyType: KeyType.ED25519, data: pk }).verify(msg, b64.dec(sigB64));
+  try {
+    const pk = b64.strict(pkB64);
+    if (pk.length !== 32) return false;
+    return new PublicKey({ keyType: KeyType.ED25519, data: pk }).verify(msg, b64.strict(sigB64));
+  } catch {
+    return false; // malformed base64: the contract refuses it at JSON decode
+  }
 }
 
 // ed25519 from a 32-byte seed with node:crypto only (PKCS8 prefix + seed); pk = last 32 bytes of SPKI.
@@ -121,12 +146,23 @@ export function signIntent(kp: KeyPair, intent: Intent): SignedIntent {
   return { intent, signature: b64.enc(kp.sign(intentMessage(intent)).signature) };
 }
 export function verifyIntent(s: SignedIntent): boolean {
-  return verify(s.intent.agent_pk, intentMessage(s.intent), s.signature);
+  try {
+    return verify(s.intent.agent_pk, intentMessage(s.intent), s.signature);
+  } catch {
+    return false; // an intent the contract's JSON ingress refuses (side, u64, u16, base64)
+  }
 }
-/** Same check the contract runs: enclave signature over the rebuilt text, and the intent commits to it. */
-export function verifyTeeProof(p: TeeProof, modelId: string, intentProofHash: string): boolean {
-  const req = b64.dec(p.request_hash),
-    res = b64.dec(p.response_hash);
-  if (req.length !== 32 || res.length !== 32) return false;
-  return verify(p.signer, teeText(p.kind, modelId, req, res), p.signature) && proofHash(req, res) === intentProofHash;
+/** Same checks the contract runs (`verify_tee` and the provider rule in `accept_intent`): kind 1 or 2, a TEE-bound
+ *  agent needs kind 2, enclave signature over the rebuilt text, and the intent commits to it. */
+export function verifyTeeProof(p: TeeProof, modelId: string, intentProofHash: string, teeAgent = false): boolean {
+  if (p.kind !== 1 && p.kind !== 2) return false;
+  if (teeAgent && p.kind !== 2) return false;
+  try {
+    const req = b64.strict(p.request_hash),
+      res = b64.strict(p.response_hash);
+    if (req.length !== 32 || res.length !== 32) return false;
+    return verify(p.signer, teeText(p.kind, modelId, req, res), p.signature) && proofHash(req, res) === intentProofHash;
+  } catch {
+    return false;
+  }
 }

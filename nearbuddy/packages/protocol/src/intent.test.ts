@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
@@ -90,6 +90,24 @@ test("a real NEAR AI Cloud enclave signature verifies, a flipped byte does not",
       proofHash(fromHex(REAL.request_hash), res),
     ),
   );
+});
+
+test("tee proof kind rules match the contract: 1 or 2 only, and a TEE-bound agent needs kind 2", () => {
+  const ph = proofHash(fromHex(REAL.request_hash), fromHex(REAL.response_hash));
+  assert.ok(verifyTeeProof(realProof, REAL.model, ph, true), "kind 2 for a TEE agent");
+  assert.ok(!verifyTeeProof({ ...realProof, kind: 3 as 2 }, REAL.model, ph), "bad tee kind");
+  // a correctly signed kind-1 (gateway) proof from a test key: valid for a plain agent, refused for a TEE-bound one
+  const k = keyFromSeed("07".repeat(32));
+  const text1 = teeText(1, REAL.model, fromHex(REAL.request_hash), fromHex(REAL.response_hash));
+  const gateway: TeeProof = {
+    ...realProof,
+    kind: 1,
+    signer: pkOf(k),
+    signature: b64.enc(new Uint8Array(sign(null, text1, k))),
+  };
+  assert.ok(verifyTeeProof(gateway, REAL.model, ph), "gateway proof, plain agent");
+  assert.ok(!verifyTeeProof(gateway, REAL.model, ph, true), "provider proof required");
+  assert.ok(!verifyTeeProof({ ...realProof, signer: realProof.signer.slice(0, -1) }, REAL.model, ph), "unpadded");
 });
 
 // Commit-reveal and consent vectors from the shared file.
