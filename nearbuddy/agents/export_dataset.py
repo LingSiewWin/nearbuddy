@@ -25,10 +25,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import ATTEST_DIR, DATA, network_file  # noqa: E402
-from duelist import FULL_SIZE_BPS, DuelistError, parse_decision  # noqa: E402
+from duelist import DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, message_text, request_body  # noqa: E402
-from prompts import SIZER, VARIANT_D, sizer_user, user_bc  # noqa: E402
+from prompts import FULL_SIZE_BPS, SIZER, VARIANT_D, sizer_user, user_bc  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SRC = DATA
