@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
 import nacl from "tweetnacl";
@@ -25,16 +26,9 @@ import {
   ZERO_PROOF,
 } from "./intent.ts";
 
-// Same fixture as the contract test `intent_message_len` (arena/src/tests.rs).
-const fixture: Intent = {
-  agent_pk: b64.enc(new Uint8Array(32).fill(1)),
-  duel_id: "7",
-  side: "Short",
-  size_bps: 5000,
-  nonce: "3",
-  expires_at: "1700000000000000000",
-  proof_hash: ZERO_PROOF,
-};
+// Inputs and expected bytes come from fixtures/wire-vectors.json, shared with the Rust and Python tests.
+const W = JSON.parse(readFileSync(new URL("../../../fixtures/wire-vectors.json", import.meta.url), "utf8"));
+const fixture: Intent = W.intent;
 
 test("intent bytes: domain prefix and borsh length", () => {
   const m = intentMessage(fixture);
@@ -44,12 +38,7 @@ test("intent bytes: domain prefix and borsh length", () => {
   assert.equal(m[19 + 36 + 8], 1); // Short = 1
 });
 
-// Printed by `cargo test intent_message_len_matches_ts -- --nocapture` (INTENT_HEX); the Python test pins the same string.
-const RUST_HEX =
-  "6e65617262756464792d696e74656e742d76312000000001010101010101010101010101010101010101010101010101010101010101010700000000000000018813030000000000000000002a36fe9c9717200000000000000000000000000000000000000000000000000000000000000000000000";
-test("intent bytes match the Rust contract byte for byte", () => {
-  assert.equal(hex(intentMessage({ ...fixture, expires_at: "1700000000000000000" })), RUST_HEX);
-});
+// Byte-for-byte parity with Rust and Python: wire-vectors.test.ts (fixtures/wire-vectors.json).
 
 test("intent sign/verify and tamper", () => {
   const kp = KeyPair.fromRandom("ed25519");
@@ -103,16 +92,13 @@ test("a real NEAR AI Cloud enclave signature verifies, a flipped byte does not",
   );
 });
 
-// Commit-reveal and consent vectors; agents/tests/test_intent_client.py pins the same hex strings.
-const CONTRACT = "arena.nearbuddy-solver.testnet";
-const SALT = new Uint8Array(32).fill(2);
-const PK_A = b64.enc(new Uint8Array(32).fill(1)),
-  PK_B = b64.enc(new Uint8Array(32).fill(3));
-const COMMITMENT_HEX = "77b102ffbab3f871bf96bf1306405e68db6968a26d3814d27146cbd641cb25d8";
-const COMMIT_MSG_HEX =
-  "6e65617262756464792d636f6d6d69742d76316172656e612e6e65617262756464792d736f6c7665722e746573746e6574070000000000000077b102ffbab3f871bf96bf1306405e68db6968a26d3814d27146cbd641cb25d8";
-const CONSENT_MSG_HEX =
-  "6e65617262756464792d6475656c2d76316172656e612e6e65617262756464792d736f6c7665722e746573746e657401010101010101010101010101010101010101010101010101010101010101010303030303030303030303030303030303030303030303030303030303030303777261702e6e65617200002a36fe9c9717";
+// Commit-reveal and consent vectors from the shared file.
+const CONTRACT: string = W.contract;
+const SALT = fromHex(W.commit.salt_hex);
+const { a: PK_A, b: PK_B, symbol: SYMBOL, close_at: CLOSE_AT } = W.consent;
+const COMMITMENT_HEX: string = W.commit.commitment_hex;
+const COMMIT_MSG_HEX: string = W.commit.message_hex;
+const CONSENT_MSG_HEX: string = W.consent.message_hex;
 
 test("commitment = sha256(intent bytes || salt), bound to every intent field and the salt", () => {
   const c = commitment(fixture, SALT);
@@ -132,10 +118,10 @@ test("commit message: domain || contract || duel_id u64 LE || commitment", () =>
 });
 
 test("consent message: domain || contract || a || b || symbol || close_at u64 LE", () => {
-  const m = consentMessage(CONTRACT, PK_A, PK_B, "wrap.near", "1700000000000000000");
+  const m = consentMessage(CONTRACT, PK_A, PK_B, SYMBOL, CLOSE_AT);
   assert.equal(hex(m), CONSENT_MSG_HEX);
-  assert.equal(m.length, CONSENT_DOMAIN.length + CONTRACT.length + 32 + 32 + "wrap.near".length + 8);
-  assert.notEqual(hex(consentMessage(CONTRACT, PK_B, PK_A, "wrap.near", "1700000000000000000")), CONSENT_MSG_HEX);
+  assert.equal(m.length, CONSENT_DOMAIN.length + CONTRACT.length + 32 + 32 + SYMBOL.length + 8);
+  assert.notEqual(hex(consentMessage(CONTRACT, PK_B, PK_A, SYMBOL, CLOSE_AT)), CONSENT_MSG_HEX);
 });
 
 /** A contract view returning bytes: JSON array of u8, hex string or base64 string. */
