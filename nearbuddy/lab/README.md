@@ -216,6 +216,11 @@ Any change after this commit is listed here with its reason.
      trials in flight were rerun, and their earlier calls stay in `spend.jsonl`. No request ever returned 429.
    - **Rebase.** The branch was rebased onto `overnight/fool-the-ai`. Naive and hardened request bytes did not
      change: every stored A/B call re-verifies under the new code.
+   - **Outages.** From 05:09 +08, the Qwen3.8-27B endpoint returned 502. Those trials were recorded and excluded,
+     as pre-registered. At 06:16 +08 the whole NEAR AI Cloud gateway returned 500, even on `/v1/models`. The D run
+     was stopped at 06:20 rather than spend plan slots on a dead API. It was to resume from its checkpoint if the API
+     came back before 07:00. Trials already recorded as transport errors stay excluded, and no outcome of D was
+     looked at before D ended.
    - **Versions.** Every trial in C and D runs cue_guard v2 (`CUE_GUARD_VERSION` 2). Every trial in D also runs
      judge prompt version 2, which binds the judge call to duel_id = 900000 + trial and nonce = the arm's index.
      Each trial records both versions, and no experiment mixes versions.
