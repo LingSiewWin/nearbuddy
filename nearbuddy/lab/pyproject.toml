@@ -1,0 +1,21 @@
+[project]
+name = "nearbuddy-lab"
+version = "0.1.0"
+description = "Pre-registered credibility-cue experiment on the arena duelists"
+requires-python = ">=3.13"
+dependencies = [
+    "pynacl==1.6.2",
+    "python-dotenv==1.2.4",
+    "requests==2.34.2",
+]
+
+[dependency-groups]
+dev = [
+    "mypy==2.4.1",
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+    "scipy==1.18.1",  # tests only: reference values for stats.py
+]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "../agents"]

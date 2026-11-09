@@ -1,0 +1,15 @@
+# Same rules as ../agents/ruff.toml, without its extend-include of ../analysis.
+line-length = 120
+target-version = "py313"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[lint.per-file-ignores]
+"corpus.py" = ["E501"]  # the headlines are the exact text the models read; no wrapping inside the strings
+
+[lint.isort]
+known-first-party = [
+    "chain", "duelist", "export_dataset", "intent_client", "keys", "nearai", "prices", "prompts", "runner", "summarize",
+    "config", "injection_effects", "corpus", "stats", "harness", "report", "claims",
+]
