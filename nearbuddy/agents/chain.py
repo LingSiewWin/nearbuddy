@@ -61,7 +61,10 @@ def rpc(
     raise RuntimeError(f"after {retries} attempts: {last}")
 
 
-def _view(method: str, args: Mapping[str, object]) -> Any:
+def _view(
+    method: str, args: Mapping[str, object], retries: int = RETRIES, timeout: float | tuple[float, float] = 30
+) -> Any:
+    """`retries` and `timeout` as in `rpc`: a caller on a deadline passes one attempt with a short timeout."""
     result = rpc(
         "query",
         {
@@ -72,6 +75,8 @@ def _view(method: str, args: Mapping[str, object]) -> Any:
             "args_base64": base64.b64encode(json.dumps(args).encode()).decode(),
         },
         method,
+        retries,
+        timeout,
     )
     return json.loads(bytes(result["result"]).decode())
 

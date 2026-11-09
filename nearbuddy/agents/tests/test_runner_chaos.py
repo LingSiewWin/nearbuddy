@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import chain  # noqa: E402
 import runner  # noqa: E402
 from config import ENV  # noqa: E402
 from export_dataset import check_row  # noqa: E402
@@ -135,7 +136,7 @@ def clock(tmp_path, monkeypatch):
     monkeypatch.setattr(time, "time_ns", lambda: c.ns)
     monkeypatch.setattr(time, "sleep", c.sleep)
     monkeypatch.setattr(runner, "chain_now_ns", lambda **_: c.ns)
-    monkeypatch.setattr(runner, "view", lambda method, args: c.chain(method, args))
+    monkeypatch.setattr(runner, "_view", lambda method, args, **_: c.chain(method, args))
     monkeypatch.delitem(ENV, "AGENT_KEY_Y", raising=False)
     monkeypatch.delitem(ENV, "AGENT_SEED_Y", raising=False)
     return c
@@ -367,3 +368,31 @@ def test_a_decision_that_hangs_past_the_cutoff_is_abandoned_and_the_held_call_re
         assert runner._prepare_by(CLOSE_NS, comp) == "busy", "no new decision writes into the abandoned call's state"
     finally:
         model.gate.set()
+
+
+def test_the_re_read_is_one_short_attempt_and_any_failure_falls_back_to_none(monkeypatch):
+    calls = []
+
+    def malformed(method, args, retries, timeout):
+        calls.append((method, retries, timeout))
+        raise KeyError("result")  # _view's result["result"] on an answer without one
+
+    monkeypatch.setattr(runner, "_view", malformed)
+    assert runner.chaos_pending("5", "pk") is None
+    assert calls == [("get_chaos", 1, (3, 5))]
+    monkeypatch.setattr(runner, "_view", lambda *_a, **_k: [{"target": "pk"}])  # no outcome field
+    assert runner.chaos_pending("5", "pk") is None
+
+
+def test_chain_view_passes_retries_and_timeout_to_rpc(monkeypatch):
+    seen = {}
+
+    def rpc(method, params, what="", retries=chain.RETRIES, timeout=30, first=0):
+        seen.update(retries=retries, timeout=timeout)
+        return {"result": list(b"[]")}
+
+    monkeypatch.setattr(chain, "rpc", rpc)
+    assert chain._view("get_chaos", {"duel_id": "5"}, retries=1, timeout=(3, 5)) == []
+    assert seen == {"retries": 1, "timeout": (3, 5)}
+    chain._view("get_chaos", {"duel_id": "5"})
+    assert seen == {"retries": chain.RETRIES, "timeout": 30}

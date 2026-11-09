@@ -81,7 +81,16 @@ from typing import Any
 import requests
 from nacl.signing import SigningKey
 
-from chain import ARENA, ASSETS, agent_tier_on_chain, chain_now_ns, view, wait_outcome, warn_if_arena_missing
+from chain import (
+    ARENA,
+    ASSETS,
+    _view,
+    agent_tier_on_chain,
+    chain_now_ns,
+    view,
+    wait_outcome,
+    warn_if_arena_missing,
+)
 from config import ATTEST_DIR, DATA, ENV, NET
 from cue_guard import CUE_GUARD_VERSION
 from duelist import GUARDED, Duelist, DuelistError
@@ -848,17 +857,27 @@ def reveal_prev(
 
 def chaos_pending(duel_id: str, pk: str) -> list[dict[str, Any]] | None:
     """Deploy 17: the headlines get_chaos lists as Pending at `pk`, read from chain rather than through the solver's
-    GET /arena (memoised for 3 s), in the shape GET /arena lists them. None when the view fails."""
+    GET /arena (memoised for 3 s), in the shape GET /arena lists them. It runs right before a commit, so it is one
+    attempt of at most (3 s connect, 5 s read), no backoff. None when the read fails in any way (transport, RPC error,
+    a malformed answer): the commit then goes out without the re-read, which only a headline landing in the last
+    seconds can miss."""
     try:
-        chaos = view("get_chaos", {"duel_id": duel_id})
-    except RuntimeError as e:
-        print(f"  get_chaos {duel_id} unreadable ({str(e)[:80]}); committing without the re-read")
+        chaos = _view("get_chaos", {"duel_id": duel_id}, retries=1, timeout=(3, 5))
+        return [
+            {
+                "duel_id": duel_id,
+                "index": n,
+                "kind": c["kind"],
+                "arm": c["arm"],
+                "at": c["at"],
+                "payload": c["headline"],
+            }
+            for n, c in enumerate(chaos)
+            if c["outcome"] == "Pending" and c["target"] == pk
+        ]
+    except Exception as e:  # a KeyError or a TypeError must not end the duel loop with a commitment held
+        print(f"  get_chaos {duel_id} unreadable ({type(e).__name__}: {str(e)[:80]}); committing without the re-read")
         return None
-    return [
-        {"duel_id": duel_id, "index": n, "kind": c["kind"], "arm": c["arm"], "at": c["at"], "payload": c["headline"]}
-        for n, c in enumerate(chaos)
-        if c["outcome"] == "Pending" and c["target"] == pk
-    ]
 
 
 def reveal(solver: Solver, p: Commitment) -> str:
