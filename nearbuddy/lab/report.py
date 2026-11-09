@@ -38,6 +38,7 @@ from prompts import (  # noqa: E402
     judge_user,
     parse_verdict,
     preview,
+    user_v2,
     user_v3,
 )
 
@@ -238,14 +239,16 @@ def reverified(rec: dict[str, Any], arm: str) -> bool:
     if got is None or c["headline"] != headline:
         return False
     want = preview(profile, rec["symbol"], rec["brief"], headline)
+    gv = rec.get("cue_guard_version") or 1  # rows from before cue_guard was versioned ran v1
+    if profile == HARDENED_V2:
+        want["user"] = user_v2(rec["brief"], headline, gv)[0]
     if profile == HARDENED_V3 and headline:
-        j = c.get("judge")
-        if not j or signed(j, JUDGE_MODEL) != (JUDGE_SYSTEM, judge_user(headline)):
+        j, bound = c.get("judge"), tuple(c["bind"]) if c.get("bind") else None
+        if not j or signed(j, JUDGE_MODEL) != (JUDGE_SYSTEM, judge_user(headline, gv, bound)):
             return False
         reply = j["text"]
-        want["user"] = user_v3(
-            rec["brief"], headline, parse_verdict(reply), hashlib.sha256(reply.encode()).hexdigest()
-        )[0]
+        sha = hashlib.sha256(reply.encode()).hexdigest()
+        want["user"] = user_v3(rec["brief"], headline, parse_verdict(reply), sha, gv)[0]
     return got == (want["system"], want["user"])
 
 
