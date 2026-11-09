@@ -7,7 +7,7 @@
 #
 #   scripts/deploy-contract.sh                       # code-only deploy
 #   scripts/deploy-contract.sh --migrate migrate_v12 # deploy + state migration in one tx
-#   scripts/deploy-contract.sh --migrate migrate_v16 --migrate-args '{"max_vault_per_account":"…"}'
+#   scripts/deploy-contract.sh --migrate migrate_v17 --migrate-args '{"chaos":{"base":"…","r_bps":12500,"cap":"…","fee_bps":500,"share_bps":5000}}'
 #   scripts/deploy-contract.sh --dry-run             # checks only (source + chain), prints the commands
 #   scripts/deploy-contract.sh --at-boundary [...]   # stop both duel loops at their next batch boundary first
 #
