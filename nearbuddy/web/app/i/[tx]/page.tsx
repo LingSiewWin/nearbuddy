@@ -14,7 +14,8 @@ const textOf = async (sp: Props["searchParams"]) => {
 
 export async function generateMetadata({ params, searchParams }: Props): Promise<Metadata> {
   const { tx } = await params;
-  const text = await textOf(searchParams);
+  // previews (X, Slack) print the title: only a headline whose sha256 is on chain gets there, never the raw `t`
+  const text = TX_RE.test(tx) ? (await card(tx, await textOf(searchParams))).text : null;
   const img = `/api/card?tx=${encodeURIComponent(tx)}${text ? `&t=${encodeURIComponent(text)}` : ""}`;
   const title = text ? `“${text}” · Fool the AI` : "A planted headline · Fool the AI";
   const description = "One fake headline, planted in a live AI trading duel on NEAR. Did the model take the bait?";
