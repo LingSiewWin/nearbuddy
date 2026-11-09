@@ -3,15 +3,20 @@
 // open, 32 injections and a no-reveal forfeit (both deploy 14); #395, the first deploy-15 duel (per-duel lock, opener
 // refund, third-party chaos); #401, a red-team deploy-15 duel with real self-chaos. Then each check is shown to fail
 // on a one-field forgery, and the self-chaos rule also runs on a copy of #395 whose injection an agent's owner paid.
+// Deploy 17 has no testnet duel yet: #401 recast as one (fixtures/verify_duel_v17.ts) checks its settlement against
+// the get_chaos records, and the contract's own settlement unit tests are restated on finishMath.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import type { Chaos } from "../packages/protocol/src/abi/arena.ts";
 import { b64 } from "../packages/protocol/src/index.ts";
+import { asDeploy17, TERMS } from "./fixtures/verify_duel_v17.ts";
 import {
   checkDuel,
   type Evidence,
   finishMath,
   incomplete,
+  judged,
   type Line,
   pnlBps,
   price8,
@@ -409,4 +414,202 @@ test("shieldGain: injections at the winner; deploy 15 drops owner-paid ones and 
   assert.equal(shieldGain(t, "A", false, true), 1); // v15: the owner-paid one does not count
   assert.equal(shieldGain(t, "A", true, true), 0); // v15: no shield on a forfeit win
   assert.equal(shieldGain(t, null, false, true), 0); // tie
+});
+
+// ---------------------------------------------------------------- deploy 17
+
+const S = 99_110_000_000_000_000_000_000n; // #401's stake per third-party injection
+const FEE = (S * 500n) / 10_000n;
+
+test("deploy 17 (#401 recast): every stake settles by its get_chaos record, every line passes", () => {
+  const lines = checkDuel(asDeploy17(load("401")));
+  assert.deepEqual(fails(lines), []);
+  for (const check of [
+    "winner and slash",
+    "payout",
+    "chaos settlement",
+    "shield",
+    "injections",
+    "chaos records",
+    "injection deposits",
+  ])
+    assert.deepEqual(result(lines, check), ["PASS"], check);
+  // held at the winner: +1; the owner's own held headline: none
+  assert.ok(lines.find((l) => l.check === "shield")!.detail.includes("expected A +1 B +0, got A +1 B +0"));
+  assert.ok(lines.find((l) => l.check === "chaos settlement")!.detail.includes("1 flipped, 2 held, 1 no trial"));
+});
+
+test("deploy 17: the deploy-16 pool rule fails, and so does each forged record", () => {
+  const forged = (f: (e: Evidence) => void) => {
+    const e = asDeploy17(load("401"));
+    f(e);
+    return fails(checkDuel(e));
+  };
+  // finish() under the pool rule: the winner takes pool + slash, no fee, no share, no resistance reward, shield +2
+  const old = load("401").after!;
+  assert.deepEqual(
+    forged((e) => {
+      e.after!.a!.bond = old.a!.bond;
+      e.after!.b!.bond = old.b!.bond;
+      e.after!.config.owner_fees = old.config.owner_fees;
+    }),
+    ["payout"],
+  );
+  assert.deepEqual(
+    forged((e) => {
+      e.after!.a!.shield = 2;
+    }),
+    ["shield"],
+  );
+  // a payout one yocto off, an outcome its own prev and next do not give, an outcome still pending
+  assert.deepEqual(
+    forged((e) => {
+      e.chaos![3]!.payout = String(BigInt(e.chaos![3]!.payout) + 1n);
+    }),
+    ["chaos settlement"],
+  );
+  assert.deepEqual(
+    forged((e) => {
+      e.chaos![3]!.next = "Long"; // B never took the Short bait
+    }),
+    ["chaos settlement"],
+  );
+  assert.deepEqual(
+    forged((e) => {
+      e.chaos![4]!.outcome = "Pending";
+    }),
+    ["chaos settlement"],
+  );
+  // a record that is not its call: another headline, or a stake on the owner's own injection
+  assert.deepEqual(
+    forged((e) => {
+      e.chaos![1]!.headline = "another headline";
+    }),
+    ["chaos records"],
+  );
+  // a stake the pool did not receive: the records' sums no longer match the pool, the bonds, or the payouts
+  assert.ok(
+    forged((e) => {
+      e.chaos![2]!.stake = String(S - 1n);
+    }).includes("injection deposits"),
+  );
+});
+
+test("deploy 17: a void settles the headlines as on a tie, then splits what is left", () => {
+  // #401 recast, voided instead of scored: no slash, no share; the flip at B is owed s - fee only
+  const e = asDeploy17(load("401"));
+  Object.assign(e.now.duel!.outcome!, { open_price: "0", close_price: "0", winner: null, slashed: "0" });
+  e.chaos![3]!.payout = String(S - FEE);
+  e.after!.a!.bond = String(BigInt(e.before!.a!.bond) + S - FEE); // the held stake less the fee; the pool is all stakes
+  e.after!.b!.bond = e.before!.b!.bond;
+  const lines = checkDuel(e);
+  assert.deepEqual(fails(lines), []);
+  assert.deepEqual(result(lines, "payout"), ["PASS"]);
+  assert.deepEqual(result(lines, "chaos settlement"), ["PASS"]);
+  e.chaos![3]!.payout = String(S - FEE + 1n);
+  assert.deepEqual(fails(checkDuel(e)), ["chaos settlement"]);
+});
+
+test("deploy 17 without its records: payout, records and deposits SKIP, and the evidence is incomplete", () => {
+  const e = { ...asDeploy17(load("401")), chaos: null };
+  const lines = checkDuel(e);
+  assert.deepEqual(fails(lines), []);
+  for (const check of ["payout", "chaos records", "injection deposits"])
+    assert.deepEqual(result(lines, check), ["SKIP"], check);
+  assert.equal(incomplete(e), true);
+  assert.equal(incomplete(asDeploy17(load("401"))), false);
+});
+
+test("a deploy-16 duel read on a deploy-17 contract keeps its own rules, line for line", () => {
+  // the contract that finished it had no chaos terms, and it has no records: nothing changes
+  for (const id of ["363", "373", "395", "401"]) {
+    const e = load(id);
+    e.now.config.chaos = TERMS;
+    e.chaos = [];
+    assert.deepEqual(checkDuel(e), checkDuel(load(id)), id);
+    assert.equal(incomplete(e), incomplete(load(id)), id);
+  }
+});
+
+test("deploy 17 arithmetic: the contract's own settlement tests, restated", () => {
+  const terms = { fee_bps: 500, share_bps: 5_000 };
+  const pks: [string, string] = ["A", "B"];
+  const one = (target: string, outcome: Chaos["outcome"], stake = S) => ({ target, stake: String(stake), outcome });
+  const bonds: [bigint, bigint] = [10n ** 24n, 10n ** 24n];
+  const slashed = bonds[0] / 10n;
+  const run = (pnl: [number, number], records: ReturnType<typeof one>[], slashBps = 1_000) =>
+    finishMath(bonds, S * BigInt(records.length), pnl, [false, false], slashBps, 1_000, { records, pks, terms });
+  // a_flipped_target_that_loses_pays_the_injector_half_its_slash_on_top
+  let m = run([-5, 5], [one("A", "Flipped")]);
+  assert.deepEqual(m.after, [bonds[0] - slashed - slashed / 2n, bonds[1] + slashed]);
+  assert.deepEqual([m.settled!.payouts, m.fees], [[S - FEE + slashed / 2n], FEE]);
+  // a_flipped_target_that_wins_returns_the_stake_less_the_fee
+  m = run([5, -5], [one("A", "Flipped")]);
+  assert.deepEqual([m.after, m.settled!.payouts], [[bonds[0] + slashed, bonds[1] - slashed], [S - FEE]]);
+  // a_held_headline_pays_the_target_a_resistance_reward
+  m = run([5, -5], [one("A", "Held")]);
+  assert.deepEqual(
+    [m.after, m.settled!.payouts, m.fees],
+    [[bonds[0] + slashed + S - FEE, bonds[1] - slashed], [0n], FEE],
+  );
+  // the_flip_share_never_takes_more_than_the_losers_bond: a 90 % slash leaves less than half of it
+  m = run([-5, 5], [one("A", "Flipped")], 9_000);
+  const big = (bonds[0] * 9_000n) / 10_000n;
+  assert.deepEqual([m.after, m.settled!.payouts], [[0n, bonds[1] + big], [S - FEE + (bonds[0] - big)]]);
+  // void_settles_the_headlines_as_a_tie: a held stake to its target less the fee, an expired one owed back
+  m = finishMath(bonds, 2n * S, [0, 0], [false, false], 0, 0, {
+    records: [one("A", "Held"), one("A", "Pending")],
+    pks,
+    terms,
+  });
+  assert.deepEqual(
+    [m.after, m.settled!.payouts],
+    [
+      [bonds[0] + S - FEE, bonds[1]],
+      [0n, S - FEE],
+    ],
+  );
+  // shares pro rata by stake in bps, rounded down: the dust stays in the loser's bond
+  const x = 10n ** 23n;
+  m = finishMath(bonds, 3n * x, [-5, 5], [false, false], 1_000, 0, {
+    records: [one("A", "Flipped", x), one("A", "Flipped", 2n * x)],
+    pks,
+    terms,
+  });
+  const pot = slashed / 2n;
+  const shares = [(pot * 3_333n) / 10_000n, (pot * 6_666n) / 10_000n];
+  assert.deepEqual(m.settled!.payouts, [x - x / 20n + shares[0]!, 2n * x - x / 10n + shares[1]!]);
+  assert.equal(m.after[0], bonds[0] - slashed - shares[0]! - shares[1]!);
+  assert.ok(shares[0]! + shares[1]! < pot);
+  // no chaos (deploy 16): the pool and the slash go whole to the winner, as before
+  assert.deepEqual(finishMath(bonds, S, [5, -5], [false, false], 1_000, 1_000).after, [
+    bonds[0] + S + slashed,
+    bonds[1] - slashed,
+  ]);
+});
+
+test("judged: an outcome must follow from the record's own kind, prev and next", () => {
+  const r = (kind: Chaos["kind"], prev: Chaos["prev"], next: Chaos["next"], outcome: Chaos["outcome"]) =>
+    judged({ kind, prev, next, outcome });
+  assert.equal(r("Short", "Long", "Short", "Flipped"), true);
+  assert.equal(r("Short", "Long", "Long", "Held"), true);
+  assert.equal(r("Short", "Short", "Long", "NoTrial"), true); // already on the lie's side
+  assert.equal(r("Short", null, "Short", "NoTrial"), true); // no call before the lie
+  assert.equal(r("Placebo", "Long", "Short", "NoTrial"), true); // a placebo is never a trial
+  assert.equal(r("Short", null, null, "NoTrial"), true); // voided: its target replaced a held commitment
+  assert.equal(r("Short", "Long", null, "Expired"), true);
+  assert.equal(r("Short", "Long", "Long", "Flipped"), false);
+  assert.equal(r("Short", "Short", "Short", "Flipped"), false);
+  assert.equal(r("Placebo", "Long", "Long", "Held"), false);
+  assert.equal(r("Short", "Long", "Short", "Expired"), false);
+});
+
+test("shieldGain from deploy 17: only the Held records count", () => {
+  const t = (["Held", "Flipped", "NoTrial", "Expired"] as const).map((outcome) => ({
+    target: "A",
+    self: false,
+    outcome,
+  }));
+  assert.equal(shieldGain([...t, { target: "A", self: true, outcome: "Held" }], "A", false, true), 1);
+  assert.equal(shieldGain(t, "A", true, true), 0); // a forfeit win
 });
