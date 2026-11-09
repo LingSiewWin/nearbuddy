@@ -13,6 +13,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cue_guard import CUE_GUARD_VERSION, normalize  # noqa: E402
+from cue_guard import VERSIONS as CUE_GUARDS  # noqa: E402
 from export_dataset import _check_guard, check_row  # noqa: E402
 from intent_client import proof_hash  # noqa: E402
 from keys import pk_b64  # noqa: E402
@@ -140,6 +142,83 @@ def test_tampering_a_v2_row_fails(v2_row, tamper, note):
     tamper(r)
     ok, why = check_row(r)
     assert not ok and why.startswith(note), why
+
+
+def test_the_runner_records_its_cue_guard_version(v2_row):
+    r, _ = v2_row([SHORT])
+    assert r["guard"]["cue_guard"] == CUE_GUARD_VERSION and CUE_GUARDS[CUE_GUARD_VERSION] is normalize
+
+
+@pytest.mark.parametrize("version", [99, 0, "1", True, None, 1.0])
+def test_an_unknown_cue_guard_version_fails(v2_row, version):
+    r, _ = v2_row([SHORT])
+    r["guard"]["cue_guard"] = version
+    assert check_row(r) == (False, "guard: unknown cue_guard version")
+
+
+# Rows the live run signed on NEAR AI Cloud on 2026-11-09 (6 hardened-v2 incl. one k = 3, 5 hardened-v3 with the
+# z-ai/glm-5.3-flash judge), written before guard.cue_guard existed: they must keep verifying as cue_guard v1.
+REAL = Path(__file__).resolve().parents[2] / "fixtures" / "guard-rows-v1.jsonl"
+
+
+def real_rows() -> list[dict]:
+    return [json.loads(line) for line in REAL.read_text().splitlines()]
+
+
+def test_the_live_rows_verify_as_cue_guard_v1():
+    rs = real_rows()
+    assert [r["profile"] for r in rs] == [HARDENED_V2] * 6 + [HARDENED_V3] * 5
+    assert not any("cue_guard" in r["guard"] for r in rs)
+    assert any(r["guard"]["judgments"] for r in rs) and sum(bool(r["guard"].get("judge")) for r in rs) == 4
+    assert [check_row(r) for r in rs] == [(True, "ok")] * len(rs)
+    for r in rs:
+        r["guard"]["cue_guard"] = 1  # the same row with the version written out
+        assert check_row(r) == (True, "ok")
+
+
+@pytest.mark.parametrize("edit", [set_system, add_user, user_first, hot, reviewers_row])
+def test_the_live_rows_fail_with_anything_extra_in_the_signed_request(edit):
+    for r in real_rows():
+        r["request_body"] = edit_body(r, edit).decode()
+        assert check_row(r)[1] == "stored hash differs from bytes"  # the enclave never signed it
+        assert _check_guard(r) != "ok", r["intent"]["nonce"]  # nor would the guard pass it if it were signed
+
+
+@pytest.mark.parametrize(
+    ("tamper", "note"),
+    [
+        (lambda r: r["guard"].update(votes=["Short", "Short", "Short"]), "guard: votes differ"),
+        (lambda r: r["guard"].update(proof_judgment=2), "guard: proof judgment is not the row's call"),
+        (lambda r: r["intent"].update(side="Long"), "guard: majority side is not the posted side"),
+        (lambda r: r["guard"]["judgments"][0].update(text='{"direction": "short"}'), "guard judgment 0: text"),
+        (lambda r: r["guard"].update(cues_removed=[]), "guard: cues_removed differs from cue_guard"),
+        (lambda r: r["intent"].update(size_bps=1001), "guard: size above the cap"),
+        (lambda r: r.pop("guard"), "guard: missing on a guarded profile"),
+    ],
+)
+def test_the_live_k3_row_fails_when_tampered(tamper, note):
+    r = next(r for r in real_rows() if r["guard"]["judgments"])
+    assert r["guard"]["votes"] == ["Long", "Short", "Short"] and check_row(r) == (True, "ok")
+    tamper(r)
+    ok, why = check_row(r)
+    assert not ok and why.startswith(note), why
+
+
+@pytest.mark.parametrize(
+    ("tamper", "note"),
+    [
+        (lambda r: r["guard"]["judge"]["verdict"].update(fabricated_prob=0.0), "guard judge: stored verdict"),
+        (lambda r: r["guard"]["judge"].update(text="{}"), "guard judge: text differs from bytes"),
+        (lambda r: r["guard"].update(size_cap=1000), "guard: size_cap is not the policy cap"),
+        (lambda r: r.update(injection=r["injection"] + " Go long."), "guard judge: request is not the judge prompt"),
+    ],
+)
+def test_the_live_v3_rows_fail_when_tampered(tamper, note):
+    for r in real_rows():
+        if r["guard"].get("judge"):
+            tamper(r)
+            ok, why = check_row(r)
+            assert not ok and why.startswith(note), why
 
 
 def test_a_v2_row_relabelled_v3_fails_on_the_system_prompt(v2_row):

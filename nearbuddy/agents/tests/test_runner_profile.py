@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import runner  # noqa: E402
 from config import ENV  # noqa: E402
+from cue_guard import CUE_GUARD_VERSION  # noqa: E402
 from export_dataset import check_row  # noqa: E402
 from keys import pk_b64  # noqa: E402
 from nearai import request_body  # noqa: E402
@@ -117,6 +118,7 @@ def test_unattacked_row_keeps_the_stated_size_under_the_mandate(agent):
     (r,) = rows()
     assert r["intent"]["size_bps"] == 300 and r["profile"] == HARDENED_V2
     assert r["guard"] == {
+        "cue_guard": CUE_GUARD_VERSION,
         "cues_removed": [],
         "size_stated": 300,
         "size_cap": FULL_SIZE_BPS,

@@ -28,6 +28,14 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Callable
+
+import cue_guard_v1
+
+# Recorded on every guarded dataset row (`guard.cue_guard`), so the row is re-checked with the cue_guard that cleaned
+# its headline. Any change to what `normalize` returns is a new version: copy this file to cue_guard_v<N>.py unchanged,
+# add it to VERSIONS and bump this number.
+CUE_GUARD_VERSION = 1
 
 # Letters that render like Latin ones: Greek, Cyrillic, and small capitals (mapped to capitals, which they look like).
 # Applied only to a word whose every non-ASCII letter is in this table, so a genuine Greek or Russian word is kept.
@@ -405,3 +413,7 @@ def normalize(text: str) -> tuple[str, list[str]]:
         if s == before:
             break
     return s, cues
+
+
+# `normalize` of every published version; rows without `guard.cue_guard` were cleaned by version 1
+VERSIONS: dict[int, Callable[[str], tuple[str, list[str]]]] = {1: cue_guard_v1.normalize, CUE_GUARD_VERSION: normalize}

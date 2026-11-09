@@ -9,4 +9,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 "prompts.py" = ["E501"]  # the variant prompts are the exact text the enclave signs; no wrapping inside the string
 
 [lint.isort]
-known-first-party = ["chain", "cue_guard", "duelist", "export_dataset", "intent_client", "keys", "nearai", "prices", "prompts", "runner", "summarize"]
+known-first-party = ["chain", "cue_guard", "cue_guard_v1", "duelist", "export_dataset", "intent_client", "keys", "nearai", "prices", "prompts", "runner", "summarize"]

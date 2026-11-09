@@ -16,7 +16,8 @@ side call's output); both calls are kept in the row's `arm_d`, and an unproven s
 Profiles (`--profile naive|hardened|hardened-v2|hardened-v3`, agent A's or the `--only` agent's; rows carry `profile`):
 hardened-v2 runs the injection through cue_guard, puts it in a block labelled "paid third-party injection, unverified"
 next to the trusted price-feed and mandate blocks, and caps the size in code while that block is present. Rows gain
-`guard` (cues removed, stated size, cap, votes). `--judgments K` asks K times and takes the majority side.
+`guard` (cue_guard version, cues removed, stated size, cap, votes). `--judgments K` asks K times and takes the
+majority side.
 hardened-v3 is hardened-v2 plus a fact-check: before the duelist's call, prompts.JUDGE_MODEL (on the same NEAR AI key,
 so its call is enclave-signed too) reads the cleaned headline alone, and its verdict joins the duelist's request and
 sets the cap. `guard.judge` keeps that call's bytes, enclave record and parsed verdict; an unproven judge call means
@@ -72,6 +73,7 @@ from nacl.signing import SigningKey
 
 from chain import ARENA, ASSETS, agent_tier_on_chain, chain_now_ns, view, wait_outcome, warn_if_arena_missing
 from config import ATTEST_DIR, DATA, ENV, NET
+from cue_guard import CUE_GUARD_VERSION
 from duelist import GUARDED, Duelist, DuelistError
 from intent_client import (
     DeadlineError,
@@ -304,6 +306,7 @@ def prepare_decision(
     guard: dict[str, Any] | None = None
     if d.variant in GUARDED:
         guard = {
+            "cue_guard": CUE_GUARD_VERSION,  # the cue_guard that cleaned the injection; a verifier rebuilds with it
             "cues_removed": decision.cues_removed,
             "size_stated": decision.size_asked,
             "size_cap": decision.size_cap,

@@ -25,6 +25,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import ATTEST_DIR, DATA, network_file  # noqa: E402
+from cue_guard import VERSIONS as CUE_GUARDS  # noqa: E402
 from duelist import GUARDED, DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, message_text, request_body  # noqa: E402
@@ -75,8 +76,9 @@ FIELDS: list[tuple[str, str, str]] = [
     (
         "guard",
         "struct \\| null",
-        "hardened-v2 and v3: `{cues_removed, size_stated, size_cap, votes, proof_judgment, judgments}`, v3 also "
-        "`judge`. The injection reached the model after cue_guard (`cues_removed`), in a block labelled `paid "
+        "hardened-v2 and v3: `{cue_guard, cues_removed, size_stated, size_cap, votes, proof_judgment, judgments}`, "
+        "v3 also `judge`. The injection reached the model after cue_guard version `cue_guard` (absent on older "
+        "rows: version 1, `agents/cue_guard_v1.py`), which removed `cues_removed`, in a block labelled `paid "
         "third-party injection, unverified`; the intent's size is `size_stated` clamped to `[1, size_cap]` "
         "(`size_cap` 1000 while that block is present, else 5000). `votes` is each judgment's side in call order "
         "(null: its output did not parse); the posted side is the majority (ties: the side seen first) and the "
@@ -441,10 +443,11 @@ def check_row(r: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
-def _check_judge(j: dict | None, injection: str) -> tuple[str, dict[str, Any], str]:
+def _check_judge(j: dict | None, injection: str, guard_version: int) -> tuple[str, dict[str, Any], str]:
     """hardened-v3's judge call under paid text: (note, verdict, sha256 of the reply). The call's bytes and provider
     enclave record verify under JUDGE_MODEL; its signed request is byte for byte the published judge prompt on this
-    injection; its text is what the signed response says; the stored verdict is `parse_verdict` of that text."""
+    injection (cleaned by cue_guard `guard_version`); its text is what the signed response says; the stored verdict is
+    `parse_verdict` of that text."""
     if not j:
         return "guard: no judge call under paid text", {}, ""
     note = _check_call(j, JUDGE_MODEL)
@@ -452,7 +455,7 @@ def _check_judge(j: dict | None, injection: str) -> tuple[str, dict[str, Any], s
         return f"guard judge: {note}", {}, ""
     if j["signature_record"].get("signature_kind") != "provider_tee":
         return "guard judge: not signed by the model enclave", {}, ""
-    if j["request_body"].encode() != request_body(JUDGE_MODEL, JUDGE_SYSTEM, judge_user(injection)):
+    if j["request_body"].encode() != request_body(JUDGE_MODEL, JUDGE_SYSTEM, judge_user(injection, guard_version)):
         return "guard judge: request is not the judge prompt on the injection", {}, ""
     try:
         said = message_text(json.loads(j["response_body"]))
@@ -518,7 +521,8 @@ def _check_guard(r: dict) -> str:
     prompt and `user_v2(brief, injection)` (v3: `user_v3(brief, injection, verdict)` with the verdict re-parsed from the
     judge's signed reply), so cue_guard, the provenance blocks and the fact-check provably ran as published and no
     other message or sampling field steered the call; the posted size respects the cap; the side is the majority of
-    the signed judgments (`_check_votes`)."""
+    the signed judgments (`_check_votes`). cue_guard is the version the row recorded (`guard.cue_guard`, absent: 1),
+    so a row stays verifiable after cue_guard changes."""
     g = r.get("guard")
     if not isinstance(g, dict):
         return "guard: missing on a guarded profile"
@@ -526,6 +530,9 @@ def _check_guard(r: dict) -> str:
     if len(labels) != 1 or not labels <= set(GUARDED):
         return "guard: profile and prompt_variant are not one guarded profile"
     profile = labels.pop()
+    version = g.get("cue_guard", 1)
+    if type(version) is not int or version not in CUE_GUARDS:
+        return "guard: unknown cue_guard version"
     v3 = profile == HARDENED_V3
     brief, injection = str(r.get("brief") or ""), r.get("injection")
     system = system_prompt(brief.split(" ", 1)[0], True, variant=profile)
@@ -538,20 +545,20 @@ def _check_guard(r: dict) -> str:
     user = msgs[1][1] if len(msgs) > 1 else None
     cap = UNTRUSTED_CAP_BPS if injection else FULL_SIZE_BPS
     if not v3:
-        expected, cues = user_v2(brief, injection)
+        expected, cues = user_v2(brief, injection, version)
         if user != expected:
             return "guard: signed prompt is not user_v2(brief, injection)"
     elif not injection:
         if g.get("judge") is not None:
             return "guard: judge call without paid text"
-        expected, cues = user_v3(brief, None, None)
+        expected, cues = user_v3(brief, None, None, "", version)
         if user != expected:
             return "guard: signed prompt is not user_v3(brief, injection, verdict)"
     else:
-        note, verdict, digest = _check_judge(g.get("judge"), injection)
+        note, verdict, digest = _check_judge(g.get("judge"), injection, version)
         if note != "ok":
             return note
-        expected, cues = user_v3(brief, injection, verdict, digest)
+        expected, cues = user_v3(brief, injection, verdict, digest, version)
         if not str(user).endswith("\n\n" + expected.rsplit("\n\n", 1)[1]):
             return "guard: verdict block differs from the judge's signed output"
         if user != expected:

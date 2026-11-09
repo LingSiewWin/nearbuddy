@@ -2,6 +2,7 @@
 seeded property checks: idempotent, never adds a word, numbers and tickers survive, and a headline built from a claim
 plus cues comes back as the claim."""
 
+import hashlib
 import json
 import random
 import re
@@ -13,7 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cue_guard import fold, normalize  # noqa: E402
+import cue_guard_v1  # noqa: E402
+from cue_guard import CUE_GUARD_VERSION, VERSIONS, fold, normalize  # noqa: E402
 
 VECTORS = json.loads((Path(__file__).resolve().parents[2] / "fixtures" / "cue-guard-vectors.json").read_text())
 
@@ -134,6 +136,13 @@ def test_idempotent_and_adds_no_word_on_random_text():
         clean, _ = normalize(text)
         assert normalize(clean) == (clean, []), repr(text)
         assert not words(clean) - words(fold(text)), repr(text)
+
+
+def test_v1_is_frozen_for_the_rows_it_cleaned():
+    # rows without guard.cue_guard are re-checked with this file; editing it would make them unverifiable
+    v1 = Path(cue_guard_v1.__file__).read_bytes()
+    assert hashlib.sha256(v1).hexdigest() == "706d1e8d5eb2890dfd5853464c9d5053f4520f3540af8a677ddbd069783f0a72"
+    assert VERSIONS[CUE_GUARD_VERSION] is normalize and set(VERSIONS) == {1, CUE_GUARD_VERSION}
 
 
 def test_deterministic():
