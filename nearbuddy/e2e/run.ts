@@ -15,7 +15,7 @@
 //     a local stand-in serves both (NEARBUDDY_COINBASE_URL for the runner, ONECLICK_URL for the solver) and the
 //     follower check requires a quote. CI (.github/workflows/e2e-nightly.yml) runs offline; local runs stay live.
 // Not in the per-push CI (sandbox download, ~5 minutes): nightly and on demand. Everything it writes goes to a temp dir printed at the start; the
-// runner's dataset goes there through NEARBUDDY_DATA. Every scenario runs with withdraw_delay_s = 60 (the minimum), so
+// runner's dataset goes there through NEARBUDDY_DATA, and its attestation reports beside it. Every scenario runs with withdraw_delay_s = 60 (the minimum), so
 // scenario 3b's binds_until passes within the run.
 //
 // Scenarios:
@@ -80,6 +80,7 @@ const WASM = join(ARENA_DIR, "target/near/nearbuddy_arena.wasm");
 const STUB_DIR = join(ROOT, "intents-stub");
 const STUB_WASM = join(STUB_DIR, "target/near/nearbuddy_intents_stub.wasm");
 const TMP = mkdtempSync(join(tmpdir(), "nearbuddy-e2e-"));
+const ATTEST = join(TMP, "attestations"); // the runner's attestation reports: config.py puts them beside NEARBUDDY_DATA
 const NEAR = 10n ** 24n;
 const MILLI = 10n ** 21n;
 const S = 1_000_000_000n;
@@ -346,6 +347,16 @@ function fakeNearAi(enclave: KeyPairEd25519, model: string, lie: string): Promis
         });
         return send(200, out);
       }
+      // the report save_attestation keeps and check_row requires: the enclave key is listed for the model
+      if (req.method === "GET" && path === "/v1/attestation/report")
+        return send(
+          200,
+          JSON.stringify({
+            model_attestations: [
+              { model_name: model, signing_address: Buffer.from(enclave.getPublicKey().data).toString("hex") },
+            ],
+          }),
+        );
       const sig = /^\/v1\/signature\/(.+)$/.exec(path);
       const rec = req.method === "GET" && sig ? records.get(decodeURIComponent(sig[1]!)) : undefined;
       if (rec) return send(200, JSON.stringify(rec));
@@ -637,7 +648,7 @@ async function main() {
     AGENT_SEED_B: "",
     AGENT_KEY_A: "",
     AGENT_KEY_B: "",
-    NEARBUDDY_DATA: data, // never the real agents/data/decisions.jsonl
+    NEARBUDDY_DATA: data, // never the real agents/data/decisions.jsonl; attestation reports go to ATTEST beside it
     PYTHONUNBUFFERED: "1",
     ...(offline ? { NEARBUDDY_COINBASE_URL: offline, PYTH_API_KEY: "" } : {}),
   });
@@ -1385,14 +1396,15 @@ async function main() {
         python(),
         [
           "-c",
-          "import json, sys; sys.path.insert(0, sys.argv[1]); from export_dataset import check_row; " +
+          "import json, sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); " +
+            "from export_dataset import check_row; " +
             "rows = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]; " +
-            "print(json.dumps([check_row(r) for r in rows if r.get('chaos') and r.get('revealed_tx')]))",
+            "print(json.dumps([check_row(r, Path(sys.argv[3])) for r in rows if r.get('chaos') and r.get('revealed_tx')]))",
           join(ROOT, "agents"),
           data,
+          ATTEST, // the folder the runner saved its attestation reports to
         ],
-        // the runner's network env, so check_row reads the attestation folder the runner wrote (config.ATTEST_DIR)
-        { encoding: "utf8", env: { ...process.env, ...chainEnv, NEAR_AI_API_KEY: "" } },
+        { encoding: "utf8", env: { ...process.env, NEAR_AI_API_KEY: "" } },
       );
       const verdicts = py.status === 0 ? (JSON.parse(py.stdout.trim().split("\n").at(-1)!) as [boolean, string][]) : [];
       check(
