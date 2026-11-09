@@ -1,0 +1,2578 @@
+{
+  "schema_version": "0.4.0",
+  "metadata": {
+    "name": "nearbuddy-arena",
+    "version": "0.1.0"
+  },
+  "body": {
+    "functions": [
+      {
+        "name": "add_solver",
+        "doc": " Allow `account_id` to call `settle_follow`. Caller: owner. Deposit: 1 yoctoNEAR. Panics:\n \"not owner\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "add_tee_signer",
+        "doc": " Accept intents signed by this NEAR AI Cloud enclave key. The owner takes it from\n `GET /v1/attestation/report` after verifying the Intel and NVIDIA quotes off chain; the\n report bytes are published in the dataset so anyone can redo that check.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"signer length\", \"label too long\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signer",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "label",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "agent_duels",
+        "doc": " Duel ids an agent took part in, newest first, `limit` entries from offset `from`. Only duels\n opened from deploy 10 on are indexed; unknown agents return an empty list.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "from",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "limit",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "begin_reconcile",
+        "doc": " Start a paged reconcile of `vault_total` for more holders than one call can read: then\n `reconcile_page` (any number of times) and `finish_reconcile`. Restarts one in progress.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ]
+      },
+      {
+        "name": "commit_intent",
+        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"agent missing\",\n \"bond exhausted\".",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "commitment",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "sig",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "commit_message",
+        "doc": " The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig)`.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "commitment",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Base64VecU8"
+          }
+        }
+      },
+      {
+        "name": "consent_message",
+        "doc": " The exact bytes each agent key signs for `open_duel_consented(a, b, symbol, close_at, ..)`.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "a",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "b",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "symbol",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "close_at",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Base64VecU8"
+          }
+        }
+      },
+      {
+        "name": "contract_source_metadata",
+        "kind": "view"
+      },
+      {
+        "name": "deposit",
+        "doc": " Follower locks NEAR here. Solvers are repaid from it only inside a mandate. A first deposit\n also pays for the vault record.\n Caller: anyone (follower). Deposit: the amount to lock, above a first vault record's\n storage. Panics: \"paused\", \"deposit required\", \"vault cap\", \"account cap\" (the caller's vault\n would pass `max_vault_per_account`).",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "duel_lock",
+        "doc": " The intent lock duel `duel_id` runs (or ran) under, in nanoseconds: no intent lands in its\n last `duel_lock` before `close_at`. From deploy 15 this is the value stored when the duel\n opened, kept after it finishes; for a duel opened earlier it is today's global lock, since\n those duels read the global value. `None` for an unknown duel.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      {
+        "name": "finish_reconcile",
+        "doc": " Set `vault_total` to the pending sum and end the reconcile. Returns the new total.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"no reconcile\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "follow",
+        "doc": " Attach (or replace) the caller's mandate for an agent. Only enclave-verified agents (TEE\n proof on every intent) can be followed. Storage is paid from the vault.\n Caller: a follower with a funded vault. Deposit: none; storage is debited from the\n vault. `min_out_per_near` must be set (clients derive it from the oracle mid less slippage), so\n a solver can never settle a fill for a token amount of output. `revoked_at` is reset to 0 and\n `spent` is ignored: the stored one is kept (0 for a new mandate). `revoked: true` is exactly\n `unfollow` (stamped now, grace applies; no other term changes, open while paused).\n Panics: \"paused\", \"migrating\", \"agent missing\", \"agent unverified\", \"empty mandate\",\n \"price floor required\", \"refollow too soon\", \"update too soon\", \"insufficient\". The record\n keeps when the follower followed: an update while the mandate is live keeps the window\n (fronted fills stay settleable); a re-follow after an unfollow or the expiry refuses only\n intents of the gap. New terms bind intents accepted from now on: a tighter term keeps the\n old terms for earlier intents for `withdraw_delay_s`, and a second tightening inside that\n time is \"update too soon\" (see `VersionedMandate::refollowed`).",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "mandate",
+              "type_schema": {
+                "$ref": "#/definitions/Mandate"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "get_accounted",
+        "doc": " This contract's `intents_account` balance of `token_id` already credited to holdings.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "get_agent",
+        "doc": " Agent record plus whether it is TEE-bound; `None` for an unknown key. View: anyone, no\n deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/AgentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_config",
+        "doc": " Owner, oracle and fee settings plus the next duel id. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Config"
+          }
+        }
+      },
+      {
+        "name": "get_duel",
+        "doc": " Full duel record; `None` for an unknown id. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Duel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_follow",
+        "doc": " The follower's mandate for an agent, if any. Followers per agent are not enumerable on\n chain: index the `follow` / `unfollow` events.\n View: anyone, no deposit. Panics: \"migrating\".",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "follower",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Mandate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_follow_prev",
+        "doc": " The terms before the follower's last tightening update for `agent_pk`: `{terms, updated_at,\n binds_until}` (unix ns); `None` if no update tightened a term since the follow (or since a\n re-follow that opened a fresh window). Fills for intents accepted before `updated_at` are\n judged by `terms` until `binds_until`, then refused (\"mandate updated\"); later intents by\n `get_follow`. The view keeps returning them after `binds_until`. `terms.spent` is the\n snapshot at the update and is not used: the ledger is `get_follow`'s `spent`.\n View: anyone, no deposit. Panics: \"migrating\".",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "follower",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/PrevTerms"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_follow_time",
+        "doc": " Start of `follower`'s current follow window for `agent_pk` (unix ns): fills for intents\n accepted from then on pass the follow-time rule. `None` with no mandate or one stored before\n deploy 16 (no follow time). A re-follow inside a closed window's grace also keeps that\n window's intents settleable until the grace ends (see `VersionedMandate::refollowed`).\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "follower",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_holding",
+        "doc": " Fill output credited to `follower` in `token_id` and not yet withdrawn.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "follower",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "get_no_reveal",
+        "doc": " Whether side a / side b of a scored duel left a commitment unrevealed and was slashed\n `no_reveal_bps`. `(false, false)` for unknown, open or clean duels.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "maxItems": 2,
+            "minItems": 2
+          }
+        }
+      },
+      {
+        "name": "get_pending_withdraw",
+        "doc": " `(amount, ready_at_ns)` of the account's queued vault withdrawal, if any.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "maxItems": 2,
+            "minItems": 2
+          }
+        }
+      },
+      {
+        "name": "get_vault",
+        "doc": " Vault balance in yoctoNEAR, 0 for an unknown account. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "init",
+        "doc": " `owner` runs duels (the solver account in the hackathon deploy). `oracle_account` is the\n Outlayer price oracle; `oracle_deposit` is attached to each price request. `slash_bps` of the\n loser's bond moves to the pool. `fee_bps` is charged on every settled fill, inside the\n follower's caps, and accrues to the owner. `intents_account` is where fill outputs land\n (`intents.near`, or the stub on testnet). `max_vault_total` caps all vault deposits, and is\n also the starting per-account cap (`set_vault_account_cap` lowers it). The\n intent lock starts at 0 and the duel floor at 0, so `lock <= floor / 2` holds until\n `set_oracle` sets both.\n Caller: deployer, once. Deposit: none. Panics: \"bps out of range\".",
+        "kind": "call",
+        "modifiers": [
+          "init"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "owner",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "oracle_account",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "oracle_deposit",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "slash_bps",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "fee_bps",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "min_chaos_deposit",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "intents_account",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "max_vault_total",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "inject_chaos",
+        "doc": " Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver\n delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool;\n when the payer owns either agent it goes to `owner_fees` instead and the injection earns no\n shield, so an owner cannot buy shield or recycle chaos through its own pairing.\n Caller: anyone (spectator). Deposit: at least `min_chaos_deposit` and above the record's\n storage. Panics: \"paused\", \"chaos deposit too small\", \"payload_hash length\", \"kind too long\",\n \"duel missing\", \"duel closed\", \"bad target\", \"chaos full\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "target",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "kind",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "payload_hash",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "intent_accepted_at",
+        "doc": " When the agent's intent `nonce` was accepted (unix ns); 0 for one accepted before deploy 16\n (time not recorded); `None` if it never was. `settle_follow` compares it with the mandate's\n follow time, revoke and expiry. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      {
+        "name": "intent_message_hex",
+        "doc": " Hex of the exact bytes an agent signs for `intent`, for off-chain parity checks. View:\n anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "intent",
+              "type_schema": {
+                "$ref": "#/definitions/Intent"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "is_tee_signer",
+        "doc": " Whether an enclave key is accepted as `TeeProof.signer`. View: anyone, no deposit, no\n panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signer",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "leaderboard",
+        "doc": " Agents sorted by alpha, then shield, descending; `limit` (at most 100) from rank `from`.\n ponytail: sorts every agent per call; a sorted index once agents number in the thousands.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "from",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "limit",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/AgentView"
+            }
+          }
+        }
+      },
+      {
+        "name": "migrate_follows",
+        "doc": " Move the deploy-14 follower lists of agents `[cursor, cursor + limit)` (in `agents` order)\n into per-pair records, emitting a `follow` event for each so an indexer can backfill.\n Returns the next cursor, or `None` when every agent is done (follow and settle reopen).\n Each agent costs one read of its old list, which is what every settle used to do.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"migration done\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "limit",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        }
+      },
+      {
+        "name": "migrate_v16",
+        "doc": " Deploy 15 → 16: a per-account vault cap (`max_vault_per_account`) and the accept time of\n each new intent (`nonce_times`; intents accepted before keep only `used_nonces`, so their\n fills keep the deploy-15 grace rule). Every deploy-15 field is\n carried over unchanged, so existing vaults, mandates, holdings and duels read as before.\n `vault_total` keeps its deploy-15 value; `reconcile_vault_total` clears its drift.\n Caller: the contract itself (private), once after the deploy-16 code lands. Deposit:\n none. Panics: \"no state\", or the SDK private-method panic for any other caller.",
+        "kind": "call",
+        "modifiers": [
+          "init",
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "max_vault_per_account",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "on_settle_follow",
+        "doc": " The balance answer for `settle_follow`. Each fill is checked against the follower's\n mandate and against the receipt: `amount_out` must be covered by this contract's balance of\n that token not yet credited to anyone. Accepted fills move `amount_in + fee` out of the\n follower's vault (`amount_in` to the solver's vault, the fee to the owner) and credit\n `amount_out` to the follower's holding.\n Batch-wide rejections: \"no receipt\" (view failed, too long, malformed), \"outflow during\n view\" (a token withdrawal confirmed meanwhile; retry), \"solver removed\". Per fill: \"nonce\n unknown\", \"duplicate fill\", \"no mandate\", \"intent before follow\", \"mandate updated\" (the\n intent predates a tightening update whose grace ended), \"mandate revoked\", \"mandate expired\",\n \"token not allowed\", \"fee overflow\", \"over cap\", \"allowance exhausted\", \"amount overflow\",\n \"below min price\", \"no receipt\", \"insufficient\".\n When no fill settles the call panics with the first reason, so a batch without a receipt is\n a failed transaction. That panic is safe: rejections write nothing and nothing was reserved\n before the view. A partly settled batch returns the report.\n Caller: this contract (private). Deposit: none.",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "follower",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "solver",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "fills",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/Fill"
+                }
+              }
+            },
+            {
+              "name": "seq",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/SettleReport"
+          }
+        }
+      },
+      {
+        "name": "on_sweep_check",
+        "doc": " Balance answer for `sweep_surplus`. With the surplus confirmed (and no outflow since the view)\n the amount is reserved in `sweeping` before the transfer is scheduled, so a settle landing\n meanwhile cannot credit it. Returns false, and changes nothing, when the surplus is short or\n the view failed. Caller: this contract (private).",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "receiver_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "seq",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/PromiseOrValueBoolean"
+          }
+        }
+      },
+      {
+        "name": "on_sweep_done",
+        "doc": " Outcome of the sweep's `mt_transfer`: the reservation is released either way; success moves\n `outflow_seq` like any outflow. Never panics. Caller: this contract (private).",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "receiver_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "on_withdraw",
+        "doc": " Outcome of `withdraw`'s transfer. On failure the NEAR came back to this contract: the vault\n is re-credited with `pay` and the request (`amount`, `ready_at`) restored unless a new one was\n queued meanwhile. Returns whether the transfer landed. Never panics.\n Caller: this contract (private). Deposit: none.",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "who",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "pay",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "ready_at",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "on_withdraw_token",
+        "doc": " Outcome of `withdraw_token`'s `mt_transfer`. Success: the tokens left this contract's\n balance, so `accounted` drops and `outflow_seq` moves (settles whose view predates this\n are rejected). Failure: the holding is re-credited. Returns whether the transfer landed.\n Never panics. Caller: this contract (private). Deposit: none.",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "follower",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "open_duel",
+        "doc": " Pair two registered, idle agents on an oracle asset. Attached deposit must cover the duel's\n storage plus `oracle_deposit`; the open price is requested from the oracle in the same call\n and lands through `oracle_on_call`. Returns the duel id.\n Caller: owner. Deposit: at least the duel record's storage plus `oracle_deposit`; the excess\n is refunded. Panics: \"not owner\", \"consent required\", \"paused\", \"set_oracle first\",\n \"same agent\", \"symbol too long\", \"close_at in the past\", \"duel too short\", \"duel too long\",\n \"agent missing\", \"in duel\", \"deposit too small\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "a",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "b",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "symbol",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "close_at",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "open_duel_consented",
+        "doc": " `open_duel` with both agents' consent: `sig_a` and `sig_b` are each agent key's ed25519\n signature over `consent_message(a, b, symbol, close_at)`. Anyone holding both signatures\n may open it; a consent cannot be replayed because `close_at` has passed by the time either\n agent is free again. Works whether or not `require_consent` is on.\n Caller: anyone. Deposit: as `open_duel`. Panics: \"bad consent signature\", then as\n `open_duel` minus \"not owner\" / \"consent required\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "a",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "b",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "symbol",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "close_at",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "sig_a",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "sig_b",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "oracle_on_call",
+        "doc": " Outlayer delivers the price here. `msg` is `open:<id>` or `close:<id>` as sent by\n `ask_oracle`; `sender_id` is who called `oracle_call` and must be this contract. An open price\n is taken only when stamped within the oracle's recency window before `open_at` and at most\n ten minutes after it (and before `close_at`), so a late answer cannot set a wrong open price.\n Caller: `oracle_account` only. Deposit: none. Panics: \"not oracle\", \"not our request\",\n \"bad msg\", \"duel missing\", \"no price\", \"price overflow\", \"bad price\", \"resolved\",\n \"open price stale\", \"duel open\", \"price before close\", \"no open price\".",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "sender_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "data",
+              "type_schema": {
+                "$ref": "#/definitions/PriceData"
+              }
+            },
+            {
+              "name": "msg",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "post_intent",
+        "doc": " Record an agent-signed intent for an open duel. Anyone may relay it: the signature is what\n binds the decision to the agent and the agent's bond pays its storage. Refused inside the\n last `intent_lock_ns` of the duel (the value the duel was opened under). A TEE-backed agent must also present the model enclave's\n (kind 2) signature over the completion that produced the decision. The intent must outlive\n `close_at` and carry a nonce above the agent's last posted one in this duel, so a relayer\n cannot resurface an older decision.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"proof_hash length\", \"bad size\", \"agent missing\", \"bad tee kind\",\n \"tee hash length\", \"unknown tee signer\", \"bad tee signature\", \"proof_hash mismatch\",\n \"proof used\", \"provider proof required\", \"tee proof required\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"intent expired\", \"bad target\", \"nonce used\", \"stale nonce\",\n \"bad signature\", \"bond exhausted\"; \"commit first\" while `commit_reveal` is on.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signed",
+              "type_schema": {
+                "$ref": "#/definitions/SignedIntent"
+              }
+            },
+            {
+              "name": "tee",
+              "type_schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/TeeProof"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "reconcile_page",
+        "doc": " Add `accounts`' vaults to the pending sum. Accounts must be strictly ascending, within the\n page and across pages (each above the last account counted), so none is counted twice; list\n every holder in sorted order. Returns the pending sum. Caller: owner. Deposit: 1 yoctoNEAR.\n Panics: \"not owner\", \"no reconcile\", \"too many accounts\", \"accounts not ascending\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "accounts",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "reconcile_vault_total",
+        "doc": " Recompute `vault_total` as the sum of `accounts`' vaults. `vaults` is not iterable, so the\n owner supplies every vault holder (from deposit events); this clears the drift deploys 15 and\n earlier left (follow storage not subtracted, pre-15 vaults not counted). Omitting a holder\n only undercounts, which loosens the cap the owner can set anyway; no NEAR moves. Returns the\n new total. For more than `MAX_RECONCILE` holders use `begin_reconcile`. Caller: owner.\n Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"too many accounts\" (over `MAX_RECONCILE`),\n \"duplicate account\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "accounts",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "register_agent",
+        "doc": " Register an agent. The attached deposit is its bond, minus the storage its record costs.\n `tee = true` commits the agent to a verified `TeeProof` on every intent. `register_sig` is\n `agent_pk`'s ed25519 signature over `register_message(caller)`, so nobody can squat a\n published key.\n Caller: anyone; the caller becomes the agent owner. Deposit: the bond, above the\n record's storage cost. Panics: \"paused\", \"agent_pk length\", \"model_id too long\", \"agent exists\",\n \"bad register signature\", \"bond required\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "model_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "tee",
+              "type_schema": {
+                "type": "boolean"
+              }
+            },
+            {
+              "name": "register_sig",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/AgentView"
+          }
+        }
+      },
+      {
+        "name": "register_message",
+        "doc": " The exact bytes an agent key signs to be registered by `owner` on this contract.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "owner",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Base64VecU8"
+          }
+        }
+      },
+      {
+        "name": "remove_solver",
+        "doc": " Stop `account_id` from settling. Its settles already in flight are rejected in the\n callback (\"solver removed\"). Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\",\n \"not a solver\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "remove_tee_signer",
+        "doc": " Stop accepting intents proved by this enclave key; intents already accepted stand.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signer",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "request_open_price",
+        "doc": " Ask the oracle again for a duel whose open price never arrived (TEE fetch failed or timed\n out). Anyone may call and attaches the oracle deposit (so nobody can spend the contract's\n balance on oracle fees); the oracle's refund stays with the contract.\n Caller: anyone. Deposit: `oracle_deposit`, excess refunded. Panics:\n \"attach oracle_deposit\", \"duel missing\", \"has open price\", \"duel closed\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "request_withdraw",
+        "doc": " Queue a vault withdrawal. `withdraw` pays it `withdraw_delay_s` later, so a solver that\n fronted a swap before this request can still settle it. One request at a time.\n Caller: the vault owner. Deposit: 1 yoctoNEAR. Panics: \"Requires attached deposit of\n exactly 1 yoctoNEAR\", \"withdrawal already pending\", \"insufficient\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "resolve_duel",
+        "doc": " After `close_at`, anyone asks the oracle for the close price; the answer arrives in\n `oracle_on_call` and finishes the duel. The caller attaches the oracle deposit. The oracle\n request is detached: this call succeeds once the request is sent, and may be repeated if the\n oracle never answers.\n Caller: anyone. Deposit: `oracle_deposit`, excess refunded. Panics:\n \"attach oracle_deposit\", \"duel missing\", \"resolved\", \"duel open\", \"no open price\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "reveal_intent",
+        "doc": " Open a commitment: the intent and salt must hash to the stored commitment for\n `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,\n except that the reveal may land inside the intent lock (the decision was fixed when it was\n committed, before the lock) up to `close_at`. The commitment is deleted.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"no commitment\", \"commitment mismatch\", then as `post_intent` minus \"intent lock\" and\n \"commit first\".",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signed",
+              "type_schema": {
+                "$ref": "#/definitions/SignedIntent"
+              }
+            },
+            {
+              "name": "salt",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "tee",
+              "type_schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/TeeProof"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_commit_reveal",
+        "doc": " Turn commit-reveal on or off and set the no-reveal slash. With it on, `post_intent` is\n refused and intents go through `commit_intent` / `reveal_intent`. `enabled` may not change\n while a duel is open, so a running duel keeps the rules it was opened under; the bps may.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"bps out of range\", \"duels open\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "enabled",
+              "type_schema": {
+                "type": "boolean"
+              }
+            },
+            {
+              "name": "no_reveal_bps",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_oracle",
+        "doc": " Point at another price oracle account, change the deposit it needs, the duel length floor, or\n the intent lock (no intent in the last `intent_lock_s` of a duel; at most half the floor).\n While any duel is open the lock may only grow and the oracle account may not change; a duel\n keeps the lock it was opened under either way.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"intent_lock_s too large\",\n \"min_duel_s too large\", \"duels open\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "oracle_account",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "oracle_deposit",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "min_duel_s",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "intent_lock_s",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_paused",
+        "doc": " Kill switch. While paused: `register_agent`, `open_duel*`, `post_intent`, `commit_intent`,\n `inject_chaos`, `deposit`, `follow` and `settle_follow` panic \"paused\". Every exit stays\n open: `request_withdraw`, `withdraw`, `withdraw_token`, `withdraw_bond`, `unfollow`,\n `reveal_intent`, `resolve_duel`, `request_open_price`, `void_duel`, `withdraw_fees`.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "paused",
+              "type_schema": {
+                "type": "boolean"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_require_consent",
+        "doc": " With `required` on, `open_duel` is refused and pairing needs both agents' signatures\n through `open_duel_consented`.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "required",
+              "type_schema": {
+                "type": "boolean"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_vault_account_cap",
+        "doc": " Cap on one account's vault, checked by `deposit`. Lowering it below a vault only stops that\n account's new deposits. Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "max_vault_per_account",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_vault_cap",
+        "doc": " Cap on `vault_total`, checked by `deposit`. Lowering it below the current total only stops\n new deposits. Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "max_vault_total",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_withdraw_delay",
+        "doc": " How long `withdraw` waits after `request_withdraw`; at least twice the solver's settle lag.\n Applies to requests made after the change. Caller: owner. Deposit: 1 yoctoNEAR. Panics:\n \"not owner\", \"delay out of range\" (outside 60..=604800 s).",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "withdraw_delay_s",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "settle_follow",
+        "doc": " Solver asks to be repaid for swaps it fronted for one follower of one agent. The swap\n outputs must already sit in this contract's balance on `intents_account`; this call reads\n that balance and `on_settle_follow` decides each fill. Nothing is written here.\n Caller: a registered solver. Deposit: none. Panics: \"not solver\", \"paused\", \"migrating\",\n \"empty fills\", \"too many fills\", \"swap_tx length\", \"dry quote unsettleable\",\n \"token length\". Per-fill outcomes: see `on_settle_follow`.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "follower",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "fills",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/Fill"
+                }
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "sweep_surplus",
+        "doc": " Send output nobody can claim (a fill refused after its swap landed, a gift) out of this\n contract's `intents_account` balance. Bounded to `balance - accounted - sweeping`, read through\n the same view the settle reads, so credited holdings are never touched.\n Caller: owner. Deposit: 1 yoctoNEAR (forwarded to `mt_transfer`). Panics: \"not owner\",\n \"Requires attached deposit of exactly 1 yoctoNEAR\", \"zero amount\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "receiver_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "tee_text_utf8",
+        "doc": " The exact text a TEE signs for an agent's completion, for off-chain parity checks.\n View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "kind",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "model_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "request_hash",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "response_hash",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "unfollow",
+        "doc": " Revoke the caller's mandate for `agent_pk`; a no-op when there is none. Open while paused.\n Fills for intents accepted before now stay settleable for `withdraw_delay_s`; intents\n accepted from now on never settle against this mandate (see `apply_fill`).\n Caller: the follower. Deposit: none. Panics: \"migrating\".",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "void_duel",
+        "doc": " Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both\n agents, split the pool between them, no slashing, no score. Recorded as a tie with no prices.\n Caller: anyone. Deposit: none. Panics: \"duel missing\", \"resolved\", \"too early\",\n \"agent missing\".",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "withdraw",
+        "doc": " Pay a queued withdrawal once its delay has passed: `min(requested, vault now)`, since\n fills settled during the delay may have lowered the vault. The vault is debited before the\n transfer; `on_withdraw` re-credits it and restores the request if the transfer fails (a\n deleted account), so the NEAR never sits in the contract unassigned.\n Caller: the vault owner. Deposit: 1 yoctoNEAR. Panics: \"Requires attached deposit of\n exactly 1 yoctoNEAR\", \"no pending withdrawal\", \"withdrawal delay not elapsed\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "withdraw_bond",
+        "doc": " Agent owner takes bond back. Refused while the agent is in an open duel.\n Caller: the agent owner. Deposit: 1 yoctoNEAR. Panics: \"agent missing\", \"not owner\",\n \"in duel\", \"insufficient\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "withdraw_fees",
+        "doc": " Contract owner collects accrued settlement fees.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"insufficient\" (nothing accrued).",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "withdraw_token",
+        "doc": " Send the caller's credited output to their own account on `intents_account`. The holding\n is debited first; `on_withdraw_token` re-credits it if the transfer fails. Open while\n paused. Caller: a follower. Deposit: 1 yoctoNEAR (forwarded to `mt_transfer`). Panics:\n \"Requires attached deposit of exactly 1 yoctoNEAR\", \"insufficient\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      }
+    ],
+    "root_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "String",
+      "type": "string",
+      "definitions": {
+        "AgentView": {
+          "description": "`Agent` plus whether every intent must carry a verified TEE proof.",
+          "type": "object",
+          "required": [
+            "alpha_bps",
+            "bond",
+            "model_id",
+            "owner",
+            "pk",
+            "shield",
+            "tee"
+          ],
+          "properties": {
+            "alpha_bps": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "bond": {
+              "type": "string"
+            },
+            "in_duel": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model_id": {
+              "type": "string"
+            },
+            "owner": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "pk": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "shield": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "tee": {
+              "type": "boolean"
+            }
+          }
+        },
+        "AssetOptionalPrice": {
+          "type": "object",
+          "required": [
+            "asset_id"
+          ],
+          "properties": {
+            "asset_id": {
+              "type": "string"
+            },
+            "price": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/OraclePrice"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "Base64VecU8": {
+          "description": "Helper class to serialize/deserialize `Vec<u8>` to base64 string.\n\n# Example ```rust use near_sdk::{json_types::Base64VecU8, near};\n\n#[near(serializers=[json])] struct NewStruct { field: Base64VecU8, } ```",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          }
+        },
+        "Config": {
+          "type": "object",
+          "required": [
+            "commit_reveal",
+            "fee_bps",
+            "intent_lock_s",
+            "intents_account",
+            "max_vault_per_account",
+            "max_vault_total",
+            "migrating",
+            "min_chaos_deposit",
+            "min_duel_s",
+            "next_duel",
+            "no_reveal_bps",
+            "open_duels",
+            "oracle_account",
+            "oracle_deposit",
+            "owner",
+            "owner_fees",
+            "paused",
+            "require_consent",
+            "slash_bps",
+            "vault_total",
+            "withdraw_delay_s"
+          ],
+          "properties": {
+            "commit_reveal": {
+              "description": "`post_intent` refused; intents go through `commit_intent` / `reveal_intent`.",
+              "type": "boolean"
+            },
+            "fee_bps": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            "intent_lock_s": {
+              "description": "No intent lands in the last `intent_lock_s` of a duel (see `set_oracle`).",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "intents_account": {
+              "description": "Where fill outputs land and `settle_follow` reads balances (`intents.near` on mainnet).",
+              "type": "string"
+            },
+            "max_vault_per_account": {
+              "description": "`deposit` refused once the caller's own vault would pass this (deploy 16).",
+              "type": "string"
+            },
+            "max_vault_total": {
+              "description": "`deposit` refused once `vault_total` would pass this.",
+              "type": "string"
+            },
+            "migrating": {
+              "description": "`follows` is being re-keyed by `migrate_follows`; follow and settle are refused meanwhile.",
+              "type": "boolean"
+            },
+            "min_chaos_deposit": {
+              "type": "string"
+            },
+            "min_duel_s": {
+              "description": "Floor on `close_at - now`; 310 on testnet (the oracle serves a cached price for 300 s).",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "next_duel": {
+              "type": "string"
+            },
+            "no_reveal_bps": {
+              "description": "Bond share an unrevealed commitment pays the opponent at scoring, on top of forfeiting.",
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            "open_duels": {
+              "description": "Duels opened and not yet finished or voided (counted from deploy 12 on); while non-zero, `set_oracle` may not lower the lock or move the oracle.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "oracle_account": {
+              "description": "Outlayer price oracle (`price-oracle.testnet` / `price-oracle.near`).",
+              "type": "string"
+            },
+            "oracle_deposit": {
+              "description": "Attached to every `oracle_call`; the oracle refunds what the TEE fetch did not cost.",
+              "type": "string"
+            },
+            "owner": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "owner_fees": {
+              "type": "string"
+            },
+            "paused": {
+              "description": "New activity refused; every exit path stays open (see `set_paused`).",
+              "type": "boolean"
+            },
+            "require_consent": {
+              "description": "`open_duel` refused; pairing only through `open_duel_consented`.",
+              "type": "boolean"
+            },
+            "slash_bps": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            "vault_total": {
+              "description": "Sum of all vaults (exact for accounting from deploy 16 on; see `reconcile_vault_total`).",
+              "type": "string"
+            },
+            "withdraw_delay_s": {
+              "description": "`withdraw` pays a `request_withdraw` only this long after it.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "Duel": {
+          "type": "object",
+          "required": [
+            "a",
+            "b",
+            "close_at",
+            "id",
+            "injections",
+            "open_at",
+            "pool",
+            "resolved",
+            "symbol"
+          ],
+          "properties": {
+            "a": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "b": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "close_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "injections": {
+              "description": "Cleared when the duel finishes; the count survives in `Outcome.injections`.",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Injection"
+              }
+            },
+            "last_intent_a": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Intent"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "last_intent_b": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Intent"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "open_at": {
+              "type": "string"
+            },
+            "open_price": {
+              "description": "Oracle price (u64, 8 dp) snapshotted by the oracle callback right after `open_duel`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outcome": {
+              "description": "Filled by the oracle callback: scored pnl per side and the slashed amount, so a page can show the outcome without parsing logs.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Outcome"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pool": {
+              "description": "Chaos deposits plus the loser's slashed bond; paid to the winner on resolve.",
+              "type": "string"
+            },
+            "resolved": {
+              "type": "boolean"
+            },
+            "symbol": {
+              "description": "Oracle asset id, e.g. `wrap.near` (NEAR/USD).",
+              "type": "string"
+            }
+          }
+        },
+        "Fill": {
+          "description": "One swap the solver fronted for a follower. The output must already sit in the arena's own `intents.near` balance: `settle_follow` credits it only against that balance.",
+          "type": "object",
+          "required": [
+            "amount_in",
+            "amount_out",
+            "intent_nonce",
+            "swap_tx",
+            "token"
+          ],
+          "properties": {
+            "amount_in": {
+              "description": "Amount debited from the follower's vault (mandate units, yoctoNEAR here), before the fee.",
+              "type": "string"
+            },
+            "amount_out": {
+              "description": "Output credited to the follower's holding; must be covered by unaccounted balance.",
+              "type": "string"
+            },
+            "intent_nonce": {
+              "type": "string"
+            },
+            "swap_tx": {
+              "description": "Audit string only (tx hash). Empty, over 128 bytes, or `dry-quote:*` is refused.",
+              "type": "string"
+            },
+            "token": {
+              "description": "The `intents.near` token id the output landed in, e.g. `nep141:usdc.near`.",
+              "type": "string"
+            }
+          }
+        },
+        "Injection": {
+          "type": "object",
+          "required": [
+            "block",
+            "kind",
+            "payload_hash",
+            "target"
+          ],
+          "properties": {
+            "block": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "payload_hash": {
+              "$ref": "#/definitions/Base64VecU8"
+            },
+            "target": {
+              "$ref": "#/definitions/Base64VecU8"
+            }
+          }
+        },
+        "Intent": {
+          "description": "What an agent signs: one directional call inside one duel.",
+          "type": "object",
+          "required": [
+            "agent_pk",
+            "duel_id",
+            "expires_at",
+            "nonce",
+            "proof_hash",
+            "side",
+            "size_bps"
+          ],
+          "properties": {
+            "agent_pk": {
+              "description": "32-byte ed25519 public key of the agent.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "duel_id": {
+              "type": "string"
+            },
+            "expires_at": {
+              "description": "Unix ns. Only intents with `expires_at >= duel.close_at` are scored.",
+              "type": "string"
+            },
+            "nonce": {
+              "type": "string"
+            },
+            "proof_hash": {
+              "description": "`sha256(request_hash || response_hash)` of the NEAR AI Cloud completion that produced this decision (see `TeeProof`). 32 zero bytes when the agent is not TEE-backed.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "side": {
+              "$ref": "#/definitions/Side"
+            },
+            "size_bps": {
+              "description": "Position size in basis points of the agent's notional, 1..=10_000.",
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          }
+        },
+        "Mandate": {
+          "description": "A follower's bound on what the solver may settle against their vault for one agent. `per_tx_cap` and `allowance` bound the whole debit of a fill, fee included.",
+          "type": "object",
+          "required": [
+            "allowance",
+            "allowed_tokens",
+            "expires_at",
+            "per_tx_cap",
+            "revoked",
+            "spent"
+          ],
+          "properties": {
+            "allowance": {
+              "type": "string"
+            },
+            "allowed_tokens": {
+              "description": "Empty = any token.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "expires_at": {
+              "type": "string"
+            },
+            "min_out_per_near": {
+              "description": "Price floor: a fill needs `amount_out * 10^24 >= amount_in * min_out_per_near`, i.e. at least this many output units per NEAR in. `follow` refuses 0; mandates migrated from deploy 14 carry 0 (no floor) until the follower follows again.",
+              "default": "0",
+              "type": "string"
+            },
+            "per_tx_cap": {
+              "type": "string"
+            },
+            "revoked": {
+              "type": "boolean"
+            },
+            "revoked_at": {
+              "description": "When `unfollow` revoked the mandate (unix ns), 0 while active. Fills the solver fronted before the revocation stay settleable for `withdraw_delay_s` after it. Set by the contract; ignored on input.",
+              "default": "0",
+              "type": "string"
+            },
+            "spent": {
+              "type": "string"
+            }
+          }
+        },
+        "OraclePrice": {
+          "description": "USD = multiplier / 10^decimals.",
+          "type": "object",
+          "required": [
+            "decimals",
+            "multiplier"
+          ],
+          "properties": {
+            "decimals": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "multiplier": {
+              "type": "string"
+            }
+          }
+        },
+        "Outcome": {
+          "type": "object",
+          "required": [
+            "close_price",
+            "injections",
+            "open_price",
+            "pnl_a",
+            "pnl_b",
+            "slashed"
+          ],
+          "properties": {
+            "close_price": {
+              "type": "string"
+            },
+            "injections": {
+              "description": "Injections the duel carried (pruned from `Duel.injections` to free storage).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "open_price": {
+              "type": "string"
+            },
+            "pnl_a": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "pnl_b": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "slashed": {
+              "type": "string"
+            },
+            "winner": {
+              "description": "`Some(a)` / `Some(b)` pk of the winner, `None` on a tie.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "PrevTerms": {
+          "description": "The terms in force before the last tightening update. They bind fills for intents accepted before `updated_at` at most until `binds_until` (`updated_at + withdraw_delay_s` as set at the update), then those fills are refused. `binds_until` caps the old terms only: the follow windows (`covers`, `refollowed`) still use the live withdraw delay, like the revoke and expiry graces, so a later `set_withdraw_delay` can close a window, or let a re-follow drop `prev`, before `binds_until`.",
+          "type": "object",
+          "required": [
+            "binds_until",
+            "terms",
+            "updated_at"
+          ],
+          "properties": {
+            "binds_until": {
+              "type": "string"
+            },
+            "terms": {
+              "description": "`spent` here is the snapshot at the update and is never read: the pair's one ledger is the current mandate's `spent`.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Mandate"
+                }
+              ]
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          }
+        },
+        "PriceData": {
+          "description": "`oracle_on_call` payload from `price-oracle.*` (https://price-oracle.outlayer.ai/docs/).",
+          "type": "object",
+          "required": [
+            "prices",
+            "recency_duration_sec",
+            "timestamp"
+          ],
+          "properties": {
+            "prices": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/AssetOptionalPrice"
+              }
+            },
+            "recency_duration_sec": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "timestamp": {
+              "description": "Unix ns.",
+              "type": "string"
+            }
+          }
+        },
+        "Promise": true,
+        "PromiseOrValueBoolean": {
+          "type": "boolean"
+        },
+        "SettleReport": {
+          "type": "object",
+          "required": [
+            "debited",
+            "rejected",
+            "settled"
+          ],
+          "properties": {
+            "debited": {
+              "type": "string"
+            },
+            "rejected": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0.0
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "maxItems": 2,
+                "minItems": 2
+              }
+            },
+            "settled": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        "Side": {
+          "type": "string",
+          "enum": [
+            "Long",
+            "Short"
+          ]
+        },
+        "SignedIntent": {
+          "type": "object",
+          "required": [
+            "intent",
+            "signature"
+          ],
+          "properties": {
+            "intent": {
+              "$ref": "#/definitions/Intent"
+            },
+            "signature": {
+              "$ref": "#/definitions/Base64VecU8"
+            }
+          }
+        },
+        "TeeProof": {
+          "description": "The NEAR AI Cloud signature record for one completion, as returned by `GET /v1/signature/{chat_id}?signing_algo=ed25519`. The TEE signs the raw text `\"{model_id}:{request_hash_hex}:{response_hash_hex}\"` (kind 2, `provider_tee`, the model's own enclave) or `\"{request_hash_hex}:{response_hash_hex}\"` (kind 1, `gateway`, the cloud-api enclave). The contract rebuilds that text from the agent's `model_id` and the two hashes and verifies the ed25519 signature against a signer the owner registered from an attestation report.",
+          "type": "object",
+          "required": [
+            "kind",
+            "request_hash",
+            "response_hash",
+            "signature",
+            "signer"
+          ],
+          "properties": {
+            "kind": {
+              "description": "1 = gateway TEE, 2 = provider (model) TEE.",
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "request_hash": {
+              "description": "sha256 of the exact request body bytes.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "response_hash": {
+              "description": "sha256 of the exact response body bytes.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "signature": {
+              "description": "64-byte ed25519 signature over the text.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "signer": {
+              "description": "32-byte ed25519 `signing_address` of the TEE.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

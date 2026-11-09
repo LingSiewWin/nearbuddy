@@ -21,6 +21,7 @@
     "status": "scripts/arena-status.sh",
     "e2e": "bun e2e/run.ts",
     "verify-duel": "bun analysis/verify_duel.ts",
+    "gen:types": "bun packages/protocol/src/abi/gen.ts",
     "readout": "agents/.venv/bin/python analysis/night_readout.py"
   },
   "dependencies": {

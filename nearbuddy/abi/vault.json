@@ -1,0 +1,1076 @@
+{
+  "schema_version": "0.4.0",
+  "metadata": {
+    "name": "nearbuddy-vault",
+    "version": "0.1.0"
+  },
+  "body": {
+    "functions": [
+      {
+        "name": "cert_message_hex",
+        "doc": " Exposed so clients can check their cert encoding matches the contract's.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "cert",
+              "type_schema": {
+                "$ref": "#/definitions/GuaranteeCert"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "contract_source_metadata",
+        "kind": "view"
+      },
+      {
+        "name": "deposit",
+        "doc": " Lock NEAR in the caller's vault. Agents spend against this, never from it directly.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Vault"
+          }
+        }
+      },
+      {
+        "name": "get_config",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Config"
+          }
+        }
+      },
+      {
+        "name": "get_guarantee_key",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "solver",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Base64VecU8"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_issuer",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "issuer",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/IssuerReserve"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_mandate",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Mandate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_solver",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "solver",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Solver"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_vault",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "owner",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Vault"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "init",
+        "doc": " `fee_bps`: solver fee in basis points of settled volume (50 = 0.5%).\n `withdraw_delay_ns`: how long a withdrawal is queued so solvers can settle first.",
+        "kind": "call",
+        "modifiers": [
+          "init"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "fee_bps",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "withdraw_delay_ns",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "iou_message_hex",
+        "doc": " Exposed so clients can check their encoding matches the contract's.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "iou",
+              "type_schema": {
+                "$ref": "#/definitions/Iou"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "is_cert_nonce_used",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "solver",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "is_nonce_used",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "issue_mandate",
+        "doc": " Authorize an agent key to spend from the caller's vault within limits.\n Re-issuing for the same key replaces the mandate (spent resets to 0; nonces stay burned).",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "allowance",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "per_tx_cap",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "allowed_payees",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "name": "expires_at",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Mandate"
+          }
+        }
+      },
+      {
+        "name": "migrate",
+        "doc": " One-shot state migration adding the guarantor collections. Call once after redeploy.",
+        "kind": "call",
+        "modifiers": [
+          "init",
+          "private"
+        ]
+      },
+      {
+        "name": "on_pull_signature",
+        "kind": "view",
+        "modifiers": [
+          "private"
+        ],
+        "callbacks": [
+          {
+            "serialization_type": "json",
+            "type_schema": true
+          }
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/PromiseOrValueAnyValue"
+          }
+        }
+      },
+      {
+        "name": "register_solver",
+        "doc": " Stake NEAR to become a solver. Stake backs the IOUs you underwrite.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Solver"
+          }
+        }
+      },
+      {
+        "name": "release_reserve",
+        "doc": " Move unused reserve back to free stake.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "issuer",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/IssuerReserve"
+          }
+        }
+      },
+      {
+        "name": "request_pull_signature",
+        "doc": " Ask the NEAR MPC network to sign a foreign-chain transaction hash on behalf of this\n contract. `payload_hex` = 32-byte tx hash, `path` = derivation path (e.g. \"sepolia-1\").\n The derived foreign address is deterministic per (this contract, path). Solver-only.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "payload_hex",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "path",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "request_withdraw",
+        "doc": " Queue a withdrawal. Solvers stop accepting IOUs from this vault while one is pending,\n and have `withdraw_delay_ns` to settle what they already underwrote.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Vault"
+          }
+        }
+      },
+      {
+        "name": "reserve_for_issuer",
+        "doc": " Earmark `amount` of the caller's stake for `issuer`. Certs for this issuer draw on it.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "issuer",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/IssuerReserve"
+          }
+        }
+      },
+      {
+        "name": "revoke_mandate",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "set_guarantee_key",
+        "doc": " Register the ed25519 key this solver signs guarantee certs with (32 raw bytes).",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "settle_batch",
+        "doc": " Settle a batch of agent-signed IOUs in one transaction.\n Invalid IOUs are reported in `rejected`, never panic the whole batch.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "ious",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/SignedIou"
+                }
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/SettlementReport"
+          }
+        }
+      },
+      {
+        "name": "settle_pull",
+        "doc": " Settle pull outcomes for signed certs. Callable by the cert's solver or its issuer, so the\n issuer can always enforce a guarantee itself. Failed pulls pay `payout` from the reserve to\n the issuer; successful pulls accrue the fee. Bad entries are rejected, never panic the batch.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "settlements",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/PullSettlement"
+                }
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/PullReport"
+          }
+        }
+      },
+      {
+        "name": "solver_withdraw",
+        "doc": " Withdraw stake (fees are credited to stake at settlement).",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "withdraw",
+        "doc": " Claim a queued withdrawal after the delay. Pays whatever is still in the vault\n (settlements during the delay may have reduced it).",
+        "kind": "call",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      }
+    ],
+    "root_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "String",
+      "type": "string",
+      "definitions": {
+        "Base64VecU8": {
+          "description": "Helper class to serialize/deserialize `Vec<u8>` to base64 string.\n\n# Example ```rust use near_sdk::{json_types::Base64VecU8, near};\n\n#[near(serializers=[json])] struct NewStruct { field: Base64VecU8, } ```",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          }
+        },
+        "Config": {
+          "type": "object",
+          "required": [
+            "fee_bps",
+            "max_batch",
+            "min_solver_stake",
+            "withdraw_delay_ns"
+          ],
+          "properties": {
+            "fee_bps": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            "max_batch": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "min_solver_stake": {
+              "type": "string"
+            },
+            "withdraw_delay_ns": {
+              "type": "string"
+            }
+          }
+        },
+        "GuaranteeCert": {
+          "description": "What a solver signs off-chain when a card is swiped. The issuer approves the card network authorization on the strength of this; the contract pays `payout` if the pull fails. Byte layout must match `packages/protocol/src/cert.ts`.",
+          "type": "object",
+          "required": [
+            "amount",
+            "chain_id",
+            "expires_at",
+            "issuer",
+            "nonce",
+            "payout",
+            "solver",
+            "token",
+            "wallet"
+          ],
+          "properties": {
+            "amount": {
+              "description": "Token units to pull (USDC: 6 dp).",
+              "type": "string"
+            },
+            "chain_id": {
+              "description": "EIP-155 chain id of the pull (Sepolia = 11155111).",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "expires_at": {
+              "description": "Unix ns. Settlement must happen before this.",
+              "type": "string"
+            },
+            "issuer": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "nonce": {
+              "type": "string"
+            },
+            "payout": {
+              "description": "yoctoNEAR the issuer receives from the reserve if the pull fails.",
+              "type": "string"
+            },
+            "solver": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "token": {
+              "description": "Token contract on the target chain, 0x-hex.",
+              "type": "string"
+            },
+            "wallet": {
+              "description": "Payer wallet on the target chain, 0x-hex.",
+              "type": "string"
+            }
+          }
+        },
+        "Iou": {
+          "description": "The message an agent signs. Encoded with borsh, prefixed by `IOU_DOMAIN`. The TypeScript side (`packages/protocol`) must produce byte-identical output.",
+          "type": "object",
+          "required": [
+            "agent_pk",
+            "amount",
+            "expires_at",
+            "nonce",
+            "owner",
+            "payee"
+          ],
+          "properties": {
+            "agent_pk": {
+              "description": "Agent public key (32 bytes, ed25519), base64 in JSON.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "amount": {
+              "description": "Amount in yoctoNEAR.",
+              "type": "string"
+            },
+            "expires_at": {
+              "description": "Unix time in nanoseconds; settlement must happen before this.",
+              "type": "string"
+            },
+            "nonce": {
+              "description": "Unique per (agent_pk, nonce). Replay protection.",
+              "type": "string"
+            },
+            "owner": {
+              "description": "Vault owner who will be debited.",
+              "type": "string"
+            },
+            "payee": {
+              "description": "Resource server that gets paid.",
+              "type": "string"
+            }
+          }
+        },
+        "IssuerReserve": {
+          "type": "object",
+          "required": [
+            "fees_accrued",
+            "paid_out",
+            "pulls_failed",
+            "pulls_ok",
+            "reserved",
+            "solver"
+          ],
+          "properties": {
+            "fees_accrued": {
+              "description": "Fees owed by the issuer for successful pulls. ponytail: accrued, invoiced off-chain.",
+              "type": "string"
+            },
+            "paid_out": {
+              "type": "string"
+            },
+            "pulls_failed": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "pulls_ok": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "reserved": {
+              "description": "yoctoNEAR of solver stake earmarked for this issuer.",
+              "type": "string"
+            },
+            "solver": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            }
+          }
+        },
+        "Mandate": {
+          "type": "object",
+          "required": [
+            "allowance",
+            "allowed_payees",
+            "expires_at",
+            "owner",
+            "per_tx_cap",
+            "revoked",
+            "spent"
+          ],
+          "properties": {
+            "allowance": {
+              "description": "Total yoctoNEAR the agent may ever spend under this mandate.",
+              "type": "string"
+            },
+            "allowed_payees": {
+              "description": "Empty = any payee.",
+              "type": "array",
+              "items": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            "expires_at": {
+              "description": "Unix ns. IOUs cannot be settled after this.",
+              "type": "string"
+            },
+            "owner": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "per_tx_cap": {
+              "description": "Max yoctoNEAR per single IOU.",
+              "type": "string"
+            },
+            "revoked": {
+              "type": "boolean"
+            },
+            "spent": {
+              "description": "Already settled under this mandate.",
+              "type": "string"
+            }
+          }
+        },
+        "Promise": true,
+        "PromiseOrValueAnyValue": true,
+        "PullOutcome": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "Pulled"
+              ],
+              "properties": {
+                "Pulled": {
+                  "type": "object",
+                  "required": [
+                    "tx_hash"
+                  ],
+                  "properties": {
+                    "tx_hash": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "Failed"
+              ],
+              "properties": {
+                "Failed": {
+                  "type": "object",
+                  "required": [
+                    "reason"
+                  ],
+                  "properties": {
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "PullReport": {
+          "type": "object",
+          "required": [
+            "fees_accrued",
+            "paid_out",
+            "rejected",
+            "settled"
+          ],
+          "properties": {
+            "fees_accrued": {
+              "type": "string"
+            },
+            "paid_out": {
+              "type": "string"
+            },
+            "rejected": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Rejected"
+              }
+            },
+            "settled": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        "PullSettlement": {
+          "type": "object",
+          "required": [
+            "outcome",
+            "signed"
+          ],
+          "properties": {
+            "outcome": {
+              "$ref": "#/definitions/PullOutcome"
+            },
+            "signed": {
+              "$ref": "#/definitions/SignedCert"
+            }
+          }
+        },
+        "Rejected": {
+          "type": "object",
+          "required": [
+            "index",
+            "reason"
+          ],
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        "SettlementReport": {
+          "type": "object",
+          "required": [
+            "covered_by_solver",
+            "rejected",
+            "settled",
+            "solver_fee",
+            "total_paid"
+          ],
+          "properties": {
+            "covered_by_solver": {
+              "description": "Amount the solver's stake had to cover because a vault was short.",
+              "type": "string"
+            },
+            "rejected": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Rejected"
+              }
+            },
+            "settled": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "solver_fee": {
+              "type": "string"
+            },
+            "total_paid": {
+              "type": "string"
+            }
+          }
+        },
+        "SignedCert": {
+          "type": "object",
+          "required": [
+            "cert",
+            "signature"
+          ],
+          "properties": {
+            "cert": {
+              "$ref": "#/definitions/GuaranteeCert"
+            },
+            "signature": {
+              "description": "64-byte ed25519 signature over `CERT_DOMAIN || borsh(cert)` by the solver's guarantee key.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            }
+          }
+        },
+        "SignedIou": {
+          "type": "object",
+          "required": [
+            "iou",
+            "signature"
+          ],
+          "properties": {
+            "iou": {
+              "$ref": "#/definitions/Iou"
+            },
+            "signature": {
+              "description": "64-byte ed25519 signature over `IOU_DOMAIN || borsh(iou)`.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            }
+          }
+        },
+        "Solver": {
+          "type": "object",
+          "required": [
+            "fees_earned",
+            "ious_settled",
+            "stake"
+          ],
+          "properties": {
+            "fees_earned": {
+              "type": "string"
+            },
+            "ious_settled": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "stake": {
+              "type": "string"
+            }
+          }
+        },
+        "Vault": {
+          "type": "object",
+          "required": [
+            "balance"
+          ],
+          "properties": {
+            "balance": {
+              "type": "string"
+            },
+            "pending_withdraw": {
+              "description": "Amount queued for withdrawal and the timestamp (ns) it becomes claimable.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2
+            }
+          }
+        }
+      }
+    }
+  }
+}
