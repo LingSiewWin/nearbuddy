@@ -51,7 +51,7 @@ POOLED = "pooled"
 
 
 def load(phase: str) -> list[dict[str, Any]]:
-    for path in (RESULTS / f"{phase}.jsonl.gz", RESULTS / f"{phase}.jsonl"):
+    for path in (RESULTS / f"{phase}.jsonl", RESULTS / f"{phase}.jsonl.gz"):  # the live file first, then the archive
         if path.exists():
             with gzip.open(path, "rt") if path.suffix == ".gz" else path.open() as f:
                 return [json.loads(line) for line in f if line.strip()]

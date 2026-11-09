@@ -1,0 +1,3 @@
+# live result files the harness appends to; the committed copies are the .jsonl.gz archives
+results/*.jsonl
+!results/probe.jsonl
