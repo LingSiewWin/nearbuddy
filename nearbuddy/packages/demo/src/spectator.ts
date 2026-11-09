@@ -70,10 +70,16 @@ console.log(
 );
 
 /** Deploy 17: `claim_chaos` for every duel of ours that has finished; "nothing to claim" (the agent held, or nothing
- *  is owed) settles it too, any other error is retried on the next call. */
+ *  is owed) settles it too, any other error is retried on the next call. An RPC error reading one duel skips that
+ *  duel only, so it cannot cost the loop its injection this cycle. */
 async function claimFinished() {
   for (const id of unclaimed) {
-    if (!(await arenaView("get_duel", { duel_id: id }))?.resolved) continue;
+    try {
+      if (!(await arenaView("get_duel", { duel_id: id }))?.resolved) continue;
+    } catch (e) {
+      console.log(`duel ${id}: get_duel failed, claim retried later: ${String(e).slice(0, 120)}`);
+      continue;
+    }
     try {
       const tx = await spectator.callFunctionRaw({
         contractId: ARENA,
@@ -95,14 +101,18 @@ async function claimFinished() {
 }
 
 // night-loop.sh stops the spectator when its batch ends, before the last duel finishes: pick up what the last 30
-// duels still owe this account
+// duels still owe this account. A duel whose get_chaos fails is skipped (logged); the batch goes on without it.
 if (V2) {
   const n = Number(cfg.next_duel);
   for (let id = Math.max(0, n - 30); id < n; id++) {
-    const owed = (await arenaView("get_chaos", { duel_id: String(id) })).some(
-      (c) => c.injector === SPECTATOR_ID && !c.claimed && c.payout !== "0",
-    );
-    if (owed) unclaimed.add(String(id));
+    try {
+      const owed = (await arenaView("get_chaos", { duel_id: String(id) })).some(
+        (c) => c.injector === SPECTATOR_ID && !c.claimed && c.payout !== "0",
+      );
+      if (owed) unclaimed.add(String(id));
+    } catch (e) {
+      console.log(`duel ${id}: get_chaos failed, not scanned for claims: ${String(e).slice(0, 120)}`);
+    }
   }
 }
 
