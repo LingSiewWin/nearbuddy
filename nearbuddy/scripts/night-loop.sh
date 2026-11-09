@@ -33,11 +33,11 @@ IDLE_MINUTES=12
 BACKOFF_S=60
 PY=agents/.venv/bin/python
 
-until_hhmm=0530 rounds=10 duel_s=330 cycle_s=45 variants="" target=a payload_set=train start_batch="" dry=0
+until_hhmm=0530 rounds=10 duel_s=330 cycle_s=45 variants="" profile="" target=a payload_set=train start_batch="" dry=0
 
 usage() {
   echo "usage: $0 [--until HHMM] [--rounds N] [--duel-seconds S] [--cycle-seconds S] [--variants A,B,C]" \
-    "[--target a|b|alt] [--payload-set train|holdout] [--start-batch N] [--dry-run]"
+    "[--profile naive|hardened|hardened-v2] [--target a|b|alt] [--payload-set train|holdout] [--start-batch N] [--dry-run]"
 }
 die() { echo "$*" >&2; exit 2; }
 val() { [ -n "${2-}" ] || die "$1 needs a value"; }
@@ -50,6 +50,7 @@ while [ $# -gt 0 ]; do
     --duel-seconds) val "$1" "${2-}"; duel_s=$2; shift 2 ;;
     --cycle-seconds) val "$1" "${2-}"; cycle_s=$2; shift 2 ;;
     --variants) val "$1" "${2-}"; variants=$2; shift 2 ;;
+    --profile) val "$1" "${2-}"; profile=$2; shift 2 ;;
     --target) val "$1" "${2-}"; target=$2; shift 2 ;;
     --payload-set) val "$1" "${2-}"; payload_set=$2; shift 2 ;;
     --start-batch) val "$1" "${2-}"; start_batch=$2; shift 2 ;;
@@ -78,6 +79,7 @@ deadline=$((now_s + left))
 # arrays keep every flag its own word in bash and zsh alike (a scalar "$flag" is one word in zsh)
 runner_cmd=("$PY" -u agents/runner.py --rounds "$rounds" --duel-seconds "$duel_s" --cycle-seconds "$cycle_s")
 [ -n "$variants" ] && runner_cmd+=(--variants "$variants")
+[ -n "$profile" ] && runner_cmd+=(--profile "$profile") # agent A: naive|hardened|hardened-v2
 stuck_cmd=("$PY" -u agents/runner.py --resolve-stuck)
 spectator_cmd=(env DUELS="$rounds" TARGET="$target" PAYLOAD_SET="$payload_set" SPECTATOR_ID="$SPECTATOR_ID"
   IDLE_MINUTES="$IDLE_MINUTES" bun packages/demo/src/spectator.ts)
