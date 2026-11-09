@@ -32,12 +32,14 @@ import requests
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "agents"))
+from cue_guard import CUE_GUARD_VERSION  # noqa: E402
+
 from config import ENV  # noqa: E402
 from duelist import Duelist, DuelistError  # noqa: E402
 from intent_client import TeeProofError, tee_proof  # noqa: E402
 from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, Completion, NearAiClient  # noqa: E402
 from prices import brief  # noqa: E402
-from prompts import HARDENED_V3, JUDGE_MODEL  # noqa: E402
+from prompts import HARDENED_V2, HARDENED_V3, JUDGE_MODEL, JUDGE_PROMPT_VERSION  # noqa: E402
 
 DATA = HERE / "data"
 RESULTS = HERE / "results"
@@ -268,7 +270,7 @@ def call(
     t0 = time.monotonic()
     c: Completion | None = None
     try:
-        d = duelist.decide(snap["symbol"], snap["brief"], headline)
+        d = duelist.decide(snap["symbol"], snap["brief"], headline, bind(meta))
         out["side"] = "Long" if d.direction > 0 else "Short"
         # the size that trades; hardened-v2 also states one (size_asked) that policy_size caps under paid text
         out |= {"size_bps": d.size_bps, "size_asked": d.size_asked, "size_cap": d.size_cap}
@@ -283,12 +285,22 @@ def call(
     out["latency_s"] = round(time.monotonic() - t0, 2)
     if judged and judge:
         out["judge"] = completion_record(judge, judged[-1])
+        out["bind"] = list(bind(meta))  # the (duel_id, nonce) the judge's signed request names
     if c is None:
         return out
     out |= completion_record(client, c)
     if judged and not out["judge"].get("verified"):
         out["verified"] = False  # the duelist's signed request quotes the judge's reply; an unproven judge breaks it
     return out
+
+
+LAB_DUEL0 = 900_000  # lab trials are not arena duels; this offset keeps the judge's duel_id out of their range
+
+
+def bind(meta: dict[str, Any]) -> tuple[str, str]:
+    """hardened-v3 (judge prompt version 2) binds the judge call to a (duel_id, intent nonce). A lab trial has no
+    duel: duel_id is LAB_DUEL0 + trial index and the nonce is the arm's index in ARMS."""
+    return str(LAB_DUEL0 + int(meta.get("trial", 0))), str(ARMS.index(meta["arm"]))
 
 
 def completion_record(client: NearAiClient, c: Completion) -> dict[str, Any]:
@@ -348,6 +360,9 @@ def run_trial(
         "symbol": snap["symbol"],
         "brief": snap["brief"],
         "move_bps": snap["move_bps"],
+        # the versions a guarded profile ran with, so a verifier rebuilds the exact signed request
+        "cue_guard_version": CUE_GUARD_VERSION if prompt in (HARDENED_V2, HARDENED_V3) else None,
+        "judge_prompt_version": JUDGE_PROMPT_VERSION if prompt == HARDENED_V3 else None,
         "calls": {},
         "excluded": None,
     }
@@ -446,6 +461,7 @@ def main() -> None:
     p.add_argument("--models", default=",".join(MODELS))
     p.add_argument("--cap", type=float, default=9.50)
     p.add_argument("--until", default="2026-11-10T07:15:00+08:00")
+    p.add_argument("--workers", type=int, default=4, help="trials in flight (each trial's calls are sequential)")
     p.add_argument("--prompts", default="naive", help="comma list of runner profiles: naive, hardened, hardened-v2")
     a = p.parse_args()
     models = a.models.split(",")
@@ -455,7 +471,7 @@ def main() -> None:
         probe(models)
     else:
         until = datetime.fromisoformat(a.until) if a.until else None
-        run(a.phase, a.n, models, a.cap, until, tuple(a.prompts.split(",")))
+        run(a.phase, a.n, models, a.cap, until, tuple(a.prompts.split(",")), a.workers)
 
 
 if __name__ == "__main__":

@@ -134,7 +134,9 @@ def test_hardened_v3_trial_judges_each_headline_and_logs_the_judge(tmp_path):
     rec = harness.run_trial(client, budget, "main", t, {"s": snap}, attack, placebo, HARDENED_V3, judge)
     row = attack[("E-GI-04", "NEAR", "Short")]
     assert "judge" not in rec["calls"]["baseline"]  # no paid text, no judge call
-    assert judge.seen[0] == (JUDGE_SYSTEM, judge_user(row["text_cue"]))
+    # judge prompt version 2: the call is bound to (duel_id, nonce) = (LAB_DUEL0 + trial, the arm's index)
+    assert judge.seen[0] == (JUDGE_SYSTEM, judge_user(row["text_cue"], bind=("900007", "1")))
+    assert rec["calls"]["cue"]["bind"] == ["900007", "1"] and rec["judge_prompt_version"] == 2
     verdict = {"fabricated_prob": 0.2, "label": "plausible"}
     sha = hashlib.sha256(FakeJudge.reply.encode()).hexdigest()
     assert client.seen[1][1] == user_v3(snap["brief"], row["text_cue"], verdict, sha)[0]
