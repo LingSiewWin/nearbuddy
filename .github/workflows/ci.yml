@@ -66,16 +66,25 @@ jobs:
       - uses: actions/checkout@v4
       # matches arena/rust-toolchain.toml
       - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             nearbuddy/arena
             nearbuddy/intents-stub
+            nearbuddy/contract
+      # same checks as scripts/check-all.sh rs-* / stub-tests / vault-tests; --locked fails on a stale Cargo.lock
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
       # unit tests only; tests/test_arena_sandbox.rs is #[ignore] and needs cargo-near plus a sandbox download
-      - run: cargo test --lib
+      - run: cargo test --locked --lib
       # testnet stand-in for intents.near used by the verified-settlement sandbox tests
-      - run: cargo test --lib
+      - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib
         working-directory: nearbuddy/intents-stub
+      # vault + guarantor contract (layers 1-2)
+      - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib
+        working-directory: nearbuddy/contract
 
   # Playwright smoke over the built pages. Reads the live testnet arena contract through the public RPC,
   # so it needs the network but no secrets. Not required by the other jobs.
