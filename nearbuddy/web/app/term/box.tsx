@@ -148,7 +148,7 @@ export function Line({
 /** `rows` box lines holding one element `w - 4` characters wide and `rows` lines tall (a textarea), borders kept. */
 export function Slot({ rows = 1, children }: { rows?: number; children: ReactNode }) {
   return (
-    <div className="ln">
+    <div className="ln slot">
       <span aria-hidden="true" className="edge">
         {Array(rows).fill("│ ").join("\n")}
       </span>

@@ -363,10 +363,10 @@ export default function Term() {
         cmdRef.current?.focus();
         return;
       }
+      if (e.key === "Escape" && k.help) return setHelp(false); // from anywhere, the command line included
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "Escape") return setHelp(false);
       if (e.key === "?") return setHelp(!k.help);
       if (k.help) return e.key === "q" && setHelp(false);
       if (e.key === ":" || e.key === "/") {
