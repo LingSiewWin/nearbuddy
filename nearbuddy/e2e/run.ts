@@ -10,7 +10,7 @@
 //   - a near-sandbox binary: NEAR_SANDBOX_BIN_PATH, else ~/.near/near-sandbox-*/near-sandbox, else the copy the
 //     near-sandbox crate downloads into arena/target/debug/build/near-sandbox-*/out/.near/ the first time
 //     `cd arena && cargo test --test test_arena_sandbox -- --ignored` runs.
-//   - the runner venv: E2E_PYTHON, else agents/.venv/bin/python (see README), else python3 with requirements.txt.
+//   - the runner venv: E2E_PYTHON, else agents/.venv/bin/python (`cd agents && uv sync`), else python3.
 //   - internet for the runner's Coinbase spot price and the solver's dry 1Click quote, unless E2E_OFFLINE=1: then
 //     a local stand-in serves both (NEARBUDDY_COINBASE_URL for the runner, ONECLICK_URL for the solver) and the
 //     follower check requires a quote. CI (.github/workflows/e2e-nightly.yml) runs offline; local runs stay live.
