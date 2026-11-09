@@ -109,7 +109,11 @@ test("deploy 17: the feed lists every chain record with its headline, arm and ou
   const snap: Snap = {
     at: now,
     contract: "arena.t",
-    config: { next_duel: "13", min_chaos_deposit: "1", chaos: {} },
+    config: {
+      next_duel: "13",
+      min_chaos_deposit: "1",
+      chaos: { base: "1", r_bps: 12_500, cap: "10", fee_bps: 500, share_bps: 5_000 },
+    },
     leaderboard: [{ pk: "B=", model_id: "Qwen/Qwen3.8-27B", tee: true, in_duel: "12" }],
     duels: [
       duel("12", now + 60_000, false, {

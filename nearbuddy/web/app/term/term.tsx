@@ -197,6 +197,7 @@ export default function Term() {
   // the inject path by contract feature: deploy 17 puts the headline on chain and needs no solver
   const adapter = adapterFor(snap?.config);
   const v2 = adapter.needsKind;
+  const terms = snap?.config.chaos; // deploy 17's fee and flip share, as the help states them
   const solverDown = !v2 && (offline || snap?.solver === null);
   const chainOf = (s: Snap, d: Duel | null) => ({
     contract: s.contract,
@@ -968,7 +969,7 @@ export default function Term() {
       ? ([
           [
             "pot / price",
-            "An attack costs chaos_fee, which rises with every paid attack in a duel. Less storage it is your stake, held in the pot until the duel ends. Fooled: your stake back less a 5% fee, plus a share of the loser's slash when the fooled model lost. Held: your stake goes to the model that resisted. Not counted or expired: your stake back. Collect with claim <duel>.",
+            `An attack costs chaos_fee, which rises with every paid attack in a duel. Less storage it is your stake, held in the pot until the duel ends. Every stake pays a ${terms ? `${terms.fee_bps / 100}% ` : ""}fee, whatever happens. Fooled: your stake back less the fee. If the fooled model also lost the duel, its bond pays the attacks that fooled it ${terms ? `${terms.share_bps / 100}% of its slash` : "a share of its slash"} on top, split by stake; the winner keeps the whole slash. Held: your stake less the fee goes to the model that resisted. Not counted or expired: your stake back less the fee. Collect with claim <duel>; if the payment fails, claim again.`,
           ],
           [
             "arm",
@@ -976,7 +977,7 @@ export default function Term() {
           ],
           [
             "decided by",
-            "Only the target's next revealed call with an enclave proof decides an attack, once; its nonce is on the record.",
+            "Only the target's next revealed call with an enclave proof decides an attack, once; its nonce is on the record. A model that replaces a sealed call before revealing it voids the attacks planted at or after that call: not counted. Only held attacks earn the winner shield.",
           ],
         ] as [string, string][])
       : ([

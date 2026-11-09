@@ -1,6 +1,6 @@
 // What the terminal shows, derived from the API bodies without React: which duel is live, the event feed, and the
 // flat field map whose changes between two polls make cells flash. bun test covers it (app/__tests__/term.test.ts).
-import type { Arm, Chaos, ChaosKind, ChaosOutcome } from "../lib/abi/arena";
+import type { Arm, Chaos, ChaosConfig, ChaosKind, ChaosOutcome } from "../lib/abi/arena";
 import type { Attack, Score, Side } from "../lib/fool";
 
 export type Intent = { agent_pk: string; side: Side; size_bps: number; nonce: string; proof_hash: string };
@@ -37,7 +37,7 @@ export type Snap = {
   at: number;
   contract: string;
   /** `chaos` (price terms) is present from deploy 17 on: the feature the inject path is picked by. */
-  config: { next_duel: string; min_chaos_deposit: string; commit_reveal?: boolean; chaos?: unknown };
+  config: { next_duel: string; min_chaos_deposit: string; commit_reveal?: boolean; chaos?: ChaosConfig };
   leaderboard: Agent[];
   duels: (Duel | null)[];
   solver: null | { pending?: Record<string, { kind: string; payload: string; payload_hash?: string }[]> };
