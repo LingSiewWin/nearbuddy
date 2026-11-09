@@ -342,9 +342,16 @@ export function checkDuel(e: Evidence): Line[] {
   const voided = !!o && o.open_price === "0" && o.close_price === "0";
   // deploy-15 rules (self-chaos to owner fees, no shield on a forfeit) when the contract that finished it had them
   const v15 = !!(e.before ?? e.now).config.intents_account;
-  // deploy-17 settlement (each injection settles by its get_chaos record) when the contract that finished it had the
-  // chaos terms, or the duel has records; migrate_v17 refuses while a duel is open, so no duel straddles deploy 17
-  const v17 = !!(e.before ?? e.now).config.chaos || !!e.chaos?.length;
+  // deploy-17 settlement (each injection settles by its get_chaos record) when the contract that finished it or
+  // opened it had the chaos terms, or the duel has records; migrate_v17 refuses while a duel is open, so no duel
+  // straddles deploy 17 and an open one runs under today's contract. A resolved duel whose close and open state could
+  // not be read is never judged by today's config: a deploy-16 duel read after deploy 17 would pass for one
+  const v17 = !!(
+    e.before?.config.chaos ||
+    e.open_block?.config.chaos ||
+    e.chaos?.length ||
+    (!d.resolved && e.now.config.chaos)
+  );
   // a duel opened under one deploy and finished under the other: its injections landed under one rule set and
   // finish() credited shield under the other, so no single rule describes it
   const straddled =

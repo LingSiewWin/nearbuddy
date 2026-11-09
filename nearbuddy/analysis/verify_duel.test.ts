@@ -531,6 +531,23 @@ test("a deploy-16 duel read on a deploy-17 contract keeps its own rules, line fo
   }
 });
 
+test("a deploy-16 duel whose close state is unreadable is not judged by today's deploy-17 config", () => {
+  // the RPC has pruned the close block (before/after null): the open block and the empty records say deploy 16
+  for (const id of ["363", "373", "395", "401"]) {
+    const old = { ...load(id), before: null, after: null };
+    const e = { ...load(id), before: null, after: null, chaos: [] };
+    e.now.config.chaos = TERMS;
+    assert.deepEqual(checkDuel(e), checkDuel(old), id);
+    const noOpen = { ...e, open_block: null };
+    assert.deepEqual(checkDuel(noOpen), checkDuel({ ...old, open_block: null }), `${id} without the open block`);
+  }
+  // still deploy 17 when the open block had the terms, or the duel has records
+  const v17 = asDeploy17(load("401"));
+  const recordsOnly = { ...v17, before: null, after: null };
+  recordsOnly.open_block = null;
+  assert.deepEqual(result(checkDuel(recordsOnly), "chaos records"), ["PASS"]);
+});
+
 test("deploy 17 arithmetic: the contract's own settlement tests, restated", () => {
   const terms = { fee_bps: 500, share_bps: 5_000 };
   const pks: [string, string] = ["A", "B"];
