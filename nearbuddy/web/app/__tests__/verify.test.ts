@@ -5,7 +5,7 @@
 import { afterAll, describe, expect, setSystemTime, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as web from "../lib/protocol";
-import { arenaCalls, duelCalls, type Evidence, type Line } from "../lib/verify";
+import { arenaCalls, checkDuel, collect, duelCalls, type Evidence, incomplete, type Line, state } from "../lib/verify";
 import { NET } from "../network";
 
 const ROOT = `${import.meta.dir}/../../..`; // nearbuddy/
@@ -16,6 +16,8 @@ const proto = {
   ...(await import(`${ROOT}/packages/protocol/src/intent.ts`)),
 } as typeof web;
 const cli = (await import(CLI)) as { checkDuel: (e: Evidence) => Line[] };
+// #401 recast as a deploy-17 duel (none exists on testnet yet), with get_chaos records typed by the ABI
+const v17 = (await import(`${ROOT}/analysis/fixtures/verify_duel_v17.ts`)) as { asDeploy17: (e: Evidence) => Evidence };
 // the route's arena id: another test file may mock ../api/near for the whole bun process
 const { ARENA } = await import("../api/near");
 // the CLI line: names the arena only when it is not the network default (as here under another file's mock)
@@ -97,6 +99,7 @@ let ev: Evidence = fixture("395");
 let fetches: string[] = [];
 let blockFails = false;
 let rpcDown = false;
+let chaosDown = false;
 const enc = (v: unknown) => ({ result: { result: Array.from(Buffer.from(JSON.stringify(v))) } });
 const prevOf = (blk: string) => `PREV:${blk}`;
 const realFetch = globalThis.fetch;
@@ -131,6 +134,8 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   }
   const args = JSON.parse(Buffer.from(p.args_base64, "base64").toString()) as Record<string, string>;
   if (p.method_name === "is_tee_signer") return Response.json(enc(ev.pinned[args.signer!] ?? false));
+  if (p.method_name === "get_chaos")
+    return Response.json(ev.chaos && !chaosDown ? enc(ev.chaos) : { error: "no such method" });
   if (p.method_name === "duel_lock") return Response.json(ev.lock_ns ? enc(ev.lock_ns) : { error: "no such method" });
   const fin = calls.closing?.block_hash;
   if (p.block_id && p.method_name === "get_duel")
@@ -252,6 +257,26 @@ describe("GET /api/verify", () => {
       expect((await get(id)).lines).toEqual(j.lines);
       expect(fetches.length).toBe(before);
     });
+
+  // the route keeps #401 from the tests above, so the deploy-17 recast runs through the web's own collector
+  test("deploy 17 (#401 recast): the collector reads get_chaos; the same lines as the CLI, no FAIL", async () => {
+    ev = v17.asDeploy17(fixture("401"));
+    const got = await collect(ARENA, "401", await state(ARENA, "401"));
+    expect(got.chaos).toEqual(ev.chaos!);
+    const lines = checkDuel(got);
+    expect(comparable(lines)).toEqual(comparable(cli.checkDuel(asReplayed(ev))));
+    expect(lines.filter((l) => l.result === "FAIL")).toEqual([]);
+    for (const check of ["payout", "chaos settlement", "shield", "chaos records", "injection deposits"])
+      expect([check, lines.find((l) => l.check === check)?.result]).toEqual([check, "PASS"]);
+    expect(incomplete(got)).toBe(false);
+    // a failed get_chaos read: no verdict on the settlement, and not final
+    chaosDown = true;
+    const down = await collect(ARENA, "401", await state(ARENA, "401"));
+    chaosDown = false;
+    expect(down.chaos).toBeNull();
+    expect(incomplete(down)).toBe(true);
+    expect(checkDuel(down).find((l) => l.check === "payout")?.result).toBe("SKIP");
+  });
 
   test("an open duel is never verified: no FastNEAR scan, no cache", async () => {
     const base = fixture("395");

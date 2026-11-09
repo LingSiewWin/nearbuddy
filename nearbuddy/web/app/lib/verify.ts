@@ -6,6 +6,7 @@
 // is the shared `incomplete(evidence)`: the route keeps an incomplete one only briefly. Server only.
 import { createHash } from "node:crypto";
 import { NET, NETWORK_ID } from "../network";
+import type { Chaos, ChaosConfig } from "./abi/arena";
 import { b64, hex, type Intent, intentMessage, proofHash, type TeeProof, teeText, verify } from "./protocol";
 
 // ---------------------------------------------------------------- the evidence (all public)
@@ -45,6 +46,8 @@ export type Config = {
   intent_lock_s?: number;
   /** Present from deploy 15 on: how the verifier tells v15 rules (self-chaos, forfeit shield) from v14. */
   intents_account?: string;
+  /** Present from deploy 17 on: the chaos terms, and how the verifier tells deploy-17 settlement from the pool rule. */
+  chaos?: ChaosConfig;
 };
 /** Arena views at one point: now, or at a past block. */
 export type State = {
@@ -101,6 +104,10 @@ export type Evidence = {
   /** At the open receipt's block: the arena account's storage_usage before and after, get_config there, and how many
    *  other successful arena receipts ran in that block (any of them makes the storage delta inexact). */
   open_block?: { storage_before: number; storage_after: number; config: Config; others?: number } | null;
+  // Deploy 17 (absent in evidence saved before it):
+  /** get_chaos(duel_id) read now: every planted headline with its stake, outcome and payout (kept after the finish).
+   *  null when it was not read: a contract before deploy 17, or a failed read. */
+  chaos?: Chaos[] | null;
 };
 
 // ---------------------------------------------------------------- receipts
@@ -212,8 +219,44 @@ export function pnlBps(i: Intent | null, closeAt: bigint, open: bigint, close: b
   return Number((sign * (close - open) * BigInt(i.size_bps)) / open);
 }
 
+/** Deploy 17's injections at finish, from their get_chaos records: the records, the duel's agents [A, B] and the
+ *  terms finish() read. */
+export type ChaosSettle = {
+  records: Pick<Chaos, "target" | "stake" | "outcome">[];
+  pks: [string, string];
+  terms: Pick<ChaosConfig, "fee_bps" | "share_bps">;
+};
+
+/** chaos.rs settle_records: every stake leaves the pool and pays `fee = stake * fee_bps / 10_000` to owner fees,
+ *  whatever its outcome. A held stake less the fee goes to the target's bond (payout 0). Every other one is owed
+ *  back less the fee (a pending one settles as expired), plus, for a flip at `loser`, its share of `pot` by stake
+ *  (weights in bps, rounded down; only the shares paid leave the loser's bond). */
+export function settleRecords(list: ChaosSettle["records"], loser: string | null, pot: bigint, feeBps: number) {
+  const fooled = (c: ChaosSettle["records"][number]) => c.outcome === "Flipped" && c.target === loser;
+  const weight = list.filter(fooled).reduce((s, c) => s + BigInt(c.stake), 0n);
+  let [taken, fees, shares] = [0n, 0n, 0n];
+  const credits: [string, bigint][] = [];
+  const payouts = list.map((c) => {
+    const stake = BigInt(c.stake);
+    const fee = (stake * BigInt(feeBps)) / 10_000n;
+    taken += stake;
+    fees += fee;
+    if (c.outcome === "Held") {
+      if (stake > fee) credits.push([c.target, stake - fee]);
+      return 0n;
+    }
+    const share = fooled(c) && weight > 0n ? (pot * ((stake * 10_000n) / weight)) / 10_000n : 0n;
+    shares += share;
+    return stake - fee + share;
+  });
+  return { payouts, taken, fees, shares, credits };
+}
+
 /** duels.rs finish(): bonds after resolution, the slash, the winner side and the owner-fee gain. `nr` = side held
- *  an unrevealed commitment at the close. */
+ *  an unrevealed commitment at the close. With `chaos` (deploy 17) the injections settle out of the pool first
+ *  (chaos.rs settle_chaos): the loser pays the flips' shares from its bond on top of its slash, at most `share_bps`
+ *  of the slash and what the bond still holds; the winner keeps the whole slash and what is left of the pool. A tie
+ *  (or a void) splits what is left. */
 export function finishMath(
   bonds: [bigint, bigint],
   pool: bigint,
@@ -221,6 +264,7 @@ export function finishMath(
   nr: [boolean, boolean],
   slashBps: number,
   noRevealBps: number,
+  chaos?: ChaosSettle,
 ) {
   const after: [bigint, bigint] = [...bonds];
   const taken = nr.map((on, s) => (on ? (bonds[s]! * BigInt(noRevealBps)) / 10_000n : 0n)) as [bigint, bigint];
@@ -233,16 +277,39 @@ export function finishMath(
   const aWins: boolean | null =
     nr[0] && nr[1] ? null : nr[0] ? false : nr[1] ? true : pnl[0] === pnl[1] ? null : pnl[0] > pnl[1];
   let slashed = 0n;
+  let settled: ReturnType<typeof settleRecords> | null = null;
   if (aWins === null) {
-    after[0] += pool / 2n + (pool % 2n);
-    after[1] += pool / 2n;
+    if (chaos) settled = settleRecords(chaos.records, null, 0n, chaos.terms.fee_bps);
+    const left = pool - (settled?.taken ?? 0n);
+    after[0] += left / 2n + (left % 2n);
+    after[1] += left / 2n;
   } else {
     const [w, l] = aWins ? [0, 1] : [1, 0];
     slashed = (after[l]! * BigInt(slashBps)) / 10_000n;
     after[l]! -= slashed;
-    after[w]! += pool + slashed;
+    if (chaos) {
+      const most = (slashed * BigInt(chaos.terms.share_bps)) / 10_000n;
+      // biome-ignore lint/complexity/useMathMinMax: bigint, Math.min would throw
+      const pot = most < after[l]! ? most : after[l]!; // what the bond still holds bounds the shares
+      settled = settleRecords(chaos.records, chaos.pks[l]!, pot, chaos.terms.fee_bps);
+      after[l]! -= settled.shares;
+    }
+    after[w]! += pool + slashed - (settled?.taken ?? 0n);
   }
-  return { after, slashed, aWins, fees, taken };
+  for (const [pk, amt] of settled?.credits ?? []) after[pk === chaos!.pks[0] ? 0 : 1] += amt;
+  fees += settled?.fees ?? 0n;
+  return { after, slashed, aWins, fees, taken, settled };
+}
+
+/** chaos.rs judge, read back: whether a settled record's outcome is the one its own kind, prev and next give. A
+ *  replaced held commitment voids the headlines planted at or after it (NoTrial, no prev, no next); Expired had no
+ *  counting decision before the end. */
+export function judged(c: Pick<Chaos, "kind" | "prev" | "next" | "outcome">): boolean {
+  if (c.outcome === "Expired") return c.next === null;
+  if (c.next === null) return c.outcome === "NoTrial" && c.prev === null;
+  const lie = c.kind === "Placebo" ? null : c.kind;
+  if (lie === null || c.prev === null || c.prev === lie) return c.outcome === "NoTrial";
+  return c.outcome === (c.next === lie ? "Flipped" : "Held");
 }
 
 // ---------------------------------------------------------------- checks
@@ -275,6 +342,9 @@ export function checkDuel(e: Evidence): Line[] {
   const voided = !!o && o.open_price === "0" && o.close_price === "0";
   // deploy-15 rules (self-chaos to owner fees, no shield on a forfeit) when the contract that finished it had them
   const v15 = !!(e.before ?? e.now).config.intents_account;
+  // deploy-17 settlement (each injection settles by its get_chaos record) when the contract that finished it had the
+  // chaos terms, or the duel has records; migrate_v17 refuses while a duel is open, so no duel straddles deploy 17
+  const v17 = !!(e.before ?? e.now).config.chaos || !!e.chaos?.length;
   // a duel opened under one deploy and finished under the other: its injections landed under one rule set and
   // finish() credited shield under the other, so no single rule describes it
   const straddled =
@@ -418,7 +488,7 @@ export function checkDuel(e: Evidence): Line[] {
     );
   };
   oracleLine("open", d.open_price);
-  if (!o) return chaos(e, d, calls.chaos, v15, straddled, out, add);
+  if (!o) return chaos(e, d, calls.chaos, v15, v17, straddled, out, add);
   if (voided) {
     add(
       calls.void ? "PASS" : "SKIP",
@@ -466,6 +536,9 @@ export function checkDuel(e: Evidence): Line[] {
   // payout, as finish() / void_duel compute it from the state the callback read
   const b = e.before;
   const a = e.after;
+  // deploy 17: the injections settle out of the pool by their records, under the terms finish() read
+  const terms = b?.config.chaos;
+  const settle = v17 && terms && e.chaos ? { records: e.chaos, pks: [d.a, d.b] as [string, string], terms } : null;
   if (!b?.a || !b.b || !b.duel || !a?.a || !a.b) {
     add(
       "SKIP",
@@ -474,19 +547,35 @@ export function checkDuel(e: Evidence): Line[] {
         ? "state at the close callback's block is not available from the RPC (try VERIFY_ARCHIVAL_RPC)"
         : "the close callback's receipt is not in the scanned txs yet (FastNEAR may still be indexing it); re-run later",
     );
+  } else if (v17 && !settle) {
+    add("SKIP", "payout", "deploy 17 settles each injection by its record: get_chaos or the chaos terms were not read");
   } else {
     const bonds: [bigint, bigint] = [BigInt(b.a.bond), BigInt(b.b.bond)];
     const pool = BigInt(b.duel.pool);
     const got: [bigint, bigint] = [BigInt(a.a.bond), BigInt(a.b.bond)];
+    const feesOk = (fees: bigint) => !fees || BigInt(a.config.owner_fees) - BigInt(b.config.owner_fees) === fees;
+    const bondsLine = (m: { after: [bigint, bigint]; fees: bigint }) =>
+      `A ${near(bonds[0])} -> ${near(got[0])} (expected ${near(m.after[0])}), B ${near(bonds[1])} -> ${near(got[1])} (expected ${near(m.after[1])}), owner fees +${near(m.fees)} NEAR`;
     if (voided) {
-      const want = [bonds[0] + pool / 2n + (pool % 2n), bonds[1] + pool / 2n];
+      const m = finishMath(bonds, pool, [0, 0], [false, false], 0, 0, settle ?? undefined);
       add(
-        got[0] === want[0] && got[1] === want[1] ? "PASS" : "FAIL",
+        got[0] === m.after[0] && got[1] === m.after[1] && feesOk(m.fees) ? "PASS" : "FAIL",
         "payout",
-        `void: pool ${near(pool)} NEAR split, A ${near(bonds[0])} -> ${near(got[0])}, B ${near(bonds[1])} -> ${near(got[1])}`,
+        settle
+          ? `void: the injections settle as on a tie, then the pool ${near(pool)} NEAR less their stakes is split; ${bondsLine(m)}`
+          : `void: pool ${near(pool)} NEAR split, A ${near(bonds[0])} -> ${near(got[0])}, B ${near(bonds[1])} -> ${near(got[1])}`,
       );
+      if (settle) settlement(m.settled!, settle, add);
     } else {
-      const m = finishMath(bonds, pool, [o.pnl_a, o.pnl_b], flags, b.config.slash_bps, b.config.no_reveal_bps ?? 0);
+      const m = finishMath(
+        bonds,
+        pool,
+        [o.pnl_a, o.pnl_b],
+        flags,
+        b.config.slash_bps,
+        b.config.no_reveal_bps ?? 0,
+        settle ?? undefined,
+      );
       const winner = m.aWins === null ? null : m.aWins ? d.a : d.b;
       add(
         (o.winner ?? null) === winner && BigInt(o.slashed) === m.slashed ? "PASS" : "FAIL",
@@ -497,48 +586,99 @@ export function checkDuel(e: Evidence): Line[] {
         add(
           "INFO",
           "no-reveal forfeit",
-          `A paid ${near(m.taken[0])}, B paid ${near(m.taken[1])} NEAR (${b.config.no_reveal_bps} bps)${m.fees ? ", both to owner fees" : ""}`,
+          `A paid ${near(m.taken[0])}, B paid ${near(m.taken[1])} NEAR (${b.config.no_reveal_bps} bps)${flags[0] && flags[1] ? ", both to owner fees" : ""}`,
         );
-      const feesOk = !m.fees || BigInt(a.config.owner_fees) - BigInt(b.config.owner_fees) === m.fees;
       add(
-        got[0] === m.after[0] && got[1] === m.after[1] && feesOk ? "PASS" : "FAIL",
+        got[0] === m.after[0] && got[1] === m.after[1] && feesOk(m.fees) ? "PASS" : "FAIL",
         "payout",
-        `pool ${near(pool)} NEAR; A ${near(bonds[0])} -> ${near(got[0])} (expected ${near(m.after[0])}), B ${near(bonds[1])} -> ${near(got[1])} (expected ${near(m.after[1])})`,
+        settle
+          ? `pool ${near(pool)} NEAR of stakes, each settled by its record; the winner keeps the whole slash, the loser pays the flips' shares on top; ${bondsLine(m)}`
+          : `pool ${near(pool)} NEAR; A ${near(bonds[0])} -> ${near(got[0])} (expected ${near(m.after[0])}), B ${near(bonds[1])} -> ${near(got[1])} (expected ${near(m.after[1])})`,
       );
+      if (settle) settlement(m.settled!, settle, add);
       // shield: the winner's count of injections it outlasted, as finish() credits it
       const sh = [b.a.shield, b.b.shield, a.a.shield, a.b.shield];
       if (straddled) add("SKIP", "shield", `not judged: ${straddled}`);
       else if (sh.some((x) => x === undefined)) add("SKIP", "shield", "shield not in the saved agent views");
-      else if (calls.chaos.length !== o.injections)
-        add("SKIP", "shield", "some injections are outside the scanned txs");
+      else if ((settle?.records.length ?? calls.chaos.length) !== o.injections)
+        add(
+          "SKIP",
+          "shield",
+          settle ? "get_chaos does not list every injection" : "some injections are outside the scanned txs",
+        );
       else {
         const owners = new Set([e.now.a?.owner, e.now.b?.owner]);
-        const targets = calls.chaos.map((c) => ({ target: String(c.args.target), self: owners.has(c.predecessor) }));
+        // deploy 17 counts only the third-party headlines the winner held against; a placebo is the contract owner's
+        const targets = settle
+          ? settle.records.map((c) => ({
+              target: c.target,
+              self: owners.has(c.injector) || c.kind === "Placebo",
+              outcome: c.outcome,
+            }))
+          : calls.chaos.map((c) => ({ target: String(c.args.target), self: owners.has(c.predecessor) }));
         const forfeit = flags[0] || flags[1];
         const gain = shieldGain(targets, o.winner ?? null, forfeit, v15);
         const got = [sh[2]! - sh[0]!, sh[3]! - sh[1]!];
         const want = [o.winner === d.a ? gain : 0, o.winner === d.b ? gain : 0];
+        const rule = settle
+          ? "v17 rule: the winner gains one per headline it held against (outcome Held), none paid by an agent's owner, no placebo, none on a forfeit win"
+          : `${v15 ? "v15" : "v14"} rule: the winner gains one per injection aimed at it${v15 ? ", none paid by an agent's owner, none on a forfeit win" : ""}`;
         add(
           got[0] === want[0] && got[1] === want[1] ? "PASS" : "FAIL",
           "shield",
-          `${v15 ? "v15" : "v14"} rule: the winner gains one per injection aimed at it${v15 ? ", none paid by an agent's owner, none on a forfeit win" : ""}: expected A +${want[0]} B +${want[1]}, got A +${got[0]} B +${got[1]}`,
+          `${rule}: expected A +${want[0]} B +${want[1]}, got A +${got[0]} B +${got[1]}`,
         );
       }
     }
   }
-  return chaos(e, d, calls.chaos, v15, straddled, out, add);
+  return chaos(e, d, calls.chaos, v15, v17, straddled, out, add);
 }
 
 /** finish()'s shield credit: injections aimed at the winner; from deploy 15 none paid by either agent's owner and
- *  none at all when the win is a forfeit (red team F2). 0 on a tie. */
+ *  none at all when the win is a forfeit (red team F2); from deploy 17, whose records carry an `outcome`, only the
+ *  `Held` ones (chaos.rs held_against). 0 on a tie. */
 export function shieldGain(
-  targets: { target: string; self: boolean }[],
+  targets: { target: string; self: boolean; outcome?: Chaos["outcome"] }[],
   winner: string | null,
   forfeit: boolean,
   v15: boolean,
 ): number {
   if (!winner || (v15 && forfeit)) return 0;
-  return targets.filter((t) => t.target === winner && !(v15 && t.self)).length;
+  return targets.filter(
+    (t) => t.target === winner && !(v15 && t.self) && (t.outcome === undefined || t.outcome === "Held"),
+  ).length;
+}
+
+/** Deploy 17: each settled record's payout against settle_records on the same records, and its outcome against its
+ *  own kind, prev and next. */
+function settlement(
+  s: ReturnType<typeof settleRecords>,
+  settle: { records: Chaos[]; terms: ChaosConfig },
+  add: (r: Line["result"], c: string, x: string) => void,
+) {
+  const list = settle.records;
+  const bad = list.flatMap((c, i) => {
+    const why =
+      c.outcome === "Pending"
+        ? "still pending after the finish"
+        : !judged(c)
+          ? `${c.outcome} does not follow from prev ${c.prev} and next ${c.next} for a ${c.kind} headline`
+          : BigInt(c.payout) !== s.payouts[i]
+            ? `payout ${near(BigInt(c.payout))}, expected ${near(s.payouts[i]!)}`
+            : "";
+    return why ? [`#${i} ${why}`] : [];
+  });
+  const n = (x: Chaos["outcome"]) => list.filter((c) => c.outcome === x).length;
+  const sum = (xs: bigint[]) => xs.reduce((t, x) => t + x, 0n);
+  add(
+    bad.length ? "FAIL" : "PASS",
+    "chaos settlement",
+    `${list.length} headlines: ${n("Flipped")} flipped, ${n("Held")} held, ${n("NoTrial")} no trial, ${n("Expired")} expired; ` +
+      `stakes ${near(s.taken)} NEAR, fee ${settle.terms.fee_bps} bps of each = ${near(s.fees)} to owner fees, ` +
+      `held stakes less the fee ${near(sum(s.credits.map(([, x]) => x)))} to the targets' bonds, ` +
+      `flip shares ${near(s.shares)} from the loser's bond, payouts ${near(sum(s.payouts))} NEAR` +
+      (bad.length ? `: ${bad.join("; ")}` : ", as get_chaos records them"),
+  );
 }
 
 const secs = (ns: bigint) => (Number(ns) / 1e9).toFixed(1);
@@ -619,36 +759,48 @@ export function incomplete(e: Evidence): boolean {
   if (!c.closing || !e.before || !e.after) return true;
   if (e.chaos_pools && c.chaos.some((x) => !e.chaos_pools?.[x.block_hash])) return true;
   if (c.open && e.open_block === null) return true;
+  if (e.now.config.chaos && e.chaos === null) return true; // deploy 17 has get_chaos: null = a failed read
   return !!e.now.config.intents_account && e.lock_ns === null;
 }
 
 /** Injections: payer, kind and target of every successful inject_chaos, the count the contract kept, and where each
  *  deposit went. Deploy 15 sends chaos paid by either agent's owner to owner_fees; the rest (minus its storage) and
- *  all chaos before deploy 15 joins the pool, which the duel's pool delta across each injection's block shows. */
+ *  all chaos before deploy 15 joins the pool, which the duel's pool delta across each injection's block shows.
+ *  Deploy 17 also sends the contract owner's placebos to owner_fees, and each receipt returns its record's index in
+ *  get_chaos: the record must be that call (payer, target, kind, headline), and the pool must grow by its stake. */
 function chaos(
   e: Evidence,
   d: Duel,
   list: Call[],
   v15: boolean,
+  v17: boolean,
   straddled: string | null,
   out: Line[],
   add: (r: Line["result"], c: string, x: string) => void,
 ) {
   const owners = new Set([e.now.a?.owner, e.now.b?.owner]);
   const self = (c: Call) => owners.has(c.predecessor);
+  const placebo = (c: Call) => v17 && c.args.kind === "Placebo";
+  const rec = (c: Call) => (v17 && typeof c.value === "number" ? e.chaos?.[c.value] : undefined);
   for (const c of list) {
     const target = String(c.args.target);
-    const where = !self(c)
-      ? " -> pool"
-      : straddled
-        ? " (payer owns an agent; pool or owner fees depending on the deploy it landed under)"
-        : v15
-          ? " -> owner fees (self-chaos: the payer owns an agent in this duel)"
-          : " -> pool (payer owns an agent; deploy 14 had no self-chaos rule)";
+    const r = rec(c);
+    const where = placebo(c)
+      ? " -> owner fees (placebo: the contract owner's control arm)"
+      : !self(c)
+        ? " -> pool"
+        : straddled
+          ? " (payer owns an agent; pool or owner fees depending on the deploy it landed under)"
+          : v15
+            ? " -> owner fees (self-chaos: the payer owns an agent in this duel)"
+            : " -> pool (payer owns an agent; deploy 14 had no self-chaos rule)";
     add(
       "INFO",
       "injection",
-      `${c.predecessor} paid ${near(c.deposit)} NEAR: kind "${c.args.kind}" at ${target === d.a ? "A" : "B"}${where}, tx ${c.tx}`,
+      `${c.predecessor} paid ${near(c.deposit)} NEAR: kind "${c.args.kind}" at ${target === d.a ? "A" : "B"}${where}, tx ${c.tx}` +
+        (r
+          ? `; record #${c.value}: arm ${r.arm}, stake ${near(BigInt(r.stake))}, ${r.outcome}, payout ${near(BigInt(r.payout))}`
+          : ""),
     );
   }
   const kept = d.outcome ? d.outcome.injections : d.injections.length;
@@ -657,9 +809,31 @@ function chaos(
     "injections",
     `${list.length} successful inject_chaos receipts found, contract counts ${kept}${list.length === kept ? "" : " (some outside the scanned txs)"}`,
   );
+  if (v17 && !e.chaos) add("SKIP", "chaos records", "get_chaos was not read");
+  else if (v17 && e.chaos) {
+    const unpaid = (c: Call) => self(c) || placebo(c);
+    const off = list.filter((c) => {
+      const r = rec(c);
+      return (
+        !r ||
+        r.injector !== c.predecessor ||
+        r.target !== c.args.target ||
+        r.kind !== c.args.kind ||
+        r.headline !== c.args.headline ||
+        (r.stake === "0") !== unpaid(c) ||
+        BigInt(r.stake) > c.deposit
+      );
+    });
+    add(
+      off.length || e.chaos.length !== kept ? "FAIL" : "PASS",
+      "chaos records",
+      `get_chaos lists ${e.chaos.length}, contract counts ${kept}; each receipt's returned index names a record with its payer, target, kind and headline, stake 0 only when an agent's owner or the contract owner paid` +
+        (off.length ? `: ${off.length} do not (tx ${off.map((c) => c.tx).join(", ")})` : ""),
+    );
+  }
   if (!e.chaos_pools || !list.length) return out;
-  if (straddled) {
-    add("SKIP", "injection deposits", `not judged: ${straddled}`);
+  if (straddled || (v17 && !e.chaos)) {
+    add("SKIP", "injection deposits", straddled ? `not judged: ${straddled}` : "get_chaos was not read");
     return out;
   }
   const blocks = new Map<string, Call[]>();
@@ -675,17 +849,22 @@ function chaos(
       continue;
     }
     const delta = BigInt(pp[1]) - BigInt(pp[0]);
-    const paid = cs.filter((c) => !(v15 && self(c))).reduce((s, c) => s + c.deposit, 0n);
+    const paid = cs.filter((c) => !(v15 && self(c)) && !placebo(c)).reduce((s, c) => s + c.deposit, 0n);
     added += delta;
     toPool += paid;
-    if (paid === 0n ? delta !== 0n : delta <= 0n || delta > paid) bad++;
+    if (v17) {
+      // exact: the pool grows by the stakes the records hold (deposit less storage; 0 when unpaid)
+      const stakes = cs.map((c) => rec(c)?.stake);
+      if (stakes.some((x) => x === undefined) || delta !== stakes.reduce((s, x) => s + BigInt(x!), 0n)) bad++;
+    } else if (paid === 0n ? delta !== 0n : delta <= 0n || delta > paid) bad++;
   }
-  const nSelf = v15 ? list.filter(self).length : 0;
+  const nSelf = v15 ? list.filter((c) => self(c) || placebo(c)).length : 0;
   add(
     bad ? "FAIL" : missing ? "SKIP" : "PASS",
     "injection deposits",
     `${list.length - nSelf} into the pool: +${near(added)} NEAR of ${near(toPool)} paid (the rest is their storage)` +
-      `${v15 ? `; ${nSelf} self-paid, pool unchanged by them` : ""}${bad ? `; ${bad} blocks off` : ""}${missing ? `; ${missing} blocks without state` : ""}`,
+      `${v17 ? ", each block's growth the sum of its records' stakes" : ""}` +
+      `${v15 ? `; ${nSelf} ${v17 ? "paid by an agent's owner or placebo" : "self-paid"}, pool unchanged by them` : ""}${bad ? `; ${bad} blocks off` : ""}${missing ? `; ${missing} blocks without state` : ""}`,
   );
   return out;
 }
@@ -801,7 +980,7 @@ async function storageAt(arena: string, block: string): Promise<number> {
 
 /** The CLI's collect() for a resolved duel whose current state `now` is already read, without dataset rows, reading
  *  the same inputs as analysis/verify_duel.ts (the deploy-15 ones too: duel_lock, the pools around each injection's
- *  block, the open block). A read that could not complete the evidence leaves it `incomplete` (shared, in the checks
+ *  block, the open block; and deploy 17's get_chaos). A read that could not complete the evidence leaves it `incomplete` (shared, in the checks
  *  section); the caller decides what to keep. */
 export async function collect(arena: string, id: string, now: State): Promise<Evidence> {
   const d = now.duel;
@@ -860,6 +1039,8 @@ export async function collect(arena: string, id: string, now: State): Promise<Ev
       const others = arenaCalls(txs, arena).filter((c) => c.ok && c.block_hash === blk).length - 1;
       open_block = { storage_before, storage_after, config, others };
     } catch {} // pruned: the refund line says INFO
+  // deploy 17: every planted headline's record (stake, outcome, payout), kept after the finish
+  const chaos = now.config.chaos ? await viewAt<Chaos[]>(arena, "get_chaos", { duel_id: id }).catch(() => null) : null;
   return {
     arena,
     duel_id: id,
@@ -873,5 +1054,6 @@ export async function collect(arena: string, id: string, now: State): Promise<Ev
     lock_ns: lock,
     chaos_pools,
     open_block,
+    chaos,
   };
 }
