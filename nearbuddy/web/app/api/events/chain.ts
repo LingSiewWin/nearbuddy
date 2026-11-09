@@ -2,6 +2,7 @@
 // with the method it was opened by, and the contract's `commit` / `intent` EVENT_JSON logs with the method
 // that emitted them. No fetch, so bun test checks them on fixture txs (app/__tests__).
 import type { ChainEvent, Opened } from "../../cells";
+import { parseEventJson } from "../../lib/protocol";
 import { NETWORKS } from "../../network";
 
 /** The slice of a FastNEAR tx this file reads. Block timestamps are ns, a string or a (lossy) JSON number. */
@@ -64,7 +65,7 @@ export function eventsOf(t: Tx, arena: string): ChainEvent[] {
           if (!log.startsWith("EVENT_JSON:")) return [];
           let e: { standard?: string; event?: string; data?: { duel_id?: number | string; agent_pk?: string } };
           try {
-            e = JSON.parse(log.slice("EVENT_JSON:".length));
+            e = parseEventJson(log) as typeof e; // keeps u64 duel_id past 2^53 exact
           } catch {
             return [];
           }

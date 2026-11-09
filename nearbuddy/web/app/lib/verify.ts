@@ -344,8 +344,12 @@ export function checkDuel(e: Evidence): Line[] {
       continue;
     }
     const sig = (c.args.signed as { signature: string }).signature;
+    let signed = false;
+    try {
+      signed = verify(stored.agent_pk, intentMessage(stored), sig);
+    } catch {} // an intent the contract's JSON ingress would refuse: FAIL, not a crash
     add(
-      verify(stored.agent_pk, intentMessage(stored), sig) ? "PASS" : "FAIL",
+      signed ? "PASS" : "FAIL",
       `intent ${s} signature`,
       `${stored.side} ${stored.size_bps} bps nonce ${stored.nonce}: ed25519 over intent_message by ${short(stored.agent_pk, 12)} (${c.method}, tx ${c.tx})`,
     );
