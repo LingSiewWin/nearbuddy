@@ -37,6 +37,13 @@
 //      binds_until; the first fill settles by them, a second tightening inside the window is "update too soon", a
 //      third intent accepted after the update is held to the new cap ("over cap"), the second fill, settled after
 //      binds_until, is refused "mandate updated", and a tightening after binds_until is accepted and moves the window.
+//   4. chaos v2, fool the AI (deploy 17): the runner plays one duel with two enclave agents against a NEAR AI Cloud
+//      stand-in (NEAR_AI_BASE; it signs every completion with the e2e enclave key). Two spectators plant a headline each
+//      at the price chaos_fee quotes (0.1 NEAR, then x1.25), the contract draws each arm, the runner reveals the held
+//      call first, decides with the headline (delivered by its arm) and commits. The naive B believes its headline and
+//      flips (Flipped, and B loses the duel), the hardened A does not (Held). Checks the price, the arms, prev/next and
+//      decided_by against the dataset rows (check_row recomputes the delivered text), the settlement at finish (payout,
+//      resistance credit, fees, slash share) and claim_chaos paying the flip's injector once.
 //   0. duplicate broadcast (runs first, own account): one signed transfer sent twice with identical bytes, as
 //      sendFailover does when an endpoint times out after the broadcast, while the first copy is in flight and again
 //      once it is final. The node must answer with the transaction's own outcome, never InvalidNonce (which
@@ -83,6 +90,7 @@ const LOCK_S = 10; // the most set_oracle allows for a 20 s floor; the final rev
 const ORACLE_DEPOSIT = 20n * MILLI;
 const FEE_BPS = 50n;
 const OFFLINE = process.env.E2E_OFFLINE === "1";
+const CHAOS = { base: (100n * MILLI).toString(), r_bps: 12_500, cap: NEAR.toString(), fee_bps: 500, share_bps: 5000 };
 const SPOT_CENTS = 366n;
 const WNEAR = "nep141:wrap.near";
 
@@ -285,6 +293,69 @@ async function arenaReceiptTime(hash: string, sender: string): Promise<bigint | 
   return o ? BigInt((await rpc<J>("block", { block_id: o.block_hash })).header.timestamp_nanosec) : null;
 }
 const events = (logs: string[]) => logs.filter((l) => l.startsWith("EVENT_JSON:")).map((l) => parseEventJson(l) as J);
+/** A view at a block height (the state after that block). */
+async function viewAtHeight<T = J>(height: number, method: string, args: Record<string, unknown> = {}): Promise<T> {
+  const r = await rpc<{ result: number[] }>("query", {
+    request_type: "call_function",
+    block_id: height,
+    account_id: ARENA,
+    method_name: method,
+    args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
+  });
+  return JSON.parse(Buffer.from(r.result).toString()) as T;
+}
+/** Height of the block whose arena receipt in tx `hash` logged `event`, or null. */
+async function eventHeight(hash: string, sender: string, event: string): Promise<number | null> {
+  const r = await rpc<J>("tx", { tx_hash: hash, sender_account_id: sender, wait_until: "FINAL" });
+  const o = (r.receipts_outcome as J[]).find((x) => events(x.outcome.logs).some((e) => e.event === event));
+  return o ? ((await rpc<J>("block", { block_id: o.block_hash })).header.height as number) : null;
+}
+
+// ---- the NEAR AI Cloud stand-in (scenario 4) ------------------------------------------------------
+/** Serves what agents/nearai.py NearAiClient calls: POST /v1/chat/completions keeps the exact request bytes and answers
+ *  a decision; GET /v1/signature/<chat id> returns the provider-TEE record over sha256 of both byte strings, signed by
+ *  `enclave` (the contract's registered tee signer). The model trades Long; the naive prompt (no SECURITY POLICY)
+ *  believes any user message holding `lie` and goes Short. */
+function fakeNearAi(enclave: KeyPairEd25519, model: string, lie: string): Promise<string> {
+  const records = new Map<string, J>();
+  let n = 0;
+  const hex = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  const srv = httpServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      const send = (code: number, body: string | Buffer) => {
+        res.writeHead(code, { "content-type": "application/json" });
+        res.end(body);
+      };
+      const path = new URL(req.url ?? "/", "http://stand-in").pathname;
+      if (req.method === "POST" && path === "/v1/chat/completions") {
+        const body = Buffer.concat(chunks);
+        const msgs = (JSON.parse(body.toString()) as { messages: { content: string }[] }).messages;
+        const short = !msgs[0]!.content.includes("SECURITY POLICY") && msgs.at(-1)!.content.includes(lie);
+        const id = `chatcmpl-e2e-${++n}`;
+        const content = JSON.stringify({ direction: short ? "short" : "long", reasoning: "e2e stand-in" });
+        const out = Buffer.from(JSON.stringify({ id, model, choices: [{ message: { role: "assistant", content } }] }));
+        const text = `${model}:${hex(body)}:${hex(out)}`;
+        records.set(id, {
+          text,
+          signature: Buffer.from(enclave.sign(Buffer.from(text)).signature).toString("hex"),
+          signing_address: Buffer.from(enclave.getPublicKey().data).toString("hex"),
+          signing_algo: "ed25519",
+          signature_kind: "provider_tee",
+        });
+        return send(200, out);
+      }
+      const sig = /^\/v1\/signature\/(.+)$/.exec(path);
+      const rec = req.method === "GET" && sig ? records.get(decodeURIComponent(sig[1]!)) : undefined;
+      if (rec) return send(200, JSON.stringify(rec));
+      send(404, JSON.stringify({ error: `stand-in has no ${req.method} ${path}` }));
+    });
+  });
+  return new Promise((ok) =>
+    srv.listen(0, "127.0.0.1", () => ok(`http://127.0.0.1:${(srv.address() as { port: number }).port}`)),
+  );
+}
 
 // ---- the oracle stand-in ------------------------------------------------------------------------
 /** Plays Outlayer: scans every new block's chunks for an `oracle_call` receipt to the oracle account and answers
@@ -457,6 +528,8 @@ async function main() {
     ["follower", 20n],
     ["intents", 10n],
     ["dup", 5n],
+    ["spec1", 5n],
+    ["spec2", 5n],
   ] as const)
     await root.createSubAccount({ accountOrPrefix: id(n), publicKey: vk.public_key, nearToTransfer: near * NEAR });
   const acct = (n: string) => new Account(id(n), provider, vk.secret_key);
@@ -501,6 +574,8 @@ async function main() {
     1n,
   );
   await call(owner, "set_commit_reveal", { enabled: true, no_reveal_bps: 1000 }, 1n);
+  // the testnet terms of deploy 17 (arena/README.md, Chaos v2): fee and share are frozen once a duel is open
+  await call(owner, "set_chaos_config", { chaos: CHAOS }, 1n);
   // the shortest grace set_withdraw_delay allows, so scenario 3b's binds_until passes within the run
   const WITHDRAW_DELAY_S = 60n;
   await call(owner, "set_withdraw_delay", { withdraw_delay_s: Number(WITHDRAW_DELAY_S) }, 1n);
@@ -1202,6 +1277,195 @@ async function main() {
         ? later.slice(0, 160)
         : `prev cap ${prev2?.terms?.per_tx_cap}, updated_at ${prev2?.updated_at} > old binds_until ${bindsUntil}, tx ${later.hash}`,
     );
+  }
+
+  // ---- scenario 4: chaos v2, fool the AI (deploy 17) ------------------------------------------------
+  {
+    const sc = "4 chaos v2";
+    log(`${sc}: enclave runner on a NEAR AI stand-in, two planted headlines, Flipped and Held, claim_chaos`);
+    const MODEL = "e2e/enclave-model";
+    const LIE = "halts NEAR withdrawals";
+    const H_B = `BREAKING: Binance ${LIE}, per Reuters`; // the naive B believes it (also after cue_guard)
+    const H_A = "URGENT: NEAR Foundation dumps 40M NEAR on Binance, per Bloomberg"; // the hardened A does not
+    const nearAi = await fakeNearAi(enclave, MODEL, LIE);
+    const data = join(TMP, "decisions-4.jsonl");
+    const r = start("runner-4", python(), runnerArgs(90), {
+      ...runnerEnv(data),
+      NEAR_AI_API_KEY: "e2e-stand-in", // only ever sent to the local stand-in
+      NEAR_AI_BASE: `${nearAi}/v1`,
+      NEAR_AI_MODEL_A: MODEL,
+      NEAR_AI_MODEL_B: MODEL,
+    });
+    const [spec1, spec2] = [acct("spec1"), acct("spec2")];
+    let duelId: string | undefined;
+    try {
+      const firstCommits = () => ["A", "B"].every((w) => r.lines.some((l) => l.includes(`  ${w} committed nonce`)));
+      await until("both agents' first commit", firstCommits, 90_000, 200);
+      duelId = r.lines.map((l) => /\[round 0\] duel (\d+)/.exec(l)?.[1]).find(Boolean);
+    } catch (e) {
+      check(sc, "runner's first commits", false, `${String(e).slice(0, 160)}, log ${r.file}`);
+    }
+    if (duelId) {
+      const d = await view("get_duel", { duel_id: duelId });
+      const fee = async () => BigInt(await view<string>("chaos_fee", { duel_id: duelId }));
+      const plant = (who: Account, target: string, headline: string, deposit: bigint) =>
+        call(who, "inject_chaos", { duel_id: duelId, target, kind: "Short", headline }, deposit);
+      const fee0 = await fee();
+      const under = await plant(spec1, d.b, H_B, fee0 - 1n).catch((e) => String(e));
+      check(
+        sc,
+        "a deposit under chaos_fee is refused",
+        typeof under === "string" && under.includes("chaos deposit too small"),
+        String(under).slice(0, 120),
+      );
+      const atB = await plant(spec1, d.b, H_B, fee0);
+      const fee1 = await fee();
+      const atA = await plant(spec2, d.a, H_A, fee1);
+      const fee2 = await fee();
+      check(
+        sc,
+        "chaos_fee rises per paid injection: 0.1, 0.125, 0.15625 NEAR",
+        fee0 === 100n * MILLI && fee1 === 125n * MILLI && fee2 === 156_250n * 10n ** 18n,
+        `${fee0} -> ${fee1} -> ${fee2}`,
+      );
+      const code = await Promise.race([r.exited, sleep(240_000).then(() => "timeout" as const)]);
+      check(sc, "runner exits 0", code === 0, `exit ${code}, log ${r.file}`);
+      const list = await view<J[]>("get_chaos", { duel_id: duelId });
+      const [cb, ca] = [list[0], list[1]];
+      const armOf = (tx: Tx) => events(tx.logs).find((e) => e.event === "chaos")?.data.arm;
+      check(
+        sc,
+        "the contract drew each arm (Cue or Clean), as its chaos event says",
+        atB.value === 0 &&
+          atA.value === 1 &&
+          ["Cue", "Clean"].includes(cb?.arm) &&
+          ["Cue", "Clean"].includes(ca?.arm) &&
+          armOf(atB) === cb.arm &&
+          armOf(atA) === ca.arm,
+        `B ${cb?.arm} (event ${armOf(atB)}), A ${ca?.arm} (event ${armOf(atA)})`,
+      );
+      check(
+        sc,
+        "B (naive) took the bait: Flipped, prev Long, next Short",
+        cb?.outcome === "Flipped" && cb.prev === "Long" && cb.next === "Short",
+        JSON.stringify({ outcome: cb?.outcome, prev: cb?.prev, next: cb?.next, decided_by: cb?.decided_by }),
+      );
+      check(
+        sc,
+        "A (hardened) held: Held, prev Long, next Long",
+        ca?.outcome === "Held" && ca.prev === "Long" && ca.next === "Long",
+        JSON.stringify({ outcome: ca?.outcome, prev: ca?.prev, next: ca?.next, decided_by: ca?.decided_by }),
+      );
+      const rows = readRows(data).filter((x) => String(x.duel_id) === duelId);
+      const revealed = (pk: string) =>
+        rows
+          .filter((x) => x.agent_pk === pk && x.revealed_tx)
+          .sort((x, y) => Number(BigInt(x.intent.nonce) - BigInt(y.intent.nonce)));
+      const story = (pk: string, c: J, headline: string) => {
+        const rs = revealed(pk);
+        const decider = rs.find((x) => x.intent.nonce === c?.decided_by);
+        return (
+          rs.length >= 2 &&
+          rs[0]?.chaos === null && // the held call, revealed first: the headline's prev
+          rs[0]?.intent.side === c?.prev &&
+          decider === rs.at(-1) &&
+          decider?.intent.side === c?.next &&
+          decider?.chaos?.some((x: J) => x.headline === headline && x.arm === c?.arm && x.index === list.indexOf(c))
+        );
+      };
+      check(
+        sc,
+        "held call revealed first; the deciding reveal saw the headline by its arm",
+        story(d.b, cb, H_B) && story(d.a, ca, H_A),
+        ["b", "a"]
+          .map((w) => `${w.toUpperCase()}: ${revealed(d[w]).map((x) => `${x.intent.nonce}${x.chaos ? "+h" : ""}`)}`)
+          .join("; "),
+      );
+      const py = spawnSync(
+        python(),
+        [
+          "-c",
+          "import json, sys; sys.path.insert(0, sys.argv[1]); from export_dataset import check_row; " +
+            "rows = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]; " +
+            "print(json.dumps([check_row(r) for r in rows if r.get('chaos') and r.get('revealed_tx')]))",
+          join(ROOT, "agents"),
+          data,
+        ],
+        { encoding: "utf8", env: { ...process.env, NEAR_AI_API_KEY: "" } },
+      );
+      const verdicts = py.status === 0 ? (JSON.parse(py.stdout.trim().split("\n").at(-1)!) as [boolean, string][]) : [];
+      check(
+        sc,
+        "check_row: every revealed headline row verifies (arm text in the signed request)",
+        verdicts.length >= 2 && verdicts.every(([ok]) => ok),
+        py.status === 0 ? JSON.stringify(verdicts) : py.stderr.slice(-200),
+      );
+      // settlement at finish: in the oracle's close answer, the receipt that logged `resolve`
+      const answer = oracle.answered.get(`close:${duelId}`);
+      const h = answer ? await eventHeight(answer.hash, oracleAcct.accountId, "resolve") : null;
+      if (h === null) check(sc, "settlement at finish", false, "no resolve receipt in the oracle's close answer");
+      else {
+        const at = async (height: number) => ({
+          a: BigInt((await viewAtHeight(height, "get_agent", { agent_pk: d.a })).bond),
+          b: BigInt((await viewAtHeight(height, "get_agent", { agent_pk: d.b })).bond),
+          fees: BigInt((await viewAtHeight(height, "get_config")).owner_fees),
+        });
+        const [pre, post] = [await at(h - 1), await at(h)];
+        const end = await view("get_duel", { duel_id: duelId });
+        const o = end.outcome;
+        const slashed = BigInt(o?.slashed ?? "0");
+        const slashBps = BigInt((await view("get_config")).slash_bps);
+        // amounts from the contract's own views, so a change of the fee or share rule does not break the run
+        check(
+          sc,
+          "B flipped and lost: slashed slash_bps of its bond, its injector is owed a payout",
+          o?.winner === d.a && slashed === (pre.b * slashBps) / 10_000n && slashed > 0n && BigInt(cb.payout) > 0n,
+          `winner ${String(o?.winner).slice(0, 8)}, slashed ${slashed} of ${pre.b}, flip payout ${cb.payout}, held payout ${ca.payout}`,
+        );
+        // what the finish moves: the escrowed stakes (pool) go to bonds, owner fees and payouts; the slash moves from
+        // the loser's bond and is accounted for inside the same sum
+        const stakes = BigInt(cb.stake) + BigInt(ca.stake);
+        const payouts = BigInt(cb.payout) + BigInt(ca.payout);
+        const moved = post.a - pre.a + (post.b - pre.b) + (post.fees - pre.fees) + payouts;
+        check(
+          sc,
+          "at finish: bonds + owner fees + payouts account for every stake exactly; the pool is emptied",
+          moved === stakes && post.b === pre.b - slashed && post.a > pre.a && end.pool === "0",
+          `A +${post.a - pre.a}, B ${post.b - pre.b}, fees +${post.fees - pre.fees}, payouts ${payouts}: ${moved} vs stakes ${stakes}, pool ${end.pool}`,
+        );
+        const balance = async (id: string) =>
+          BigInt(
+            (await rpc<J>("query", { request_type: "view_account", finality: "optimistic", account_id: id })).amount,
+          );
+        const b0 = await balance(spec1.accountId);
+        const claimed = await call(spec1, "claim_chaos", { duel_id: duelId }, 1n).catch((e) => String(e));
+        const b1 = await balance(spec1.accountId);
+        const again = await call(spec1, "claim_chaos", { duel_id: duelId }, 1n).catch((e) => String(e));
+        const heldClaim = await call(spec2, "claim_chaos", { duel_id: duelId }, 1n).catch((e) => String(e));
+        const after = await view<J[]>("get_chaos", { duel_id: duelId });
+        const payout = BigInt(cb.payout);
+        check(
+          sc,
+          "claim_chaos pays the flip's injector its payout, once",
+          typeof claimed !== "string" &&
+            b1 - b0 > payout - 10n * MILLI &&
+            b1 - b0 <= payout &&
+            after[0].claimed === true &&
+            typeof again === "string" &&
+            again.includes("nothing to claim"),
+          `balance +${b1 - b0} for payout ${payout}; second claim: ${String(again).slice(0, 80)}`,
+        );
+        check(
+          sc,
+          "the held headline's injector can claim exactly its view payout (none: nothing to claim)",
+          ca.payout === "0"
+            ? typeof heldClaim === "string" && heldClaim.includes("nothing to claim") && after[1].claimed === false
+            : typeof heldClaim !== "string" && after[1].claimed === true,
+          `payout ${ca.payout}: ${typeof heldClaim === "string" ? heldClaim.slice(0, 80) : `claimed, tx ${heldClaim.hash}`}`,
+        );
+      }
+    } else if (!r.lines.some((l) => l.includes("committed nonce")))
+      check(sc, "runner opened a duel", false, r.lines.slice(-5).join(" | "));
   }
 
   oracle.halt();
