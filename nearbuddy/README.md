@@ -498,7 +498,7 @@ nearbuddy/
   packages/demo/            terminal demos: bun run demo (IOUs), bun run guarantor (cards), bun run arena-demo (follow + chaos + settle), bun run real-swap
   agents/                   Python runner: model duelists (NEAR AI Cloud or stub), intent signing, prices, dataset, summary
   analysis/                 loss model (loss_model.py, output committed), injection effects, send latency, copier bot
-  web/                      Next.js 16: / dashboard (vault + solver), /arena (standings, duels, chaos, followers), /agent/[pk]; API routes under web/app/api/
+  web/                      Next.js 16: / Fool-the-AI terminal (board, live duel, attack feed, inject), /arena full record, /duel/[id], /agent/[pk], /i/[tx] share card; API routes under web/app/api/; `bun scripts/board.ts` after a dataset export
 ```
 
 ## Contract API (`nearbuddy-vault.testnet`)
