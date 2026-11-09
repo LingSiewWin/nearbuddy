@@ -59,3 +59,25 @@ def test_unparseable_reply_records_the_request_bytes_sent(tmp_path, monkeypatch)
     sent_json = json.loads(row["request_body"])
     assert sent_json["max_tokens"] == 1800  # the pair 2 cap is now readable on a failure
     assert sent_json["messages"][1]["content"] == row["brief"]
+
+
+class NotUtf8Reply(Reply):
+    def __init__(self):
+        self.content = b'{"id":"chat-2","choices":[{"message":{"content":"\xff"}}]}'
+
+
+def test_a_body_that_is_not_utf8_skips_the_cycle_with_a_row(tmp_path, monkeypatch):
+    """The client refuses a body it could not store losslessly; the runner records it and skips, like a 5xx."""
+    monkeypatch.setattr(nearai.requests, "post", lambda url, headers, data, timeout: NotUtf8Reply())
+    monkeypatch.setattr(runner, "DATA", tmp_path / "decisions.jsonl")
+    monkeypatch.delitem(runner.ENV, "AGENT_KEY_Z", raising=False)
+    monkeypatch.delitem(runner.ENV, "AGENT_SEED_Z", raising=False)
+    model = nearai.NearAiClient("key", "Qwen/Qwen3.6-35B-A3B-FP8", base_url="http://model.invalid/v1")
+    d, sk, comp = runner.make_duelist("Z", model, hardened=False)
+
+    out = runner.prepare_decision("5", "NEAR/USD", 366_000_000, 365_000_000, 0, {}, 11, d, sk, comp, model, {})
+
+    assert out is None
+    (row,) = [json.loads(line) for line in runner.DATA.read_text().splitlines()]
+    assert row["error"].startswith("model body not UTF-8")
+    assert "response_body" not in row

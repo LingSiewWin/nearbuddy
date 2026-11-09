@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest  # noqa: E402
 from nacl.signing import SigningKey  # noqa: E402
 
 from intent_client import proof_hash, tee_proof  # noqa: E402
@@ -90,6 +91,24 @@ def test_near_ai_client_round_trip_and_tee_proof():
     assert p["kind"] == 2
     assert proof_hash(done.request_hash, done.response_hash) != proof_hash(None)
     srv.shutdown()
+
+
+class NotUtf8(Fake):
+    def do_POST(self):
+        self.rfile.read(int(self.headers["content-length"]))
+        self._send(b'{"id":"x","model":"m","choices":[{"message":{"content":"\xff"}}]}')
+
+
+def test_a_body_that_is_not_utf8_fails_the_call():
+    """The dataset stores the body as text and re-hashes it; a lossy decode would break every later check."""
+    srv = HTTPServer(("127.0.0.1", 0), NotUtf8)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    c = NearAiClient("k", "test/model-a", f"http://127.0.0.1:{srv.server_port}/v1")
+    try:
+        with pytest.raises(UnicodeDecodeError):
+            c.complete("sys", "user")
+    finally:
+        srv.shutdown()
 
 
 SNAPSHOT = Path(__file__).resolve().parents[2] / "dataset" / "decisions.jsonl"

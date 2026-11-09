@@ -240,6 +240,21 @@ def prepare_decision(
         )
         print(f"  model call failed ({str(e)[:120]}); skipping this cycle")
         return None
+    except UnicodeDecodeError as e:  # nearai refuses a body that is not UTF-8: no bytes a verifier could re-hash
+        record(
+            {
+                "duel_id": duel_id,
+                "agent_pk": pk,
+                "model": model.model_id,
+                "hardened": d.hardened,
+                "prompt_variant": d.prompt_variant,
+                "error": f"model body not UTF-8: {str(e)[:200]}",
+                "injection": injection_text,
+                "brief": brief(symbol, px, open_px),
+            }
+        )
+        print("  model body not UTF-8; skipping this cycle")
+        return None
     c = comp.last  # the call the intent's proof binds: variant D's sizer call when it ran, else the only call
     sig_record, tee, sig_error = _prove(model, c, pk)
     arm_d = None
@@ -326,8 +341,9 @@ def _call_record(c: Completion, sig_record: dict[str, Any] | None, tee: dict[str
     return {
         "text": c.text,
         "chat_id": c.chat_id,
-        "request_body": c.request_bytes.decode(errors="replace"),
-        "response_body": c.response_bytes.decode(errors="replace"),
+        # strict: verifiers re-hash these strings; NearAIClient.complete already refused non-UTF-8 bytes
+        "request_body": c.request_bytes.decode(),
+        "response_body": c.response_bytes.decode(),
         "request_hash": c.request_hash.hex() if c.request_bytes else None,
         "response_hash": c.response_hash.hex() if c.response_bytes else None,
         "signature_record": sig_record,

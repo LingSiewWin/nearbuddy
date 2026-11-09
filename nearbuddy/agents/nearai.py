@@ -115,7 +115,9 @@ class NearAiClient:
         body = request_body(self.model_id, system, user, self._max_tokens)
         r = requests.post(f"{self._base}/chat/completions", headers=self._headers, data=body, timeout=180)
         r.raise_for_status()
-        j = r.json()
+        # Strict UTF-8: the dataset stores this text and verifiers re-hash it, so a lossy decode would turn a
+        # genuine enclave-signed row into a hash mismatch. Bytes that are not UTF-8 fail the call instead.
+        j = json.loads(r.content.decode("utf-8"))
         return Completion(message_text(j), j.get("id"), j.get("model", self.model_id), body, r.content)
 
     def signature(self, chat_id: str, attempts: int = 6) -> dict[str, Any] | None:
