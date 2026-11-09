@@ -18,11 +18,11 @@
 //! signed by this contract through NEAR Chain Signatures (`request_pull_signature`), so one
 //! NEAR stake can back wallets on Ethereum, Solana or Bitcoin.
 use near_sdk::json_types::{Base64VecU8, U64, U128};
-use near_sdk::serde_json::{json, Value};
+use near_sdk::serde_json::{Value, json};
 use near_sdk::store::{IterableMap, LookupMap, LookupSet};
 use near_sdk::{
-    env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise,
-    PromiseError, PromiseOrValue,
+    AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError,
+    PromiseOrValue, env, near, require,
 };
 use std::collections::BTreeMap;
 
@@ -293,8 +293,14 @@ impl Contract {
     pub fn request_withdraw(&mut self, amount: U128) -> Vault {
         let owner = env::predecessor_account_id();
         let mut vault = self.vaults.get(&owner).cloned().expect("no vault");
-        require!(vault.pending_withdraw.is_none(), "withdrawal already pending");
-        require!(amount.0 > 0 && amount.0 <= vault.balance.0, "amount exceeds balance");
+        require!(
+            vault.pending_withdraw.is_none(),
+            "withdrawal already pending"
+        );
+        require!(
+            amount.0 > 0 && amount.0 <= vault.balance.0,
+            "amount exceeds balance"
+        );
         let ready_at = env::block_timestamp() + self.withdraw_delay_ns;
         vault.pending_withdraw = Some((amount, U64(ready_at)));
         self.vaults.insert(owner, vault.clone());
@@ -307,7 +313,10 @@ impl Contract {
         let owner = env::predecessor_account_id();
         let mut vault = self.vaults.get(&owner).cloned().expect("no vault");
         let (amount, ready_at) = vault.pending_withdraw.expect("no pending withdrawal");
-        require!(env::block_timestamp() >= ready_at.0, "withdrawal delay not elapsed");
+        require!(
+            env::block_timestamp() >= ready_at.0,
+            "withdrawal delay not elapsed"
+        );
         let pay = amount.0.min(vault.balance.0);
         vault.balance = U128(vault.balance.0 - pay);
         vault.pending_withdraw = None;
@@ -328,10 +337,16 @@ impl Contract {
         let owner = env::predecessor_account_id();
         require!(agent_pk.0.len() == 32, "agent_pk must be 32 bytes");
         require!(per_tx_cap.0 > 0 && per_tx_cap.0 <= allowance.0, "bad caps");
-        require!(expires_at.0 > env::block_timestamp(), "expires_at in the past");
+        require!(
+            expires_at.0 > env::block_timestamp(),
+            "expires_at in the past"
+        );
         require!(self.vaults.contains_key(&owner), "deposit first");
         if let Some(existing) = self.mandates.get(&agent_pk.0) {
-            require!(existing.owner == owner, "agent key already mandated by another owner");
+            require!(
+                existing.owner == owner,
+                "agent key already mandated by another owner"
+            );
         }
         let mandate = Mandate {
             owner: owner.clone(),
@@ -370,7 +385,10 @@ impl Contract {
             ious_settled: 0,
         });
         s.stake = U128(s.stake.0 + add);
-        require!(s.stake.0 >= MIN_SOLVER_STAKE.as_yoctonear(), "stake below minimum");
+        require!(
+            s.stake.0 >= MIN_SOLVER_STAKE.as_yoctonear(),
+            "stake below minimum"
+        );
         self.solvers.insert(id, s.clone());
         s
     }
@@ -389,8 +407,15 @@ impl Contract {
     /// Invalid IOUs are reported in `rejected`, never panic the whole batch.
     pub fn settle_batch(&mut self, ious: Vec<SignedIou>) -> SettlementReport {
         let solver_id = env::predecessor_account_id();
-        let mut solver = self.solvers.get(&solver_id).cloned().expect("not a registered solver");
-        require!(!ious.is_empty() && ious.len() <= MAX_BATCH, "batch size out of range");
+        let mut solver = self
+            .solvers
+            .get(&solver_id)
+            .cloned()
+            .expect("not a registered solver");
+        require!(
+            !ious.is_empty() && ious.len() <= MAX_BATCH,
+            "batch size out of range"
+        );
         let now = env::block_timestamp();
 
         let mut payouts: BTreeMap<AccountId, u128> = BTreeMap::new();
@@ -411,7 +436,10 @@ impl Contract {
                     report.total_paid = U128(report.total_paid.0 + amt);
                     report.covered_by_solver = U128(report.covered_by_solver.0 + covered);
                 }
-                Err(reason) => report.rejected.push(Rejected { index: i as u32, reason }),
+                Err(reason) => report.rejected.push(Rejected {
+                    index: i as u32,
+                    reason,
+                }),
             }
         }
 
@@ -424,7 +452,9 @@ impl Contract {
             fee += payee_fee;
             let net = amt - payee_fee;
             if net > 0 {
-                Promise::new(payee).transfer(NearToken::from_yoctonear(net)).detach();
+                Promise::new(payee)
+                    .transfer(NearToken::from_yoctonear(net))
+                    .detach();
             }
         }
         report.solver_fee = U128(fee);
@@ -444,7 +474,12 @@ impl Contract {
     }
 
     /// Validate one IOU and apply its state changes. Returns how much the solver's stake covered.
-    fn apply_iou(&mut self, signed: &SignedIou, now: u64, solver: &mut Solver) -> Result<u128, String> {
+    fn apply_iou(
+        &mut self,
+        signed: &SignedIou,
+        now: u64,
+        solver: &mut Solver,
+    ) -> Result<u128, String> {
         let iou = &signed.iou;
         if iou.agent_pk.0.len() != 32 {
             return Err("agent_pk length".into());
@@ -465,7 +500,11 @@ impl Contract {
         if !env::ed25519_verify(&sig, &msg, &pk) {
             return Err("bad signature".into());
         }
-        let mandate = self.mandates.get(&iou.agent_pk.0).ok_or("no mandate")?.clone();
+        let mandate = self
+            .mandates
+            .get(&iou.agent_pk.0)
+            .ok_or("no mandate")?
+            .clone();
         if mandate.revoked {
             return Err("mandate revoked".into());
         }
@@ -516,8 +555,15 @@ impl Contract {
     /// Earmark `amount` of the caller's stake for `issuer`. Certs for this issuer draw on it.
     pub fn reserve_for_issuer(&mut self, issuer: AccountId, amount: U128) -> IssuerReserve {
         let id = env::predecessor_account_id();
-        let mut s = self.solvers.get(&id).cloned().expect("not a registered solver");
-        require!(amount.0 > 0 && amount.0 <= s.stake.0, "amount exceeds free stake");
+        let mut s = self
+            .solvers
+            .get(&id)
+            .cloned()
+            .expect("not a registered solver");
+        require!(
+            amount.0 > 0 && amount.0 <= s.stake.0,
+            "amount exceeds free stake"
+        );
         let mut r = self.issuers.get(&issuer).cloned().unwrap_or(IssuerReserve {
             solver: id.clone(),
             reserved: U128(0),
@@ -538,8 +584,16 @@ impl Contract {
     /// Move unused reserve back to free stake.
     pub fn release_reserve(&mut self, issuer: AccountId, amount: U128) -> IssuerReserve {
         let id = env::predecessor_account_id();
-        let mut s = self.solvers.get(&id).cloned().expect("not a registered solver");
-        let mut r = self.issuers.get(&issuer).cloned().expect("no reserve for issuer");
+        let mut s = self
+            .solvers
+            .get(&id)
+            .cloned()
+            .expect("not a registered solver");
+        let mut r = self
+            .issuers
+            .get(&issuer)
+            .cloned()
+            .expect("no reserve for issuer");
         require!(r.solver == id, "not this issuer's solver");
         require!(amount.0 <= r.reserved.0, "exceeds reserve");
         r.reserved = U128(r.reserved.0 - amount.0);
@@ -554,10 +608,18 @@ impl Contract {
     /// the issuer; successful pulls accrue the fee. Bad entries are rejected, never panic the batch.
     pub fn settle_pull(&mut self, settlements: Vec<PullSettlement>) -> PullReport {
         let caller = env::predecessor_account_id();
-        require!(!settlements.is_empty() && settlements.len() <= MAX_BATCH, "batch size out of range");
+        require!(
+            !settlements.is_empty() && settlements.len() <= MAX_BATCH,
+            "batch size out of range"
+        );
         let now = env::block_timestamp();
         let mut payouts: BTreeMap<AccountId, u128> = BTreeMap::new();
-        let mut report = PullReport { settled: 0, paid_out: U128(0), fees_accrued: U128(0), rejected: vec![] };
+        let mut report = PullReport {
+            settled: 0,
+            paid_out: U128(0),
+            fees_accrued: U128(0),
+            rejected: vec![],
+        };
 
         for (i, st) in settlements.into_iter().enumerate() {
             match self.apply_pull(&st, &caller, now) {
@@ -569,11 +631,16 @@ impl Contract {
                     report.paid_out = U128(report.paid_out.0 + paid);
                     report.fees_accrued = U128(report.fees_accrued.0 + fee);
                 }
-                Err(reason) => report.rejected.push(Rejected { index: i as u32, reason }),
+                Err(reason) => report.rejected.push(Rejected {
+                    index: i as u32,
+                    reason,
+                }),
             }
         }
         for (issuer, amt) in payouts {
-            Promise::new(issuer).transfer(NearToken::from_yoctonear(amt)).detach();
+            Promise::new(issuer)
+                .transfer(NearToken::from_yoctonear(amt))
+                .detach();
         }
         env::log_str(&format!(
             r#"EVENT_JSON:{{"standard":"nearbuddy","version":"1.0.0","event":"settle_pull","data":{{"caller":"{caller}","settled":{},"rejected":{},"paid_out":"{}","fees_accrued":"{}"}}}}"#,
@@ -586,7 +653,12 @@ impl Contract {
     }
 
     /// Returns (paid_to_issuer, fee_accrued).
-    fn apply_pull(&mut self, st: &PullSettlement, caller: &AccountId, now: u64) -> Result<(u128, u128), String> {
+    fn apply_pull(
+        &mut self,
+        st: &PullSettlement,
+        caller: &AccountId,
+        now: u64,
+    ) -> Result<(u128, u128), String> {
         let cert = &st.signed.cert;
         if *caller != cert.solver && *caller != cert.issuer {
             return Err("caller is neither solver nor issuer".into());
@@ -597,17 +669,24 @@ impl Contract {
         if st.signed.signature.0.len() != 64 {
             return Err("signature length".into());
         }
-        let pk = self.solver_keys.get(&cert.solver).ok_or("solver has no guarantee key")?;
+        let pk = self
+            .solver_keys
+            .get(&cert.solver)
+            .ok_or("solver has no guarantee key")?;
         let pk: [u8; 32] = pk.as_slice().try_into().unwrap();
         let sig: [u8; 64] = st.signed.signature.0.as_slice().try_into().unwrap();
-        if !env::ed25519_verify(&sig, &cert_message(cert), &pk) {
+        if !env::ed25519_verify(&sig, cert_message(cert), &pk) {
             return Err("bad cert signature".into());
         }
         let nk = cert_nonce_key(&cert.solver, cert.nonce.0);
         if self.used_nonces.contains(&nk) {
             return Err("cert nonce already settled".into());
         }
-        let mut r = self.issuers.get(&cert.issuer).cloned().ok_or("no reserve for issuer")?;
+        let mut r = self
+            .issuers
+            .get(&cert.issuer)
+            .cloned()
+            .ok_or("no reserve for issuer")?;
         if r.solver != cert.solver {
             return Err("cert solver is not the issuer's solver".into());
         }
@@ -641,19 +720,34 @@ impl Contract {
         let id = env::predecessor_account_id();
         require!(self.solvers.contains_key(&id), "not a registered solver");
         require!(payload_hex.len() == 64, "payload must be 32 bytes hex");
-        require!(env::attached_deposit() >= NearToken::from_yoctonear(1), "attach 1 yoctoNEAR");
+        require!(
+            env::attached_deposit() >= NearToken::from_yoctonear(1),
+            "attach 1 yoctoNEAR"
+        );
         let args = json!({
             "request": { "path": path, "payload_v2": { "Ecdsa": payload_hex }, "domain_id": 0 }
         })
         .to_string()
         .into_bytes();
         Promise::new(MPC_CONTRACT.parse().unwrap())
-            .function_call("sign".to_string(), args, NearToken::from_yoctonear(1), MPC_GAS)
-            .then(Self::ext(env::current_account_id()).with_static_gas(MPC_CALLBACK_GAS).on_pull_signature())
+            .function_call(
+                "sign".to_string(),
+                args,
+                NearToken::from_yoctonear(1),
+                MPC_GAS,
+            )
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(MPC_CALLBACK_GAS)
+                    .on_pull_signature(),
+            )
     }
 
     #[private]
-    pub fn on_pull_signature(&self, #[callback_result] result: Result<Value, PromiseError>) -> PromiseOrValue<Value> {
+    pub fn on_pull_signature(
+        &self,
+        #[callback_result] result: Result<Value, PromiseError>,
+    ) -> PromiseOrValue<Value> {
         match result {
             Ok(sig) => PromiseOrValue::Value(sig),
             Err(_) => env::panic_str("MPC signature request failed"),
@@ -665,7 +759,9 @@ impl Contract {
     }
 
     pub fn get_guarantee_key(&self, solver: AccountId) -> Option<Base64VecU8> {
-        self.solver_keys.get(&solver).map(|k| Base64VecU8(k.clone()))
+        self.solver_keys
+            .get(&solver)
+            .map(|k| Base64VecU8(k.clone()))
     }
 
     pub fn is_cert_nonce_used(&self, solver: AccountId, nonce: U64) -> bool {
@@ -772,7 +868,10 @@ mod tests {
     fn sign(sk: &ed25519_dalek::SigningKey, iou: &Iou) -> SignedIou {
         use ed25519_dalek::Signer;
         let sig = sk.sign(&iou_message(iou)).to_bytes().to_vec();
-        SignedIou { iou: iou.clone(), signature: Base64VecU8(sig) }
+        SignedIou {
+            iou: iou.clone(),
+            signature: Base64VecU8(sig),
+        }
     }
 
     fn iou(pk: &[u8], nonce: u64, amount: u128) -> Iou {
@@ -793,7 +892,13 @@ mod tests {
         ctx(OWNER, 1_000);
         c.deposit();
         ctx(OWNER, 0);
-        c.issue_mandate(Base64VecU8(pk.clone()), U128(500), U128(10), vec![], U64(NOW + 10_000));
+        c.issue_mandate(
+            Base64VecU8(pk.clone()),
+            U128(500),
+            U128(10),
+            vec![],
+            U64(NOW + 10_000),
+        );
         ctx(SOLVER, MIN_SOLVER_STAKE.as_yoctonear());
         c.register_solver();
         (c, sk, pk)
@@ -825,7 +930,14 @@ mod tests {
         let r = c.settle_batch(vec![good.clone(), tampered, over_cap, good]);
         assert_eq!(r.settled, 1);
         let reasons: Vec<&str> = r.rejected.iter().map(|x| x.reason.as_str()).collect();
-        assert_eq!(reasons, vec!["bad signature", "amount exceeds per_tx_cap", "nonce already settled"]);
+        assert_eq!(
+            reasons,
+            vec![
+                "bad signature",
+                "amount exceeds per_tx_cap",
+                "nonce already settled"
+            ]
+        );
     }
 
     #[test]
@@ -855,7 +967,7 @@ mod tests {
         assert_eq!(r.settled, 1);
         assert_eq!(r.covered_by_solver.0, 2);
         let s = c.get_solver(SOLVER.parse().unwrap()).unwrap();
-        assert_eq!(s.stake.0, MIN_SOLVER_STAKE.as_yoctonear() - 2 + 0); // fee 5*50/10000 = 0
+        assert_eq!(s.stake.0, MIN_SOLVER_STAKE.as_yoctonear() - 2); // plus fee 5*50/10000 = 0
     }
 
     #[test]
@@ -867,7 +979,13 @@ mod tests {
         c.deposit();
         ctx(OWNER, 0);
         let cap = 100_000_000_000_000_000_000u128; // 0.0001 NEAR
-        c.issue_mandate(Base64VecU8(pk.clone()), U128(cap * 200), U128(cap), vec![], U64(NOW + 10_000));
+        c.issue_mandate(
+            Base64VecU8(pk.clone()),
+            U128(cap * 200),
+            U128(cap),
+            vec![],
+            U64(NOW + 10_000),
+        );
         ctx(SOLVER, NearToken::from_near(1).as_yoctonear());
         c.register_solver();
         let batch: Vec<SignedIou> = (0..100).map(|n| sign(&sk, &iou(&pk, n, cap / 2))).collect();
@@ -886,7 +1004,13 @@ mod tests {
         ctx(OWNER, 1_000);
         c.deposit();
         ctx(OWNER, 0);
-        c.issue_mandate(Base64VecU8(pk.clone()), U128(500), U128(10), vec![API.parse().unwrap()], U64(NOW + 10_000));
+        c.issue_mandate(
+            Base64VecU8(pk.clone()),
+            U128(500),
+            U128(10),
+            vec![API.parse().unwrap()],
+            U64(NOW + 10_000),
+        );
         ctx(SOLVER, MIN_SOLVER_STAKE.as_yoctonear());
         c.register_solver();
 
@@ -895,7 +1019,11 @@ mod tests {
         let mut expired = iou(&pk, 2, 5);
         expired.expires_at = U64(NOW);
         ctx(SOLVER, 0);
-        let r = c.settle_batch(vec![sign(&sk, &wrong_payee), sign(&sk, &expired), sign(&sk, &iou(&pk, 3, 5))]);
+        let r = c.settle_batch(vec![
+            sign(&sk, &wrong_payee),
+            sign(&sk, &expired),
+            sign(&sk, &iou(&pk, 3, 5)),
+        ]);
         assert_eq!(r.settled, 1);
         let reasons: Vec<&str> = r.rejected.iter().map(|x| x.reason.as_str()).collect();
         assert_eq!(reasons, vec!["payee not allowed", "iou expired"]);
@@ -908,9 +1036,16 @@ mod tests {
 
         // mandate expiry
         ctx(OWNER, 0);
-        c.issue_mandate(Base64VecU8(pk.clone()), U128(500), U128(10), vec![], U64(NOW + 10));
+        c.issue_mandate(
+            Base64VecU8(pk.clone()),
+            U128(500),
+            U128(10),
+            vec![],
+            U64(NOW + 10),
+        );
         let mut b = VMContextBuilder::new();
-        b.predecessor_account_id(SOLVER.parse().unwrap()).block_timestamp(NOW + 10);
+        b.predecessor_account_id(SOLVER.parse().unwrap())
+            .block_timestamp(NOW + 10);
         testing_env!(b.build());
         let mut late = iou(&pk, 5, 5);
         late.expires_at = U64(NOW + 100);
@@ -929,10 +1064,11 @@ mod tests {
         c.request_withdraw(U128(400));
         let early = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.withdraw()));
         assert!(early.is_err(), "withdraw before delay must fail");
-        let twice = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.request_withdraw(U128(1))));
+        let twice =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.request_withdraw(U128(1))));
         assert!(twice.is_err(), "second pending withdrawal must fail");
         let v = c.get_vault(OWNER.parse().unwrap()).unwrap();
-        assert_eq!(v.pending_withdraw.unwrap().0 .0, 400);
+        assert_eq!(v.pending_withdraw.unwrap().0.0, 400);
     }
 
     #[test]
@@ -960,7 +1096,10 @@ mod tests {
         println!("IOU_HEX={h}");
         assert!(h.starts_with(&hex(IOU_DOMAIN)));
         // domain(16) + len(4)+13 + 4+32 + 4+11 + 16 + 8 + 8
-        assert_eq!(iou_message(&i).len(), 16 + 4 + 13 + 4 + 32 + 4 + 11 + 16 + 8 + 8);
+        assert_eq!(
+            iou_message(&i).len(),
+            16 + 4 + 13 + 4 + 32 + 4 + 11 + 16 + 8 + 8
+        );
     }
 
     // ------------------------------------------------------------ guarantor layer
@@ -984,7 +1123,10 @@ mod tests {
     fn sign_cert(sk: &ed25519_dalek::SigningKey, c: &GuaranteeCert) -> SignedCert {
         use ed25519_dalek::Signer;
         let sig = sk.sign(&cert_message(c)).to_bytes().to_vec();
-        SignedCert { cert: c.clone(), signature: Base64VecU8(sig) }
+        SignedCert {
+            cert: c.clone(),
+            signature: Base64VecU8(sig),
+        }
     }
 
     fn setup_guarantor() -> (Contract, ed25519_dalek::SigningKey) {
@@ -999,9 +1141,22 @@ mod tests {
     fn reserve_moves_stake_and_failed_pull_pays_issuer() {
         let (mut c, sk) = setup_guarantor();
         let stake0 = MIN_SOLVER_STAKE.as_yoctonear();
-        assert_eq!(c.get_solver(SOLVER.parse().unwrap()).unwrap().stake.0, stake0 - 50);
-        let ok = PullSettlement { signed: sign_cert(&sk, &cert(1, 10)), outcome: PullOutcome::Pulled { tx_hash: "0xabc".into() } };
-        let bad = PullSettlement { signed: sign_cert(&sk, &cert(2, 30)), outcome: PullOutcome::Failed { reason: "revert".into() } };
+        assert_eq!(
+            c.get_solver(SOLVER.parse().unwrap()).unwrap().stake.0,
+            stake0 - 50
+        );
+        let ok = PullSettlement {
+            signed: sign_cert(&sk, &cert(1, 10)),
+            outcome: PullOutcome::Pulled {
+                tx_hash: "0xabc".into(),
+            },
+        };
+        let bad = PullSettlement {
+            signed: sign_cert(&sk, &cert(2, 30)),
+            outcome: PullOutcome::Failed {
+                reason: "revert".into(),
+            },
+        };
         ctx(SOLVER, 0);
         let r = c.settle_pull(vec![ok, bad]);
         assert_eq!(r.settled, 2, "{:?}", r.rejected);
@@ -1017,7 +1172,12 @@ mod tests {
     #[test]
     fn issuer_can_enforce_and_replay_forgery_short_reserve_rejected() {
         let (mut c, sk) = setup_guarantor();
-        let fail = |n, p| PullSettlement { signed: sign_cert(&sk, &cert(n, p)), outcome: PullOutcome::Failed { reason: "revert".into() } };
+        let fail = |n, p| PullSettlement {
+            signed: sign_cert(&sk, &cert(n, p)),
+            outcome: PullOutcome::Failed {
+                reason: "revert".into(),
+            },
+        };
         // Issuer settles its own claim.
         ctx(ISSUER, 0);
         let r = c.settle_pull(vec![fail(1, 20)]);
@@ -1028,7 +1188,14 @@ mod tests {
         let r = c.settle_pull(vec![fail(1, 20), forged, fail(4, 31)]);
         assert_eq!(r.settled, 0);
         let reasons: Vec<&str> = r.rejected.iter().map(|x| x.reason.as_str()).collect();
-        assert_eq!(reasons, ["cert nonce already settled", "bad cert signature", "reserve short"]);
+        assert_eq!(
+            reasons,
+            [
+                "cert nonce already settled",
+                "bad cert signature",
+                "reserve short"
+            ]
+        );
         ctx("rando.testnet", 0);
         let r = c.settle_pull(vec![fail(5, 1)]);
         assert_eq!(r.rejected[0].reason, "caller is neither solver nor issuer");
@@ -1036,7 +1203,10 @@ mod tests {
         ctx(SOLVER, 0);
         let ir = c.release_reserve(ISSUER.parse().unwrap(), U128(30));
         assert_eq!(ir.reserved.0, 0);
-        assert_eq!(c.get_solver(SOLVER.parse().unwrap()).unwrap().stake.0, MIN_SOLVER_STAKE.as_yoctonear() - 20);
+        assert_eq!(
+            c.get_solver(SOLVER.parse().unwrap()).unwrap().stake.0,
+            MIN_SOLVER_STAKE.as_yoctonear() - 20
+        );
     }
 
     #[test]
@@ -1045,6 +1215,9 @@ mod tests {
         println!("CERT_HEX={}", hex(&m));
         assert!(hex(&m).starts_with(&hex(CERT_DOMAIN)));
         // domain(17) + solver(4+14) + issuer(4+14) + chain_id 8 + wallet(4+42) + token(4+42) + amount 16 + payout 16 + nonce 8 + expires 8
-        assert_eq!(m.len(), 17 + 4 + 14 + 4 + 14 + 8 + 4 + 42 + 4 + 42 + 16 + 16 + 8 + 8);
+        assert_eq!(
+            m.len(),
+            17 + 4 + 14 + 4 + 14 + 8 + 4 + 42 + 4 + 42 + 16 + 16 + 8 + 8
+        );
     }
 }
