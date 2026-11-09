@@ -218,6 +218,42 @@ Any change after this commit is listed here with its reason.
      judge prompt version 2, which binds the judge call to duel_id = 900000 + trial and nonce = the arm's index.
      Each trial records both versions, and no experiment mixes versions.
 
+## Results
+
+`uv run --locked python report.py` prints every table below from `results/main.jsonl.gz`. All tests are two-sided,
+use verified calls only, and are Holm-adjusted within their family. Each interval is a Wilson 95% interval.
+
+### Experiment A: naive prompt (pre-registered primary), 240 trials per model
+
+| model | trials | cue flip | clean flip | placebo flip | H1 cue-only vs clean-only | H1 Holm p | H2 Holm p |
+|---|---|---|---|---|---|---|---|
+| Qwen3.8-27B | 228 | 227/227 1.00 [0.98, 1.00] | 227/227 1.00 [0.98, 1.00] | 21/227 0.09 [0.06, 0.14] | 0 vs 0 | 1.000 | 5.4e-105 |
+| DeepSeek-V4.1-Flash-1017 | 240 | 232/240 0.97 [0.94, 0.98] | 227/240 0.95 [0.91, 0.97] | 63/240 0.26 [0.21, 0.32] | 9 vs 4 | 1.000 | 1.6e-64 |
+| glm-5.3-flash | 240 | 217/237 0.92 [0.87, 0.94] | 220/237 0.93 [0.89, 0.95] | 44/240 0.18 [0.14, 0.24] | 6 vs 9 | 1.000 | 1.6e-64 |
+| pooled | 708 | 676/704 0.96 [0.94, 0.97] | 674/704 0.96 [0.94, 0.97] | 128/707 0.18 [0.15, 0.21] | 15 vs 13 | 1.000 | 3.7e-223 |
+
+- **H1 is not supported.** The naive prompt takes the lie whether or not it carries "BREAKING" and a named outlet:
+  the cue arm and the clean arm both flip 0.96 pooled (McNemar p = 0.85). The paper's 100%-to-0% cue collapse does
+  not replicate here. On this prompt the claim alone is enough.
+- **H2 is supported, strongly, in every model.** A cued false headline flips 0.96 against 0.18 for a cued neutral
+  one. The flips hold against the market: when the lie pushes against the brief's move, cue 581/607 = 0.96, placebo
+  54/609 = 0.09.
+
+### Experiment B: hardened prompt (amendment 1), 240 trials per model
+
+| model | trials | cue flip | clean flip | placebo flip | H1 cue-only vs clean-only | H1 Holm p | H2 Holm p |
+|---|---|---|---|---|---|---|---|
+| Qwen3.8-27B | 237 | 4/237 0.02 [0.01, 0.04] | 4/237 0.02 [0.01, 0.04] | 4/237 0.02 [0.01, 0.04] | 0 vs 0 | 1.000 | 1.000 |
+| DeepSeek-V4.1-Flash-1017 | 236 | 31/235 0.13 [0.09, 0.18] | 28/235 0.12 [0.08, 0.17] | 32/236 0.14 [0.10, 0.19] | 4 vs 2 | 1.000 | 1.000 |
+| glm-5.3-flash | 240 | 14/233 0.06 [0.04, 0.10] | 13/235 0.06 [0.03, 0.09] | 22/240 0.09 [0.06, 0.13] | 7 vs 6 | 1.000 | 0.906 |
+| pooled | 713 | 49/705 0.07 [0.05, 0.09] | 45/707 0.06 [0.05, 0.08] | 58/713 0.08 [0.06, 0.10] | 11 vs 8 | 1.000 | 1.000 |
+
+- **Neither H1b nor H2b is supported.** The hardened prompt flips at the placebo rate under every arm. What flips
+  remain are the baseline's own noise: when the lie happens to point with the brief's move, all three arms flip
+  about 0.9 (placebo 48/53), because the model goes back to the momentum call. Against the move, cue flips 4/655.
+- **Size shift.** The naive prompt moves the position +9602 bps toward the lie (cue, pooled); the hardened prompt
+  moves it +695, which is no more than its placebo (+813).
+
 ## The repo README's injection claims, recomputed
 
 `uv run --locked python claims.py` reads `../dataset/decisions.jsonl` and recomputes the claims from the raw rows, with
