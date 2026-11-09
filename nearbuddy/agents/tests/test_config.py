@@ -8,11 +8,11 @@ from pathlib import Path
 AGENTS = Path(__file__).resolve().parents[1]
 
 
-def data_path(env_value: str | None, module: str) -> str:
+def data_path(env_value: str | None, module: str, attr: str = "DATA") -> str:
     env = {k: v for k, v in os.environ.items() if k != "NEARBUDDY_DATA"}
     if env_value is not None:
         env["NEARBUDDY_DATA"] = env_value
-    code = f"import sys; sys.path.insert(0, {str(AGENTS)!r}); import {module}; print({module}.DATA)"
+    code = f"import sys; sys.path.insert(0, {str(AGENTS)!r}); import {module}; print({module}.{attr})"
     return subprocess.run(
         [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -22,6 +22,13 @@ def test_nearbuddy_data_moves_the_dataset(tmp_path):
     target = str(tmp_path / "sandbox.jsonl")
     assert data_path(target, "config") == target
     assert data_path(target, "summarize") == target
+
+
+def test_nearbuddy_data_moves_the_attestations_beside_it(tmp_path):
+    # a sandbox run's attestation reports must never land in the real folder the export ships
+    assert data_path(str(tmp_path / "sandbox.jsonl"), "config", "ATTEST_DIR") == str(tmp_path / "attestations")
+    assert data_path(None, "config", "ATTEST_DIR") == str(AGENTS / "data" / "attestations")
+    assert data_path("", "config", "ATTEST_DIR") == str(AGENTS / "data" / "attestations")
 
 
 def test_unset_or_empty_keeps_agents_data():
