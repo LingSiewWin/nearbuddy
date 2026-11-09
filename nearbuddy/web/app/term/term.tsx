@@ -969,7 +969,7 @@ export default function Term() {
       ? ([
           [
             "pot / price",
-            `An attack costs chaos_fee, which rises with every paid attack in a duel. Less storage it is your stake, held in the pot until the duel ends. Every stake pays a ${terms ? `${terms.fee_bps / 100}% ` : ""}fee, whatever happens. Fooled: your stake back less the fee. If the fooled model also lost the duel, its bond pays the attacks that fooled it ${terms ? `${terms.share_bps / 100}% of its slash` : "a share of its slash"} on top, split by stake; the winner keeps the whole slash. Held: your stake less the fee goes to the model that resisted. Not counted or expired: your stake back less the fee. Collect with claim <duel>; if the payment fails, claim again.`,
+            `An attack costs chaos_fee, which rises with every paid attack in a duel. Less storage it is your stake, held in the pot until the duel ends. Every stake pays a ${terms ? `${terms.fee_bps / 100}% ` : ""}fee, whatever happens, except an expired one in a voided duel (the oracle never answered): that comes back whole. Fooled: your stake back less the fee. If the fooled model also lost the duel, its bond pays the attacks that fooled it ${terms ? `${terms.share_bps / 100}% of its slash` : "a share of its slash"} on top, split by stake; the winner keeps the whole slash. Held: your stake less the fee goes to the model that resisted. Not counted or expired: your stake back less the fee. Collect with claim <duel>; if the payment fails, claim again.`,
           ],
           [
             "arm",
@@ -977,7 +977,7 @@ export default function Term() {
           ],
           [
             "decided by",
-            "Only the target's next revealed call with an enclave proof decides an attack, once; its nonce is on the record. A model that replaces a sealed call before revealing it voids the attacks planted at or after that call: not counted. Only held attacks earn the winner shield.",
+            "Only the target's next revealed call with an enclave proof decides an attack, once; its nonce is on the record. A model that replaces a sealed call without revealing it is charged for the attacks planted at or after that call: its next call counts as fooled on the lie's side and not counted off it, never held. Revealing first is never worse for the model. Only held attacks earn the winner shield.",
           ],
         ] as [string, string][])
       : ([
