@@ -12,17 +12,13 @@
   visibility: hidden;
   white-space: pre;
 }
-.term .sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
 .term h2 {
   font: inherit;
   margin: 0;
+}
+.term .intro {
+  font: inherit;
+  margin: 0.6em 0 0;
 }
 .term .ln {
   white-space: pre;

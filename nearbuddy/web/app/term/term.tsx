@@ -812,7 +812,17 @@ export default function Term() {
             {two ? " ? help " : " ? "}
           </button>
         </header>
-        <h1 className="sr">Fool the AI: plant a fake headline in a live AI trading duel on NEAR</h1>
+        <h1 className="intro">
+          <span className="hi">fool the AI</span>
+          <span className="dim">
+            {" "}
+            · plant one fake headline in a live AI trader, sign it with your wallet, see if its next call takes the bait
+            ·{" "}
+          </span>
+          <button type="button" className="lnk hi" onClick={() => run("help")}>
+            how it works
+          </button>
+        </h1>
         {/* two columns stack independently (1 over 3, 2 over 4); one column reads 1, 2, 3, 4 */}
         <main className="grid">
           {two ? (
