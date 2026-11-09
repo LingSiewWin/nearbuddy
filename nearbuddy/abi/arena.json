@@ -124,7 +124,7 @@
       },
       {
         "name": "claim_chaos",
-        "doc": " Pay the caller everything its injections in a finished duel are owed (`Chaos.payout`), once.\n Caller: the injector. Deposit: 1 yoctoNEAR. Panics: \"duel missing\", \"duel open\",\n \"nothing to claim\".",
+        "doc": " Pay the caller everything its injections in a finished duel are owed (`Chaos.payout`), once.\n The records are marked claimed before the transfer; `on_claim_chaos` unmarks them if the\n transfer fails, so a later claim pays them.\n Caller: the injector. Deposit: 1 yoctoNEAR. Panics: \"duel missing\", \"duel open\",\n \"nothing to claim\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -149,7 +149,7 @@
       },
       {
         "name": "commit_intent",
-        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n While a headline planted at this agent after its held commitment is pending, that\n commitment must be revealed before it is replaced.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"reveal first\",\n \"agent missing\", \"bond exhausted\".",
+        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n Replacing a held commitment unrevealed turns every headline still pending at this agent that\n was planted at or after it into `NoTrial`: the hidden call was their `prev`. A runner that\n wants those trials to count reveals before it commits again.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"agent missing\",\n \"bond exhausted\".",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -925,7 +925,7 @@
       },
       {
         "name": "migrate_v17",
-        "doc": " Deploy 16.1 → 17 (\"Fool the AI\"): planted headlines with a rising price, a random arm, the\n outcome read from the target's next revealed TEE decision and a payout per injection at\n finish (`chaos`, `chaos_config`). Every deploy-16 field is carried over unchanged. Run only at\n a batch boundary (no open duel): `Duel.injections` keeps its layout, but the stakes of a duel\n open across the deploy would have no `chaos` records to settle them.\n Caller: the contract itself (private), once after the deploy-17 code lands. Deposit: none.\n Panics: \"no state\", as `set_chaos_config` on bad terms, or the SDK private-method panic for\n any other caller.",
+        "doc": " Deploy 16.1 → 17 (\"Fool the AI\"): planted headlines with a rising price, a random arm, the\n outcome read from the target's next revealed TEE decision and a payout per injection at\n finish (`chaos`, `chaos_config`). Every deploy-16 field is carried over unchanged. Refused\n unless no duel is open (a batch boundary): `Duel.injections` keeps its layout, but the stakes\n of a duel open across the deploy would have no `chaos` records to settle them.\n Caller: the contract itself (private), once after the deploy-17 code lands. Deposit: none.\n Panics: \"no state\", \"duels open\", as `set_chaos_config` on bad terms, or the SDK\n private-method panic for any other caller.",
         "kind": "call",
         "modifiers": [
           "init",
@@ -941,6 +941,38 @@
               }
             }
           ]
+        }
+      },
+      {
+        "name": "on_claim_chaos",
+        "doc": " Outcome of `claim_chaos`'s transfer. On failure (a deleted account) the NEAR came back to\n this contract: `injector`'s records in that duel are unclaimed again. That claim marked every\n one of them with a payout, and no other claim could run before this callback (it would have\n found nothing to claim), so exactly those are unmarked. Returns whether the transfer landed.\n Never panics. Caller: this contract (private). Deposit: none.",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "injector",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
         }
       },
       {
@@ -2150,7 +2182,7 @@
               "$ref": "#/definitions/ChaosOutcome"
             },
             "payout": {
-              "description": "Owed to `injector` once the duel finished: the stake back (no trial, expired, or flipped less the fee) plus, for a flip at the duel's loser, a share of its slash.",
+              "description": "Owed to `injector` once the duel finished: the stake back less the fee (no trial, expired or flipped) plus, for a flip at the duel's loser, a share the loser pays from its bond on top of its slash.",
               "type": "string"
             },
             "prev": {
@@ -2173,7 +2205,7 @@
           }
         },
         "ChaosConfig": {
-          "description": "Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At finish `fee_bps` of a decided stake (flipped or held) goes to `owner_fees`, and `share_bps` of the loser's slash is split pro rata by stake among the injections that flipped it.",
+          "description": "Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At finish `fee_bps` of every stake, whatever its outcome, goes to `owner_fees`. The loser pays `share_bps` of its slash again, from its bond on top of the slash (bounded by the bond), split pro rata by stake among the injections that flipped it; the winner keeps the whole slash.",
           "type": "object",
           "required": [
             "base",
@@ -2240,7 +2272,7 @@
               ]
             },
             {
-              "description": "No trial: no known decision before the injection, the target already held the lie's side, or a placebo. Still records `prev` and `next`.",
+              "description": "No trial: no known decision before the injection, the target already held the lie's side, a placebo, or the target replaced, unrevealed, the commitment it held at the injection. Still records `prev` and `next` (neither for a replaced commitment).",
               "type": "string",
               "enum": [
                 "NoTrial"
@@ -2460,7 +2492,7 @@
               ]
             },
             "pool": {
-              "description": "Chaos stakes, escrowed until the duel finishes and then settled per injection (see `Chaos`), plus the loser's slashed bond, paid to the winner less the flipped injections' share.",
+              "description": "Chaos stakes, escrowed until the duel finishes and then settled per injection (see `Chaos`), plus the loser's slashed bond, paid whole to the winner.",
               "type": "string"
             },
             "resolved": {

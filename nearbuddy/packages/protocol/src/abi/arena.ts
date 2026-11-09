@@ -75,7 +75,7 @@ export interface Chaos {
   kind: ChaosKind;
   next: Side | null;
   outcome: ChaosOutcome;
-  /** Owed to `injector` once the duel finished: the stake back (no trial, expired, or flipped less the fee) plus, for a flip at the duel's loser, a share of its slash. */
+  /** Owed to `injector` once the duel finished: the stake back less the fee (no trial, expired or flipped) plus, for a flip at the duel's loser, a share the loser pays from its bond on top of its slash. */
   payout: string;
   prev: Side | null;
   /** Escrowed in the duel pool until it finishes. 0 when the contract owner (placebo) or the owner of either agent paid: that deposit went to `owner_fees` at injection. */
@@ -83,7 +83,7 @@ export interface Chaos {
   target: Base64VecU8;
 }
 
-/** Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At finish `fee_bps` of a decided stake (flipped or held) goes to `owner_fees`, and `share_bps` of the loser's slash is split pro rata by stake among the injections that flipped it. */
+/** Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At finish `fee_bps` of every stake, whatever its outcome, goes to `owner_fees`. The loser pays `share_bps` of its slash again, from its bond on top of the slash (bounded by the bond), split pro rata by stake among the injections that flipped it; the winner keeps the whole slash. */
 export interface ChaosConfig {
   base: string;
   cap: string;
@@ -170,7 +170,7 @@ export interface Duel {
   open_price: string | null;
   /** Filled by the oracle callback: scored pnl per side and the slashed amount, so a page can show the outcome without parsing logs. */
   outcome: Outcome | null;
-  /** Chaos stakes, escrowed until the duel finishes and then settled per injection (see `Chaos`), plus the loser's slashed bond, paid to the winner less the flipped injections' share. */
+  /** Chaos stakes, escrowed until the duel finishes and then settled per injection (see `Chaos`), plus the loser's slashed bond, paid whole to the winner. */
   pool: string;
   resolved: boolean;
   /** Oracle asset id, e.g. `wrap.near` (NEAR/USD). */
@@ -444,6 +444,8 @@ export interface ArenaCalls {
   begin_reconcile: { args: Record<string, never>; result: undefined };
   /**
    * Pay the caller everything its injections in a finished duel are owed (`Chaos.payout`), once.
+   *  The records are marked claimed before the transfer; `on_claim_chaos` unmarks them if the
+   *  transfer fails, so a later claim pays them.
    *  Caller: the injector. Deposit: 1 yoctoNEAR. Panics: "duel missing", "duel open",
    *  "nothing to claim".
    * modifiers: payable
@@ -454,12 +456,13 @@ export interface ArenaCalls {
    *  this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
    *  signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
    *  should be 32 random bytes: the intent space is small enough to brute-force without it.
-   *  While a headline planted at this agent after its held commitment is pending, that
-   *  commitment must be revealed before it is replaced.
+   *  Replacing a held commitment unrevealed turns every headline still pending at this agent that
+   *  was planted at or after it into `NoTrial`: the hidden call was their `prev`. A runner that
+   *  wants those trials to count reveals before it commits again.
    *  Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
    *  "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
-   *  "duel closed", "intent lock", "bad target", "commitment used", "reveal first",
-   *  "agent missing", "bond exhausted".
+   *  "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
+   *  "bond exhausted".
    */
   commit_intent: {
     args: { duel_id: string; agent_pk: Base64VecU8; commitment: Base64VecU8; sig: Base64VecU8 };
