@@ -665,12 +665,27 @@ test("judged: an outcome must follow from the record's own kind, prev and next",
   assert.equal(r("Short", "Short", "Long", "NoTrial"), true); // already on the lie's side
   assert.equal(r("Short", null, "Short", "NoTrial"), true); // no call before the lie
   assert.equal(r("Placebo", "Long", "Short", "NoTrial"), true); // a placebo is never a trial
-  assert.equal(r("Short", null, null, "NoTrial"), true); // voided: its target replaced a held commitment
+  // charged: the target replaced its held call unrevealed (prev hidden, null); the lie's side is a flip, never a hold
+  assert.equal(r("Short", null, "Short", "Flipped"), true);
+  assert.equal(r("Short", null, "Long", "NoTrial"), true);
+  assert.equal(r("Short", null, "Long", "Held"), false);
+  assert.equal(r("Short", null, "Long", "Flipped"), false);
+  assert.equal(r("Placebo", null, "Short", "Flipped"), false); // a placebo has no lie's side
+  // a replacement no longer voids: a decided outcome always has a next
+  assert.equal(r("Short", null, null, "NoTrial"), false);
   assert.equal(r("Short", "Long", null, "Expired"), true);
   assert.equal(r("Short", "Long", "Long", "Flipped"), false);
   assert.equal(r("Short", "Short", "Short", "Flipped"), false);
   assert.equal(r("Placebo", "Long", "Long", "Held"), false);
   assert.equal(r("Short", "Long", "Short", "Expired"), false);
+  // in a whole duel: #401 recast with B's flip charged (B replaced its held call unrevealed, so prev is null)
+  const e = asDeploy17(load("401"));
+  e.chaos![3]!.prev = null;
+  assert.deepEqual(fails(checkDuel(e)), []);
+  e.chaos![3]!.outcome = "Held"; // never a hold against a hidden call (the bonds then differ too)
+  const line = checkDuel(e).find((l) => l.check === "chaos settlement")!;
+  assert.equal(line.result, "FAIL");
+  assert.ok(line.detail.includes("#3 Held does not follow from prev null and next Short"), line.detail);
 });
 
 test("shieldGain from deploy 17: only the Held records count", () => {
