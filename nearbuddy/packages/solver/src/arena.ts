@@ -421,8 +421,13 @@ export class Arena {
 
   /** Commit-reveal, step 1: relay the agent's signed commitment. Nothing about the call is public yet: no quotes. */
   async commitIntent(duel_id: string, agent_pk: string, commitment: string, sig: string) {
-    if (!verify(agent_pk, commitMessage(ARENA, duel_id, b64.dec(commitment)), sig))
+    let c: Uint8Array;
+    try {
+      c = b64.strict(commitment); // the contract's Base64VecU8 refuses url-safe or non-canonical input on chain
+    } catch {
       throw new Error("bad commit signature");
+    }
+    if (!verify(agent_pk, commitMessage(ARENA, duel_id, c), sig)) throw new Error("bad commit signature");
     return { tx: (await this.call("commit_intent", { duel_id, agent_pk, commitment, sig })).tx };
   }
 
@@ -436,9 +441,11 @@ export class Arena {
     if (!verifyIntent(signed)) throw new Error("bad intent signature");
     if (tee) {
       // same check the contract runs, so a bad record fails here without spending gas
-      const agent = await arenaView<{ model_id: string } | null>("get_agent", { agent_pk: signed.intent.agent_pk });
+      const agent = await arenaView<{ model_id: string; tee: boolean } | null>("get_agent", {
+        agent_pk: signed.intent.agent_pk,
+      });
       if (!agent) throw new Error("agent missing");
-      if (!verifyTeeProof(tee, agent.model_id, signed.intent.proof_hash)) throw new Error("bad tee proof");
+      if (!verifyTeeProof(tee, agent.model_id, signed.intent.proof_hash, agent.tee)) throw new Error("bad tee proof");
     }
     const r = await this.call(method, { signed, ...extra, tee: tee ?? null });
     // The intent has landed: from here a failure is reported in the body, never as an error. A 500 for a landed tx
