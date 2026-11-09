@@ -28,7 +28,7 @@ from config import ATTEST_DIR, DATA, network_file  # noqa: E402
 from duelist import DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, message_text, request_body  # noqa: E402
-from prompts import FULL_SIZE_BPS, SIZER, VARIANT_D, sizer_user, user_bc  # noqa: E402
+from prompts import FULL_SIZE_BPS, SIZER, UNTRUSTED_CAP_BPS, VARIANT_D, sizer_user, user_bc, user_v2  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SRC = DATA
@@ -416,7 +416,31 @@ def check_row(r: dict) -> tuple[bool, str]:
         note = _check_arm_d(r)
         if note != "ok":
             return False, note
+    if r.get("guard"):
+        note = _check_guard(r)
+        if note != "ok":
+            return False, note
     return True, "ok"
+
+
+def _check_guard(r: dict) -> str:
+    """hardened-v2: the enclave-signed user message is exactly `user_v2(brief, injection)`, so cue_guard and the
+    provenance blocks provably ran as published; the posted size respects the cap under unverified text; with k > 1
+    every judgment's bytes verify on their own."""
+    g = r["guard"]
+    user = next((content for role, content in _messages(r) if role == "user"), None)
+    expected, cues = user_v2(r.get("brief") or "", r.get("injection"))
+    if user != expected:
+        return "guard: signed prompt is not user_v2(brief, injection)"
+    if list(g.get("cues_removed") or []) != cues:
+        return "guard: cues_removed differs from cue_guard"
+    if r.get("injection") and int(r.get("intent", {}).get("size_bps", 0)) > UNTRUSTED_CAP_BPS:
+        return "guard: size above the cap under unverified text"
+    for j in g.get("judgments") or []:
+        note = _check_call(j, r.get("model", ""))
+        if note != "ok":
+            return f"guard judgment: {note}"
+    return "ok"
 
 
 def write_parquet(rows: list[dict[str, Any]], path: Path) -> bool:
