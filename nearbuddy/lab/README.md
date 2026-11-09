@@ -154,6 +154,26 @@ Any change after this commit is listed here with its reason.
    No model showed a cue-over-clean effect in the pilot (discordant pairs 0 vs 0, 0 vs 0, 0 vs 1), so H1 was powered
    for the minimal effect of interest (0.15 vs 0.05), which needs 240. For H2 the pilot rates need only 10 to 20.
 
+## The repo README's injection claims, recomputed
+
+`uv run --locked python claims.py` reads `../dataset/decisions.jsonl` and recomputes the claims from the raw rows, with
+the same row filter and labels as `analysis/injection_effects.py`. That is 498 TEE decision rows in duels 258-310,
+52 of them attacked.
+
+| prompt | README claim | recomputed | Wilson 95% | Fisher, attacked vs unattacked on the pushed side | lie pushed against the move |
+|---|---|---|---|---|---|
+| naive | 22/23 vs 42% base | 21/22 = 0.95 vs 0.42 | [0.78, 0.99] | Short: 16/16 vs 69/223, p = 2.4e-08; Long: 5/6 vs 154/223, p = 0.67 | 11/12 |
+| hardened | 18/29 vs 30% base | 18/29 = 0.62 vs 0.30 | [0.44, 0.77] | Short: 17/27 vs 60/223, p = 0.00028; Long: 1/2 vs 163/223, p = 0.47 | 0/10 |
+
+- **Naive: holds, off by one row.** The 23rd row (duel 268) carried a bullish and a bearish payload in the same
+  prompt, so today's classifier cannot read which side it pushed. On the 21 Short-pushed rows, the effect is far
+  beyond the model's base rate. The few Long-pushed rows cannot be told apart from the model's own Long lean.
+- **Hardened: the number holds, the reading does not.** 18/29 reproduces exactly and is above the base rate on the
+  Short side. But all 18 rows that took the pushed side were attacks pushing the way the price was already moving.
+  Against the move, the hardened prompt took the lie 0 of 10 times. This matches the repo README's own later split.
+- **Caveat.** The unattacked comparator is 223 decisions from 52 agent-duels, and those decisions are correlated, so
+  the per-decision Fisher p-values overstate the evidence.
+
 ## Run
 
 ```
