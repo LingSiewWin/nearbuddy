@@ -724,7 +724,7 @@ def commit_decision(
     chaos_v2 = chaos_v2 or any("arm" in i for i in mine)
     held_top = held[label][-1] if held.get(label) else None
     new = [i for i in mine if "arm" in i and (held_top is None or i["index"] not in held_top.saw)]
-    first = reveal_prev(solver, held, label, mine, model.tee)
+    first = reveal_prev(solver, held, label, mine, model.tee, cutoff)
     if first is None:
         return nonce, "skipped"
     mine, decided = first
@@ -745,8 +745,8 @@ def commit_decision(
     started = time.time_ns()
     prep = decide(mine)
     took = time.time_ns() - started
-    if prep == "late":
-        return nonce, "closed"
+    if prep == "late":  # the abandoned decision signed nonce + 1 into its judge request: never reuse it
+        return nonce + 1, "closed"
     if prep is None or isinstance(prep, str):
         return nonce, "skipped"
     nonce += 1
@@ -795,14 +795,14 @@ def commit_decision(
             print(f"  {label} headline {missed} landed while deciding{why}: nothing committed")
             return nonce, "skipped"
         print(f"  {label} headline {missed} landed while deciding: deciding again with it, nonce {nonce} unused")
-        res = reveal_prev(solver, held, label, [i for i in fresh or [] if i["index"] not in decided], model.tee)
+        res = reveal_prev(solver, held, label, [i for i in fresh or [] if i["index"] not in decided], model.tee, cutoff)
         if res is None:
             return nonce, "skipped"
         mine, more = res
         decided |= more
         prep = decide(mine)
-        if prep == "late":
-            return nonce, "closed"
+        if prep == "late":  # as above: the abandoned decision used nonce + 1
+            return nonce + 1, "closed"
         if prep is None or isinstance(prep, str):
             return nonce, "skipped"
         nonce += 1
@@ -840,6 +840,9 @@ def commit_decision(
         record({**p.row, "revealed_tx": None, "tx": None, "error": late})
         print(f"  late commitment for {pk[:8]} not posted ({late}); the held one is revealed inside the lock")
         return nonce, "closed"
+    except requests.RequestException as e:  # the answer timed out at the cutoff: the commit may still land
+        print(f"  {label} commit unanswered ({type(e).__name__}); kept as a candidate for the final reveal")
+        return nonce, "closed"
     p.row["committed_tx"] = committed["tx"]
     p.at = int(committed["at"]) if committed.get("at") else None
     for old in cands[:-1]:  # replaced on chain by this commit: never revealed, recorded as replaced
@@ -851,7 +854,12 @@ def commit_decision(
 
 
 def reveal_prev(
-    solver: Solver, held: dict[str, list[Commitment]], label: str, mine: list[dict[str, Any]], tee: bool
+    solver: Solver,
+    held: dict[str, list[Commitment]],
+    label: str,
+    mine: list[dict[str, Any]],
+    tee: bool,
+    by_ns: int | None = None,
 ) -> tuple[list[dict[str, Any]], set[int]] | None:
     """Reveal `label`'s held call now when a headline in `mine` it did not see was planted at or after its commit (or
     the commit time is unknown): the held call is that headline's `prev`, and a commit replacing it unrevealed is
@@ -864,7 +872,7 @@ def reveal_prev(
     if top is None or not any(top.at is None or int(i["at"]) >= top.at for i in new):
         return mine, set()
     print(f"  {label} reveals its held call first: headline {[i['index'] for i in new]} planted after it")
-    if not reveal_now(solver, held, label):
+    if not reveal_now(solver, held, label, by_ns):
         print(f"  {label} held call not revealed: not replacing it this cycle")
         return None
     if not tee:
@@ -897,14 +905,14 @@ def chaos_pending(duel_id: str, pk: str) -> list[dict[str, Any]] | None:
         return None
 
 
-def reveal(solver: Solver, p: Commitment) -> str:
+def reveal(solver: Solver, p: Commitment, by_ns: int | None = None) -> str:
     """Commit-reveal, step 2: open the commitment (intent, salt, tee). The solver quotes followers here. Records the
     decision's dataset row. Returns "revealed", or "closed" when the chain refused it as late."""
     try:
         posted = solver.post(
             "/reveal",
             {"signed": p.signed, "salt": base64.b64encode(p.salt).decode(), "tee": p.tee},
-            deadline_ns=p.deadline_ns,
+            deadline_ns=p.deadline_ns if by_ns is None or p.deadline_ns is None else min(p.deadline_ns, by_ns),
         )
     except RuntimeError as e:
         late = _late(e)
@@ -923,21 +931,21 @@ def reveal(solver: Solver, p: Commitment) -> str:
 NOT_ON_CHAIN = ("commitment mismatch", "no commitment")
 
 
-def reveal_now(solver: Solver, held: dict[str, list[Commitment]], label: str) -> bool:
+def reveal_now(solver: Solver, held: dict[str, list[Commitment]], label: str, by_ns: int | None = None) -> bool:
     """Reveal `label`'s held commitment during the duel (a headline was planted after it). True when it was revealed;
     False puts the candidates back in `held`, so the next `reveal_prev` or the final reveal tries again; so does Ctrl-C
     during the reveal, or play_duel's final reveal would skip a commitment that may still be on chain (slashed)."""
     cands = held.pop(label, [])
     revealed = False
     try:
-        revealed = not reveal_held(solver, {label: cands})
+        revealed = not reveal_held(solver, {label: cands}, by_ns)
     finally:
         if not revealed:
             held[label] = cands
     return revealed
 
 
-def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> list[str]:
+def reveal_held(solver: Solver, held: dict[str, list[Commitment]], by_ns: int | None = None) -> list[str]:
     """Reveal the commitment each agent has on chain (an unrevealed one is slashed), all agents at once: each /reveal
     waits for its follower quotes, so in a row the last agent could miss the window while the first one waits out a
     solver restart. Per agent the candidates go newest first; one the contract does not hold ("commitment mismatch",
@@ -952,14 +960,16 @@ def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> list[str]:
     def one(label: str, cands: list[Commitment]) -> bool:
         for i, p in enumerate(reversed(cands)):
             try:
-                reveal(solver, p)
+                reveal(solver, p, by_ns)
             except Exception as e:  # requests' ConnectionError/Timeout are not RuntimeError
                 if isinstance(e, RuntimeError) and any(w in str(e) for w in NOT_ON_CHAIN):
                     record({**p.row, "revealed_tx": None, "tx": None, "error": "commitment not on chain"})
                     continue
                 record({**p.row, "revealed_tx": None, "tx": None, "error": f"reveal failed: {str(e)[:200]}"})
                 print(f"  reveal for {label} failed: {type(e).__name__}: {str(e)[:120]}")
-                if isinstance(e, DeadlineError) or (p.deadline_ns is not None and time.time_ns() >= p.deadline_ns):
+                # a mid-duel reveal stopped at `by_ns` (the commit cutoff) is retried by the final reveal: no alarm
+                past = p.deadline_ns is not None and time.time_ns() >= p.deadline_ns
+                if past or (isinstance(e, DeadlineError) and by_ns is None):
                     print(
                         f"!!! REVEAL DEADLINE PASSED for {label} (nonce {p.signed['intent']['nonce']}): the "
                         "commitment may stay unrevealed; the contract then forfeits the duel and slashes "

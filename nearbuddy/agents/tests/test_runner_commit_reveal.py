@@ -239,8 +239,7 @@ def test_one_failed_final_reveal_does_not_strand_the_other_agent(env):
 def test_a_commit_that_times_out_is_revealed_first_since_it_may_have_landed(env):
     clock, _ = env
     solver = FakeSolver(clock, fail={("/commit", 2): requests.Timeout("read timed out")})
-    with pytest.raises(requests.Timeout):
-        play(solver, scripted(["Long", "Short"]))
+    play(solver, scripted(["Long", "Short"]))  # timed-out commit stays a candidate, no raise
     assert solver.paths() == ["/commit", "/commit", "/reveal"]
     assert opened(solver, 0) == commits(solver)[1], "the salt of the commit whose answer was lost"
     rs = {r["commitment"]: r for r in rows()}
@@ -257,8 +256,7 @@ def test_a_transport_failure_on_the_newest_candidate_still_tries_the_older_one(e
         clock,
         fail={("/commit", 2): requests.Timeout("read timed out"), ("/reveal", 1): requests.ConnectionError("reset")},
     )
-    with pytest.raises(requests.Timeout):
-        play(solver, scripted(["Long", "Short"]))
+    play(solver, scripted(["Long", "Short"]))  # timed-out commit stays a candidate, no raise
     assert solver.paths() == ["/commit", "/commit", "/reveal", "/reveal"]
     assert opened(solver, 0) == commits(solver)[1] and opened(solver, 1) == commits(solver)[0]
     rs = {r["commitment"]: r for r in rows()}
@@ -298,8 +296,7 @@ def test_a_transient_error_mid_duel_holds_the_commitments_until_the_lock(env, mo
 def test_a_commit_error_that_may_have_landed_holds_until_the_lock_too(env):
     clock, _ = env
     solver = FakeSolver(clock, fail={("/commit", 2): requests.Timeout("read timed out")})
-    with pytest.raises(requests.Timeout):
-        play(solver, scripted(["Long", "Short"]))
+    play(solver, scripted(["Long", "Short"]))  # timed-out commit stays a candidate, no raise
     assert reveal_times(solver) and all(LOCK_AT <= t < CLOSE_NS for t in reveal_times(solver))
 
 
@@ -312,8 +309,7 @@ def test_a_timed_out_commit_that_never_landed_falls_back_to_the_held_one(env):
             ("/reveal", 1): "reveal_intent failed: Smart contract panicked: commitment mismatch",
         },
     )
-    with pytest.raises(requests.Timeout):
-        play(solver, scripted(["Long", "Short"]))
+    play(solver, scripted(["Long", "Short"]))  # timed-out commit stays a candidate, no raise
     assert solver.paths() == ["/commit", "/commit", "/reveal", "/reveal"]
     assert opened(solver, 0) == commits(solver)[1] and opened(solver, 1) == commits(solver)[0]
     rs = {r["commitment"]: r for r in rows()}
