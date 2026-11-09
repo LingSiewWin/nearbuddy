@@ -4292,6 +4292,33 @@ fn try_inject(c: &mut Contract, who: &str, deposit: u128, kind: ChaosKind, h: &s
     r.map(|_| "ok".to_string()).unwrap_or_else(panic_msg)
 }
 
+/// L3: with a zero price (a fresh init at `min_chaos_deposit` 0), a deposit that only pays the
+/// record's storage would leave a paid record with no stake: refused.
+#[test]
+fn a_paid_injection_must_leave_a_stake_after_its_storage() {
+    let (mut c, ..) = setup();
+    c.min_chaos_deposit = 0;
+    c.chaos_config.base = U128(0);
+    c.chaos_config.cap = U128(0);
+    let d = open(&mut c);
+    assert_eq!(c.chaos_fee(U64(d)).0, 0);
+    // the first record also creates the duel's list; every later one adds the same bytes
+    for _ in 0..2 {
+        assert_eq!(
+            try_inject(&mut c, SPECTATOR, NEAR / 100, ChaosKind::Short, HEADLINE),
+            "ok"
+        );
+    }
+    let cost = NEAR / 100 - chaos_at(&c, d, 1).stake.0;
+    let ok = try_inject(&mut c, SPECTATOR, cost + 1, ChaosKind::Short, HEADLINE);
+    assert_eq!((ok.as_str(), chaos_at(&c, d, 2).stake.0), ("ok", 1));
+    // last: a refusal past the flush leaves the mocked state half written
+    assert_eq!(
+        try_inject(&mut c, SPECTATOR, cost, ChaosKind::Short, HEADLINE),
+        "chaos deposit too small"
+    );
+}
+
 #[test]
 fn headline_must_be_short_printable_utf8() {
     let (mut c, ..) = setup();

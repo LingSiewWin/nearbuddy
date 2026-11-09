@@ -304,7 +304,7 @@ impl Contract {
     /// Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes
     /// toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with
     /// no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the
-    /// stake, escrowed in the pool until the duel finishes. When the payer owns either agent the
+    /// stake (more than 0 when paid), escrowed in the pool until the duel finishes. When the payer owns either agent the
     /// stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).
     /// The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the
     /// injection's index in `get_chaos(duel_id)`.
@@ -390,6 +390,8 @@ impl Contract {
         let cost = storage_cost_since(before);
         require!(deposit >= cost, "chaos deposit too small");
         let stake = deposit - cost;
+        // a paid record with no stake would settle nothing yet still be judged and earn shield
+        require!(unpaid || stake > 0, "chaos deposit too small");
         if unpaid {
             self.owner_fees += stake;
         } else {
