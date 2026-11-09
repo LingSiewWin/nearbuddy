@@ -1,7 +1,8 @@
 """Chaos v2 (deploy 17) in the runner, offline: headlines come from GET /arena `pending` (the solver's get_chaos read),
 each is delivered by its arm, and under commit-reveal a headline planted after the held commitment makes the runner
-reveal that commitment first (the contract refuses to replace it, "reveal first"), decide with the headline and always
-commit. `check_row` recomputes the delivered text from the arms and finds it in the enclave-signed request."""
+reveal that commitment first (replacing it unrevealed would void the headline, NoTrial), decide with the headline and
+always commit. Before each commit the runner reads get_chaos from chain again, and a call that missed a headline
+decides again. `check_row` recomputes the delivered text from the arms and finds it in the enclave-signed request."""
 
 import json
 import sys
@@ -50,13 +51,28 @@ class Clock:
 
 
 class ChaosSolver:
-    """GET /arena lists `headlines` (pending, at agent `pk`) once the clock reaches each one's `seen_at`; /commit tells
-    the commit's chain time (`clock + land_s`); `fail` maps (path, n-th call) to the error it raises."""
+    """GET /arena lists `headlines` (pending, at agent `pk`) once the clock reaches each one's `seen_at`; the chain
+    (`get_chaos`, the runner's re-read before a commit) lists each from its block time `at`. /commit tells the commit's
+    chain time (`clock + land_s`); `fail` maps (path, n-th call) to the error it raises, or an exception to raise."""
 
     def __init__(self, clock, pk, headlines, land_s=1, fail=None):
         self.clock, self.pk, self.headlines, self.land_s = clock, pk, headlines, land_s
         self.fail = fail or {}
         self.posts: list[tuple[str, dict, int]] = []
+        self.reads: list[int] = []  # clock of every get_chaos read
+        clock.chain = self.chain
+
+    def chain(self, method, args):
+        assert method == "get_chaos" and args == {"duel_id": "5"}
+        self.reads.append(self.clock.ns)
+        listed = sorted((h for h in self.headlines if "arm" in h), key=lambda h: h["index"])
+        assert [h["index"] for h in listed] == list(range(len(listed))), "get_chaos lists every headline by index"
+        return [
+            {"target": self.pk, "headline": h["payload"], "kind": h["kind"], "arm": h["arm"], "at": h["at"]}
+            | {"outcome": "Pending"}
+            for h in listed
+            if self.clock.ns >= int(h["at"])
+        ]
 
     def get(self, path):
         assert path == "/arena"
@@ -67,7 +83,8 @@ class ChaosSolver:
         self.posts.append((path, body, self.clock.ns))
         n = sum(1 for p, _, _ in self.posts if p == path)
         if (path, n) in self.fail:
-            raise RuntimeError(f"solver {path} 500: {self.fail[(path, n)]}")
+            err = self.fail[(path, n)]
+            raise err if isinstance(err, BaseException) else RuntimeError(f"solver {path} 500: {err}")
         if path == "/commit":
             return {"tx": f"C{n}", "at": str(self.clock.ns + self.land_s * S)}
         if path == "/consume":  # deploy 16.1: a consumed payload leaves the list
@@ -115,6 +132,7 @@ def clock(tmp_path, monkeypatch):
     monkeypatch.setattr(time, "time_ns", lambda: c.ns)
     monkeypatch.setattr(time, "sleep", c.sleep)
     monkeypatch.setattr(runner, "chain_now_ns", lambda **_: c.ns)
+    monkeypatch.setattr(runner, "view", lambda method, args: c.chain(method, args))
     monkeypatch.delitem(ENV, "AGENT_KEY_Y", raising=False)
     monkeypatch.delitem(ENV, "AGENT_SEED_Y", raising=False)
     return c
@@ -125,11 +143,11 @@ def player(model):
     return [("Y", d, sk, comp, model)]
 
 
-def play(solver, players):
+def play(solver, players, chaos_v2=True):
     # an enclave's report is saved where check_row looks, so its rows cite an attestation listing their signer
     attestations = attest(*(m for *_, m in players if isinstance(m, Enclave)))
     runner.play_duel(
-        solver, "5", "NEAR/USD", 365_000_000, CLOSE_NS, STOP_NS, players, 10, 20, attestations, True, LOCK_S
+        solver, "5", "NEAR/USD", 365_000_000, CLOSE_NS, STOP_NS, players, 10, 20, attestations, True, LOCK_S, chaos_v2
     )
 
 
@@ -151,8 +169,9 @@ def test_deploy_16_payload_is_delivered_once_then_consumed_and_a_kept_call_stays
         "seen_at": 10 * S,
     }
     solver = ChaosSolver(clock, pk, [legacy])
-    play(solver, ps)
+    play(solver, ps, chaos_v2=False)
     assert solver.paths() == ["/commit", "/consume", "/reveal"], "kept, consumed, revealed only inside the lock"
+    assert solver.reads == [], "16.1 has no get_chaos: no re-read before a commit"
     assert solver.posts[1][1] == {"target": pk, "duel_id": "5", "blocks": ["7"]}
     assert [HALT in u for u in model.users] == [False, True, False]
     kept = [r for r in rows() if r.get("kept_commitment")]
@@ -203,30 +222,39 @@ class Slow(Scripted):
         return super().complete(system, user)
 
 
-def test_a_headline_planted_while_the_model_decides_reveals_the_held_call_before_the_commit(clock):
-    # cycle 2 reads at t=21 and sees nothing; the headline lands at 21.5 while the model decides (until t=22) and
-    # changes its call. The held call (committed at t=2) is the headline's prev: replacing it unrevealed would void the
-    # trial, so it opens first
+def test_a_headline_planted_while_the_model_decides_reveals_the_held_call_and_decides_again_with_it(clock):
+    # cycle 2 reads GET /arena at t=21 and sees nothing; the headline lands at 21.5 while the model decides (until
+    # t=22) and changes its call. The chain re-read before the commit finds it. The held call (committed at t=2) is its
+    # prev: replacing it unrevealed would void the trial, so it opens first; the Short decided without the headline is
+    # never committed, since revealed it would decide the trial blind. The model decides again, with the headline
     model = Slow(clock, ["Long", "Short"])
     ps = player(model)
     solver = ChaosSolver(clock, pk_b64(ps[0][2]), [headline(0, HALT, at_s=21.5)])
     play(solver, ps)
-    assert solver.paths() == ["/commit", "/reveal", "/commit", "/commit", "/reveal"]
-    revealed = [r for r in rows() if r["revealed_tx"]]
+    assert solver.paths() == ["/commit", "/reveal", "/commit", "/reveal"]
+    assert [t // S for _, _, t in solver.posts] == [1, 22, 23, 90]
+    assert [HALT in u for u in model.users] == [False, False, True, True]
+    rs = rows()
+    revealed = [r for r in rs if r["revealed_tx"]]
     assert [r["chaos"] is None for r in revealed] == [True, False], "prev without the headline, the decider with it"
-    assert [HALT in u for u in model.users] == [False, False, True]
+    blind = next(r for r in rs if r.get("error", "").startswith("not committed"))
+    assert blind["error"] == "not committed: headline [0] landed while deciding" and blind["injection"] is None
+    assert blind["intent"]["nonce"] == "12" and revealed[1]["intent"]["nonce"] == "13", "a fresh nonce for the redo"
 
 
-def test_reveal_first_from_the_contract_reveals_the_held_call_and_commits_again(clock):
-    # a headline the solver did not list yet landed after the held commit: the contract refuses the replacement
-    model = Scripted(["Long", "Short"])
+def test_a_headline_landing_before_the_first_commit_is_seen_by_the_committed_call(clock):
+    # nothing held yet: the headline lands at 0.5 s while the first call is decided (until t=1). Committed, that call
+    # would be the first revealed decision after the injection and decide the trial without having seen it
+    model = Slow(clock, ["Long", "Short"])
     ps = player(model)
-    solver = ChaosSolver(clock, pk_b64(ps[0][2]), [], fail={("/commit", 2): "Smart contract panicked: reveal first"})
+    solver = ChaosSolver(clock, pk_b64(ps[0][2]), [headline(0, HALT, at_s=0.5, seen_s=20)])
     play(solver, ps)
-    assert solver.paths() == ["/commit", "/commit", "/reveal", "/commit", "/reveal"]
-    sides = [b["signed"]["intent"]["side"] for p, b, _ in solver.posts if p == "/reveal"]
-    assert sides == ["Long", "Short"], "the held Long opened first, then the Short committed after it"
-    assert solver.posts[1][1] == solver.posts[3][1], "the same commitment, sent again"
+    assert solver.paths() == ["/commit", "/reveal"], "the redo is committed once and kept; nothing opens early"
+    assert [t // S for _, _, t in solver.posts] == [2, 90]
+    assert [HALT in u for u in model.users] == [False, True, True, True]
+    assert solver.reads == [1 * S], "one re-read per commit, none before a kept call or after the redo"
+    decider = next(r for r in rows() if r["revealed_tx"])
+    assert decider["chaos"] == [{"index": 0, "arm": "Cue", "kind": "Short", "headline": HALT}]
 
 
 def test_an_enclave_reveal_decides_what_the_held_call_saw_so_only_new_headlines_are_delivered(clock):
