@@ -34,6 +34,17 @@ def test_rates_and_pairs_skip_missing_outcomes():
     assert report.paired(recs, "cue", "placebo", unverified=True) == (0, 0, 1)
 
 
+def test_reverify_real_pilot_calls_and_catch_tampering():
+    rec = next(r for r in report.load("pilot") if all(c["verified"] for c in r["calls"].values()))
+    assert all(report.reverified(rec, a) for a in rec["calls"])
+    swapped = {**rec, "calls": {**rec["calls"], "cue": {**rec["calls"]["cue"], "headline": "something else"}}}
+    assert not report.reverified(swapped, "cue")  # the arm label must match the signed request
+    edited = {**rec, "calls": {**rec["calls"], "clean": {**rec["calls"]["clean"], "response_body": "{}"}}}
+    assert not report.reverified(edited, "clean")
+    relabelled = {**rec, "calls": {**rec["calls"], "baseline": rec["calls"]["cue"]}}
+    assert not report.reverified(relabelled, "baseline")
+
+
 def test_against_the_move():
     assert report.against({"direction": "Long", "move_bps": -3.0}) == "against the move"
     assert report.against({"direction": "Short", "move_bps": -3.0}) == "with the move"

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
+import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
 from functools import partial
@@ -23,6 +25,9 @@ from typing import Any
 import stats
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "agents"))
+from intent_client import TeeProofError, tee_proof  # noqa: E402
+
 RESULTS = HERE / "results"
 ALPHA = 0.05
 FAMILY = 4  # three models and the pooled data, per hypothesis
@@ -193,6 +198,31 @@ EXCL = (
 )
 
 
+def reverified(rec: dict[str, Any], arm: str) -> bool:
+    """Checks a call marked verified again, from the stored record alone: the stored bytes hash to the stored
+    hashes, the enclave's ed25519 signature over them verifies (provider enclave, kind 2), and the signed request's
+    user message carries this arm's headline (none for the baseline), so the arm label cannot be swapped."""
+    c = rec["calls"][arm]
+    req, resp = c["request_body"].encode(), c["response_body"].encode()
+    if hashlib.sha256(req).hexdigest() != c["request_hash"] or hashlib.sha256(resp).hexdigest() != c["response_hash"]:
+        return False
+    try:
+        tee = tee_proof(
+            c["signature_record"], rec["model"], bytes.fromhex(c["request_hash"]), bytes.fromhex(c["response_hash"])
+        )
+    except (TeeProofError, KeyError, ValueError, TypeError):
+        return False
+    user = json.loads(req)["messages"][1]["content"]
+    shown = "<URGENT_MARKET_TELEMETRY>" in user
+    return bool(tee["kind"] == 2 and shown == (arm != "baseline") and (not shown or c["headline"] in user))
+
+
+def verification(recs: list[dict[str, Any]]) -> str:
+    marked = [(r, a) for r in recs for a, c in r["calls"].items() if c.get("verified")]
+    ok_ = sum(reverified(r, a) for r, a in marked)
+    return f"{ok_} of {len(marked)} calls marked verified re-verify from the stored bytes and signature records"
+
+
 def against(r: dict[str, Any]) -> str:
     move = r["move_bps"]
     if not move:
@@ -228,6 +258,7 @@ def report(phase: str, prompt: str = "naive") -> None:
     confirmatory(gs)
     print("## Exclusions (every call accounted for)\n")
     exclusions(gs)
+    print(f"Re-verification: {verification(recs)}.\n")
     print("## Sensitivity: unverified but parsed calls included\n")
     confirmatory(gs, unverified=True)
     print("## Secondary (exploratory, uncorrected)\n")
