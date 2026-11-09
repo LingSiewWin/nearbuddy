@@ -30,6 +30,9 @@ jobs:
       - run: bun install --frozen-lockfile
         working-directory: nearbuddy/web
       - run: bun run test
+      # generated contract types (packages/protocol/src/abi, web/app/lib/abi, agents/arena_types.py) must match
+      # abi/*.json; on a diff run `bun run gen:types` and commit
+      - run: bun run gen:types && git diff --exit-code -- packages/protocol/src/abi web/app/lib/abi agents/arena_types.py
       - run: bun x tsc --noEmit -p .
       - run: bun run lint
       - run: bun run build
@@ -55,6 +58,7 @@ jobs:
       # same lint and format checks as scripts/check-all.sh py-lint (ruff.toml here also covers ../analysis)
       - run: uv run --locked ruff check . ../analysis
       - run: uv run --locked ruff format --check . ../analysis
+      - run: uv run --locked mypy .
       - run: uv run --locked pytest -q
 
   rust:
@@ -62,6 +66,8 @@ jobs:
     defaults:
       run:
         working-directory: nearbuddy/arena
+    env:
+      CARGO_NEAR_VERSION: 0.22.0 # same as e2e-nightly.yml; run scripts/gen-abi.sh locally with this version
     steps:
       - uses: actions/checkout@v4
       # matches arena/rust-toolchain.toml
@@ -84,6 +90,25 @@ jobs:
         working-directory: nearbuddy/intents-stub
       # vault + guarantor contract (layers 1-2)
       - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib
+        working-directory: nearbuddy/contract
+      - name: cache cargo-near
+        id: cargo-near
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-near
+          key: cargo-near-${{ runner.os }}-${{ env.CARGO_NEAR_VERSION }}
+      - name: install cargo-near
+        if: steps.cargo-near.outputs.cache-hit != 'true'
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/near/cargo-near/releases/download/cargo-near-v${CARGO_NEAR_VERSION}/cargo-near-installer.sh" | sh
+      # the committed ABIs (nearbuddy/abi, input of the generated TS/Python types) must match the contracts;
+      # on a diff run scripts/gen-abi.sh and commit
+      - run: cargo near abi && diff -u ../abi/arena.json target/near/nearbuddy_arena_abi.json
+      # gen.ts types an Option field as always present (`T | null`) because serde writes None as null;
+      # skip_serializing_if would drop the key instead, and the ABI schema cannot show that
+      - run: "! grep -rn skip_serializing_if src ../contract/src"
+      - run: cargo near abi && diff -u ../abi/vault.json target/near/nearbuddy_vault_abi.json
         working-directory: nearbuddy/contract
 
   # Playwright smoke over the built pages. Reads the live testnet arena contract through the public RPC,
