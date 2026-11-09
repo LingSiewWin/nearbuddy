@@ -60,5 +60,21 @@ export async function send(call: Call): Promise<string> {
   });
   const hash = (out as { transaction?: { hash?: string } } | undefined)?.transaction?.hash;
   if (!hash) throw new Error("the wallet returned no transaction hash");
+  const why = refusal(out);
+  if (why) throw new Error(`the contract refused it (${why}) · tx ${hash.slice(0, 10)}…`);
   return hash;
+}
+
+type Outcome = { status?: unknown; receipts_outcome?: { outcome?: { status?: unknown } }[] };
+/** Why a sent transaction failed (the panic message when there is one), or null when it and every receipt succeeded.
+ *  Wallets hand the RPC's FinalExecutionOutcome back as is, so a contract panic ("duel closed", "chaos full") arrives
+ *  as a resolved promise and must be read from here. */
+export function refusal(out: unknown): string | null {
+  const o = (out ?? {}) as Outcome;
+  const failure = [o.status, ...(o.receipts_outcome ?? []).map((r) => r.outcome?.status)].find(
+    (s) => typeof s === "object" && s !== null && "Failure" in s,
+  ) as { Failure: unknown } | undefined;
+  if (!failure) return null;
+  const panic = JSON.stringify(failure.Failure).match(/"ExecutionError":"(?:Smart contract panicked: )?([^"]+)"/)?.[1];
+  return panic ?? JSON.stringify(failure.Failure).slice(0, 120);
 }
