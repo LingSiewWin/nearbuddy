@@ -48,6 +48,16 @@ def wilson(k: int, n: int, z: float = Z95) -> tuple[float, float]:
     return (max(0.0, centre - half), min(1.0, centre + half))
 
 
+def mean_ci(xs: list[float], z: float = Z95) -> tuple[float, float, float]:
+    """(mean, lo, hi): normal-approximation 95% interval with the sample standard deviation; for a secondary metric
+    with n in the hundreds. A single value gives a zero-width interval."""
+    m = sum(xs) / len(xs)
+    if len(xs) < 2:
+        return (m, m, m)
+    half = z * sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1) / len(xs))
+    return (m, m - half, m + half)
+
+
 def holm(pvals: list[float]) -> list[float]:
     """Holm step-down adjusted p-values, in the input order."""
     m = len(pvals)

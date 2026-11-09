@@ -42,6 +42,14 @@ def test_wilson_empty():
     assert stats.wilson(0, 0) == (0.0, 1.0)
 
 
+def test_mean_ci_matches_scipy_normal_interval():
+    xs = [10000.0, 0.0, 4000.0, -1000.0, 10000.0, 0.0, 9000.0]
+    m, lo, hi = stats.mean_ci(xs)
+    want = sp.norm.interval(0.95, loc=sp.tmean(xs), scale=sp.sem(xs))
+    assert m == pytest.approx(sp.tmean(xs)) and (lo, hi) == pytest.approx(want)
+    assert stats.mean_ci([5.0]) == (5.0, 5.0, 5.0)
+
+
 def test_holm_textbook_example():
     # Holm (1979) step-down by hand: sorted p 0.01, 0.02, 0.03, 0.04 -> 4x, 3x, 2x, 1x, then a running max
     assert stats.holm([0.03, 0.01, 0.04, 0.02]) == pytest.approx([0.06, 0.04, 0.06, 0.06])
