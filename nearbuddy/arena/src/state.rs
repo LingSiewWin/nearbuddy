@@ -374,16 +374,19 @@ impl Contract {
 
     /// Deploy 16.1 → 17 ("Fool the AI"): planted headlines with a rising price, a random arm, the
     /// outcome read from the target's next revealed TEE decision and a payout per injection at
-    /// finish (`chaos`, `chaos_config`). Every deploy-16 field is carried over unchanged. Run only at
-    /// a batch boundary (no open duel): `Duel.injections` keeps its layout, but the stakes of a duel
-    /// open across the deploy would have no `chaos` records to settle them.
+    /// finish (`chaos`, `chaos_config`). Every deploy-16 field is carried over unchanged. Refused
+    /// unless no duel is open (a batch boundary): `Duel.injections` keeps its layout, but the stakes
+    /// of a duel open across the deploy would have no `chaos` records to settle them.
     /// Caller: the contract itself (private), once after the deploy-17 code lands. Deposit: none.
-    /// Panics: "no state", as `set_chaos_config` on bad terms, or the SDK private-method panic for
-    /// any other caller.
+    /// Panics: "no state", "duels open", as `set_chaos_config` on bad terms, or the SDK
+    /// private-method panic for any other caller.
     #[private]
     #[init(ignore_state)]
     pub fn migrate_v17(chaos: ChaosConfig) -> Self {
         let old: ContractV16 = env::state_read().expect("no state");
+        // a duel open across the deploy has injections with no `chaos` record: the next
+        // `inject_chaos` there would index past the records and its stakes could not settle
+        require!(old.open_duels == 0, "duels open");
         chaos.check(old.min_chaos_deposit);
         Self {
             owner: old.owner,

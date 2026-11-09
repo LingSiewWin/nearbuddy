@@ -3154,7 +3154,8 @@ fn v16_state(c: &mut Contract) -> Vec<u8> {
 }
 
 /// The terms deploy 17 is meant to run under: 0.1 NEAR rising 1.25x per injection up to 1 NEAR,
-/// a 5 % fee on decided stakes, half the loser's slash to the injections that flipped it.
+/// a 5 % fee on every stake, half the loser's slash again, from its bond, to the injections that
+/// flipped it.
 fn chaos_terms() -> ChaosConfig {
     ChaosConfig {
         base: U128(MIN_CHAOS),
@@ -3168,6 +3169,7 @@ fn chaos_terms() -> ChaosConfig {
 #[test]
 fn migrate_v17_keeps_deploy_16_state_and_adds_chaos_terms() {
     let (mut c, d, v) = setup_follow(mandate(NEAR, VAULT, vec![]));
+    resolve_at_close(&mut c, d, UP); // the deploy lands at a batch boundary: no duel open
     let raw = v16_state(&mut c);
     let before = c.get_config();
     env::storage_write(b"STATE", &raw);
@@ -3193,9 +3195,24 @@ fn migrate_v17_keeps_deploy_16_state_and_adds_chaos_terms() {
     assert_eq!(settle(&mut m, vec![fill(1, "usdc", 50)]).settled, 1);
     // chaos starts empty and priced at the new base, then rises
     assert!(m.get_chaos(U64(d)).is_empty());
-    assert_eq!(m.chaos_fee(U64(d)).0, MIN_CHAOS);
-    inject(&mut m, d, &key(1).1, MIN_CHAOS);
-    assert_eq!(m.chaos_fee(U64(d)).0, MIN_CHAOS * 5 / 4);
+    let d2 = open(&mut m);
+    assert_eq!(m.chaos_fee(U64(d2)).0, MIN_CHAOS);
+    inject(&mut m, d2, &key(1).1, MIN_CHAOS);
+    assert_eq!(m.chaos_fee(U64(d2)).0, MIN_CHAOS * 5 / 4);
+}
+
+/// L1: a duel open across the deploy would keep its pre-17 injections with no `chaos` records, and
+/// the next `inject_chaos` there indexed past them ("index out of bounds"). The migration refuses.
+#[test]
+#[should_panic(expected = "duels open")]
+fn migrate_v17_refuses_while_a_duel_is_open() {
+    let (mut c, ..) = setup();
+    let d = open(&mut c);
+    inject(&mut c, d, &key(1).1, MIN_CHAOS); // a deploy-16 injection, no record after the deploy
+    let raw = v16_state(&mut c);
+    env::storage_write(b"STATE", &raw);
+    ctx(CONTRACT, 0);
+    Contract::migrate_v17(chaos_terms());
 }
 
 #[test]
