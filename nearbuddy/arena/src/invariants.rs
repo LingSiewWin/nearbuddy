@@ -298,7 +298,8 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
     // planted at it (a spectator's mostly; an agent owner's or a placebo sometimes); with
     // commit-reveal on, that call is revealed (the decision before) and a second later it commits
     // again and reveals (the decision that decides both: flipped, held or no trial); sometimes the
-    // first call is replaced unrevealed instead, which voids both headlines (no trial)
+    // first call is replaced unrevealed instead, which hides both headlines' prev (the second call
+    // then flips them on the lie's side, else they are no trial)
     let plant = (
         prop_oneof![8 => 0u8..2, 1 => Just(2u8)],
         prop::bool::weighted(0.15),
@@ -725,6 +726,9 @@ struct ChaosM {
     at: u64,
     prev: Option<bool>,
     next: Option<bool>,
+    /// The target replaced, unrevealed, the call it held at the injection: `prev` stays unknown,
+    /// and the hidden call counts against the target (a lie-side next flips, any other is no trial).
+    hidden: bool,
     outcome: ChaosOutcome,
     stake: u128,
     injector: String,
@@ -1121,10 +1125,14 @@ impl World {
             .filter(|r| r.side_b == side_b && r.outcome == ChaosOutcome::Pending)
         {
             if td <= r.at {
-                r.prev = Some(long);
+                if !r.hidden {
+                    r.prev = Some(long);
+                }
             } else if counts {
                 r.next = Some(long);
                 r.outcome = match (r.dir, r.prev) {
+                    (Some(lie), _) if r.hidden && long == lie => ChaosOutcome::Flipped,
+                    (Some(_), _) if r.hidden => ChaosOutcome::NoTrial,
                     (Some(lie), Some(p)) if p != lie && long == lie => ChaosOutcome::Flipped,
                     (Some(lie), Some(p)) if p != lie => ChaosOutcome::Held,
                     _ => ChaosOutcome::NoTrial,
@@ -1527,7 +1535,8 @@ impl World {
                         .to_vec();
                     let pk = Base64VecU8(self.pks[ag].clone());
                     // the held commitment is the decision before a headline planted at or after it:
-                    // replaced unrevealed, that headline can never be judged and is no trial
+                    // replaced unrevealed, that headline's prev is hidden and counts against the
+                    // target
                     let side_b = ag == self.duels[d].b;
                     let held_at = self.pending.get(&(d, ag)).map(|p| p.3);
                     if self
@@ -1542,7 +1551,7 @@ impl World {
                                     && r.outcome == ChaosOutcome::Pending
                                     && r.at >= t
                             }) {
-                                r.outcome = ChaosOutcome::NoTrial;
+                                r.hidden = true;
                                 r.prev = None;
                             }
                         }
@@ -1667,6 +1676,7 @@ impl World {
                             at: self.now,
                             prev: last,
                             next: None,
+                            hidden: false,
                             outcome: ChaosOutcome::Pending,
                             stake: if unpaid { 0 } else { stake },
                             injector: payer,

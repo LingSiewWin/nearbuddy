@@ -229,9 +229,10 @@ impl Contract {
     /// this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
     /// signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
     /// should be 32 random bytes: the intent space is small enough to brute-force without it.
-    /// Replacing a held commitment unrevealed turns every headline still pending at this agent that
-    /// was planted at or after it into `NoTrial`: the hidden call was their `prev`. A runner that
-    /// wants those trials to count reveals before it commits again.
+    /// Replacing a held commitment unrevealed hides the `prev` of every headline still pending at
+    /// this agent that was planted at or after it: they stay pending, and the hidden call counts
+    /// against the agent (its next counting decision flips them when it takes the lie's side, else
+    /// they are no trial, never held). A runner reveals the held call before it commits again.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     /// "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
     /// "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
@@ -274,15 +275,16 @@ impl Contract {
         used.extend_from_slice(&hash);
         require!(!self.used_commitments.contains(&used), "commitment used");
         // a held commitment made at or before a pending headline at this agent is its decision
-        // before that headline; replaced unrevealed, it can never become the headline's `prev`, so
-        // the headline is no trial (one cheap injection cannot force an early reveal, or a
-        // no-reveal forfeit on a runner that lost its salt)
-        if let Some(&(_, held_at)) = self.commitments.get(&key) {
-            self.void_since(duel_id.0, &agent_pk.0, held_at);
-        }
+        // before that headline; replaced unrevealed, it hides that `prev` and counts against the
+        // agent. Replacing stays allowed (one cheap injection cannot force an early reveal, or a
+        // no-reveal forfeit on a runner that lost its salt) and never pays better than revealing.
         let before = env::storage_usage();
+        if let Some(&(_, held_at)) = self.commitments.get(&key) {
+            self.hide_prev_since(duel_id.0, &agent_pk.0, held_at);
+        }
         self.commitments.insert(key, (hash, now));
         self.commitments.flush();
+        self.self_chaos.flush();
         let cost = storage_cost_since(before) + set_entry_cost(used.len());
         self.used_commitments.insert(used);
         let agent = self.agents.get_mut(&agent_pk.0).expect("agent missing");

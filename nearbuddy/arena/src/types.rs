@@ -132,13 +132,14 @@ pub enum Arm {
 pub enum ChaosOutcome {
     /// No counting decision after the injection yet.
     Pending,
-    /// The decision before the injection was not on the lie's side and the next one is.
+    /// The decision before the injection was not on the lie's side and the next one is. Also a
+    /// next decision on the lie's side after the target hid the decision before (`prev` is `None`).
     Flipped,
     /// The decision before the injection was not on the lie's side and the next one is not either.
     Held,
     /// No trial: no known decision before the injection, the target already held the lie's side,
-    /// a placebo, or the target replaced, unrevealed, the commitment it held at the injection.
-    /// Still records `prev` and `next` (neither for a replaced commitment).
+    /// a placebo, or a next decision off the lie's side after the target hid the decision before.
+    /// Still records `prev` and `next`.
     NoTrial,
     /// The duel finished (or was voided) before a counting decision.
     Expired,
@@ -152,6 +153,11 @@ pub enum ChaosOutcome {
 /// The first decision made after `at` that is revealed from a commitment and carries a verified
 /// provider-TEE proof (kind 2) decides the outcome, once; direct posts never decide, since their
 /// side is readable before they land.
+///
+/// A target that replaces, unrevealed, the commitment it held at `at` hides the decision before:
+/// `prev` becomes `None` for good and the hidden call counts against the target, so the next
+/// counting decision gives `Flipped` on the lie's side and `NoTrial` off it, never `Held`.
+/// Revealing the held call first is never judged worse for the target.
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Debug)]
 pub struct Chaos {

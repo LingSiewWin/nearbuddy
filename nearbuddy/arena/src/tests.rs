@@ -4961,28 +4961,32 @@ fn a_held_call_revealed_before_the_next_commit_is_the_headlines_prev() {
 }
 
 #[test]
-fn replacing_a_held_call_after_a_headline_voids_it_instead_of_faking_a_flip() {
-    // replaced unrevealed, the held Short can never be `prev`; the stale `prev` (Long) must not turn
-    // the next Short into a fake flip, so the headline is no trial from the replacement on
+fn replacing_a_held_call_after_a_headline_counts_the_hidden_call_against_the_target() {
+    // replaced unrevealed, the held Short can never be `prev`: the stale `prev` (Long) is cleared,
+    // the headline stays pending, and the next Short is charged as a flip. Revealed first, the held
+    // Short would have made it no trial (`a_held_call_revealed_before_the_next_commit_...`).
     let (mut c, ska, _, tee, d) = fool_setup();
     let (ix, _, next) = held_then_next(&mut c, &ska, &tee, d);
     commit_at(&mut c, &ska, &next, &[3; 32], NOW + 3);
     let s = chaos_at(&c, d, ix);
     assert_eq!(
         (s.outcome, s.prev, s.next, s.decided_by),
-        (ChaosOutcome::NoTrial, None, None, None),
+        (ChaosOutcome::Pending, None, None, None),
         "the stale prev (Long) is cleared: the real one is unknowable"
     );
     reveal_a(&mut c, &ska, &tee, &next, NOW + 3);
     let s = chaos_at(&c, d, ix);
     assert_eq!(
-        (s.outcome, s.next),
-        (ChaosOutcome::NoTrial, None),
-        "a voided headline is never decided"
+        (s.outcome, s.prev, s.next, s.decided_by),
+        (ChaosOutcome::Flipped, None, Some(Side::Short), Some(U64(3))),
+        "the hidden call counts against the target"
     );
-    resolve_at_close(&mut c, d, UP);
+    resolve_at_close(&mut c, d, UP); // Short A loses to B, which never decided
     let s = chaos_at(&c, d, ix);
-    assert_eq!(s.payout.0, s.stake.0 - s.stake.0 * 500 / 10_000);
+    assert!(
+        s.payout.0 > s.stake.0 - s.stake.0 * 500 / 10_000,
+        "the loser pays the flip's share"
+    );
 }
 
 // ---------------------------------------------------------------- audit fixes (deploy 17)
@@ -5137,8 +5141,9 @@ fn a_held_headline_at_the_winner_earns_shield() {
 }
 
 /// M3: one cheap injection no longer forces a target holding a commitment to reveal it before it
-/// may change its call. A runner that lost the salt simply commits again: the headline becomes no
-/// trial and the new call, revealed, scores with no forfeit.
+/// may change its call. A runner that lost the salt simply commits again: the headline stays
+/// pending with its `prev` hidden, and the new call, revealed, decides it (a flip, since it takes
+/// the lie's side) and scores with no forfeit.
 #[test]
 fn one_injection_cannot_force_an_early_reveal() {
     let (mut c, ska, _, tee, d) = fool_setup();
@@ -5161,8 +5166,9 @@ fn one_injection_cannot_force_an_early_reveal() {
     let msg = r.map(|_| "ok".to_string()).unwrap_or_else(panic_msg);
     println!("replace commitment after injection: {msg}");
     assert_eq!(msg, "ok");
-    assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::NoTrial);
+    assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Pending);
     reveal_a(&mut c, &ska, &tee, &c2, NOW + 4 * SEC);
+    assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Flipped);
     resolve_at_close(&mut c, d, UP);
     assert_eq!(c.get_no_reveal(U64(d)), (false, false), "no forfeit");
 }
@@ -5182,6 +5188,172 @@ fn a_replacement_still_decides_a_headline_planted_before_the_held_call() {
         (s.prev, s.next, s.outcome),
         (Some(Side::Long), Some(Side::Short), ChaosOutcome::Flipped)
     );
+}
+
+const DOWN: u64 = 364_170_000; // -0.5 %
+
+fn other(s: Side) -> Side {
+    match s {
+        Side::Long => Side::Short,
+        Side::Short => Side::Long,
+    }
+}
+
+/// One lie at A, played by a runner that reveals its held call first (`dodge` false) or replaces
+/// it unrevealed (`dodge` true). A reveals `p` (or nothing), commits `h` and holds it, the lie
+/// `lie` lands, then A's model answers `n`, which A commits and reveals with its enclave proof. B
+/// takes the other side of `n`; the price moves `up` or down. Returns the record after the finish,
+/// A's bond and shield, and what the injector paid. Runs on its own thread: a fresh mocked chain.
+fn one_lie(
+    p: Option<Side>,
+    h: Side,
+    lie: ChaosKind,
+    n: Side,
+    up: bool,
+    dodge: bool,
+) -> (Chaos, u128, u32, u128) {
+    std::thread::spawn(move || one_lie_here(p, h, lie, n, up, dodge))
+        .join()
+        .unwrap()
+}
+
+fn one_lie_here(
+    p: Option<Side>,
+    h: Side,
+    lie: ChaosKind,
+    n: Side,
+    up: bool,
+    dodge: bool,
+) -> (Chaos, u128, u32, u128) {
+    let (mut c, ska, skb, tee, d) = fool_setup();
+    decide_b(&mut c, &skb, d, other(n), 1, NOW);
+    if let Some(p) = p {
+        decide_a(&mut c, &ska, &tee, d, p, 1, NOW, NOW);
+    }
+    let req: [u8; 32] = key(1).1.try_into().unwrap();
+    let mut held = intent(&key(1).1, d, h, 5_000, 2);
+    held.proof_hash = Base64VecU8(proof_hash(&req, &[2; 32]));
+    commit_at(&mut c, &ska, &held, &[2; 32], NOW + 1);
+    let deposit = c.chaos_fee(U64(d)).0;
+    let ix = plant(&mut c, d, 1, lie, NOW + 2);
+    if !dodge {
+        reveal_a(&mut c, &ska, &tee, &held, NOW + 3);
+    }
+    let mut next = intent(&key(1).1, d, n, 5_000, 3);
+    next.proof_hash = Base64VecU8(proof_hash(&req, &[3; 32]));
+    commit_at(&mut c, &ska, &next, &[3; 32], NOW + 4);
+    reveal_a(&mut c, &ska, &tee, &next, NOW + 5);
+    resolve_at_close(&mut c, d, if up { UP } else { DOWN });
+    let shield = c.get_agent(Base64VecU8(key(1).1)).unwrap().shield;
+    (chaos_at(&c, d, ix), bond(&c, 1), shield, deposit)
+}
+
+/// M3 re-audit: A revealed Long and holds Long when "go Short" lands; its model is fooled into
+/// Short and A loses. Revealing the held call first makes it a flip and A pays the injector a share.
+/// Replacing it unrevealed must not dodge that: the hidden call counts against A, so the fooled
+/// call is a flip all the same.
+#[test]
+fn dodging_a_fooled_call_by_replacing_the_held_one_still_flips() {
+    let short = ChaosKind::Short;
+    let run = |dodge| {
+        one_lie(
+            Some(Side::Long),
+            Side::Long,
+            short,
+            Side::Short,
+            true,
+            dodge,
+        )
+    };
+    let (honest, bond_honest, _, dep) = run(false);
+    let (dodged, bond_dodged, _, _) = run(true);
+    for (name, r, b) in [
+        ("reveal", &honest, bond_honest),
+        ("dodge", &dodged, bond_dodged),
+    ] {
+        let back = r.stake.0 - r.stake.0 * 500 / 10_000;
+        println!(
+            "{name}: {:?} prev={:?} next={:?} injector_net={:.5} share_paid_by_target={:.5} \
+             target_bond={:.5} NEAR",
+            r.outcome,
+            r.prev,
+            r.next,
+            (r.payout.0 as f64 - dep as f64) / 1e24,
+            r.payout.0.saturating_sub(back) as f64 / 1e24,
+            b as f64 / 1e24
+        );
+    }
+    assert_eq!(honest.outcome, ChaosOutcome::Flipped);
+    assert_eq!(
+        (dodged.outcome, dodged.prev, dodged.next),
+        (ChaosOutcome::Flipped, None, Some(Side::Short)),
+        "the hidden call counts against the target: the record keeps prev unknown"
+    );
+    assert!(
+        dodged.payout.0 >= honest.payout.0,
+        "the dodge saves no share"
+    );
+}
+
+/// M3 re-audit: A holds the lie's side when it lands and then turns away from it. Revealed first,
+/// the held call makes it no trial. A dodge must not turn it into a hold (a resistance reward and
+/// shield for a lie A was already on).
+#[test]
+fn dodging_a_held_lie_side_call_never_earns_a_hold() {
+    let run = |dodge| {
+        one_lie(
+            Some(Side::Long),
+            Side::Short,
+            ChaosKind::Short,
+            Side::Long,
+            true,
+            dodge,
+        )
+    };
+    let (honest, _, shield_honest, _) = run(false);
+    let (dodged, _, shield_dodged, _) = run(true);
+    assert_eq!(honest.outcome, ChaosOutcome::NoTrial);
+    assert_eq!((dodged.outcome, dodged.prev), (ChaosOutcome::NoTrial, None));
+    assert_eq!((shield_honest, shield_dodged), (0, 0));
+}
+
+/// M3 re-audit, over every small case: the target's revealed call before the lie (none, Long,
+/// Short), its held call, the lie's side, its next call and the price move. Replacing the held call
+/// unrevealed never ends better for the target than revealing it first: never a better outcome
+/// (Flipped < NoTrial < Held for the target), never less owed to the injector (what the target
+/// keeps from the stake is `stake - fee - payout`, so a smaller payout is the target's gain), never
+/// more shield, and never a hold.
+#[test]
+fn dodging_never_beats_revealing_over_small_ranges() {
+    use ChaosOutcome::*;
+    let rank = |o: ChaosOutcome| match o {
+        Flipped => 0,
+        NoTrial | Expired => 1,
+        Held => 2,
+        Pending => panic!("pending after the finish"),
+    };
+    let (mut cases, mut worse) = (0, 0);
+    for p in [None, Some(Side::Long), Some(Side::Short)] {
+        for h in [Side::Long, Side::Short] {
+            for lie in [ChaosKind::Long, ChaosKind::Short] {
+                for n in [Side::Long, Side::Short] {
+                    for up in [false, true] {
+                        let (r, _, sr, _) = one_lie(p, h, lie, n, up, false);
+                        let (x, _, sx, _) = one_lie(p, h, lie, n, up, true);
+                        let at = format!("p={p:?} h={h:?} lie={lie:?} n={n:?} up={up}");
+                        assert!(rank(x.outcome) <= rank(r.outcome), "{at}: {x:?} vs {r:?}");
+                        assert!(x.payout.0 >= r.payout.0, "{at}: injector owed less");
+                        assert!(sx <= sr, "{at}: more shield");
+                        assert_ne!(x.outcome, Held, "{at}: a dodge held");
+                        cases += 1;
+                        worse += (rank(x.outcome) < rank(r.outcome)) as u32;
+                    }
+                }
+            }
+        }
+    }
+    println!("{cases} cases; the dodge ended worse for the target in {worse}, never better");
+    assert_eq!(cases, 48);
 }
 
 /// L2: `claim_chaos` marks the records claimed before its transfer. When the transfer fails (the

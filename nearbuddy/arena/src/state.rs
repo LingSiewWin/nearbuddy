@@ -163,7 +163,9 @@ pub struct Contract {
     /// Duel id to a bitmask over `Duel.injections` (at most 32): bit i set when injection i was paid
     /// by the owner of either agent. Such chaos earns no shield and its deposit goes to `owner_fees`,
     /// not the pool, so an owner cannot buy shield or recycle chaos deposits through its own duel.
-    /// Duels opened before deploy 15 have no entry.
+    /// Bit 32 + i (deploy 17.1): injection i's target replaced, unrevealed, the commitment it held
+    /// at the injection, so its `prev` is hidden (see `hide_prev_since`). Removed when the duel
+    /// finishes or is voided. Duels opened before deploy 15 have no entry.
     pub(crate) self_chaos: LookupMap<u64, u64>,
     /// `deposit` is refused once the caller's vault would exceed this (deploy 16), so one account
     /// cannot park the whole of `max_vault_total` and block every other follower. Vaults already

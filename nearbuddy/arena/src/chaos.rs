@@ -19,6 +19,9 @@ use crate::{
 pub const MAX_HEADLINE: usize = 280;
 /// Gas for `on_claim_chaos`: at worst it rewrites one duel's 32 records.
 const CLAIM_CALLBACK_GAS: Gas = Gas::from_tgas(10);
+/// Bit `HID_PREV + i` of `self_chaos[duel]`, above the 32 self-paid bits: injection `i`'s target
+/// replaced, unrevealed, the commitment it held at the injection (see `hide_prev_since`).
+const HID_PREV: u32 = 32;
 
 /// Invisible format characters (zero-width, bidi overrides and isolates, word joiners, BOM): a
 /// headline holding them reads differently to the model than on a page.
@@ -71,9 +74,18 @@ impl ChaosConfig {
 }
 
 impl Chaos {
-    /// The outcome a counting decision on `next` gives this injection.
-    fn judge(&self, next: Side) -> ChaosOutcome {
+    /// The outcome a counting decision on `next` gives this injection. `hidden`: the target hid
+    /// the call it held at the injection (see `hide_prev_since`), which then counts against it:
+    /// `Flipped` when `next` takes the lie's side, else `NoTrial`, never `Held`.
+    fn judge(&self, next: Side, hidden: bool) -> ChaosOutcome {
         match (self.kind.direction(), self.prev) {
+            (Some(d), _) if hidden => {
+                if next == d {
+                    ChaosOutcome::Flipped
+                } else {
+                    ChaosOutcome::NoTrial
+                }
+            }
             (Some(d), Some(p)) if p != d => {
                 if next == d {
                     ChaosOutcome::Flipped
@@ -187,30 +199,36 @@ impl Contract {
         })
     }
 
-    /// Agent `pk` replaces, unrevealed, the commitment it made at `t` in duel `id`. That hidden
-    /// decision was the last one at or before every headline planted at `pk` from `t` on, so their
-    /// `prev` can never be known: each one still pending becomes `NoTrial` with no `prev` (settled
-    /// as a refund less the fee). Headlines planted before `t` stay pending: the replacement decides them as the
-    /// replaced call would have.
-    pub(crate) fn void_since(&mut self, id: u64, pk: &[u8], t: u64) {
+    /// Agent `pk` replaces, unrevealed, the commitment it made at `t` in duel `id`. That hidden call
+    /// was the last decision at or before every headline planted at `pk` from `t` on, so their
+    /// `prev` is unknown for good (`None`). Each one still pending stays pending, and the hidden call
+    /// counts against the target: the next counting decision makes it `Flipped` when it takes the
+    /// lie's side and `NoTrial` otherwise, never `Held` (`Chaos::judge`). Revealing the held call
+    /// first is judged no worse for the target, whatever that call was (a flip needs the next call
+    /// on the lie's side, a hold needs a revealed call off it), so replacing it never pays.
+    /// Headlines planted before `t` stay as they are: the replacement decides them as the replaced
+    /// call would have.
+    pub(crate) fn hide_prev_since(&mut self, id: u64, pk: &[u8], t: u64) {
         let Some(list) = self.chaos.get_mut(&id) else {
             return;
         };
+        let mut bits = 0u64;
         for (index, c) in list.iter_mut().enumerate() {
             if c.target.0 == pk && c.outcome == ChaosOutcome::Pending && c.at.0 >= t {
-                c.outcome = ChaosOutcome::NoTrial;
                 c.prev = None;
-                env::log_str(&format!(
-                    r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"chaos_outcome","data":{{"duel_id":{id},"index":{index},"outcome":"NoTrial","prev":null,"next":null,"nonce":null}}}}"#
-                ));
+                bits |= 1 << (HID_PREV + index as u32);
             }
+        }
+        if bits != 0 {
+            let old = self.self_chaos.get(&id).copied().unwrap_or(0);
+            self.self_chaos.insert(id, old | bits);
         }
     }
 
     /// An accepted decision of agent `pk` in duel `id`, made at `decided_at` (its commit time when
-    /// revealed, else now). Pending injections at `pk` made at or after it take its side as `prev`;
-    /// a later decision decides them only when `counts` (revealed from a commitment, with a verified
-    /// provider-TEE proof).
+    /// revealed, else now). Pending injections at `pk` made at or after it take its side as `prev`
+    /// (unless their `prev` was hidden); a later decision decides them only when `counts` (revealed
+    /// from a commitment, with a verified provider-TEE proof).
     pub(crate) fn observe_decision(
         &mut self,
         id: u64,
@@ -223,12 +241,16 @@ impl Contract {
         let Some(list) = self.chaos.get_mut(&id) else {
             return;
         };
+        let hidden = self.self_chaos.get(&id).map_or(0, |b| b >> HID_PREV);
         for (index, c) in list.iter_mut().enumerate() {
             if c.target.0 != pk || c.outcome != ChaosOutcome::Pending {
                 continue;
             }
+            let hid = hidden & (1 << index) != 0;
             if decided_at <= c.at.0 {
-                c.prev = Some(side);
+                if !hid {
+                    c.prev = Some(side);
+                }
                 continue;
             }
             if !counts {
@@ -236,7 +258,7 @@ impl Contract {
             }
             c.next = Some(side);
             c.decided_by = Some(U64(nonce));
-            c.outcome = c.judge(side);
+            c.outcome = c.judge(side, hid);
             let prev = c.prev.map_or("null".into(), |p| format!(r#""{p:?}""#));
             env::log_str(&format!(
                 r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"chaos_outcome","data":{{"duel_id":{id},"index":{index},"outcome":"{:?}","prev":{prev},"next":"{side:?}","nonce":{nonce}}}}}"#,
