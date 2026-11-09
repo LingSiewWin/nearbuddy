@@ -98,6 +98,8 @@ jobs:
     env:
       # fastnear tolerates the first-scan burst (SCAN get_duel views) better than drpc
       NEAR_RPC: https://test.rpc.fastnear.com
+      # the default fallback is fastnear too, which turns failover off (web/app/api/near.ts): one 429 failed a view
+      NEAR_RPC_FALLBACK: https://near-testnet.drpc.org
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
