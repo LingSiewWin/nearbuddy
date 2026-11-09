@@ -14,8 +14,9 @@
 //   - internet for the runner's Coinbase spot price and the solver's dry 1Click quote, unless E2E_OFFLINE=1: then
 //     a local stand-in serves both (NEARBUDDY_COINBASE_URL for the runner, ONECLICK_URL for the solver) and the
 //     follower check requires a quote. CI (.github/workflows/e2e-nightly.yml) runs offline; local runs stay live.
-// Not in the per-push CI (sandbox download, ~4 minutes): nightly and on demand. Everything it writes goes to a temp dir printed at the start; the
-// runner's dataset goes there through NEARBUDDY_DATA.
+// Not in the per-push CI (sandbox download, ~5 minutes): nightly and on demand. Everything it writes goes to a temp dir printed at the start; the
+// runner's dataset goes there through NEARBUDDY_DATA. Every scenario runs with withdraw_delay_s = 60 (the minimum), so
+// scenario 3b's binds_until passes within the run.
 //
 // Scenarios:
 //   1. commit-reveal duel: owner turns commit-reveal on, the runner plays one duel with two stub agents, the oracle
@@ -30,6 +31,12 @@
 //      POST /settle_follow: the solver credits the output to the arena on the intents stub (stub_credit) and settles
 //      against that balance. Checks the dry-quote refusal, the holding credited, the replay refusal and
 //      withdraw_token of the holding to the follower's stub balance.
+//   3b. tighten after front (deploy 17): two intents of a fresh enclave agent accepted (the solver quotes them),
+//      then the follower lowers per_tx_cap below the fill. The stub swap lands inside /settle_follow after the
+//      update; apply_fill judges each fill by its intent's accepted_at. get_follow_prev keeps the old terms until
+//      binds_until; the first fill settles by them, a second tightening inside the window is "update too soon", a
+//      third intent accepted after the update is held to the new cap ("over cap"), the second fill, settled after
+//      binds_until, is refused "mandate updated", and a tightening after binds_until is accepted and moves the window.
 //   0. duplicate broadcast (runs first, own account): one signed transfer sent twice with identical bytes, as
 //      sendFailover does when an endpoint times out after the broadcast, while the first copy is in flight and again
 //      once it is final. The node must answer with the transaction's own outcome, never InvalidNonce (which
@@ -495,6 +502,9 @@ async function main() {
     1n,
   );
   await call(owner, "set_commit_reveal", { enabled: true, no_reveal_bps: 1000 }, 1n);
+  // the shortest grace set_withdraw_delay allows, so scenario 3b's binds_until passes within the run
+  const WITHDRAW_DELAY_S = 60n;
+  await call(owner, "set_withdraw_delay", { withdraw_delay_s: Number(WITHDRAW_DELAY_S) }, 1n);
   const enclave = KeyPairEd25519.fromRandom();
   const enclavePk = b64.enc(enclave.getPublicKey().data);
   await call(owner, "add_tee_signer", { signer: enclavePk, label: "e2e enclave stand-in" }, 1n);
@@ -1020,6 +1030,178 @@ async function main() {
       "withdraw_token moves the holding to the follower's intents balance",
       out.value === true && onStub === holding && left === 0n,
       `returned ${out.value}, stub balance ${onStub}, holding left ${left}, tx ${out.hash}`,
+    );
+  }
+
+  // ---- scenario 3b: a tightening update after the solver fronted (deploy 17) ----------------------
+  {
+    const sc = "3b tighten front";
+    log(`${sc}: intents accepted before and after the follower lowers per_tx_cap below the fill`);
+    const MODEL = "e2e/enclave-model";
+    const [t3, t4] = [KeyPairEd25519.fromRandom(), KeyPairEd25519.fromRandom()];
+    const pk = (k: KeyPairEd25519) => b64.enc(k.getPublicKey().data);
+    const regMsg = new Uint8Array(
+      Buffer.from(await view<string>("register_message", { owner: owner.accountId }), "base64"),
+    );
+    for (const k of [t3, t4])
+      await post("/register", {
+        agent_pk: pk(k),
+        model_id: MODEL,
+        bond: (500n * MILLI).toString(),
+        tee: true,
+        register_sig: b64.enc(k.sign(regMsg).signature),
+      });
+    const { USDC_NEAR } = await import("../packages/solver/src/oneclick.ts");
+    // one fill: 0.1 NEAR sold at the spot price, under the old cap (debit 0.1005 NEAR) and over the new one
+    const amountIn = 100n * MILLI;
+    const amountOut = usdcForYocto(amountIn);
+    const debit = amountIn + (amountIn * FEE_BPS) / 10_000n;
+    const oldCap = 200n * MILLI;
+    const newCap = 50n * MILLI;
+    await call(follower, "deposit", {}, NEAR);
+    const terms = {
+      allowance: NEAR.toString(),
+      spent: "0",
+      per_tx_cap: oldCap.toString(),
+      allowed_tokens: [],
+      expires_at: ((await chainNow()) + 3600n * S).toString(),
+      revoked: false,
+      min_out_per_near: ((((amountOut * NEAR) / amountIn) * 95n) / 100n).toString(),
+    };
+    await call(follower, "follow", { agent_pk: pk(t3), mandate: terms });
+    // three commit/reveal rounds (one after the update) must land before close_at - intent lock; never resolved
+    const closeAt = BigInt(Date.now()) * 1_000_000n + 120n * S;
+    const duel = await post("/duel", { a: pk(t3), b: pk(t4), symbol: "wrap.near", close_at: closeAt.toString() });
+    const duelId = String(duel.duel_id);
+    await until("open price", async () => (await view("get_duel", { duel_id: duelId })).open_price, 30_000);
+    // one intent committed and revealed with its own TeeProof through the solver
+    const commitReveal = async (nonce: string) => {
+      const req = createHash("sha256").update(`e2e 3b request ${nonce}`).digest();
+      const res = createHash("sha256").update(`e2e 3b response ${nonce}`).digest();
+      const intent: Intent = {
+        agent_pk: pk(t3),
+        duel_id: duelId,
+        side: "Short",
+        size_bps: 5000,
+        nonce,
+        expires_at: (closeAt + 60n * S).toString(),
+        proof_hash: proofHash(req, res),
+      };
+      const salt = randomBytes(32);
+      const c = commitment(intent, salt);
+      await post("/commit", {
+        duel_id: duelId,
+        agent_pk: pk(t3),
+        commitment: b64.enc(c),
+        sig: b64.enc(t3.sign(commitMessage(ARENA, duelId, c)).signature),
+      });
+      await post("/reveal", {
+        signed: signIntent(t3, intent),
+        salt: b64.enc(salt),
+        tee: {
+          kind: 2,
+          request_hash: b64.enc(req),
+          response_hash: b64.enc(res),
+          signer: enclavePk,
+          signature: b64.enc(enclave.sign(teeText(2, MODEL, req, res)).signature),
+        },
+      });
+      return BigInt((await view<string | null>("intent_accepted_at", { agent_pk: pk(t3), nonce })) ?? "0");
+    };
+    await commitReveal("1");
+    const acceptedAt = await commitReveal("2");
+    // apply_fill judges a fill by its intent's accepted_at, not by when the output landed, so each settle goes
+    // through the solver as in scenario 3: an empty swap_tx makes it stub_credit amount_out, then call settle_follow
+    const fill = (nonce: string) => ({
+      intent_nonce: nonce,
+      token: USDC_NEAR,
+      amount_in: amountIn.toString(),
+      amount_out: amountOut.toString(),
+      swap_tx: "",
+    });
+    const settle = (nonce: string) =>
+      post("/settle_follow", { agent_pk: pk(t3), follower: follower.accountId, fills: [fill(nonce)] }).catch((e) =>
+        String(e),
+      );
+    const spentNow = async () =>
+      BigInt((await view("get_follow", { agent_pk: pk(t3), follower: follower.accountId }))?.spent ?? "0");
+    // the attack: the follower tightens after intents 1 and 2 were accepted (and quoted), before their fills settle
+    await call(follower, "follow", { agent_pk: pk(t3), mandate: { ...terms, per_tx_cap: newCap.toString() } });
+    const prev = await view("get_follow_prev", { agent_pk: pk(t3), follower: follower.accountId });
+    const cur = await view("get_follow", { agent_pk: pk(t3), follower: follower.accountId });
+    const delayNs = BigInt((await view("get_config")).withdraw_delay_s) * S;
+    const updatedAt = BigInt(prev?.updated_at ?? "0");
+    const bindsUntil = BigInt(prev?.binds_until ?? "0");
+    check(
+      sc,
+      "get_follow_prev keeps the old terms, binds_until = updated_at + withdraw_delay",
+      prev?.terms?.per_tx_cap === oldCap.toString() &&
+        cur?.per_tx_cap === newCap.toString() &&
+        acceptedAt > 0n &&
+        updatedAt > acceptedAt &&
+        delayNs === WITHDRAW_DELAY_S * S &&
+        bindsUntil === updatedAt + delayNs,
+      `prev cap ${prev?.terms?.per_tx_cap}, current cap ${cur?.per_tx_cap}, accepted ${acceptedAt} < updated ${updatedAt}, ` +
+        `binds_until ${bindsUntil} (updated + ${delayNs / S} s)`,
+    );
+    // inside the window first: s1 and the second tightening must land before binds_until
+    const spent0 = await spentNow();
+    const s1 = await settle("1");
+    const spent1 = await spentNow();
+    check(
+      sc,
+      "a fill fronted before the update settles by the old terms",
+      typeof s1 !== "string" && s1.report?.settled === 1 && spent1 - spent0 === debit,
+      typeof s1 === "string"
+        ? s1.slice(0, 160)
+        : `report ${JSON.stringify(s1.report)}, spent ${spent0} -> ${spent1} (debit ${debit} > new cap ${newCap}), tx ${s1.tx}`,
+    );
+    const again = await call(follower, "follow", {
+      agent_pk: pk(t3),
+      mandate: { ...terms, per_tx_cap: (newCap / 2n).toString() },
+    }).catch((e) => String(e));
+    check(
+      sc,
+      "a second tightening inside the window panics",
+      typeof again === "string" && again.includes("update too soon"),
+      (typeof again === "string" ? again : `accepted, tx ${again.hash}`).slice(0, 160),
+    );
+    // an intent accepted after the update is held to the new terms, inside the window or after it
+    const accepted3 = await commitReveal("3");
+    const s3 = await settle("3");
+    const spent3 = await spentNow();
+    check(
+      sc,
+      "a fill for an intent accepted after the update is held to the new terms",
+      typeof s3 === "string" && s3.includes("over cap") && accepted3 > updatedAt && spent3 === spent1,
+      `${(typeof s3 === "string" ? s3 : `settled, tx ${s3.tx}`).slice(0, 120)}; accepted ${accepted3} > updated ` +
+        `${updatedAt}; spent ${spent1} -> ${spent3}`,
+    );
+    log(`${sc}: waiting for binds_until, then settling the other fronted fill`);
+    await until("chain clock past binds_until", async () => (await chainNow()) > bindsUntil + S, 120_000, 1000);
+    const s2 = await settle("2");
+    const spent2 = await spentNow();
+    check(
+      sc,
+      "a fill for an earlier intent settled after binds_until is refused",
+      typeof s2 === "string" && s2.includes("mandate updated") && spent2 === spent3,
+      `${(typeof s2 === "string" ? s2 : `settled, tx ${s2.tx}`).slice(0, 120)}; spent ${spent3} -> ${spent2}`,
+    );
+    // the window has closed: a further tightening is accepted and opens a new one from the current terms
+    const later = await call(follower, "follow", {
+      agent_pk: pk(t3),
+      mandate: { ...terms, per_tx_cap: (newCap / 2n).toString() },
+    }).catch((e) => String(e));
+    const prev2 = await view("get_follow_prev", { agent_pk: pk(t3), follower: follower.accountId });
+    check(
+      sc,
+      "a tightening after binds_until is accepted and moves the window",
+      typeof later !== "string" &&
+        prev2?.terms?.per_tx_cap === newCap.toString() &&
+        BigInt(prev2?.updated_at ?? "0") > bindsUntil,
+      typeof later === "string"
+        ? later.slice(0, 160)
+        : `prev cap ${prev2?.terms?.per_tx_cap}, updated_at ${prev2?.updated_at} > old binds_until ${bindsUntil}, tx ${later.hash}`,
     );
   }
 
