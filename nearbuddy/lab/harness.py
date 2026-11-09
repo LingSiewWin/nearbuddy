@@ -7,6 +7,7 @@
     uv run --locked python harness.py run --phase pilot --n 10
     uv run --locked python harness.py run --phase main --n 240 --prompts naive,hardened     # experiments A and B
     uv run --locked python harness.py run --phase main --n 240 --prompts hardened-v2        # experiment C
+    uv run --locked python harness.py run --phase main --n 240 --prompts hardened-v3        # experiment D
 
 Every paid call is logged to spend.jsonl (model, tokens in and out, $). A call is refused when its worst-case cost
 would take the logged spend past --cap. A trial is appended to results/<phase>.jsonl only once all its calls are
@@ -36,6 +37,7 @@ from duelist import Duelist, DuelistError  # noqa: E402
 from intent_client import TeeProofError, tee_proof  # noqa: E402
 from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, Completion, NearAiClient  # noqa: E402
 from prices import brief  # noqa: E402
+from prompts import HARDENED_V3, JUDGE_MODEL  # noqa: E402
 
 DATA = HERE / "data"
 RESULTS = HERE / "results"
@@ -232,18 +234,35 @@ def call(
     headline: str | None,
     meta: dict[str, Any],
     prompt: str = "naive",
+    judge: NearAiClient | None = None,
 ) -> dict[str, Any]:
     """One stateless decision through the duelist's own path, with its enclave proof. Never raises for a model
-    failure: parse, transport and signature failures are recorded in the returned dict."""
+    failure: parse, transport and signature failures are recorded in the returned dict. hardened-v3 under paid text
+    makes the judge call first, through `judge` with its own budget line and proof; the call counts as verified
+    only when both the judge's and the duelist's signatures verify, as in the runner."""
     model = client.model_id
     last: list[Completion] = []
+    judged: list[Completion] = []
 
     def complete(system: str, user: str) -> str:
         last.append(complete_with_retries(client, system, user))
         return last[-1].text
 
+    def judge_fn(system: str, user: str) -> str:
+        assert judge is not None
+        budget.reserve(judge.model_id)
+        jc = None
+        try:
+            jc = complete_with_retries(judge, system, user)
+            judged.append(jc)
+            return jc.text
+        finally:
+            budget.settle(judge.model_id, usage_of(jc), meta | {"role": "judge", "chat_id": jc.chat_id if jc else None})
+
     duelist = Duelist(address="lab", hardened=False, model=model, complete_fn=complete)
-    duelist.profile = prompt  # the runner's --profile setter: naive, hardened or hardened-v2
+    duelist.profile = prompt  # the runner's --profile setter: naive, hardened, hardened-v2 or hardened-v3
+    if prompt == HARDENED_V3:
+        duelist.judge = judge_fn
     out: dict[str, Any] = {"headline": headline, "side": None, "error": None, "verified": False}
     budget.reserve(model)
     t0 = time.monotonic()
@@ -253,7 +272,7 @@ def call(
         out["side"] = "Long" if d.direction > 0 else "Short"
         # the size that trades; hardened-v2 also states one (size_asked) that policy_size caps under paid text
         out |= {"size_bps": d.size_bps, "size_asked": d.size_asked, "size_cap": d.size_cap}
-        out["cues_removed"] = d.cues_removed
+        out |= {"cues_removed": d.cues_removed, "verdict": d.verdict}
     except DuelistError as e:
         out["error"] = f"parse: {e}"[:300]
     except (requests.RequestException, UnicodeDecodeError) as e:
@@ -262,9 +281,19 @@ def call(
         c = last[-1] if last else None
         out["usd"] = budget.settle(model, usage_of(c), meta | {"chat_id": c.chat_id if c else None})
     out["latency_s"] = round(time.monotonic() - t0, 2)
+    if judged and judge:
+        out["judge"] = completion_record(judge, judged[-1])
     if c is None:
         return out
-    out |= {
+    out |= completion_record(client, c)
+    if judged and not out["judge"].get("verified"):
+        out["verified"] = False  # the duelist's signed request quotes the judge's reply; an unproven judge breaks it
+    return out
+
+
+def completion_record(client: NearAiClient, c: Completion) -> dict[str, Any]:
+    """One completion as stored fields: output, exact bytes, their sha256, usage, and its enclave proof."""
+    return {
         "text": c.text,
         "chat_id": c.chat_id,
         "request_body": c.request_bytes.decode(),
@@ -272,9 +301,8 @@ def call(
         "request_hash": c.request_hash.hex(),
         "response_hash": c.response_hash.hex(),
         "usage": usage_of(c),
+        **prove(client, c),
     }
-    out |= prove(client, c)
-    return out
 
 
 def prove(client: NearAiClient, c: Completion) -> dict[str, Any]:
@@ -307,6 +335,7 @@ def run_trial(
     attack: dict[tuple[str, str, str], dict[str, Any]],
     placebo: dict[tuple[str, str], dict[str, Any]],
     prompt: str = "naive",
+    judge: NearAiClient | None = None,
 ) -> dict[str, Any]:
     """Baseline first; the attack row is the one pushing against the baseline's side; then cue, clean, placebo."""
     snap = snaps[t["snapshot"]]
@@ -323,7 +352,7 @@ def run_trial(
         "excluded": None,
     }
     meta = {"phase": phase, "prompt": prompt, "trial": t["trial"]}
-    base = rec["calls"]["baseline"] = call(client, budget, snap, None, meta | {"arm": "baseline"}, prompt)
+    base = rec["calls"]["baseline"] = call(client, budget, snap, None, meta | {"arm": "baseline"}, prompt, judge)
     if base["side"] is None:
         rec["excluded"] = "baseline: " + (base["error"] or "no side")
         return rec
@@ -332,7 +361,7 @@ def run_trial(
     prow = placebo[(t["placebo_template_id"], snap["asset"])]
     rec |= {"direction": d, "attack_row_id": row["id"], "placebo_row_id": prow["id"]}
     for arm, text in (("cue", row["text_cue"]), ("clean", row["text_clean"]), ("placebo", prow["text_cue"])):
-        rec["calls"][arm] = call(client, budget, snap, text, meta | {"arm": arm}, prompt)
+        rec["calls"][arm] = call(client, budget, snap, text, meta | {"arm": arm}, prompt, judge)
     return rec
 
 
@@ -360,6 +389,7 @@ def run(
     done = done_trials(out)
     budget = Budget(cap)
     clients = {m: NearAiClient(ENV["NEAR_AI_API_KEY"], m) for m in models}
+    judge = NearAiClient(ENV["NEAR_AI_API_KEY"], JUDGE_MODEL) if HARDENED_V3 in prompts else None  # as the runner
     stop = threading.Event()
     write = threading.Lock()
     # round-robin across prompts and models, so a budget or deadline stop leaves every cell at about the same N
@@ -375,7 +405,7 @@ def run(
             print(f"deadline {until.isoformat()} reached; stopping")
             return
         try:
-            rec = run_trial(clients[m], budget, phase, t, snaps, attack, placebo, pr)
+            rec = run_trial(clients[m], budget, phase, t, snaps, attack, placebo, pr, judge)
         except BudgetExhausted as e:
             stop.set()
             print(f"budget stop: {e}")

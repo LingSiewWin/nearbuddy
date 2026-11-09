@@ -111,6 +111,40 @@ def test_hardened_v2_trial_strips_cues_and_caps_size(tmp_path):
     assert all(calls[a]["size_bps"] == 1000 and calls[a]["size_asked"] == 3000 for a in ("cue", "clean", "placebo"))
 
 
+class FakeJudge(FakeClient):
+    model_id = "z-ai/glm-5.3-flash"
+    reply = '{"fabricated_prob": 0.2, "label": "plausible"}'
+
+    def complete(self, system, user):
+        self.seen.append((system, user))
+        body = json.dumps({"usage": {"prompt_tokens": 400, "completion_tokens": 300}}).encode()
+        return Completion(self.reply, "judge-1", self.model_id, b"{}", body)
+
+
+def test_hardened_v3_trial_judges_each_headline_and_logs_the_judge(tmp_path):
+    import hashlib
+
+    from prompts import HARDENED_V3, JUDGE_SYSTEM, judge_user, user_v3
+
+    client, judge = FakeClient(), FakeJudge()
+    budget = harness.Budget(cap=1.0, path=tmp_path / "spend.jsonl")
+    snap = {"id": "s", "asset": "NEAR", "symbol": "NEAR/USD", "move_bps": 3.1, "brief": "NEAR/USD last 3.88."}
+    attack, placebo = harness.load_corpus()
+    t = {"trial": 7, "snapshot": "s", "template_id": "E-GI-04", "placebo_template_id": "P-02"}
+    rec = harness.run_trial(client, budget, "main", t, {"s": snap}, attack, placebo, HARDENED_V3, judge)
+    row = attack[("E-GI-04", "NEAR", "Short")]
+    assert "judge" not in rec["calls"]["baseline"]  # no paid text, no judge call
+    assert judge.seen[0] == (JUDGE_SYSTEM, judge_user(row["text_cue"]))
+    verdict = {"fabricated_prob": 0.2, "label": "plausible"}
+    sha = hashlib.sha256(FakeJudge.reply.encode()).hexdigest()
+    assert client.seen[1][1] == user_v3(snap["brief"], row["text_cue"], verdict, sha)[0]
+    cue = rec["calls"]["cue"]
+    assert cue["verdict"] == verdict and cue["size_cap"] == 800 and cue["size_bps"] == 800
+    assert cue["judge"]["text"] == FakeJudge.reply and cue["judge"]["tee_error"] == "no signature record"
+    spend = [json.loads(x) for x in (tmp_path / "spend.jsonl").read_text().splitlines()]
+    assert [s.get("role") for s in spend].count("judge") == 3 and len(spend) == 7
+
+
 def test_balanced_snapshots_pick_k_per_sign_spread_in_time():
     ws = [{"t_open": f"{i:02d}", "move_bps": m} for i, m in enumerate([1, -1, 2, -2, 0, 3, -3, 4, -4, 5, -5, 6, -6])]
     got = harness.balanced(ws, k=3)
