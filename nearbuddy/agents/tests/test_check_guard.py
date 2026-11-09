@@ -6,6 +6,7 @@ its parsed verdict is the block the duelist's signed prompt carries."""
 
 import hashlib
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,12 +14,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import export_dataset  # noqa: E402
+import runner  # noqa: E402
 from cue_guard import CUE_GUARD_VERSION, normalize  # noqa: E402
 from cue_guard import VERSIONS as CUE_GUARDS  # noqa: E402
 from export_dataset import _check_guard, check_row  # noqa: E402
 from intent_client import proof_hash  # noqa: E402
 from keys import pk_b64  # noqa: E402
-from prompts import HARDENED_V2, HARDENED_V3, UNTRUSTED_CAP_BPS, user_v2  # noqa: E402
+from prompts import HARDENED_V2, HARDENED_V3, JUDGE_MODEL, UNTRUSTED_CAP_BPS, user_v2  # noqa: E402
 from tests.test_arm_d import snippet_verify  # noqa: E402
 from tests.test_runner_profile import JudgeEnclave, agent, post, rows, v3_agent  # noqa: E402, F401
 
@@ -204,12 +207,17 @@ def test_a_row_the_runner_signed_under_v1_still_verifies(v2_row):
 
 
 # Rows the live run signed on NEAR AI Cloud on 2026-11-09 (6 hardened-v2 incl. one k = 3, 5 hardened-v3 with the
-# z-ai/glm-5.3-flash judge), written before guard.cue_guard existed: they must keep verifying as cue_guard v1.
-REAL = Path(__file__).resolve().parents[2] / "fixtures" / "guard-rows-v1.jsonl"
+# z-ai/glm-5.3-flash judge), written before guard.cue_guard existed: they must keep verifying as cue_guard v1. That run
+# passed the runner no attestation map, so each row's attestation_file was filled in afterwards: it cites a report the
+# runner fetched on 2026-11-10 (fixtures/attestations) that lists the same duelist and judge signers.
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
+REAL = FIXTURES / "guard-rows-v1.jsonl"
 
 
-def real_rows() -> list[dict]:
-    return [json.loads(line) for line in REAL.read_text().splitlines()]
+def real_rows(path: Path = REAL) -> list[dict]:
+    """The rows, with the attestation reports they cite copied to where check_row looks (tests/conftest.py)."""
+    shutil.copytree(FIXTURES / "attestations", export_dataset.ATTEST_DIR, dirs_exist_ok=True)
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 def test_the_live_rows_verify_as_cue_guard_v1():
@@ -428,6 +436,7 @@ def test_the_duelist_prompt_must_be_user_v3_with_the_judges_verdict(v3_row):
 
 def test_a_judge_call_on_another_prompt_or_reply_fails(v3_row):
     judge = JudgeEnclave()
+    v3_row["guard"]["judge"]["attestation_file"] = runner.save_attestation(judge)  # an attested judge, other bytes
     j = json.loads(v3_row["guard"]["judge"]["request_body"])["messages"]
     resign_judge(v3_row, judge, j[0]["content"], j[1]["content"] + " (and the brief)", "{}")
     assert check(v3_row)[1] == "guard judge: request is not the judge prompt on the injection"
@@ -435,3 +444,52 @@ def test_a_judge_call_on_another_prompt_or_reply_fails(v3_row):
     resign_judge(v3_row, judge, j[0]["content"], j[1]["content"], '{"fabricated_prob": 0.05, "label": "plausible"}')
     v3_row["guard"]["judge"]["verdict"] = {"fabricated_prob": 0.05, "label": "plausible"}
     assert check(v3_row)[1] == "guard: verdict block differs from the judge's signed output"
+
+
+def test_a_made_up_verdict_signed_by_a_key_no_attestation_lists_fails(v3_row):
+    """The forgery the attestation check stops: the operator signs the judge call with its own key. Bytes, reply,
+    verdict and the sha256 the duelist's signed request quotes are all unchanged, so nothing else can refuse it."""
+    j = v3_row["guard"]["judge"]
+    msgs = json.loads(j["request_body"])["messages"]
+    resign_judge(v3_row, JudgeEnclave(), msgs[0]["content"], msgs[1]["content"], j["text"])
+    assert check(v3_row) == (False, "guard judge attestation: signer not attested for this model")
+
+
+def _judge_report(r: dict) -> str:
+    return r["guard"]["judge"]["attestation_file"]
+
+
+@pytest.mark.parametrize(
+    ("tamper", "note"),
+    [
+        (lambda r: r["guard"]["judge"].update(attestation_file=None), "guard judge attestation: no attestation_file"),
+        (lambda r: r["guard"]["judge"].pop("attestation_file"), "guard judge attestation: no attestation_file"),
+        (lambda r: r["guard"]["judge"].update(attestation_file="z-ai_glm-5.3-flash-0.json"), "guard judge attestation"),
+        (
+            lambda r: r["guard"]["judge"].update(attestation_file=f"../attestations/{_judge_report(r)}"),
+            "guard judge attestation: no attestation_file",
+        ),
+        (
+            lambda r: r["guard"]["judge"].update(attestation_file=r["attestation_file"]),  # the duelist's report
+            "guard judge attestation: signer not attested for this model",
+        ),
+        (lambda r: r.update(attestation_file=None), "attestation: no attestation_file"),
+        (lambda r: r.update(attestation_file=_judge_report(r)), "attestation: signer not attested for this model"),
+    ],
+)
+def test_a_signer_the_cited_attestation_does_not_list_fails(tamper, note):
+    for r in (real_rows()[7],):  # a live judge row
+        tamper(r)
+        ok, why = check(r)
+        assert not ok and why.startswith(note), why
+
+
+def test_a_missing_or_failed_attestation_report_fails_closed():
+    r = real_rows()[7]
+    judge_report = export_dataset.ATTEST_DIR / _judge_report(r)
+    judge_report.write_text(json.dumps({"model": JUDGE_MODEL, "nonce": "00", "status": 503, "error": "unavailable"}))
+    assert check(r) == (False, "guard judge attestation: attestation file missing or unreadable")
+    judge_report.unlink()
+    assert check(r) == (False, "guard judge attestation: attestation file missing or unreadable")
+    (export_dataset.ATTEST_DIR / r["attestation_file"]).unlink()
+    assert check(r) == (False, "attestation: attestation file missing or unreadable")

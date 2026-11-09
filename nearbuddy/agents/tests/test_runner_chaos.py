@@ -18,7 +18,7 @@ from export_dataset import check_row  # noqa: E402
 from keys import pk_b64  # noqa: E402
 from nearai import Completion, StubClient  # noqa: E402
 from prompts import deliver  # noqa: E402
-from tests.test_arm_d import Enclave  # noqa: E402
+from tests.test_arm_d import Enclave, attest  # noqa: E402
 
 S = 1_000_000_000
 CLOSE_NS = 100 * S
@@ -126,7 +126,11 @@ def player(model):
 
 
 def play(solver, players):
-    runner.play_duel(solver, "5", "NEAR/USD", 365_000_000, CLOSE_NS, STOP_NS, players, 10, 20, {}, True, LOCK_S)
+    # an enclave's report is saved where check_row looks, so its rows cite an attestation listing their signer
+    attestations = attest(*(m for *_, m in players if isinstance(m, Enclave)))
+    runner.play_duel(
+        solver, "5", "NEAR/USD", 365_000_000, CLOSE_NS, STOP_NS, players, 10, 20, attestations, True, LOCK_S
+    )
 
 
 def rows():

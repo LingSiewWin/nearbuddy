@@ -95,9 +95,9 @@ FIELDS: list[tuple[str, str, str]] = [
         "proof is judgment `proof_judgment`, the first on that side. `judgments` (null when one call) holds every "
         "call's bytes and enclave record, all on the same signed request. "
         "hardened-v3: `judge` (null without an injection) is the fact-check call on `z-ai/glm-5.3-flash` with the "
-        "same call fields as `arm_d.side_call` plus `verdict` `{fabricated_prob, label}` and `attestation_file`; "
-        "the verdict is the last block of the duelist's signed request, and `size_cap` is "
-        "`max(1, round(1000 * (1 - fabricated_prob)))`, or 1 when the label is `unverifiable`.",
+        "same call fields as `arm_d.side_call` plus `verdict` `{fabricated_prob, label}` and `attestation_file` (the "
+        "report that must list the judge's signer); the verdict is the last block of the duelist's signed request, "
+        "and `size_cap` is `max(1, round(1000 * (1 - fabricated_prob)))`, or 1 when the label is `unverifiable`.",
     ),
     (
         "open_px",
@@ -168,7 +168,8 @@ FIELDS: list[tuple[str, str, str]] = [
         "attestation_file",
         "string \\| null",
         "File in `attestations/` with the enclave's attestation report (Intel TDX quote, NVIDIA payload, nonce); "
-        "its `model_attestations[].signing_address` is the signer of `signature_record`.",
+        "its `model_attestations[]` must list `signature_record.signing_address` for the row's `model`, or the row "
+        "does not verify (also when the field is null or the file is missing).",
     ),
     (
         "intent",
@@ -238,10 +239,15 @@ import hashlib
 import html
 import json
 import math
+import os
 import re
 from collections import Counter
 
 from nacl.signing import VerifyKey  # pip install pynacl
+
+# the dataset's attestations/ folder: every signer (the row's, and hardened-v3's judge) must be listed in the report
+# its row cites, for its model
+ATTESTATIONS = "attestations"
 
 # arm D: the side call's system prompt (format with the symbol), and the head of the size call's user message,
 # which quotes the brief, the side it sizes and sha256 of the side call's output before the telemetry
@@ -286,6 +292,20 @@ def verify_call(call: dict, model: str) -> str:
     signer = bytes.fromhex(rec["signing_address"].removeprefix("0x"))
     VerifyKey(signer).verify(text.encode(), bytes.fromhex(rec["signature"].removeprefix("0x")))  # raises if forged
     return "ok"
+
+
+def attested(rec: dict, model: str, name) -> str:
+    """'ok' when attestations/<name> lists the record's signer for `model`. Fails closed: no file named, a path, an
+    unreadable report or a signer it does not list. This ties the signer to the report; checking the report's
+    intel_quote (dcap-qvl) and nvidia_payload (NRAS) ties the report to hardware."""
+    if not isinstance(name, str) or not name or os.path.basename(name) != name:
+        return "no attestation_file"
+    try:
+        with open(os.path.join(ATTESTATIONS, name)) as f:
+            listed = {(m["signing_address"], m["model_name"]) for m in json.load(f)["report"]["model_attestations"]}
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return "attestation file missing or unreadable"
+    return "ok" if (rec.get("signing_address"), model) in listed else "signer not attested for this model"
 
 
 def direction(text: str) -> str | None:
@@ -347,8 +367,9 @@ def parse_verdict(raw: str) -> dict:
 
 
 def verify_judge(j: dict | None, clean: str) -> tuple[str, dict]:
-    """hardened-v3's fact-check call: (note, verdict). It verifies under JUDGE_MODEL's enclave, its signed request is
-    the judge prompt on the cleaned headline alone, and the stored verdict is the parse of its signed reply."""
+    """hardened-v3's fact-check call: (note, verdict). It verifies under JUDGE_MODEL's enclave, whose signer the cited
+    attestation lists; its signed request is the judge prompt on the cleaned headline alone, and the stored verdict is
+    the parse of its signed reply."""
     if not j:
         return "guard: no judge call under paid text", {}
     note = verify_call(j, JUDGE_MODEL)
@@ -356,6 +377,9 @@ def verify_judge(j: dict | None, clean: str) -> tuple[str, dict]:
         return f"guard judge: {note}", {}
     if j["signature_record"]["signature_kind"] != "provider_tee":
         return "guard judge: not signed by the model enclave", {}
+    note = attested(j["signature_record"], JUDGE_MODEL, j.get("attestation_file"))
+    if note != "ok":
+        return f"guard judge attestation: {note}", {}
     headline = "^".join(re.split(r"\s+", clean.strip()))  # datamarked: words joined by ^
     if j["request_body"] != client_body(JUDGE_MODEL, JUDGE_SYSTEM, f"<headline>\n{headline}\n</headline>"):
         return "guard judge: request is not the judge prompt on the injection", {}
@@ -465,6 +489,9 @@ def verify(row: dict) -> str:
     req, res = bytes.fromhex(row["request_hash"]), bytes.fromhex(row["response_hash"])
     if row["intent"]["proof_hash"] != base64.b64encode(hashlib.sha256(req + res).digest()).decode():
         return "proof_hash differs"
+    note = attested(row["signature_record"], row["model"], row.get("attestation_file"))
+    if note != "ok":
+        return f"attestation: {note}"
     d = row.get("arm_d")
     if not d:
         return verify_guard(row)
@@ -552,6 +579,20 @@ def _check_call(c: dict, model: str) -> str:
     return "ok"
 
 
+def _check_attested(rec: dict, model: str, name: object, attest_dir: Path) -> str:
+    """'ok' when the attestation report `name` (a file in `attest_dir`) lists the record's signer for `model`, so the
+    key that signed is one an attested enclave published, not any key whose signature checks out. Fails closed: no
+    file named, a path instead of a file name, a missing or unreadable report, or a signer it does not list."""
+    if not isinstance(name, str) or not name or Path(name).name != name:
+        return "no attestation_file"
+    try:
+        report = json.loads((attest_dir / name).read_text())["report"]
+        listed = {(m["signing_address"], m["model_name"]) for m in report["model_attestations"]}
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return "attestation file missing or unreadable"
+    return "ok" if (rec.get("signing_address"), model) in listed else "signer not attested for this model"
+
+
 def _messages(c: dict) -> list[tuple[str, str]]:
     return [(m["role"], m["content"]) for m in json.loads(c["request_body"])["messages"]]
 
@@ -609,20 +650,25 @@ def _check_arm_d(r: dict) -> str:
     return "ok"
 
 
-def check_row(r: dict) -> tuple[bool, str]:
-    """Recompute every hash the row claims with the same code the runner used. Returns (verifiable, note)."""
+def check_row(r: dict, attest_dir: Path | None = None) -> tuple[bool, str]:
+    """Recompute every hash the row claims with the same code the runner used, and require every signer to be listed
+    in the attestation report its row cites (in `attest_dir`, default ATTEST_DIR). Returns (verifiable, note)."""
+    attest_dir = attest_dir or ATTEST_DIR
     note = _check_call(r, r.get("model", ""))
     if note != "ok":
         return False, note
     req, res = bytes.fromhex(r["request_hash"]), bytes.fromhex(r["response_hash"])
     if r.get("intent", {}).get("proof_hash") != proof_hash(req, res):
         return False, "proof_hash differs"
+    note = _check_attested(r["signature_record"], r.get("model", ""), r.get("attestation_file"), attest_dir)
+    if note != "ok":
+        return False, f"attestation: {note}"
     if r.get("arm_d"):
         note = _check_arm_d(r)
         if note != "ok":
             return False, note
     if {r.get("profile"), r.get("prompt_variant")} & set(GUARDED) or r.get("guard") is not None:
-        note = _check_guard(r)
+        note = _check_guard(r, attest_dir)
         if note != "ok":
             return False, note
     if r.get("chaos"):
@@ -632,11 +678,13 @@ def check_row(r: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
-def _check_judge(j: dict | None, injection: str, guard_version: int) -> tuple[str, dict[str, Any], str]:
+def _check_judge(
+    j: dict | None, injection: str, guard_version: int, attest_dir: Path
+) -> tuple[str, dict[str, Any], str]:
     """hardened-v3's judge call under paid text: (note, verdict, sha256 of the reply). The call's bytes and provider
-    enclave record verify under JUDGE_MODEL; its signed request is byte for byte the published judge prompt on this
-    injection (cleaned by cue_guard `guard_version`); its text is what the signed response says; the stored verdict is
-    `parse_verdict` of that text."""
+    enclave record verify under JUDGE_MODEL, and the attestation it cites lists that signer; its signed request is
+    byte for byte the published judge prompt on this injection (cleaned by cue_guard `guard_version`); its text is what
+    the signed response says; the stored verdict is `parse_verdict` of that text."""
     if not j:
         return "guard: no judge call under paid text", {}, ""
     note = _check_call(j, JUDGE_MODEL)
@@ -644,6 +692,9 @@ def _check_judge(j: dict | None, injection: str, guard_version: int) -> tuple[st
         return f"guard judge: {note}", {}, ""
     if j["signature_record"].get("signature_kind") != "provider_tee":
         return "guard judge: not signed by the model enclave", {}, ""
+    note = _check_attested(j["signature_record"], JUDGE_MODEL, j.get("attestation_file"), attest_dir)
+    if note != "ok":
+        return f"guard judge attestation: {note}", {}, ""
     if j["request_body"].encode() != request_body(JUDGE_MODEL, JUDGE_SYSTEM, judge_user(injection, guard_version)):
         return "guard judge: request is not the judge prompt on the injection", {}, ""
     try:
@@ -723,13 +774,14 @@ def _check_chaos(r: dict) -> str:
     return "ok"
 
 
-def _check_guard(r: dict) -> str:
+def _check_guard(r: dict, attest_dir: Path | None = None) -> str:
     """hardened-v2 and v3: the whole signed request is byte for byte the client's body for the profile's system
     prompt and `user_v2(brief, injection)` (v3: `user_v3(brief, injection, verdict)` with the verdict re-parsed from the
     judge's signed reply), so cue_guard, the provenance blocks and the fact-check provably ran as published and no
     other message or sampling field steered the call; the posted size respects the cap; the side is the majority of
     the signed judgments (`_check_votes`). cue_guard is the version the row recorded (`guard.cue_guard`, absent: 1),
     so a row stays verifiable after cue_guard changes."""
+    attest_dir = attest_dir or ATTEST_DIR
     g = r.get("guard")
     if not isinstance(g, dict):
         return "guard: missing on a guarded profile"
@@ -762,7 +814,7 @@ def _check_guard(r: dict) -> str:
         if user != expected:
             return "guard: signed prompt is not user_v3(brief, injection, verdict)"
     else:
-        note, verdict, digest = _check_judge(g.get("judge"), injection, version)
+        note, verdict, digest = _check_judge(g.get("judge"), injection, version, attest_dir)
         if note != "ok":
             return note
         expected, cues = user_v3(brief, injection, verdict, digest, version)
@@ -898,8 +950,9 @@ request must be the client's body too, quoting the same brief, `sha256(side_call
 hardened-v2 and hardened-v3 rows (`guard`): the snippet rebuilds the duelist's request from the profile's published
 system prompt, the row's `brief`, the operator mandate and the cleaned headline, and requires the signed request to be
 exactly that body, so no extra message, sampling field or other `max_tokens` steered the call. For hardened-v3 it
-also verifies the judge call (`guard.judge`) under its own enclave record, requires its signed request to be the
-published judge prompt on that headline alone, re-parses its verdict and rebuilds the fact-check block from it. It
+also verifies the judge call (`guard.judge`) under its own enclave record, requires its signer to be listed for the
+judge model in the attestation the judge call cites, requires its signed request to be the published judge prompt on
+that headline alone, re-parses its verdict and rebuilds the fact-check block from it. It
 checks `size_cap` and that the posted size is within it, and recounts `votes` from every signed judgment: the
 judgments must share the row's signer and request bytes, `proof_judgment` must be the row's own call and the first
 judgment on the majority side, and that side must be `intent.side`.
@@ -923,9 +976,11 @@ rows = [json.loads(line) for line in open("decisions.jsonl")]
 print(sum(verify(r) == "ok" for r in rows), "of", len(rows), "rows verify")
 ```
 
-To tie the signer to hardware, open `attestations/<attestation_file>`, find the entry in
-`report.model_attestations` whose `signing_address` equals the row's, and check its `intel_quote` with dcap-qvl and
-its `nvidia_payload` with NVIDIA NRAS (the nonce is in the file). To tie the row to the chain, look up `tx` on
+The snippet (run next to the `attestations/` folder) and `check_row` require every signer, the row's and the judge
+call's, to be listed for its model in `report.model_attestations` of the `attestations/<attestation_file>` its record
+cites; a row citing no file, a missing file or a report without that signer does not verify. That ties the signer to
+the report. To tie the report to hardware, check that entry's `intel_quote` with dcap-qvl and its `nvidia_payload`
+with NVIDIA NRAS (the nonce is in the file). To tie the row to the chain, look up `tx` on
 https://testnet.nearblocks.io and compare the posted intent with `intent`. Under commit-reveal, `tx` is the
 `reveal_intent` (`revealed_tx`): its args carry the same intent, the enclave proof and the salt, so
 `sha256(intent_message(intent) || salt)` must equal `commitment`, which `committed_tx` stored before the reveal.

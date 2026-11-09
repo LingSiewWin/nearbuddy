@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from nacl.signing import SigningKey  # noqa: E402
 
+import export_dataset  # noqa: E402
 from export_dataset import check_row  # noqa: E402
 from intent_client import proof_hash, tee_text  # noqa: E402
 
@@ -24,7 +25,10 @@ def good_row() -> dict[str, Any]:
     response = json.dumps({"id": "chatcmpl-1", "choices": [{"message": {"content": '{"direction":"long"}'}}]})
     req, res = hashlib.sha256(request.encode()).digest(), hashlib.sha256(response.encode()).digest()
     text = tee_text(2, MODEL, req, res)
+    listed = [{"model_name": MODEL, "signing_address": bytes(ENCLAVE.verify_key).hex()}]
+    (export_dataset.ATTEST_DIR / "enclave.json").write_text(json.dumps({"report": {"model_attestations": listed}}))
     return {
+        "attestation_file": "enclave.json",
         "duel_id": "1",
         "model": MODEL,
         "request_body": request,
@@ -85,3 +89,31 @@ def test_intent_proof_hash_must_match_the_bytes():
     r = good_row()
     del r["intent"]
     assert check_row(r) == (False, "proof_hash differs")
+
+
+def test_the_signer_must_be_listed_in_the_attestation_the_row_cites():
+    """A key that signs correctly is not enough: the report the row cites must list it for the row's model, so an
+    operator's own key cannot stand in for the enclave's. Anything short of that fails closed."""
+    for name, note in (
+        (None, "no attestation_file"),
+        ("", "no attestation_file"),
+        (["enclave.json"], "no attestation_file"),
+        ("../attestations/enclave.json", "no attestation_file"),  # a path, even one that resolves to the report
+        ("absent.json", "attestation file missing or unreadable"),
+    ):
+        r = good_row()
+        r["attestation_file"] = name
+        assert check_row(r) == (False, f"attestation: {note}"), name
+    key = bytes(ENCLAVE.verify_key).hex()
+    for report, note in (
+        ("not json", "attestation file missing or unreadable"),
+        ({"status": 503, "error": "unavailable"}, "attestation file missing or unreadable"),  # a failed fetch
+        ({"report": {"model_attestations": [{"model_name": "other/model"}]}}, "attestation file missing or unreadable"),
+        ({"report": {"model_attestations": [{"model_name": MODEL, "signing_address": "ab" * 32}]}}, "signer not"),
+        ({"report": {"model_attestations": [{"model_name": "other/model", "signing_address": key}]}}, "signer not"),
+    ):
+        r = good_row()
+        text = report if isinstance(report, str) else json.dumps(report)
+        (export_dataset.ATTEST_DIR / "enclave.json").write_text(text)
+        ok, why = check_row(r)
+        assert not ok and why.startswith(f"attestation: {note}"), why

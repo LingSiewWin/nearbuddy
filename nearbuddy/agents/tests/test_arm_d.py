@@ -15,6 +15,7 @@ from nacl.signing import SigningKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import export_dataset  # noqa: E402
 import runner  # noqa: E402
 from config import ENV  # noqa: E402
 from duelist import FULL_SIZE_BPS, Duelist  # noqa: E402
@@ -79,8 +80,15 @@ class Enclave:
             raise requests.ConnectionError("Remote end closed connection without response")
         return self.records.get(chat_id)
 
-    def attestation(self) -> None:
-        return None
+    def attestation(self) -> dict:
+        """A report in NEAR AI Cloud's shape listing this enclave's key for its model (no quotes: none are checked)."""
+        key = self.sk.verify_key.encode().hex()
+        return {"report": {"model_attestations": [{"model_name": self.model_id, "signing_address": key}]}}
+
+
+def attest(*clients) -> dict[str, str | None]:
+    """The runner's attestations map for these enclaves, each report saved where check_row looks (tests/conftest.py)."""
+    return {c.model_id: runner.save_attestation(c) for c in clients}
 
 
 class FakeSolver(Solver):
@@ -176,9 +184,8 @@ def enclave_agent(tmp_path, monkeypatch):
 
 def post(duelist, pending):
     d, sk, comp, model = duelist
-    return runner.post_decision(
-        FakeSolver(), "5", "NEAR/USD", 366_000_000, 365_000_000, CLOSE_NS, pending, 10, "Z", d, sk, comp, model, {}
-    )
+    args = ("5", "NEAR/USD", 366_000_000, 365_000_000, CLOSE_NS, pending, 10, "Z", d, sk, comp, model, attest(model))
+    return runner.post_decision(FakeSolver(), *args)
 
 
 def rows():
@@ -248,6 +255,7 @@ def test_other_arms_still_post_the_full_size_from_one_call(enclave_agent):
 def snippet_verify(row: dict) -> str:
     scope: dict = {}
     exec(VERIFY_SNIPPET, scope)  # the dataset card's snippet, run as a reader would
+    scope["ATTESTATIONS"] = str(export_dataset.ATTEST_DIR)  # where check_row reads them in this test
     try:
         return scope["verify"](row)
     except Exception as e:  # a forged signature raises inside the snippet

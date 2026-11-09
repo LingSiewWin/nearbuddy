@@ -14,6 +14,7 @@ import pytest  # noqa: E402
 import yaml  # noqa: E402
 from nacl.signing import SigningKey  # noqa: E402
 
+import export_dataset  # noqa: E402
 from export_dataset import FIELDS, card, check_row, write_parquet  # noqa: E402
 from intent_client import proof_hash  # noqa: E402
 
@@ -27,7 +28,10 @@ def good_row() -> dict:
     req = hashlib.sha256(REQ_BODY.encode()).digest()
     res = hashlib.sha256(RES_BODY.encode()).digest()
     text = f"{MODEL}:{req.hex()}:{res.hex()}"
+    listed = [{"model_name": MODEL, "signing_address": bytes(ENCLAVE.verify_key).hex()}]
+    (export_dataset.ATTEST_DIR / "enclave.json").write_text(json.dumps({"report": {"model_attestations": listed}}))
     return {
+        "attestation_file": "enclave.json",
         "model": MODEL,
         "request_body": REQ_BODY,
         "response_body": RES_BODY,
@@ -110,6 +114,7 @@ def card_verify():
     snippet = next(b for b in re.findall(r"```python\n(.*?)```", CARD, re.S) if "def verify" in b)
     scope: dict = {}
     exec(snippet, scope)  # the card's own snippet, run as a reader would
+    scope["ATTESTATIONS"] = str(EXPORT_DIR / "attestations")  # as if run from the export directory
     return scope["verify"]
 
 
@@ -117,7 +122,8 @@ def test_card_snippet_verifies_a_real_row_and_agrees_with_check_row():
     verify = card_verify()
     assert verify(next(r for r in ROWS if r["verifiable"])) == "ok"
     for r in ROWS:
-        assert (verify(r) == "ok") == check_row(r)[0], r["duel_id"]
+        ok, _ = check_row(r, EXPORT_DIR / "attestations")
+        assert (verify(r) == "ok") == ok == r["verifiable"], r["duel_id"]
 
 
 def test_card_snippet_rejects_a_tampered_real_row():
