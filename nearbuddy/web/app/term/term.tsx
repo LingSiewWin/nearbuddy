@@ -41,6 +41,7 @@ const VERDICT: Record<FeedItem["verdict"], [string, string]> = {
   held: ["HELD", "win"],
   untested: ["not counted", "dim"],
   waiting: ["waiting", "open"],
+  answered: ["answered", "hi"],
 };
 
 /** Columns of monospace text that fit the terminal's width, measured from a probe span. */
@@ -102,6 +103,8 @@ export default function Term() {
   const [flash, setFlash] = useState<ReadonlyMap<string, number>>(new Map());
   const [mode, setMode] = useState<"NORMAL" | "COMMAND" | "INSERT">("NORMAL");
   const cmdRef = useRef<HTMLInputElement | null>(null);
+  const sending = useRef(false);
+  const helpRef = useRef<HTMLDivElement | null>(null);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const prevFields = useRef<Record<string, string>>({});
   const prevFeed = useRef<Set<string> | null>(null);
@@ -228,7 +231,18 @@ export default function Term() {
     return hits.find((a) => a.pk === duel?.a || a.pk === duel?.b) ?? hits[0] ?? null;
   };
 
+  // one attack at a time: a ref, so a double click lands on the guard before the busy re-render does
   async function inject(id: string, side: Target, headline: string) {
+    if (sending.current) return say("one attack at a time: finish the one in progress first", "warn");
+    sending.current = true;
+    try {
+      await injectOnce(id, side, headline);
+    } finally {
+      sending.current = false;
+      setBusy(null);
+    }
+  }
+  async function injectOnce(id: string, side: Target, headline: string) {
     if (!snap) return say("still reading the arena; try again in a moment", "warn");
     let d: Duel | null = snap.duels.find((x) => x?.id === id) ?? (rec?.duel?.id === id ? rec.duel : null);
     if (!d)
@@ -248,7 +262,6 @@ export default function Term() {
     try {
       call = await ADAPTER.prepare({ duel_id: id, target: side === "A" ? d.a : d.b, text: headline }, chain);
     } catch (e) {
-      setBusy(null);
       if (e instanceof Offline) {
         setOffline(true);
         return say("solver offline: your headline was not sent and nothing was signed", "bad");
@@ -256,26 +269,19 @@ export default function Term() {
       return say(`refused: ${e instanceof Error ? e.message : e}`, "bad");
     }
     setBusy(`sign in your wallet: ${near(call.deposit)} NEAR to ${call.receiverId}`);
+    const target = side === "A" ? d.a : d.b;
+    const before = (side === "A" ? d.last_intent_a : d.last_intent_b)?.nonce ?? null;
     try {
-      const tx = await wallet.send(call);
+      const tx = await wallet.send(call); // throws when the wallet declines or the contract refuses
       setMine((m) => [
         ...m,
-        {
-          tx,
-          duel: id,
-          target: side === "A" ? d.a : d.b,
-          text: headline,
-          hash: String(call.args.payload_hash),
-          at: Date.now(),
-        },
+        { tx, duel: id, target, text: headline, hash: String(call.args.payload_hash), before, at: Date.now() },
       ]);
       setShare(`${location.origin}/i/${tx}?t=${encodeURIComponent(headline)}`);
       setText("");
       say(`planted in duel #${id}, side ${side}: tx ${short(tx, 10)} · type copy for the share link`, "ok");
     } catch (e) {
-      say(`not signed: ${e instanceof Error ? e.message : e}`, "bad");
-    } finally {
-      setBusy(null);
+      say(e instanceof Error ? e.message : String(e), "bad");
     }
   }
 
@@ -419,6 +425,11 @@ export default function Term() {
   const P = Math.max(36, Math.min(two ? Math.floor((cols - 2) / 2) : cols, 100));
   const W = P - 4; // text width inside a box
 
+  // the help dialog takes focus when it opens, so a keyboard or screen-reader user lands inside it
+  useEffect(() => {
+    if (help) helpRef.current?.focus();
+  }, [help]);
+
   // ---- pane 1: hardest to fool
   const stripW = Math.max(10, Math.min(40, W - 17 - 24)); // the strip gives way first, then the name
   const nameW = W - 17 - stripW;
@@ -541,7 +552,11 @@ export default function Term() {
               w={P}
               sel={pane === 2 && sel[2] === i}
               onClick={() => activate(2, i)}
-              label={open ? `target side ${t} with a headline` : `open side ${t}'s record`}
+              label={`${open ? `target side ${t} with a headline` : `open side ${t}'s record`}: ${callCells(t)
+                .map((c) => (typeof c === "string" ? c : c.t))
+                .join("")
+                .replace(/\s+/g, " ")
+                .trim()}`}
               cells={callCells(t)}
             />
           ))}
@@ -634,7 +649,15 @@ export default function Term() {
                 f.after ? { t: `${upper(f.after)} `, c: f.verdict === "fooled" ? "loss" : "hi" } : "",
                 f.reply
                   ? { t: `"${f.reply}"`, title: f.reply }
-                  : { t: f.verdict === "waiting" ? "next call pending" : "", c: "dim" },
+                  : {
+                      t:
+                        f.verdict === "waiting"
+                          ? "next call pending"
+                          : f.verdict === "answered"
+                            ? "its first call after your headline"
+                            : "",
+                      c: "dim",
+                    },
                 f.tx ? "  " : "",
                 f.tx ? { t: `tx ${short(f.tx, 6)}`, href: txHref(f.tx), title: f.tx, c: "dim" } : "",
               ]}
@@ -664,7 +687,7 @@ export default function Term() {
                     setTarget(t);
                     setLine(injectLine(duel.id, t, text));
                   },
-                  label: `target side ${t}`,
+                  label: `target side ${t}, ${modelOf(t === "A" ? duel.a : duel.b)}${target === t ? ", selected" : ""}`,
                 },
                 "  ",
               ])
@@ -791,7 +814,7 @@ export default function Term() {
     ],
     [
       "pot / price",
-      "The pot is what the duel pays its winner. An attack costs the contract's minimum chaos deposit, which goes into the pot.",
+      "The pot is what the duel pays its winner. An attack costs at least the contract's minimum chaos deposit; less storage, it goes into the pot (into protocol fees when the payer owns one of the two agents).",
     ],
     [
       "data",
@@ -973,7 +996,7 @@ export default function Term() {
           </nav>
         </footer>
         {help ? (
-          <div className="help" role="dialog" aria-modal="true" aria-labelledby="help-h">
+          <div className="help" role="dialog" aria-modal="true" aria-labelledby="help-h" tabIndex={-1} ref={helpRef}>
             <Box n="?" title="help" extra="Esc closes" w={HW} on id="help">
               {helpRows.flatMap(([k, v]) => [
                 ...(two ? [] : [<Line key={k} w={HW} cells={[{ t: k, c: "hi" }]} />]),

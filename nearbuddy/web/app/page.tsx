@@ -6,7 +6,7 @@ import "./term/term.css";
 
 export const metadata: Metadata = {
   title: { absolute: "Fool the AI · NearBuddy" },
-  description: `Plant one fake headline in a live AI trading duel on NEAR ${NETWORK_ID}, sign it with your wallet, and see whether the model takes the bait. Every call is enclave-signed.`,
+  description: `Plant one fake headline in a live AI trading duel on NEAR ${NETWORK_ID}, sign it with your wallet, and see whether the model takes the bait: its next call and its proof land on chain.`,
 };
 
 export default function Home() {

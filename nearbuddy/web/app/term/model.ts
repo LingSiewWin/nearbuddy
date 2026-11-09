@@ -40,8 +40,16 @@ export type Snap = {
 export type Board = { source: string; rows: number; models: Score[]; recent: Attack[] };
 /** GET /api/duel, normalised to what pane 2 needs. */
 export type DuelRec = { duel: Duel | null; a: Agent | null; b: Agent | null };
-/** An attack this browser signed, kept for the session. */
-export type Mine = { tx: string; duel: string; target: string; text: string; hash: string; at: number };
+/** An attack this browser signed, kept for the session; `before` is the target's call nonce when it was signed. */
+export type Mine = {
+  tx: string;
+  duel: string;
+  target: string;
+  text: string;
+  hash: string;
+  before: string | null;
+  at: number;
+};
 
 /** Headlines by payload_hash from the solver's pending list. The solver drops an injection from it once the runner has
  *  read it, so the page keeps every text it has seen (see Term) instead of losing it the moment the model sees it. */
@@ -72,10 +80,11 @@ export type FeedItem = {
   lie: string | null;
   hash: string | null;
   pushed: Side | null;
-  /** The model's call after the lie, and its own words when the dataset has them. */
+  /** The model's call after the lie (null until one is known to be newer), and its words when the dataset has them. */
   after: Side | null;
   reply: string | null;
-  verdict: "fooled" | "held" | "untested" | "waiting";
+  /** answered: a call newer than this browser's attack landed; whether it took the bait needs the lie's side. */
+  verdict: "fooled" | "held" | "untested" | "waiting" | "answered";
   tx: string | null;
   mine: boolean;
 };
@@ -88,25 +97,29 @@ export function feed(s: Snap | null, b: Board | null, mine: Mine[], texts: Recor
     const id = s?.leaderboard.find((a) => a.pk === pk)?.model_id;
     return id ? shortModel(id) : pk.slice(0, 8);
   };
-  const call = (d: Duel | undefined, pk: string) =>
-    (d && (pk === d.a ? d.last_intent_a : pk === d.b ? d.last_intent_b : null)?.side) ?? null;
+  const intentOf = (d: Duel | undefined, pk: string) =>
+    (d && (pk === d.a ? d.last_intent_a : pk === d.b ? d.last_intent_b : null)) ?? null;
   const duels = (s?.duels ?? []).filter((d): d is Duel => !!d);
-  const own: FeedItem[] = [...mine].reverse().map((m) => ({
-    key: `mine:${m.tx}`,
-    duel: m.duel,
-    model: model(m.target),
-    lie: m.text,
-    hash: m.hash,
-    pushed: null,
-    after: call(
+  const own: FeedItem[] = [...mine].reverse().map((m) => {
+    const it = intentOf(
       duels.find((d) => d.id === m.duel),
       m.target,
-    ),
-    reply: null,
-    verdict: "waiting",
-    tx: m.tx,
-    mine: true,
-  }));
+    );
+    const newer = !!it && it.nonce !== m.before; // the call on chain when it was signed came before the lie
+    return {
+      key: `mine:${m.tx}`,
+      duel: m.duel,
+      model: model(m.target),
+      lie: m.text,
+      hash: m.hash,
+      pushed: null,
+      after: newer ? (it?.side ?? null) : null,
+      reply: null,
+      verdict: newer ? "answered" : "waiting",
+      tx: m.tx,
+      mine: true,
+    };
+  });
   const live: FeedItem[] = duels
     .filter((d) => !d.resolved)
     .flatMap((d) =>
@@ -121,7 +134,8 @@ export function feed(s: Snap | null, b: Board | null, mine: Mine[], texts: Recor
                 lie: texts[j.payload_hash] ?? textsOf(s)[j.payload_hash] ?? null,
                 hash: j.payload_hash,
                 pushed: null,
-                after: call(d, j.target),
+                after: null, // the duel's last call may predate this attack: no block time to tell
+
                 reply: null,
                 verdict: "waiting" as const,
                 tx: null,

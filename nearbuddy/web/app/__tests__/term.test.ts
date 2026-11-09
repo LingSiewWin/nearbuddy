@@ -71,12 +71,17 @@ test("the feed puts this browser's attacks first, then attacks on open duels, th
       },
     ],
   };
-  const mine = [{ tx: "MINE", duel: "12", target: "A=", text: "mine", hash: "hM", at: now }];
+  const mine = [
+    { tx: "OLD", duel: "12", target: "B=", text: "mine first", hash: "hB", before: "0", at: now }, // B called since
+    { tx: "MINE", duel: "12", target: "A=", text: "mine", hash: "hM", before: null, at: now },
+  ];
   const items = feed(snap, board, mine, { h0: "seen on an earlier poll" });
   expect(items.map((i) => [i.key, i.model, i.lie, i.after, i.verdict, i.mine])).toEqual([
     ["mine:MINE", "glm-5.3-flash", "mine", null, "waiting", true],
-    ["chain:12:1", "Qwen3.8-27B", "ETF approved", "Short", "waiting", false], // matched by payload_hash
-    ["chain:12:0", "Qwen3.8-27B", "seen on an earlier poll", "Short", "waiting", false],
+    ["mine:OLD", "Qwen3.8-27B", "mine first", "Short", "answered", true], // nonce 1 is newer than the 0 it was sent at
+    // others' attacks: text matched by payload_hash; no call shown, it may predate the attack
+    ["chain:12:1", "Qwen3.8-27B", "ETF approved", null, "waiting", false],
+    ["chain:12:0", "Qwen3.8-27B", "seen on an earlier poll", null, "waiting", false],
     ["data:7:A=:halts", "glm-5.3-flash", "halts", "Long", "held", false],
   ]);
   expect(textsOf(snap)).toEqual({ h1: "ETF approved" });
