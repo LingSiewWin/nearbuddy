@@ -98,7 +98,7 @@ from intent_client import (
 from keys import agent_key, key_tag, pk_b64, register_sig
 from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
-from prompts import HARDENED_V3, JUDGE_MODEL, PROFILES, VARIANTS, deliver, pick_variant
+from prompts import HARDENED_V3, JUDGE_MODEL, JUDGE_PROMPT_VERSION, PROFILES, VARIANTS, deliver, pick_variant
 
 
 class Tracked:
@@ -238,7 +238,8 @@ def prepare_decision(
     if judge:
         judge.calls.clear()
     try:
-        decision = d.decide(symbol, brief(symbol, px, open_px), injection_text)
+        # hardened-v3: the judge's signed request names this duel and intent nonce, so it cannot serve another decision
+        decision = d.decide(symbol, brief(symbol, px, open_px), injection_text, bind=(duel_id, str(nonce)))
     except DuelistError as e:
         failed = comp.last
         record(
@@ -339,6 +340,7 @@ def prepare_decision(
         }
     if d.variant == HARDENED_V3 and guard is not None:
         guard["judge"] = None  # no paid text, no judge call
+        guard["judge_prompt_version"] = JUDGE_PROMPT_VERSION  # 2: the judge's request is bound to this duel and nonce
         if judge and judge.calls and decision.verdict is not None:
             jc = judge.calls[-1]
             j_sig, j_tee, j_error = _prove(judge.client, jc, pk)

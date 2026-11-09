@@ -35,6 +35,7 @@ from prompts import (  # noqa: E402
     HARDENED_V2,
     HARDENED_V3,
     JUDGE_MODEL,
+    JUDGE_PROMPT_VERSION,
     JUDGE_SYSTEM,
     LABELS,
     PROMPT_V2,
@@ -97,7 +98,10 @@ FIELDS: list[tuple[str, str, str]] = [
         "hardened-v3: `judge` (null without an injection) is the fact-check call on `z-ai/glm-5.3-flash` with the "
         "same call fields as `arm_d.side_call` plus `verdict` `{fabricated_prob, label}` and `attestation_file` (the "
         "report that must list the judge's signer); the verdict is the last block of the duelist's signed request, "
-        "and `size_cap` is `max(1, round(1000 * (1 - fabricated_prob)))`, or 1 when the label is `unverifiable`.",
+        "and `size_cap` is `max(1, round(1000 * (1 - fabricated_prob)))`, or 1 when the label is `unverifiable`. "
+        "`judge_prompt_version` 2: the judge's signed request names the row's `duel_id` and `intent.nonce` as "
+        "attributes of its headline tag, so a judge call made for another decision fails; 1 (absent): it names "
+        "neither (unbound).",
     ),
     (
         "open_px",
@@ -229,7 +233,12 @@ FIELDS: list[tuple[str, str, str]] = [
         "on posted rows.",
     ),
     ("verifiable", "bool", "Added by the exporter: every hash, the enclave signature and `proof_hash` check out."),
-    ("verify_note", "string", "Added by the exporter: `ok` or the first check that failed (e.g. `no tee bytes`)."),
+    (
+        "verify_note",
+        "string",
+        "Added by the exporter: `ok`, `ok; judge unbound` (a hardened-v3 judge call under `judge_prompt_version` 1, "
+        "which names no duel), or the first check that failed (e.g. `no tee bytes`).",
+    ),
 ]
 
 # Runs as-is in tests/test_export_dataset.py against real rows; keep it equivalent to check_row, except that it takes
@@ -270,6 +279,7 @@ UNTRUSTED_CAP_BPS = __UNTRUSTED_CAP_BPS__
 CUE_GUARD_VERSIONS = __CUE_GUARD_VERSIONS__
 JUDGE_MODEL = __JUDGE_MODEL__
 JUDGE_SYSTEM = __JUDGE_SYSTEM__
+JUDGE_PROMPT_VERSIONS = __JUDGE_PROMPT_VERSIONS__
 LABELS = __LABELS__
 UNVERIFIED_BLOCK = re.compile(rf'\n\n<input origin="{UNVERIFIED}" cues_removed="(\d+)">\n(.*?)\n</input>', re.DOTALL)
 FENCE = re.compile(r"`{3}(?:json)?\s*(.*?)\s*`{3}", re.DOTALL)
@@ -366,10 +376,10 @@ def parse_verdict(raw: str) -> dict:
     return {"fabricated_prob": float(p), "label": label}
 
 
-def verify_judge(j: dict | None, clean: str) -> tuple[str, dict]:
+def verify_judge(j: dict | None, clean: str, bind: tuple | None) -> tuple[str, dict]:
     """hardened-v3's fact-check call: (note, verdict). It verifies under JUDGE_MODEL's enclave, whose signer the cited
-    attestation lists; its signed request is the judge prompt on the cleaned headline alone, and the stored verdict is
-    the parse of its signed reply."""
+    attestation lists; its signed request is the judge prompt on the cleaned headline alone, naming `bind` (duel_id,
+    intent nonce) when the row's judge_prompt_version binds; the stored verdict is the parse of its signed reply."""
     if not j:
         return "guard: no judge call under paid text", {}
     note = verify_call(j, JUDGE_MODEL)
@@ -381,7 +391,10 @@ def verify_judge(j: dict | None, clean: str) -> tuple[str, dict]:
     if note != "ok":
         return f"guard judge attestation: {note}", {}
     headline = "^".join(re.split(r"\s+", clean.strip()))  # datamarked: words joined by ^
-    if j["request_body"] != client_body(JUDGE_MODEL, JUDGE_SYSTEM, f"<headline>\n{headline}\n</headline>"):
+    tag = "<headline>"
+    if bind:  # the duel and intent nonce, escaped, as attributes of the tag
+        tag = f'<headline duel_id="{html.escape(str(bind[0]))}" nonce="{html.escape(str(bind[1]))}">'
+    if j["request_body"] != client_body(JUDGE_MODEL, JUDGE_SYSTEM, f"{tag}\n{headline}\n</headline>"):
         return "guard judge: request is not the judge prompt on the injection", {}
     if j.get("text") != call_text(j):
         return "guard judge: text differs from bytes", {}
@@ -461,7 +474,11 @@ def verify_guard(row: dict) -> str:
         user += "\n\n" + block(UNVERIFIED, clean, cues_removed=m.group(1))
         cap = UNTRUSTED_CAP_BPS
         if profile == "hardened-v3":
-            note, verdict = verify_judge(g.get("judge"), clean)
+            jv = g.get("judge_prompt_version", 1)
+            if type(jv) is not int or jv not in JUDGE_PROMPT_VERSIONS:
+                return "guard: unknown judge_prompt_version"
+            bind = None if jv == 1 else (row.get("duel_id"), row["intent"].get("nonce"))
+            note, verdict = verify_judge(g.get("judge"), clean, bind)
             if note != "ok":
                 return note
             text = f"fabricated_prob: {json.dumps(verdict['fabricated_prob'])}\nlabel: {verdict['label']}"
@@ -549,6 +566,7 @@ VERIFY_SNIPPET = (
     .replace("__CUE_GUARD_VERSIONS__", repr(sorted(CUE_GUARDS)))
     .replace("__JUDGE_MODEL__", repr(JUDGE_MODEL))
     .replace("__JUDGE_SYSTEM__", repr(JUDGE_SYSTEM))
+    .replace("__JUDGE_PROMPT_VERSIONS__", repr(list(range(1, JUDGE_PROMPT_VERSION + 1))))
     .replace("__LABELS__", repr(LABELS))
 )
 
@@ -650,9 +668,13 @@ def _check_arm_d(r: dict) -> str:
     return "ok"
 
 
+UNBOUND = "ok; judge unbound"  # verifies, but the judge's request (judge_prompt_version 1) names no duel or nonce
+
+
 def check_row(r: dict, attest_dir: Path | None = None) -> tuple[bool, str]:
     """Recompute every hash the row claims with the same code the runner used, and require every signer to be listed
-    in the attestation report its row cites (in `attest_dir`, default ATTEST_DIR). Returns (verifiable, note)."""
+    in the attestation report its row cites (in `attest_dir`, default ATTEST_DIR). Returns (verifiable, note); a
+    verifiable row's note is `ok`, or `ok; judge unbound` for a hardened-v3 judge call that names no duel."""
     attest_dir = attest_dir or ATTEST_DIR
     note = _check_call(r, r.get("model", ""))
     if note != "ok":
@@ -669,22 +691,23 @@ def check_row(r: dict, attest_dir: Path | None = None) -> tuple[bool, str]:
             return False, note
     if {r.get("profile"), r.get("prompt_variant")} & set(GUARDED) or r.get("guard") is not None:
         note = _check_guard(r, attest_dir)
-        if note != "ok":
+        if note not in ("ok", UNBOUND):
             return False, note
     if r.get("chaos"):
-        note = _check_chaos(r)
-        if note != "ok":
-            return False, note
-    return True, "ok"
+        chaos_note = _check_chaos(r)
+        if chaos_note != "ok":
+            return False, chaos_note
+    return True, note  # "ok", or UNBOUND for a v1 judge call
 
 
 def _check_judge(
-    j: dict | None, injection: str, guard_version: int, attest_dir: Path
+    j: dict | None, injection: str, guard_version: int, bind: tuple[object, object] | None, attest_dir: Path
 ) -> tuple[str, dict[str, Any], str]:
     """hardened-v3's judge call under paid text: (note, verdict, sha256 of the reply). The call's bytes and provider
     enclave record verify under JUDGE_MODEL, and the attestation it cites lists that signer; its signed request is
-    byte for byte the published judge prompt on this injection (cleaned by cue_guard `guard_version`); its text is what
-    the signed response says; the stored verdict is `parse_verdict` of that text."""
+    byte for byte the published judge prompt on this injection (cleaned by cue_guard `guard_version`), naming `bind`
+    (the row's duel_id and intent nonce) when the row's judge prompt version binds; its text is what the signed
+    response says; the stored verdict is `parse_verdict` of that text."""
     if not j:
         return "guard: no judge call under paid text", {}, ""
     note = _check_call(j, JUDGE_MODEL)
@@ -695,7 +718,8 @@ def _check_judge(
     note = _check_attested(j["signature_record"], JUDGE_MODEL, j.get("attestation_file"), attest_dir)
     if note != "ok":
         return f"guard judge attestation: {note}", {}, ""
-    if j["request_body"].encode() != request_body(JUDGE_MODEL, JUDGE_SYSTEM, judge_user(injection, guard_version)):
+    expected = request_body(JUDGE_MODEL, JUDGE_SYSTEM, judge_user(injection, guard_version, bind))
+    if j["request_body"].encode() != expected:
         return "guard judge: request is not the judge prompt on the injection", {}, ""
     try:
         said = message_text(json.loads(j["response_body"]))
@@ -780,8 +804,10 @@ def _check_guard(r: dict, attest_dir: Path | None = None) -> str:
     judge's signed reply), so cue_guard, the provenance blocks and the fact-check provably ran as published and no
     other message or sampling field steered the call; the posted size respects the cap; the side is the majority of
     the signed judgments (`_check_votes`). cue_guard is the version the row recorded (`guard.cue_guard`, absent: 1),
-    so a row stays verifiable after cue_guard changes."""
+    so a row stays verifiable after cue_guard changes; so is the judge prompt (`guard.judge_prompt_version`, absent: 1,
+    which binds nothing and returns UNBOUND instead of ok)."""
     attest_dir = attest_dir or ATTEST_DIR
+    unbound = False
     g = r.get("guard")
     if not isinstance(g, dict):
         return "guard: missing on a guarded profile"
@@ -814,7 +840,12 @@ def _check_guard(r: dict, attest_dir: Path | None = None) -> str:
         if user != expected:
             return "guard: signed prompt is not user_v3(brief, injection, verdict)"
     else:
-        note, verdict, digest = _check_judge(g.get("judge"), injection, version, attest_dir)
+        jv = g.get("judge_prompt_version", 1)
+        if type(jv) is not int or not 1 <= jv <= JUDGE_PROMPT_VERSION:
+            return "guard: unknown judge_prompt_version"
+        unbound = jv == 1
+        bind = None if unbound else (r.get("duel_id"), r.get("intent", {}).get("nonce"))
+        note, verdict, digest = _check_judge(g.get("judge"), injection, version, bind, attest_dir)
         if note != "ok":
             return note
         expected, cues = user_v3(brief, injection, verdict, digest, version)
@@ -832,7 +863,8 @@ def _check_guard(r: dict, attest_dir: Path | None = None) -> str:
         return "guard: size_cap is not the policy cap"
     if int(r.get("intent", {}).get("size_bps", 0)) > cap:
         return "guard: size above the cap"
-    return _check_votes(r, g)
+    note = _check_votes(r, g)
+    return UNBOUND if note == "ok" and unbound else note
 
 
 def write_parquet(rows: list[dict[str, Any]], path: Path) -> bool:
@@ -952,7 +984,9 @@ system prompt, the row's `brief`, the operator mandate and the cleaned headline,
 exactly that body, so no extra message, sampling field or other `max_tokens` steered the call. For hardened-v3 it
 also verifies the judge call (`guard.judge`) under its own enclave record, requires its signer to be listed for the
 judge model in the attestation the judge call cites, requires its signed request to be the published judge prompt on
-that headline alone, re-parses its verdict and rebuilds the fact-check block from it. It
+that headline alone, naming the row's `duel_id` and `intent.nonce` (`guard.judge_prompt_version` 2; version 1 rows
+name neither and `check_row` notes them `ok; judge unbound`), re-parses its verdict and rebuilds the fact-check block
+from it. It
 checks `size_cap` and that the posted size is within it, and recounts `votes` from every signed judgment: the
 judgments must share the row's signer and request bytes, `proof_judgment` must be the row's own call and the first
 judgment on the majority side, and that side must be `intent.side`.
@@ -1010,6 +1044,10 @@ https://testnet.nearblocks.io and compare the posted intent with `intent`. Under
 - **Re-rolls are invisible.** Sampling is not deterministic, so the operator could repeat a call (in any arm, or
   arm D's side call) until it returns a wanted answer and publish only that one. A signature proves a completion
   happened, not that it was the only one.
+- **Judge binding is not judge non-shopping.** Under `guard.judge_prompt_version` 2 the judge's signed request names
+  the row's duel and intent nonce, so a judge call made for another duel or decision cannot be reused. It does not
+  show that this was the first judge call for that decision: the operator could ask the judge again and keep the
+  verdict it liked. Only committing the judge request hash on chain before the call could rule that out.
 - **Small and testnet.** Few attacked rows per arm and testnet stakes; treat rates as provisional.
 
 ## Citation

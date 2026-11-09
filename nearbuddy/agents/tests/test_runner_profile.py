@@ -179,8 +179,9 @@ def test_v3_attacked_row_keeps_the_signed_judge_call_and_its_verdict(v3_agent):
     verdict = {"fabricated_prob": 0.85, "label": "likely_fabricated"}
     assert (r["profile"], j["verdict"], j["tee"]["kind"], r["guard"]["size_cap"]) == (HARDENED_V3, verdict, 2, 150)
     assert (r["intent"]["side"], r["intent"]["size_bps"]) == ("Short", 150)
-    assert j["request_body"].encode() == request_body(JUDGE_MODEL, JUDGE_SYSTEM, judge_user(ATTACK))
-    assert j["attestation_file"].startswith("z-ai_glm-5.3-flash-")
+    # bound to this duel and the intent's nonce (post_decision used nonce 10 + 1)
+    assert j["request_body"].encode() == request_body(JUDGE_MODEL, JUDGE_SYSTEM, judge_user(ATTACK, bind=("5", "11")))
+    assert r["guard"]["judge_prompt_version"] == 2 and j["attestation_file"].startswith("z-ai_glm-5.3-flash-")
     assert r["brief"] not in j["request_body"] and j["signature_record"]["text"].startswith(f"{JUDGE_MODEL}:")
     user = json.loads(r["request_body"])["messages"][1]["content"]
     assert user == user_v3(r["brief"], ATTACK, verdict, hashlib.sha256(j["text"].encode()).hexdigest())[0]

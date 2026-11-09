@@ -18,10 +18,10 @@ import export_dataset  # noqa: E402
 import runner  # noqa: E402
 from cue_guard import CUE_GUARD_VERSION, normalize  # noqa: E402
 from cue_guard import VERSIONS as CUE_GUARDS  # noqa: E402
-from export_dataset import _check_guard, check_row  # noqa: E402
+from export_dataset import UNBOUND, _check_guard, check_row  # noqa: E402
 from intent_client import proof_hash  # noqa: E402
 from keys import pk_b64  # noqa: E402
-from prompts import HARDENED_V2, HARDENED_V3, JUDGE_MODEL, UNTRUSTED_CAP_BPS, user_v2  # noqa: E402
+from prompts import HARDENED_V2, HARDENED_V3, JUDGE_MODEL, JUDGE_SYSTEM, UNTRUSTED_CAP_BPS, judge_user, user_v2  # noqa: E402
 from tests.test_arm_d import snippet_verify  # noqa: E402
 from tests.test_runner_profile import JudgeEnclave, agent, post, rows, v3_agent  # noqa: E402, F401
 
@@ -207,9 +207,10 @@ def test_a_row_the_runner_signed_under_v1_still_verifies(v2_row):
 
 
 # Rows the live run signed on NEAR AI Cloud on 2026-11-09 (6 hardened-v2 incl. one k = 3, 5 hardened-v3 with the
-# z-ai/glm-5.3-flash judge), written before guard.cue_guard existed: they must keep verifying as cue_guard v1. That run
-# passed the runner no attestation map, so each row's attestation_file was filled in afterwards: it cites a report the
-# runner fetched on 2026-11-10 (fixtures/attestations) that lists the same duelist and judge signers.
+# z-ai/glm-5.3-flash judge), written before guard.cue_guard and guard.judge_prompt_version existed: they must keep
+# verifying as cue_guard v1, with an unbound judge. That run passed the runner no attestation map, so each row's
+# attestation_file was filled in afterwards: it cites a report the runner fetched on 2026-11-10 (fixtures/attestations)
+# that lists the same duelist and judge signers.
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 REAL = FIXTURES / "guard-rows-v1.jsonl"
 
@@ -220,15 +221,17 @@ def real_rows(path: Path = REAL) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_the_live_rows_verify_as_cue_guard_v1():
+def test_the_live_rows_verify_as_cue_guard_v1_with_an_unbound_judge():
     rs = real_rows()
     assert [r["profile"] for r in rs] == [HARDENED_V2] * 6 + [HARDENED_V3] * 5
-    assert not any("cue_guard" in r["guard"] for r in rs)
+    assert not any("cue_guard" in r["guard"] or "judge_prompt_version" in r["guard"] for r in rs)
     assert any(r["guard"]["judgments"] for r in rs) and sum(bool(r["guard"].get("judge")) for r in rs) == 4
-    assert [check(r) for r in rs] == [(True, "ok")] * len(rs)
+    notes = [(True, UNBOUND if r["guard"].get("judge") else "ok") for r in rs]
+    assert [check(r) for r in rs] == notes
     for r in rs:
-        r["guard"]["cue_guard"] = 1  # the same row with the version written out
-        assert check(r) == (True, "ok")
+        r["guard"]["cue_guard"] = 1  # the same row with the versions written out
+        r["guard"]["judge_prompt_version"] = 1
+    assert [check(r) for r in rs] == notes
 
 
 @pytest.mark.parametrize("edit", [set_system, add_user, user_first, hot, reviewers_row])
@@ -455,6 +458,54 @@ def test_a_made_up_verdict_signed_by_a_key_no_attestation_lists_fails(v3_row):
     assert check(v3_row) == (False, "guard judge attestation: signer not attested for this model")
 
 
+def test_the_runner_binds_the_judge_to_the_duel_and_the_intent_nonce(v3_row):
+    j = v3_row["guard"]["judge"]
+    assert v3_row["guard"]["judge_prompt_version"] == 2 and v3_row["intent"]["nonce"] == "11"
+    assert json.loads(j["request_body"])["messages"] == [
+        {"role": "system", "content": JUDGE_SYSTEM},
+        {"role": "user", "content": judge_user(INJ, bind=("5", "11"))},
+    ]
+    assert judge_user(INJ, bind=("5", "11")).startswith('<headline duel_id="5" nonce="11">\n')
+
+
+# hardened-v3 rows the runner signed on NEAR AI Cloud on 2026-11-10 under judge_prompt_version 2, each judge call bound
+# to its duel and intent nonce: 901 and 902 carry the same headline, 903 a lie pushing Long, 904 a neutral placebo, 905
+# no injection. Their signers are listed in the reports in fixtures/attestations, fetched by the runner in that run.
+BOUND = FIXTURES / "guard-rows-v3-bound.jsonl"
+JUDGE_PROMPT = "guard judge: request is not the judge prompt on the injection"
+
+
+def test_the_bound_live_rows_verify_and_name_their_duel_and_nonce():
+    rs = real_rows(BOUND)
+    assert [r["duel_id"] for r in rs] == ["901", "902", "903", "904", "905"]
+    assert [check(r) for r in rs] == [(True, "ok")] * 5
+    assert all(r["guard"]["judge_prompt_version"] == 2 for r in rs) and rs[4]["guard"]["judge"] is None
+    for r in rs[:4]:
+        tag = f'<headline duel_id="{r["duel_id"]}" nonce="{r["intent"]["nonce"]}">\n'
+        assert json.loads(r["guard"]["judge"]["request_body"])["messages"][1]["content"].startswith(tag)
+        assert r["guard"]["judge"]["tee"]["kind"] == 2
+
+
+@pytest.mark.parametrize(
+    ("tamper", "note"),
+    [
+        (lambda r, o: r["guard"].update(judge=o["guard"]["judge"]), JUDGE_PROMPT),  # 902's real call, same headline
+        (lambda r, o: r.update(duel_id=o["duel_id"]), JUDGE_PROMPT),
+        (lambda r, o: r["intent"].update(nonce=o["intent"]["nonce"]), JUDGE_PROMPT),
+        (lambda r, o: r["guard"].update(judge_prompt_version=1), JUDGE_PROMPT),  # claiming unbound does not help
+        (lambda r, o: r["guard"].pop("judge_prompt_version"), JUDGE_PROMPT),
+        (lambda r, o: r["guard"].update(judge_prompt_version=3), "guard: unknown judge_prompt_version"),
+        (lambda r, o: r["guard"].update(judge_prompt_version="2"), "guard: unknown judge_prompt_version"),
+        (lambda r, o: r["guard"].update(judge_prompt_version=True), "guard: unknown judge_prompt_version"),
+    ],
+)
+def test_a_judge_call_made_for_another_duel_or_nonce_fails(tamper, note):
+    r, other = real_rows(BOUND)[:2]
+    assert r["injection"] == other["injection"] and r["guard"]["judge"]["verdict"] != other["guard"]["judge"]["verdict"]
+    tamper(r, other)
+    assert check(r) == (False, note)
+
+
 def _judge_report(r: dict) -> str:
     return r["guard"]["judge"]["attestation_file"]
 
@@ -478,14 +529,14 @@ def _judge_report(r: dict) -> str:
     ],
 )
 def test_a_signer_the_cited_attestation_does_not_list_fails(tamper, note):
-    for r in (real_rows()[7],):  # a live judge row
+    for r in (real_rows()[7], real_rows(BOUND)[0]):  # an unbound and a bound judge row
         tamper(r)
         ok, why = check(r)
         assert not ok and why.startswith(note), why
 
 
 def test_a_missing_or_failed_attestation_report_fails_closed():
-    r = real_rows()[7]
+    r = real_rows(BOUND)[0]
     judge_report = export_dataset.ATTEST_DIR / _judge_report(r)
     judge_report.write_text(json.dumps({"model": JUDGE_MODEL, "nonce": "00", "status": 503, "error": "unavailable"}))
     assert check(r) == (False, "guard judge attestation: attestation file missing or unreadable")

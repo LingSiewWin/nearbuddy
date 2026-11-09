@@ -14,9 +14,9 @@ and takes the majority side (ties: the first judgment's side); the aggregation i
 no narrative a judgment repeats can steer it. The proof binds the first judgment on the majority side.
 
 Profile hardened-v3 is hardened-v2 with one more call before the duelist's: `judge_fn` (the fact-check model) reads
-`prompts.judge_user(injection)` alone, `prompts.parse_verdict` reads its reply (failing closed to unverifiable), and the
-verdict plus sha256 of the reply become the last block of the duelist's request (`prompts.user_v3`). Under paid text
-the cap is `prompts.fact_check_cap(verdict)` instead of UNTRUSTED_CAP_BPS.
+`prompts.judge_user(injection, bind=(duel_id, nonce))` alone, `prompts.parse_verdict` reads its reply (failing closed
+to unverifiable), and the verdict plus sha256 of the reply become the last block of the duelist's request
+(`prompts.user_v3`). Under paid text the cap is `prompts.fact_check_cap(verdict)` instead of UNTRUSTED_CAP_BPS.
 
 The model client is injected as `complete_fn(system, user) -> str`, so the parsing logic is unit-tested
 with no network and the runner can swap the stub for NEAR AI Cloud.
@@ -185,9 +185,16 @@ class Duelist:
     def system_prompt(self, symbol: str) -> str:
         return system_prompt(symbol, self.hardened, self.persona, self.variant)
 
-    def decide(self, symbol: str, market_brief: str, injection_text: str | None = None) -> Decision:
+    def decide(
+        self,
+        symbol: str,
+        market_brief: str,
+        injection_text: str | None = None,
+        bind: tuple[object, object] | None = None,
+    ) -> Decision:
+        """`bind` is the (duel_id, intent nonce) the decision is for; hardened-v3 puts it in the judge's request."""
         if self.variant in GUARDED:
-            return self._decide_v2(symbol, market_brief, injection_text)
+            return self._decide_v2(symbol, market_brief, injection_text, bind)
         user = user_prompt(market_brief, injection_text, self.variant)  # variant D: the telemetry is dropped here
         raw = self._complete(self.system_prompt(symbol), user)
         decision = parse_decision(raw)
@@ -218,7 +225,9 @@ class Duelist:
         decision.size_bps = min(FULL_SIZE_BPS, max(1, asked))
         decision.size_note = "sized"
 
-    def _decide_v2(self, symbol: str, brief: str, injection: str | None) -> Decision:
+    def _decide_v2(
+        self, symbol: str, brief: str, injection: str | None, bind: tuple[object, object] | None = None
+    ) -> Decision:
         """hardened-v2: `judgments` calls on the same system and user messages; the majority side wins and the first
         call on that side is the proof. An unparseable judgment does not vote (0 in `votes`, which stays one entry
         per call); if none parses, the first error is raised. The size is `policy_size` of the proof call's stated size.
@@ -230,7 +239,7 @@ class Duelist:
         if self.variant == HARDENED_V3 and injection:
             if self.judge is None:
                 raise ValueError("hardened-v3 needs judge_fn, the fact-check model")
-            reply = self.judge(JUDGE_SYSTEM, judge_user(injection))
+            reply = self.judge(JUDGE_SYSTEM, judge_user(injection, bind=bind))
             verdict = parse_verdict(reply)
             user, cues = user_v3(brief, injection, verdict, hashlib.sha256(reply.encode()).hexdigest())
         else:
