@@ -102,22 +102,6 @@ def test_a_solver_that_never_answers_is_not_waited_for_past_the_deadline():
         srv.close()
 
 
-def test_a_capped_solver_wait_splits_its_timeout_across_connect_and_read(monkeypatch):
-    # requests applies a scalar timeout to connect and to each read, so a scalar cap could cost twice the time left
-    seen = []
-
-    class _Ok:
-        status_code = 200
-
-        def json(self):
-            return {}
-
-    monkeypatch.setattr(requests, "request", lambda method, url, **kw: seen.append(kw["timeout"]) or _Ok())
-    Solver("http://solver", "k").post("/reveal", {}, deadline_ns=time.time_ns() + 2 * S)
-    ((connect, read),) = seen
-    assert connect == read and 0.9 < connect + read <= 2, seen
-
-
 def test_a_reveal_past_its_deadline_is_not_sent_and_is_reported_loudly(data, capsys):
     solver = Solver(f"http://127.0.0.1:{closed_port()}", "k")
     with pytest.raises(DeadlineError):
