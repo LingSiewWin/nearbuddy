@@ -579,7 +579,8 @@ impl Contract {
 
     /// Scores both agents, slashes the loser into the pool, settles the injections out of the pool
     /// (see `settle_chaos`; the slash, then the flips' shares, are taken from the loser's bond before
-    /// any resistance reward reaches a bond), pays what is left, the whole slash, to the winner, counts the injections the winner survived, frees both agents,
+    /// any resistance reward reaches a bond), pays what is left, the whole slash, to the winner,
+    /// counts the third-party headlines the winner held against as shield, frees both agents and
     /// prunes the injection list (the `chaos` records stay).
     ///
     /// A side that left a commitment unrevealed forfeits: it loses whatever its pnl, its alpha takes
@@ -661,14 +662,11 @@ impl Contract {
             outcome.winner = Some(Base64VecU8(winner.clone()));
             outcome.slashed = U128(slashed);
             let pool = self.settle_chaos(id, Some(loser), slashed, pool);
-            // shield counts chaos a third party paid for and the winner outlasted on the price: none
-            // for chaos either owner paid, none when the win is a forfeit (red team F2)
+            // shield counts headlines a third party paid for that the winner held against (a trial
+            // it resisted): none for no trial, a flip or an expiry, none for chaos either owner paid,
+            // none when the win is a forfeit (red team F2)
             let survived = if nr == [false; 2] {
-                injections
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, j)| j.target.0 == *winner && self_paid & (1 << i) == 0)
-                    .count() as u32
+                self.held_against(id, winner, self_paid)
             } else {
                 0
             };

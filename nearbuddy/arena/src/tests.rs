@@ -2605,10 +2605,13 @@ fn resolve_scores_50_bps_slashes_and_prunes() {
     assert_eq!(
         refund(&c, d),
         pool,
-        "no decision after the injection: its stake goes back"
+        "no decision after the injection: its stake goes back (no fee under `init` terms)"
     );
-    assert_eq!(a.shield, 1);
-    assert_eq!(b.shield, 0);
+    assert_eq!(
+        (a.shield, b.shield),
+        (0, 0),
+        "an expired headline is no trial resisted"
+    );
     assert!(a.in_duel.is_none() && b.in_duel.is_none());
     let duel = c.get_duel(U64(d)).unwrap();
     assert!(duel.resolved);
@@ -2660,18 +2663,31 @@ fn resolve_tie_splits_pool_remainder_to_a() {
 }
 
 #[test]
-fn resolve_shield_counts_injections_at_winner() {
-    let (mut c, ska, skb) = setup();
-    let tee = tee_signer(&mut c);
-    let d = open(&mut c);
-    post_a(&mut c, &ska, &tee, d, Side::Long, 1);
-    post_b(&mut c, &skb, d, Side::Short, 1);
-    inject(&mut c, d, &key(1).1, MIN_CHAOS);
-    inject(&mut c, d, &key(1).1, MIN_CHAOS);
-    inject(&mut c, d, &key(2).1, MIN_CHAOS);
-    resolve_at_close(&mut c, d, UP);
-    assert_eq!(c.get_agent(Base64VecU8(key(1).1)).unwrap().shield, 2);
-    assert_eq!(c.get_duel(U64(d)).unwrap().outcome.unwrap().injections, 3);
+fn resolve_shield_counts_the_headlines_the_winner_held_against() {
+    let (mut c, ska, skb, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+    decide_b(&mut c, &skb, d, Side::Short, 1, NOW);
+    let held = [
+        plant(&mut c, d, 1, ChaosKind::Short, NOW + 1),
+        plant(&mut c, d, 1, ChaosKind::Short, NOW + 1),
+    ];
+    let no_trial = plant(&mut c, d, 1, ChaosKind::Long, NOW + 1); // A already Long
+    plant(&mut c, d, 2, ChaosKind::Long, NOW + 1); // at the loser
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 2, NOW + 2, NOW + 2);
+    let late = plant(&mut c, d, 1, ChaosKind::Short, NOW + 3); // expires
+    resolve_at_close(&mut c, d, UP); // Long A wins
+    for ix in held {
+        assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Held);
+    }
+    assert_eq!(chaos_at(&c, d, no_trial).outcome, ChaosOutcome::NoTrial);
+    assert_eq!(chaos_at(&c, d, late).outcome, ChaosOutcome::Expired);
+    assert_eq!(
+        c.get_agent(Base64VecU8(key(1).1)).unwrap().shield,
+        2,
+        "only the held ones"
+    );
+    assert_eq!(c.get_agent(Base64VecU8(key(2).1)).unwrap().shield, 0);
+    assert_eq!(c.get_duel(U64(d)).unwrap().outcome.unwrap().injections, 5);
 }
 
 #[test]
@@ -4029,16 +4045,16 @@ fn open_before_set_oracle_panics() {
 #[test]
 fn chaos_an_agent_owner_pays_earns_no_shield_and_goes_to_owner_fees() {
     // OPERATOR owns both agents (duel 363 shape): its chaos at A is a fee, not pool, and no shield
-    let (mut c, ska, skb) = setup();
-    let tee = tee_signer(&mut c);
-    let d = open(&mut c);
-    post_a(&mut c, &ska, &tee, d, Side::Long, 1);
-    post_b(&mut c, &skb, d, Side::Short, 1);
+    // even when A holds against it
+    let (mut c, ska, skb, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+    decide_b(&mut c, &skb, d, Side::Short, 1, NOW);
     let fees0 = c.get_config().owner_fees.0;
-    inject_as(&mut c, OPERATOR, d, &key(1).1, MIN_CHAOS);
+    let price = c.chaos_fee(U64(d)).0;
+    inject_as(&mut c, OPERATOR, d, &key(1).1, price);
     let fees1 = c.get_config().owner_fees.0;
     assert!(
-        fees1 > fees0 && fees1 - fees0 < MIN_CHAOS,
+        fees1 > fees0 && fees1 - fees0 < price,
         "the deposit less its storage is a fee"
     );
     assert_eq!(
@@ -4046,12 +4062,11 @@ fn chaos_an_agent_owner_pays_earns_no_shield_and_goes_to_owner_fees() {
         0,
         "nothing reaches the pool"
     );
-    inject(&mut c, d, &key(1).1, MIN_CHAOS);
+    let price = c.chaos_fee(U64(d)).0;
+    plant(&mut c, d, 1, ChaosKind::Short, NOW);
     let pool = c.get_duel(U64(d)).unwrap().pool.0;
-    assert!(
-        pool > 0 && pool < MIN_CHAOS,
-        "a spectator's deposit is pool"
-    );
+    assert!(pool > 0 && pool < price, "a spectator's deposit is pool");
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 2, NOW + 1, NOW + 1); // A holds against both
     resolve_at_close(&mut c, d, UP); // A is Long and wins on the rise
     let a = c.get_agent(Base64VecU8(key(1).1)).unwrap();
     assert_eq!(a.shield, 1, "only the spectator's chaos counts");
@@ -4527,7 +4542,7 @@ fn a_held_headline_pays_the_target_a_resistance_reward() {
 }
 
 #[test]
-fn no_trial_returns_the_stake_whole() {
+fn no_trial_returns_the_stake_less_the_fee() {
     // the target already held the lie's side, or had no decision before the injection
     let (mut c, ska, _, tee, d) = fool_setup();
     let early = plant(&mut c, d, 1, ChaosKind::Long, NOW);
@@ -4541,14 +4556,18 @@ fn no_trial_returns_the_stake_whole() {
     assert_eq!(chaos_at(&c, d, same).prev, Some(Side::Long));
     let fees = c.get_config().owner_fees.0;
     resolve_at_close(&mut c, d, UP);
+    let mut fee_sum = 0;
     for ix in [early, same] {
         let s = chaos_at(&c, d, ix);
+        let fee = s.stake.0 * 500 / 10_000;
         assert_eq!(
-            s.payout, s.stake,
-            "no fee on a stake that never met a trial"
+            s.payout.0,
+            s.stake.0 - fee,
+            "a stake that never met a trial still pays the fee"
         );
+        fee_sum += fee;
     }
-    assert_eq!(c.get_config().owner_fees.0, fees);
+    assert_eq!(c.get_config().owner_fees.0, fees + fee_sum);
 }
 
 #[test]
@@ -4575,7 +4594,10 @@ fn a_decision_committed_before_the_injection_never_decides_it() {
     );
     resolve_at_close(&mut c, d, UP);
     let s = chaos_at(&c, d, ix);
-    assert_eq!((s.outcome, s.payout), (ChaosOutcome::Expired, s.stake));
+    assert_eq!(
+        (s.outcome, s.payout.0),
+        (ChaosOutcome::Expired, s.stake.0 - s.stake.0 * 500 / 10_000)
+    );
 }
 
 #[test]
@@ -4612,7 +4634,10 @@ fn a_plain_agents_reveal_never_decides_a_headline() {
     assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Pending);
     resolve_at_close(&mut c, d, UP);
     let s = chaos_at(&c, d, ix);
-    assert_eq!((s.outcome, s.payout), (ChaosOutcome::Expired, s.stake));
+    assert_eq!(
+        (s.outcome, s.payout.0),
+        (ChaosOutcome::Expired, s.stake.0 - s.stake.0 * 500 / 10_000)
+    );
 }
 
 #[test]
@@ -4671,7 +4696,10 @@ fn void_settles_the_headlines_as_a_tie() {
     assert_eq!(bond(&c, 1), bond_a + h - h * 500 / 10_000);
     assert_eq!(bond(&c, 2), bond_b);
     let s = chaos_at(&c, d, late);
-    assert_eq!((s.outcome, s.payout.0), (ChaosOutcome::Expired, l));
+    assert_eq!(
+        (s.outcome, s.payout.0),
+        (ChaosOutcome::Expired, l - l * 500 / 10_000)
+    );
 }
 
 #[test]
@@ -4751,7 +4779,7 @@ fn set_chaos_config_guards_its_terms() {
 /// Every combination of up to three injections over small stakes, outcomes, targets, losers,
 /// slashes and terms: settling conserves value (what leaves the pool is paid out, credited or
 /// fee'd, exactly), shares never exceed the slash's pot, every injection ends settled with one
-/// final outcome, refunds are whole, and a reward goes only to a decided injection.
+/// final outcome, every stake pays the fee once, and a reward goes only to a decided injection.
 #[test]
 fn settle_records_conserves_and_pays_once_over_small_ranges() {
     use ChaosOutcome::*;
@@ -4832,11 +4860,13 @@ fn settle_records_conserves_and_pays_once_over_small_ranges() {
                             r.outcome == Flipped && r.stake.0 > 0 && loser == Some(&r.target.0)
                         });
                         assert!(flipped_loser || s.shares == 0, "a share without a flip");
+                        let fees: u128 = list.iter().map(|x| x.0 * fee_bps as u128 / 10_000).sum();
+                        assert_eq!(s.fees, fees, "every stake pays the fee, once");
                         for (r, (stake, before, _)) in recs.iter().zip(list) {
                             let fee = stake * fee_bps as u128 / 10_000;
                             match (before, r.outcome) {
                                 (Pending, Expired) | (NoTrial, NoTrial) => {
-                                    assert_eq!(r.payout.0, *stake, "a refund is whole")
+                                    assert_eq!(r.payout.0, stake - fee, "a refund less the fee")
                                 }
                                 (Held, Held) => assert_eq!(r.payout.0, 0),
                                 (Flipped, Flipped) => assert!(r.payout.0 >= stake - fee),
@@ -4996,4 +5026,65 @@ fn the_flip_share_never_takes_more_than_the_losers_bond() {
         s.stake.0 - s.stake.0 * 500 / 10_000 + (a0 - slashed)
     );
     assert_eq!(bond(&c, 2), b0 + slashed);
+}
+
+/// M2: a sybil squats all 32 slots with headlines that can never be a trial (A already holds the
+/// lie's side). Each stake still pays the 5 % fee, and a no trial buys no shield.
+#[test]
+fn squatting_the_slots_pays_the_fee_and_buys_no_shield() {
+    let (mut c, ska, skb, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW + SEC, NOW + SEC);
+    let mut paid = 0u128;
+    for i in 0..32 {
+        paid += plant_as(&mut c, SYBIL, d, 1, ChaosKind::Long, NOW + 2 * SEC + i).0;
+    }
+    assert_eq!(
+        try_inject(&mut c, SPECTATOR, NEAR, ChaosKind::Short, HEADLINE),
+        "chaos full"
+    );
+    decide_a(
+        &mut c,
+        &ska,
+        &tee,
+        d,
+        Side::Long,
+        2,
+        NOW + 4 * SEC,
+        NOW + 4 * SEC,
+    );
+    decide_b(&mut c, &skb, d, Side::Short, 1, NOW + 5 * SEC);
+    let fees0 = c.get_config().owner_fees.0;
+    resolve_at_close(&mut c, d, UP); // Long A wins
+    let list = c.get_chaos(U64(d));
+    assert!(list.iter().all(|x| x.outcome == ChaosOutcome::NoTrial));
+    let stakes: u128 = list.iter().map(|x| x.stake.0).sum();
+    let fees: u128 = list.iter().map(|x| x.stake.0 * 500 / 10_000).sum();
+    let owed: u128 = list.iter().map(|x| x.payout.0).sum();
+    println!(
+        "paid={paid} owed_back={owed} cost={} ({:.4} NEAR; storage {}, fees {fees}) shield={}",
+        paid - owed,
+        (paid - owed) as f64 / 1e24,
+        paid - stakes,
+        c.get_agent(Base64VecU8(key(1).1)).unwrap().shield
+    );
+    assert_eq!(owed, stakes - fees);
+    assert_eq!(c.get_config().owner_fees.0, fees0 + fees);
+    assert!(
+        paid - owed > paid / 20,
+        "at least the 5 % fee of every price"
+    );
+    assert_eq!(c.get_agent(Base64VecU8(key(1).1)).unwrap().shield, 0);
+}
+
+/// M2: a third-party headline the winner held against is what earns shield.
+#[test]
+fn a_held_headline_at_the_winner_earns_shield() {
+    let (mut c, ska, skb, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+    decide_b(&mut c, &skb, d, Side::Short, 1, NOW);
+    let ix = plant(&mut c, d, 1, ChaosKind::Short, NOW + 1);
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 2, NOW + 2, NOW + 2);
+    resolve_at_close(&mut c, d, UP);
+    assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Held);
+    assert_eq!(c.get_agent(Base64VecU8(key(1).1)).unwrap().shield, 1);
 }

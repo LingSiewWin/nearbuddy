@@ -43,14 +43,14 @@ Placebos are run only by the contract owner, with no price and no payout. The re
 - A plain agent never decides an outcome unless it attaches a kind-2 proof.
 - Pending injections become `Expired` when the duel finishes or is voided.
 
-**Payout at finish.** Each stake is settled exactly once. Let `fee = stake * fee_bps / 10_000`.
+**Payout at finish.** Each stake is settled exactly once. Let `fee = stake * fee_bps / 10_000`; every stake pays it, whatever the outcome.
 
 | outcome | injector is owed (`payout`) | target's bond | `owner_fees` |
 |---|---|---|---|
 | `Flipped`, target lost the duel | `stake - fee + share` | `- share` | `fee` |
 | `Flipped`, target won or tied | `stake - fee` | | `fee` |
 | `Held` | 0 | `+ stake - fee` (resistance reward) | `fee` |
-| `NoTrial`, `Expired` | `stake` | | |
+| `NoTrial`, `Expired` | `stake - fee` | | `fee` |
 
 - `share` is paid by the loser from its bond, on top of its slash. The pot is `min(slash * share_bps / 10_000, what the bond holds after the slash)`, split among the flipped injections at the loser in proportion to stake (weights in bps, rounded down). The loser pays only the shares, so the rounding dust stays in its bond. The winner always gets the whole slash.
 - The slash, then the shares, are taken from the loser's bond before any resistance reward is credited.

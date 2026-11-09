@@ -741,15 +741,15 @@ fn settle_model(
         if r.outcome == ChaosOutcome::Pending {
             r.outcome = ChaosOutcome::Expired;
         }
+        // every stake pays the fee, whatever its outcome
         let fee = r.stake * cfg.fee_bps as u128 / 10_000;
         taken += r.stake;
+        fees += fee;
         match r.outcome {
             ChaosOutcome::Held => {
-                fees += fee;
                 credit[r.side_b as usize] += r.stake - fee;
             }
             ChaosOutcome::Flipped => {
-                fees += fee;
                 // weight 0: every flip at the loser was unpaid (an owner's), nothing to split by
                 let share = if at_loser(r) && weight > 0 {
                     pot * (r.stake * 10_000 / weight) / 10_000
@@ -759,7 +759,7 @@ fn settle_model(
                 shares += share;
                 r.payout = r.stake - fee + share;
             }
-            _ => r.payout = r.stake,
+            _ => r.payout = r.stake - fee,
         }
     }
     let paid: u128 = recs.iter().map(|r| r.payout).sum();
@@ -1966,15 +1966,19 @@ impl World {
         assert_eq!(post.bonds[a], Some(na), "bond a after resolution");
         assert_eq!(post.bonds[b], Some(nb), "bond b after resolution");
         assert_eq!(post.fees, fees, "owner fees after resolution");
-        // 5b. shield grows only by third-party chaos the winner outlasted on the price: never from
-        // chaos an agent owner paid, never on a forfeit win, never for the loser or on a tie
+        // 5b. shield grows only by third-party chaos the winner held against: never from chaos an
+        // agent owner paid, never for no trial, a flip or an expiry, never on a forfeit win, never
+        // for the loser or on a tie
         let won = |side_b: bool| a_wins == Some(!side_b);
         for (side_b, ag) in [(false, a), (true, b)] {
             let earned = if won(side_b) && nr == [false; 2] {
                 self.duels[d]
                     .chaos
                     .iter()
-                    .filter(|(at_b, own)| *at_b == side_b && !own)
+                    .zip(&self.duels[d].recs)
+                    .filter(|((at_b, own), r)| {
+                        *at_b == side_b && !own && r.outcome == ChaosOutcome::Held
+                    })
                     .count() as u32
             } else {
                 0

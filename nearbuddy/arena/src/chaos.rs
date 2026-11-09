@@ -2,10 +2,11 @@
 //! duel, paying a price that rises with each injection. The contract draws the delivery arm (`Cue`
 //! or `Clean`) from the block's random seed. The target's first revealed, TEE-proved decision made
 //! after the injection decides the outcome (`Flipped`, `Held` or `NoTrial`), once. At finish each
-//! stake is settled exactly once (`settle_records`): a flip returns the stake less the fee, plus a
-//! share taken from the loser's bond on top of its slash when the target lost the duel; a held
-//! stake, less the fee, goes to the target's bond as its resistance reward; no trial, or no decision
-//! before the end, returns the stake whole. Injectors claim what they are owed with `claim_chaos`.
+//! stake is settled exactly once (`settle_records`) and pays the fee whatever its outcome: a flip
+//! returns the stake less the fee, plus a share taken from the loser's bond on top of its slash when
+//! the target lost the duel; a held stake, less the fee, goes to the target's bond as its resistance
+//! reward; no trial, or no decision before the end, returns the stake less the fee. Injectors claim
+//! what they are owed with `claim_chaos`.
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::{NearToken, Promise, env, near, require};
 
@@ -109,16 +110,17 @@ pub(crate) struct Settlement {
     pub shares: u128,
 }
 
-/// Settles every injection of a finished duel, once: a pending one expires, then
-/// - `NoTrial`, `Expired`: `payout = stake`;
-/// - `Held`: `stake - fee` to the target's bond, `fee` to the owner;
-/// - `Flipped`: `payout = stake - fee`, `fee` to the owner, plus, when the target is `loser`, its share of `pot`, split
+/// Settles every injection of a finished duel, once: a pending one expires, every stake pays
+/// `fee = stake * fee_bps / 10_000` to the owner whatever its outcome (so filling the slots with
+/// injections that never meet a trial is not free), then
+/// - `NoTrial`, `Expired`: `payout = stake - fee`;
+/// - `Held`: `stake - fee` to the target's bond;
+/// - `Flipped`: `payout = stake - fee`, plus, when the target is `loser`, its share of `pot`, split
 ///   by stake (weights in bps, rounded down).
 ///
 /// `pot` is what the loser pays the flips on top of its slash (see `settle_chaos`); only the shares
 /// paid (`shares <= pot`) are taken from it, so the rounding dust stays with the loser. What leaves
-/// the pool (`taken`) is every stake, and `taken + shares` equals payouts + credits + fees, where
-/// `fee = stake * fee_bps / 10_000`.
+/// the pool (`taken`) is every stake, and `taken + shares` equals payouts + credits + fees.
 pub(crate) fn settle_records(
     list: &mut [Chaos],
     loser: Option<&[u8]>,
@@ -140,15 +142,14 @@ pub(crate) fn settle_records(
         let stake = c.stake.0;
         let fee = stake * cfg.fee_bps as u128 / 10_000;
         s.taken += stake;
+        s.fees += fee;
         match c.outcome {
             ChaosOutcome::Held => {
-                s.fees += fee;
                 if stake > fee {
                     s.credits.push((c.target.0.clone(), stake - fee));
                 }
             }
             ChaosOutcome::Flipped => {
-                s.fees += fee;
                 let share = if fooled_loser(c) && weight > 0 {
                     pot * (stake * 10_000 / weight) / 10_000
                 } else {
@@ -157,13 +158,26 @@ pub(crate) fn settle_records(
                 s.shares += share;
                 c.payout = U128(stake - fee + share);
             }
-            _ => c.payout = U128(stake),
+            _ => c.payout = U128(stake - fee),
         }
     }
     s
 }
 
 impl Contract {
+    /// Third-party headlines (not paid by either agent's owner, not placebos: `self_paid` bits
+    /// clear) at `pk` in finished duel `id` that `pk` held against: its shield gain.
+    pub(crate) fn held_against(&self, id: u64, pk: &[u8], self_paid: u64) -> u32 {
+        self.chaos.get(&id).map_or(0, |v| {
+            v.iter()
+                .enumerate()
+                .filter(|(i, c)| {
+                    c.target.0 == pk && c.outcome == ChaosOutcome::Held && self_paid & (1 << i) == 0
+                })
+                .count() as u32
+        })
+    }
+
     /// Paid (non-placebo) injections so far in duel `id`: the `n` of the price.
     fn paid_injections(&self, id: u64) -> u32 {
         self.chaos.get(&id).map_or(0, |v| {
