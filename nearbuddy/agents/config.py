@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -11,9 +12,26 @@ from dotenv import dotenv_values
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
+
+def env_file(root: Path = ROOT) -> Path:
+    """This checkout's `.env`. A git worktree has none (it is gitignored), so it reads the main checkout's instead:
+    the secrets stay in one file and are never copied."""
+    own = root / ".env"
+    if own.exists():
+        return own
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True).stdout.strip()
+
+    top, common = git("rev-parse", "--show-toplevel"), git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not top or not common:
+        return own
+    return Path(common).parent / root.resolve().relative_to(Path(top).resolve()) / ".env"
+
+
 # a bare `KEY` line in .env reads as None; drop it so every value is a str
 ENV: dict[str, str] = {
-    **{k: v for k, v in dotenv_values(ROOT / ".env").items() if v is not None},
+    **{k: v for k, v in dotenv_values(env_file()).items() if v is not None},
     **os.environ,
 }
 # Same table as packages/protocol/src/network.ts (tests/test_network.py fails when they drift).
