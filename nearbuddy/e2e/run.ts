@@ -1391,7 +1391,8 @@ async function main() {
           join(ROOT, "agents"),
           data,
         ],
-        { encoding: "utf8", env: { ...process.env, NEAR_AI_API_KEY: "" } },
+        // the runner's network env, so check_row reads the attestation folder the runner wrote (config.ATTEST_DIR)
+        { encoding: "utf8", env: { ...process.env, ...chainEnv, NEAR_AI_API_KEY: "" } },
       );
       const verdicts = py.status === 0 ? (JSON.parse(py.stdout.trim().split("\n").at(-1)!) as [boolean, string][]) : [];
       check(
