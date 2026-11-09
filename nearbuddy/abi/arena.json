@@ -149,7 +149,7 @@
       },
       {
         "name": "commit_intent",
-        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n Replacing a held commitment unrevealed turns every headline still pending at this agent that\n was planted at or after it into `NoTrial`: the hidden call was their `prev`. A runner that\n wants those trials to count reveals before it commits again.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"agent missing\",\n \"bond exhausted\".",
+        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n Replacing a held commitment unrevealed hides the `prev` of every headline still pending at\n this agent that was planted at or after it: they stay pending, and the hidden call counts\n against the agent (its next counting decision flips them when it takes the lie's side, else\n they are no trial, never held). A runner reveals the held call before it commits again.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"agent missing\",\n \"bond exhausted\".",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -738,7 +738,7 @@
       },
       {
         "name": "inject_chaos",
-        "doc": " Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes\n toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with\n no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the\n stake, escrowed in the pool until the duel finishes. When the payer owns either agent the\n stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).\n The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the\n injection's index in `get_chaos(duel_id)`.\n Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the\n record's storage. Panics: \"paused\", \"headline empty\", \"headline too long\", \"headline control\n character\", \"placebo is system-run\", \"duel missing\", \"chaos deposit too small\", \"duel\n closed\", \"bad target\", \"chaos full\".",
+        "doc": " Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes\n toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with\n no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the\n stake (more than 0 when paid), escrowed in the pool until the duel finishes. When the payer owns either agent the\n stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).\n The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the\n injection's index in `get_chaos(duel_id)`.\n Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the\n record's storage. Panics: \"paused\", \"headline empty\", \"headline too long\", \"headline control\n character\", \"placebo is system-run\", \"duel missing\", \"chaos deposit too small\", \"duel\n closed\", \"bad target\", \"chaos full\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -1929,7 +1929,7 @@
       },
       {
         "name": "void_duel",
-        "doc": " Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both\n agents, no slashing, no score. Recorded as a tie with no prices: the injections settle as on a\n tie (see `settle_records`) and what is left of the pool is split between the agents.\n Caller: anyone. Deposit: none. Panics: \"duel missing\", \"resolved\", \"too early\",\n \"agent missing\".",
+        "doc": " Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both\n agents, no slashing, no score. Recorded as a tie with no prices: the injections settle as on a\n tie (see `settle_records`), except that an expired one pays no fee, and what is left of the\n pool is split between the agents.\n Caller: anyone. Deposit: none. Panics: \"duel missing\", \"resolved\", \"too early\",\n \"agent missing\".",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -2125,7 +2125,7 @@
           }
         },
         "Chaos": {
-          "description": "One planted headline (deploy 17). `Duel.injections[i]` and `get_chaos(duel)[i]` are the same injection.\n\n`prev` is the side of the target's last decision made at or before `at` (a decision's time is its commit time when revealed, else its accept time), updated while the injection is pending. The first decision made after `at` that is revealed from a commitment and carries a verified provider-TEE proof (kind 2) decides the outcome, once; direct posts never decide, since their side is readable before they land.",
+          "description": "One planted headline (deploy 17). `Duel.injections[i]` and `get_chaos(duel)[i]` are the same injection.\n\n`prev` is the side of the target's last decision made at or before `at` (a decision's time is its commit time when revealed, else its accept time), updated while the injection is pending. The first decision made after `at` that is revealed from a commitment and carries a verified provider-TEE proof (kind 2) decides the outcome, once; direct posts never decide, since their side is readable before they land.\n\nA target that replaces, unrevealed, the commitment it held at `at` hides the decision before: `prev` becomes `None` for good and the hidden call counts against the target, so the next counting decision gives `Flipped` on the lie's side and `NoTrial` off it, never `Held`. Revealing the held call first is never judged worse for the target.",
           "type": "object",
           "required": [
             "arm",
@@ -2182,7 +2182,7 @@
               "$ref": "#/definitions/ChaosOutcome"
             },
             "payout": {
-              "description": "Owed to `injector` once the duel finished: the stake back less the fee (no trial, expired or flipped) plus, for a flip at the duel's loser, a share the loser pays from its bond on top of its slash.",
+              "description": "Owed to `injector` once the duel finished: the stake back less the fee (no trial, expired or flipped; the whole stake when it expired in a voided duel) plus, for a flip at the duel's loser, a share the loser pays from its bond on top of its slash.",
               "type": "string"
             },
             "prev": {
@@ -2205,7 +2205,7 @@
           }
         },
         "ChaosConfig": {
-          "description": "Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At finish `fee_bps` of every stake, whatever its outcome, goes to `owner_fees`. The loser pays `share_bps` of its slash again, from its bond on top of the slash (bounded by the bond), split pro rata by stake among the injections that flipped it; the winner keeps the whole slash.",
+          "description": "Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At finish `fee_bps` of every stake, whatever its outcome, goes to `owner_fees` (not of one that expired in a voided duel: the oracle never answered). The loser pays `share_bps` of its slash again, from its bond on top of the slash (bounded by the bond), split pro rata by stake among the injections that flipped it; the winner keeps the whole slash.",
           "type": "object",
           "required": [
             "base",
@@ -2258,7 +2258,7 @@
               ]
             },
             {
-              "description": "The decision before the injection was not on the lie's side and the next one is.",
+              "description": "The decision before the injection was not on the lie's side and the next one is. Also a next decision on the lie's side after the target hid the decision before (`prev` is `None`).",
               "type": "string",
               "enum": [
                 "Flipped"
@@ -2272,7 +2272,7 @@
               ]
             },
             {
-              "description": "No trial: no known decision before the injection, the target already held the lie's side, a placebo, or the target replaced, unrevealed, the commitment it held at the injection. Still records `prev` and `next` (neither for a replaced commitment).",
+              "description": "No trial: no known decision before the injection, the target already held the lie's side, a placebo, or a next decision off the lie's side after the target hid the decision before. Still records `prev` and `next`.",
               "type": "string",
               "enum": [
                 "NoTrial"

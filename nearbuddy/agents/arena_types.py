@@ -52,6 +52,10 @@ type Base64VecU8 = str
 # revealed, else its accept time), updated while the injection is pending. The first decision made after `at` that is
 # revealed from a commitment and carries a verified provider-TEE proof (kind 2) decides the outcome, once; direct posts
 # never decide, since their side is readable before they land.
+#
+# A target that replaces, unrevealed, the commitment it held at `at` hides the decision before: `prev` becomes `None`
+# for good and the hidden call counts against the target, so the next counting decision gives `Flipped` on the lie's
+# side and `NoTrial` off it, never `Held`. Revealing the held call first is never judged worse for the target.
 class Chaos(TypedDict):
     arm: Arm
     # Block time of the injection (ns).
@@ -80,8 +84,9 @@ class Chaos(TypedDict):
     kind: ChaosKind
     next: Side | None
     outcome: ChaosOutcome
-    # Owed to `injector` once the duel finished: the stake back less the fee (no trial, expired or flipped) plus, for a
-    # flip at the duel's loser, a share the loser pays from its bond on top of its slash.
+    # Owed to `injector` once the duel finished: the stake back less the fee (no trial, expired or flipped; the whole
+    # stake when it expired in a voided duel) plus, for a flip at the duel's loser, a share the loser pays from its bond
+    # on top of its slash.
     payout: str
     prev: Side | None
     # Escrowed in the duel pool until it finishes. 0 when the contract owner (placebo) or the owner of either agent
@@ -92,9 +97,9 @@ class Chaos(TypedDict):
 
 # Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel (placebos not counted) needs
 # a deposit of at least `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. At
-# finish `fee_bps` of every stake, whatever its outcome, goes to `owner_fees`. The loser pays `share_bps` of its slash
-# again, from its bond on top of the slash (bounded by the bond), split pro rata by stake among the injections that
-# flipped it; the winner keeps the whole slash.
+# finish `fee_bps` of every stake, whatever its outcome, goes to `owner_fees` (not of one that expired in a voided duel:
+# the oracle never answered). The loser pays `share_bps` of its slash again, from its bond on top of the slash (bounded
+# by the bond), split pro rata by stake among the injections that flipped it; the winner keeps the whole slash.
 class ChaosConfig(TypedDict):
     base: str
     cap: str
@@ -1042,9 +1047,10 @@ class ArenaCall(Protocol):
     # this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
     # signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
     # should be 32 random bytes: the intent space is small enough to brute-force without it.
-    # Replacing a held commitment unrevealed turns every headline still pending at this agent that
-    # was planted at or after it into `NoTrial`: the hidden call was their `prev`. A runner that
-    # wants those trials to count reveals before it commits again.
+    # Replacing a held commitment unrevealed hides the `prev` of every headline still pending at
+    # this agent that was planted at or after it: they stay pending, and the hidden call counts
+    # against the agent (its next counting decision flips them when it takes the lie's side, else
+    # they are no trial, never held). A runner reveals the held call before it commits again.
     # Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     # "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
     # "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
@@ -1100,7 +1106,7 @@ class ArenaCall(Protocol):
     # Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes
     # toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with
     # no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the
-    # stake, escrowed in the pool until the duel finishes. When the payer owns either agent the
+    # stake (more than 0 when paid), escrowed in the pool until the duel finishes. When the payer owns either agent the
     # stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).
     # The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the
     # injection's index in `get_chaos(duel_id)`.
@@ -1338,7 +1344,8 @@ class ArenaCall(Protocol):
 
     # Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both
     # agents, no slashing, no score. Recorded as a tie with no prices: the injections settle as on a
-    # tie (see `settle_records`) and what is left of the pool is split between the agents.
+    # tie (see `settle_records`), except that an expired one pays no fee, and what is left of the
+    # pool is split between the agents.
     # Caller: anyone. Deposit: none. Panics: "duel missing", "resolved", "too early",
     # "agent missing".
     @overload
