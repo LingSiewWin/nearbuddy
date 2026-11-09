@@ -63,6 +63,9 @@ jobs:
       # headline manipulation detector (scripts/check-all.sh sentinel); tests use cached fixtures, no network
       - run: uv sync --locked && uv run --locked ruff check . && uv run --locked ruff format --check . && uv run --locked pytest -q
         working-directory: nearbuddy/sentinel
+      # the pre-registered experiment's statistics, corpus and harness (scripts/check-all.sh lab); no network calls
+      - run: uv sync --locked && uv run --locked ruff check . && uv run --locked ruff format --check . && uv run --locked mypy . && uv run --locked pytest -q
+        working-directory: nearbuddy/lab
 
   rust:
     runs-on: ubuntu-latest
