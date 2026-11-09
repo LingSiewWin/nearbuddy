@@ -578,8 +578,8 @@ impl Contract {
     }
 
     /// Scores both agents, slashes the loser into the pool, settles the injections out of the pool
-    /// (see `settle_records`; the slash is taken before any resistance reward reaches a bond), pays
-    /// what is left to the winner, counts the injections the winner survived, frees both agents,
+    /// (see `settle_chaos`; the slash, then the flips' shares, are taken from the loser's bond before
+    /// any resistance reward reaches a bond), pays what is left, the whole slash, to the winner, counts the injections the winner survived, frees both agents,
     /// prunes the injection list (the `chaos` records stay).
     ///
     /// A side that left a commitment unrevealed forfeits: it loses whatever its pnl, its alpha takes

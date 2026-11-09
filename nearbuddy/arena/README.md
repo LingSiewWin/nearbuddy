@@ -47,15 +47,15 @@ Placebos are run only by the contract owner, with no price and no payout. The re
 
 | outcome | injector is owed (`payout`) | target's bond | `owner_fees` |
 |---|---|---|---|
-| `Flipped`, target lost the duel | `stake - fee + share` | | `fee` |
+| `Flipped`, target lost the duel | `stake - fee + share` | `- share` | `fee` |
 | `Flipped`, target won or tied | `stake - fee` | | `fee` |
 | `Held` | 0 | `+ stake - fee` (resistance reward) | `fee` |
 | `NoTrial`, `Expired` | `stake` | | |
 
-- `share` comes from `pot = loser's slash * share_bps / 10_000`, split among the flipped injections at the loser in proportion to stake (weights in bps, rounded down). Rounding dust and the rest of the slash go to the winner.
-- The slash is taken from the loser's bond before any resistance reward is credited.
+- `share` is paid by the loser from its bond, on top of its slash. The pot is `min(slash * share_bps / 10_000, what the bond holds after the slash)`, split among the flipped injections at the loser in proportion to stake (weights in bps, rounded down). The loser pays only the shares, so the rounding dust stays in its bond. The winner always gets the whole slash.
+- The slash, then the shares, are taken from the loser's bond before any resistance reward is credited.
 - A void settles like a tie.
-- Conservation: what leaves the pool is every stake plus the shares paid, and it equals payouts + resistance credits + fees.
+- Conservation: every stake leaves the pool, and the shares leave the loser's bond. Together they equal payouts + resistance credits + fees.
 - Injectors collect with `claim_chaos(duel_id)` (1 yocto). It pays everything the caller is owed in that duel in one transfer, once.
 - When an owner of either agent, or the contract owner (placebo), pays for an injection, that deposit goes to `owner_fees` at injection. Its stake is 0: it earns nothing and buys no shield, but its outcome is still recorded for the trial.
 

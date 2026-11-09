@@ -4436,7 +4436,7 @@ fn arm_is_drawn_from_the_block_seed_and_the_index() {
 }
 
 #[test]
-fn a_flipped_target_that_loses_pays_the_injector_back_plus_half_its_slash() {
+fn a_flipped_target_that_loses_pays_the_injector_half_its_slash_on_top() {
     let (mut c, ska, skb, tee, d) = fool_setup();
     decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW); // A is Long
     decide_b(&mut c, &skb, d, Side::Long, 1, NOW);
@@ -4466,11 +4466,15 @@ fn a_flipped_target_that_loses_pays_the_injector_back_plus_half_its_slash() {
     let share = slashed / 2;
     let s = chaos_at(&c, d, ix);
     assert_eq!(s.payout.0, stake - fee + share);
-    assert_eq!(bond(&c, 1), bond_a - slashed);
+    assert_eq!(
+        bond(&c, 1),
+        bond_a - slashed - share,
+        "the loser pays the share on top"
+    );
     assert_eq!(
         bond(&c, 2),
-        bond_b + slashed - share,
-        "the winner takes the rest"
+        bond_b + slashed,
+        "the winner takes the whole slash"
     );
     assert_eq!(c.get_config().owner_fees.0, fees + fee);
     // claim once
@@ -4804,22 +4808,30 @@ fn settle_records_conserves_and_pays_once_over_small_ranges() {
                             share_bps,
                         };
                         let mut recs: Vec<Chaos> = list.iter().copied().map(rec).collect();
+                        let pot = slashed * share_bps as u128 / 10_000;
                         let s = crate::chaos::settle_records(
                             &mut recs,
                             loser.map(|v| v.as_slice()),
-                            slashed,
+                            pot,
                             &cfg,
                         );
                         runs += 1;
                         let stakes: u128 = list.iter().map(|x| x.0).sum();
                         let paid: u128 = recs.iter().map(|r| r.payout.0).sum();
                         let credited: u128 = s.credits.iter().map(|c| c.1).sum();
-                        assert_eq!(s.taken, paid + credited + s.fees, "conservation {list:?}");
-                        let pot = slashed * share_bps as u128 / 10_000;
-                        assert!(
-                            s.taken >= stakes && s.taken - stakes <= pot,
-                            "shares <= pot"
+                        // out of the pool every stake, out of the loser's bond the shares; all of it
+                        // is paid out, credited or fee'd
+                        assert_eq!(s.taken, stakes, "every stake leaves the pool");
+                        assert_eq!(
+                            s.taken + s.shares,
+                            paid + credited + s.fees,
+                            "conservation {list:?}"
                         );
+                        assert!(s.shares <= pot, "shares <= pot");
+                        let flipped_loser = recs.iter().any(|r| {
+                            r.outcome == Flipped && r.stake.0 > 0 && loser == Some(&r.target.0)
+                        });
+                        assert!(flipped_loser || s.shares == 0, "a share without a flip");
                         for (r, (stake, before, _)) in recs.iter().zip(list) {
                             let fee = stake * fee_bps as u128 / 10_000;
                             match (before, r.outcome) {
@@ -4894,4 +4906,94 @@ fn a_held_call_from_before_a_headline_is_revealed_before_it_is_replaced() {
     let long = |nonce| intent(&key(1).1, d, Side::Long, 5_000, nonce);
     commit_at(&mut c, &ska, &long(4), &[4; 32], NOW + 5);
     commit_at(&mut c, &ska, &long(5), &[5; 32], NOW + 6);
+}
+
+// ---------------------------------------------------------------- audit fixes (deploy 17)
+
+/// A second account an agent owner controls; owns no agent, so its stake is escrowed.
+const SYBIL: &str = "sybil.testnet";
+
+/// `who` plants `kind` at agent `seed` at `ts`, paying exactly `chaos_fee`. Returns (deposit, index).
+fn plant_as(
+    c: &mut Contract,
+    who: &str,
+    d: u64,
+    seed: u8,
+    kind: ChaosKind,
+    ts: u64,
+) -> (u128, u32) {
+    let fee = c.chaos_fee(U64(d)).0;
+    ctx_at(who, fee, ts);
+    let ix = c.inject_chaos(U64(d), Base64VecU8(key(seed).1), kind, HEADLINE.into());
+    (fee, ix)
+}
+
+/// H1: A's owner hedges a losing duel. A second account plants the side A ends on, A flips to it
+/// and loses. The flip's share now comes from A's bond on top of the slash, so the owner's two
+/// accounts together lose the fee and the storage, and the winner keeps the whole slash.
+#[test]
+fn an_owner_flipping_its_own_losing_agent_through_a_sybil_loses_money() {
+    let (mut c, ska, skb, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW + SEC, NOW + SEC); // throwaway prev
+    let (dep, ix) = plant_as(&mut c, SYBIL, d, 1, ChaosKind::Short, NOW + 2 * SEC);
+    decide_a(
+        &mut c,
+        &ska,
+        &tee,
+        d,
+        Side::Short,
+        2,
+        NOW + 3 * SEC,
+        NOW + 3 * SEC,
+    ); // real call
+    decide_b(&mut c, &skb, d, Side::Long, 1, NOW + 4 * SEC);
+    let (a0, b0) = (bond(&c, 1), bond(&c, 2));
+    resolve_at_close(&mut c, d, UP); // Short A loses
+    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
+    let ch = chaos_at(&c, d, ix);
+    let slashed = o.slashed.0;
+    let share = a0 - slashed - bond(&c, 1); // what A paid beyond its slash
+    let sybil_net = ch.payout.0 as i128 - dep as i128;
+    let owner_net = sybil_net - share as i128;
+    let winner_gain = bond(&c, 2) - b0;
+    println!(
+        "slashed={slashed} deposit={dep} payout={} sybil_net={sybil_net} a_paid_on_top={share} \
+         owner_net={owner_net} winner_gain={winner_gain}",
+        ch.payout.0
+    );
+    assert_eq!(ch.outcome, ChaosOutcome::Flipped);
+    assert_eq!(share, slashed / 2, "share_bps of the slash, on top");
+    assert_eq!(winner_gain, slashed, "the winner keeps the whole slash");
+    let stake = ch.stake.0;
+    assert_eq!(
+        owner_net,
+        stake as i128 - (stake * 500 / 10_000) as i128 - dep as i128,
+        "the owner's accounts lose exactly the fee and the storage"
+    );
+    assert!(owner_net < 0, "the sybil loses money");
+}
+
+/// H1: the share is bounded by what the loser's bond holds after the slash.
+#[test]
+fn the_flip_share_never_takes_more_than_the_losers_bond() {
+    let (mut c, ska, skb, tee, d) = fool_setup();
+    c.slash_bps = 9_000; // half the slash is more than the tenth of the bond the slash leaves
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+    let ix = plant(&mut c, d, 1, ChaosKind::Short, NOW + 1);
+    decide_a(&mut c, &ska, &tee, d, Side::Short, 2, NOW + 2, NOW + 2);
+    decide_b(&mut c, &skb, d, Side::Long, 1, NOW + 3);
+    let (a0, b0) = (bond(&c, 1), bond(&c, 2));
+    resolve_at_close(&mut c, d, UP); // Short A loses
+    let slashed = a0 * 9_000 / 10_000;
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(
+        bond(&c, 1),
+        0,
+        "the slash and the share took the whole bond"
+    );
+    assert_eq!(
+        s.payout.0,
+        s.stake.0 - s.stake.0 * 500 / 10_000 + (a0 - slashed)
+    );
+    assert_eq!(bond(&c, 2), b0 + slashed);
 }

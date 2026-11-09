@@ -3,9 +3,9 @@
 //! or `Clean`) from the block's random seed. The target's first revealed, TEE-proved decision made
 //! after the injection decides the outcome (`Flipped`, `Held` or `NoTrial`), once. At finish each
 //! stake is settled exactly once (`settle_records`): a flip returns the stake less the fee, plus a
-//! share of the slash when the target lost the duel; a held stake, less the fee, goes to the target's
-//! bond as its resistance reward; no trial, or no decision before the end, returns the stake whole.
-//! Injectors claim what they are owed with `claim_chaos`.
+//! share taken from the loser's bond on top of its slash when the target lost the duel; a held
+//! stake, less the fee, goes to the target's bond as its resistance reward; no trial, or no decision
+//! before the end, returns the stake whole. Injectors claim what they are owed with `claim_chaos`.
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::{NearToken, Promise, env, near, require};
 
@@ -96,29 +96,33 @@ fn draw_arm(duel_id: u64, index: usize) -> Arm {
     }
 }
 
-/// What finishing a duel moves out of its pool for the injections.
+/// What finishing a duel moves for its injections.
 #[derive(Default, Debug)]
 pub(crate) struct Settlement {
     /// To `owner_fees`.
     pub fees: u128,
     /// Resistance rewards, to these agents' bonds.
     pub credits: Vec<(Vec<u8>, u128)>,
-    /// Every stake plus the shares of the slash: what leaves the pool.
+    /// Every stake: what leaves the pool.
     pub taken: u128,
+    /// The shares paid to flips at the loser, taken from its bond on top of its slash.
+    pub shares: u128,
 }
 
 /// Settles every injection of a finished duel, once: a pending one expires, then
 /// - `NoTrial`, `Expired`: `payout = stake`;
 /// - `Held`: `stake - fee` to the target's bond, `fee` to the owner;
-/// - `Flipped`: `payout = stake - fee`, `fee` to the owner, plus, when the target is `loser`, its
-///   share of `pot = slashed * share_bps / 10_000`, split by stake (weights in bps, rounded down).
+/// - `Flipped`: `payout = stake - fee`, `fee` to the owner, plus, when the target is `loser`, its share of `pot`, split
+///   by stake (weights in bps, rounded down).
 ///
-/// `fee = stake * fee_bps / 10_000`. What leaves the pool (`taken`) is every stake plus the shares
-/// paid, and equals payouts + credits + fees; the rounding dust of the pot stays in the pool.
+/// `pot` is what the loser pays the flips on top of its slash (see `settle_chaos`); only the shares
+/// paid (`shares <= pot`) are taken from it, so the rounding dust stays with the loser. What leaves
+/// the pool (`taken`) is every stake, and `taken + shares` equals payouts + credits + fees, where
+/// `fee = stake * fee_bps / 10_000`.
 pub(crate) fn settle_records(
     list: &mut [Chaos],
     loser: Option<&[u8]>,
-    slashed: u128,
+    pot: u128,
     cfg: &ChaosConfig,
 ) -> Settlement {
     let fooled_loser =
@@ -128,7 +132,6 @@ pub(crate) fn settle_records(
         .filter(|c| fooled_loser(c))
         .map(|c| c.stake.0)
         .sum();
-    let pot = slashed * cfg.share_bps as u128 / 10_000;
     let mut s = Settlement::default();
     for c in list.iter_mut() {
         if c.outcome == ChaosOutcome::Pending {
@@ -151,7 +154,7 @@ pub(crate) fn settle_records(
                 } else {
                     0
                 };
-                s.taken += share;
+                s.shares += share;
                 c.payout = U128(stake - fee + share);
             }
             _ => c.payout = U128(stake),
@@ -215,7 +218,11 @@ impl Contract {
     }
 
     /// Settles duel `id`'s injections (see `settle_records`) out of `pool` and returns what is
-    /// left of it for the winner, or for the split on a tie or void.
+    /// left of it for the winner, or for the split on a tie or void. `loser` has already paid its
+    /// `slashed` into the pool; the flips at it are paid on top, from its bond: at most
+    /// `slashed * share_bps / 10_000`, bounded by what the bond still holds. So the winner keeps the
+    /// whole slash, and an owner flipping its own losing agent through a second account only moves
+    /// its own money and pays the fee.
     pub(crate) fn settle_chaos(
         &mut self,
         id: u64,
@@ -226,8 +233,15 @@ impl Contract {
         let Some(list) = self.chaos.get_mut(&id) else {
             return pool;
         };
-        let s = settle_records(list, loser, slashed, &self.chaos_config);
+        let pot = loser.map_or(0, |pk| {
+            let bond = self.agents.get(pk).expect("agent missing").bond.0;
+            (slashed * self.chaos_config.share_bps as u128 / 10_000).min(bond)
+        });
+        let s = settle_records(list, loser, pot, &self.chaos_config);
         self.owner_fees += s.fees;
+        if let Some(pk) = loser {
+            self.agents.get_mut(pk).expect("agent missing").bond.0 -= s.shares;
+        }
         for (pk, amt) in s.credits {
             self.agents.get_mut(&pk).expect("agent missing").bond.0 += amt;
         }
