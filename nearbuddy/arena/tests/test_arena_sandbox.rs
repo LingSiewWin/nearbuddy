@@ -1,7 +1,9 @@
 //! Sandbox run of the real wasm: agents register with a key-possession signature (a squatter is
 //! refused), a TEE-backed agent posts enclave-proved intents (and one tampered proof is refused),
 //! a bystander relays one intent, the plain agent commits a hidden intent and a bystander reveals it,
-//! the duel takes the maximum 32 injections, a follower follows the TEE agent (the plain one is
+//! the duel takes the maximum 32 injections (31 planted headlines at a rising price and one placebo),
+//! A's next enclave-proved reveal decides all 32 (the headlines flipped it, the placebo is no trial)
+//! and the spectator claims its payouts after the finish, a follower follows the TEE agent (the plain one is
 //! refused) and settles 10 fills against the intents stub (refused before the outputs land and for a
 //! fill with no output; then 4 units go back out through `withdraw_token`; `withdraw` inside the
 //! delay is refused), the duel is resolved through the oracle callback with the oracle
@@ -154,6 +156,9 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     .assert_success();
     // 60 s duel floor, 30 s intent lock: the duel below is 120 s, intents must land in its first 90 s
     call("set_oracle", json!({"oracle_account": oracle.account_id(), "oracle_deposit": NearToken::from_millinear(20).as_yoctonear().to_string(), "min_duel_s": 60, "intent_lock_s": 30}), &solver, one).await?.assert_success();
+    // deploy-17 chaos terms: 0.1 NEAR rising 1.25x per injection up to 0.5 NEAR, 5 % fee, half the
+    // loser's slash to the injections that flipped it
+    call("set_chaos_config", json!({"chaos": {"base": NearToken::from_millinear(100).as_yoctonear().to_string(), "r_bps": 12_500, "cap": NearToken::from_millinear(500).as_yoctonear().to_string(), "fee_bps": 500, "share_bps": 5_000}}), &solver, one).await?.assert_success();
     call(
         "add_tee_signer",
         json!({"signer": b64(&tee.verifying_key().to_bytes()), "label": "sandbox enclave"}),
@@ -356,14 +361,100 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         .parse()?;
     assert!(bond_a1 < bond_a0, "intent storage is paid from the bond");
 
-    // 32 injections at A (the cap), then the 33rd must fail
-    let mut last_gas = 0;
-    for k in 0..32u8 {
-        let r = call("inject_chaos", json!({"duel_id": duel_id.to_string(), "target": b64(&pka), "kind": "fake_news", "payload_hash": b64(&[k; 32])}), &spectator, NearToken::from_millinear(100)).await?.assert_success();
-        last_gas = gas_of(&r);
+    // 31 headlines at A at the rising price, one placebo by the owner (the cap is 32), then the 33rd
+    // must fail
+    let fee = |net: near_api::NetworkConfig| {
+        let c = contract.clone();
+        async move {
+            c.call_function("chaos_fee", json!({"duel_id": duel_id.to_string()}))
+                .read_only::<U128>()
+                .fetch_from(&net)
+                .await
+                .map(|r| r.data.0)
+        }
+    };
+    let (mut last_gas, mut paid) = (0, 0u128);
+    for k in 0..31u8 {
+        let f = fee(net.clone()).await?;
+        if k == 0 {
+            let under = NearToken::from_yoctonear(f - 1);
+            call("inject_chaos", json!({"duel_id": duel_id.to_string(), "target": b64(&pka), "kind": "Short", "headline": "BREAKING: Reuters says NEAR halts withdrawals"}), &spectator, under).await?.assert_failure();
+            println!("inject_chaos one yocto under chaos_fee: refused");
+        }
+        let headline = format!("BREAKING: Reuters says NEAR halts withdrawals ({k})");
+        let r = call("inject_chaos", json!({"duel_id": duel_id.to_string(), "target": b64(&pka), "kind": "Short", "headline": headline}), &spectator, NearToken::from_yoctonear(f)).await?.assert_success();
+        assert_eq!(r.json::<u32>()?, k as u32);
+        (last_gas, paid) = (gas_of(&r), paid + f);
     }
-    println!("GAS inject_chaos (32nd) {:.2} TGas", last_gas as f64 / 1e12);
-    call("inject_chaos", json!({"duel_id": duel_id.to_string(), "target": b64(&pka), "kind": "fake_news", "payload_hash": b64(&[99u8; 32])}), &spectator, NearToken::from_millinear(100)).await?.assert_failure();
+    println!(
+        "GAS inject_chaos (31st; next fee {:.3} NEAR) {:.2} TGas; 31 headlines cost {:.3} NEAR",
+        fee(net.clone()).await? as f64 / 1e24,
+        last_gas as f64 / 1e12,
+        paid as f64 / 1e24
+    );
+    call("inject_chaos", json!({"duel_id": duel_id.to_string(), "target": b64(&pka), "kind": "Placebo", "headline": "Markets open as usual"}), &solver, NearToken::from_millinear(10)).await?.assert_success();
+    call("inject_chaos", json!({"duel_id": duel_id.to_string(), "target": b64(&pka), "kind": "Short", "headline": "one more"}), &spectator, NearToken::from_near(1)).await?.assert_failure();
+    println!("inject_chaos past 32: refused");
+
+    // A's next decision, committed after every injection and revealed with its enclave proof: Short,
+    // the side the headlines pushed. One reveal decides all 32.
+    let i_a2 = Intent {
+        agent_pk: Base64VecU8(pka.clone()),
+        duel_id: U64(duel_id),
+        side: Side::Short,
+        size_bps: 5_000,
+        nonce: U64(2),
+        expires_at: U64(close_at),
+        proof_hash: Base64VecU8(sha(&[0x22; 32], &[0x22; 32])),
+    };
+    let salt_a = [0x6au8; 32];
+    let c_a = sha(&intent_message(&i_a2), &salt_a);
+    let csig_a = ska
+        .sign(&commit_bytes(contract.account_id(), duel_id, &c_a))
+        .to_bytes()
+        .to_vec();
+    call("commit_intent", json!({"duel_id": duel_id.to_string(), "agent_pk": b64(&pka), "commitment": b64(&c_a), "sig": b64(&csig_a)}), &solver, zero).await?.assert_success();
+    let isig_a = ska.sign(&intent_message(&i_a2)).to_bytes().to_vec();
+    let tsig_a = tee
+        .sign(&tee_text(2, MODEL_A, &[0x22; 32], &[0x22; 32]))
+        .to_bytes()
+        .to_vec();
+    let r = call("reveal_intent", json!({"signed": {"intent": i_a2, "signature": b64(&isig_a)}, "salt": b64(&salt_a), "tee": {"kind": 2, "request_hash": b64(&[0x22; 32]), "response_hash": b64(&[0x22; 32]), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&tsig_a)}}), &solver, zero).await?.assert_success();
+    println!(
+        "GAS reveal_intent (TEE, decides 32 headlines) {:.2} TGas",
+        gas_of(&r) as f64 / 1e12
+    );
+    let chaos: Vec<Value> = contract
+        .call_function("get_chaos", json!({"duel_id": duel_id.to_string()}))
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(chaos.len(), 32);
+    for c in &chaos[..31] {
+        assert_eq!(
+            (&c["outcome"], &c["prev"], &c["next"], &c["decided_by"]),
+            (
+                &json!("Flipped"),
+                &json!("Long"),
+                &json!("Short"),
+                &json!("2")
+            )
+        );
+        assert!(c["arm"] == "Cue" || c["arm"] == "Clean");
+    }
+    assert_eq!(
+        (
+            &chaos[31]["outcome"],
+            &chaos[31]["arm"],
+            &chaos[31]["stake"]
+        ),
+        (&json!("NoTrial"), &json!("Placebo"), &json!("0"))
+    );
+    let stakes: u128 = chaos[..31]
+        .iter()
+        .map(|c| c["stake"].as_str().unwrap().parse::<u128>().unwrap())
+        .sum();
 
     // follower deposits and follows A; settle 10 fills against 10 distinct intents
     call("deposit", json!({}), &follower, NearToken::from_near(5))
@@ -680,7 +771,7 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         .await?
         .data;
     assert_eq!(a["alpha_bps"], 25);
-    assert_eq!(a["shield"], 32);
+    assert_eq!(a["shield"], 31, "the placebo buys no shield");
     assert_eq!(a["tee"], true);
     let duel: Value = contract
         .call_function("get_duel", json!({"duel_id": duel_id.to_string()}))
@@ -703,6 +794,43 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         .await?
         .data;
     assert_eq!(no_reveal, (false, false));
+    // A was fooled but won: each headline is owed its stake less the 5 % fee, no share; claim once
+    let chaos: Vec<Value> = contract
+        .call_function("get_chaos", json!({"duel_id": duel_id.to_string()}))
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    let owed: u128 = chaos
+        .iter()
+        .map(|c| c["payout"].as_str().unwrap().parse::<u128>().unwrap())
+        .sum();
+    let fees: u128 = chaos[..31]
+        .iter()
+        .map(|c| c["stake"].as_str().unwrap().parse::<u128>().unwrap() * 500 / 10_000)
+        .sum();
+    assert_eq!(owed, stakes - fees);
+    let r = call(
+        "claim_chaos",
+        json!({"duel_id": duel_id.to_string()}),
+        &spectator,
+        one,
+    )
+    .await?
+    .assert_success();
+    gas_lines("claim_chaos (31 payouts, one transfer)", &r);
+    call(
+        "claim_chaos",
+        json!({"duel_id": duel_id.to_string()}),
+        &spectator,
+        one,
+    )
+    .await?
+    .assert_failure();
+    println!(
+        "claim_chaos paid {:.4} NEAR once; a second claim: refused",
+        owed as f64 / 1e24
+    );
 
     // a second duel opened by a bystander with both agents' consent over the consent_message bytes
     let now2 = near_api::Chain::block()
