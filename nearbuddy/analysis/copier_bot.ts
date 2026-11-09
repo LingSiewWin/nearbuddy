@@ -17,6 +17,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { JsonRpcProvider } from "near-api-js";
+import { parseEventJson } from "../packages/protocol/src/index.ts";
 import { NET, NETWORK_ID, networkFile } from "../packages/protocol/src/network.ts";
 
 const MAINNET = NETWORK_ID === "mainnet";
@@ -112,9 +113,9 @@ function eventsOf(t: Tx): Seen[] {
   return t.receipts.flatMap((r) =>
     r.execution_outcome.outcome.logs.flatMap((log): Seen[] => {
       if (!log.startsWith("EVENT_JSON:")) return [];
-      const e = JSON.parse(log.slice("EVENT_JSON:".length)) as {
+      const e = parseEventJson(log) as {
         event: string;
-        data: { duel_id: number; agent_pk: string; nonce?: number };
+        data: { duel_id: number | string; agent_pk: string; nonce?: number | string }; // u64 past 2^53 as string
       };
       if (e.event !== "commit" && e.event !== "intent") return [];
       return [

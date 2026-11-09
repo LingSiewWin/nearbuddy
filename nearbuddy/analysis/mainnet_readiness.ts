@@ -8,6 +8,7 @@
 //   MAINNET_RPC=https://rpc.mainnet.fastnear.com OWNER_ID_MAINNET=nearbuddy.near SOLVER_ID_MAINNET=solver.nearbuddy.near
 import "../packages/protocol/src/env.ts";
 import { randomBytes } from "node:crypto";
+import { unhex } from "../packages/protocol/src/index.ts";
 import { NETWORKS } from "../packages/protocol/src/network.ts";
 import { quote, sellNearForUsdc, USDC_NEAR, WNEAR } from "../packages/solver/src/oneclick.ts";
 
@@ -205,7 +206,7 @@ for (const m of MODELS) {
     // Already trusted on ARENA_CONTRACT? A new address means the enclave rotated: re-verify before pinning.
     const pinned = await Promise.all(
       atts.map(async (a) => {
-        const b64 = Buffer.from(a.signing_address ?? "", "hex").toString("base64");
+        const b64 = Buffer.from(unhex(a.signing_address ?? "")).toString("base64"); // tolerates a 0x prefix
         const res = await fetch(process.env.NEAR_RPC ?? "https://near-testnet.drpc.org", {
           method: "POST",
           headers: { "content-type": "application/json" },
