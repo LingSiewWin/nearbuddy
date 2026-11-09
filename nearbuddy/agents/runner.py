@@ -43,9 +43,11 @@ each entry then carries the contract's `arm`): the headlines still `Pending` on 
 their target delivers each by its arm (`prompts.deliver`: `Cue` as written, `Clean` after cue_guard), until a revealed
 TEE decision committed after the headline decides it. Rows carry `chaos` (index, arm, kind, headline of every headline
 delivered). A headline planted after the held commitment is that call's "before": the contract accepts a commit that
-replaces it but voids the headline (NoTrial), so the held commitment is revealed first, then the agent decides with
-the headline and always commits, so the call that saw it is the one revealed next. Right before a commit the pending
-headlines are read again from chain (get_chaos), and a call that missed one decides again if the time left allows
+replaces it unrevealed but charges the hidden call against the target (the headline is then Flipped on the lie's side,
+NoTrial off it, never Held), so the held commitment is revealed first, then the agent decides with the headline and
+always commits, so the call that saw it is the one revealed next; if that reveal fails, nothing replaces the held
+call this cycle. Right before every commit the pending headlines are read again from chain (get_chaos); a call that
+missed one decides again if the time left allows, and a held call is never replaced on a failed read
 (`commit_decision`).
 
 Second pair (`--pair-tag p2`, scripts/second-loop.sh): the same seeds derive a distinct key set per tag
@@ -691,15 +693,20 @@ def commit_decision(
     Deploy 16.1 payloads are delivered once and consumed with the call, kept or committed. Planted headlines (deploy
     17: `chaos_v2`, or an entry with an `arm`): a pending headline the held call was not decided with is new. When one
     was planted at or after the held commit (or the commit time is unknown), the held call is that headline's `prev`:
-    the contract accepts a commit that replaces it but voids the headline (NoTrial, the stake back less the fee), so
-    the held call is revealed first, before the model is asked (`reveal_prev`). An enclave agent's reveal decides every
-    headline the held call saw, so only the new ones are delivered then. With a new headline the call is always
-    committed, never kept: the call that saw the headline must be the one revealed next.
+    the contract accepts a commit that replaces it unrevealed but charges the hidden call against the target (the
+    headline's next decision is Flipped on the lie's side, NoTrial off it, never Held), so the held call is revealed
+    first, before the model is asked (`reveal_prev`). If that reveal fails, nothing replaces the held call this cycle
+    ("skipped"; it stays for the next cycle or the final reveal). An enclave agent's reveal decides every headline the
+    held call saw, so only the new ones are delivered then. With a new headline the call is always committed, never
+    kept: the call that saw the headline must be the one revealed next.
 
-    Deploy 17, right before the commit: the pending headlines are read again from chain (`chaos_pending`, not the
-    solver's GET /arena, memoised for 3 s). A headline that landed while the model decided was never seen by this
-    call, which would decide that headline's trial blind once revealed. The call is then recorded as not committed,
-    the held call is revealed if it is the headline's `prev`, and the model decides again with every pending headline.
+    Deploy 17, right before every commit: the pending headlines are read again from chain (`chaos_pending`, not the
+    solver's GET /arena, memoised for 3 s). When the read fails and a held call would be replaced, nothing is
+    committed. A headline that landed while the model decided was never seen by this call, which would decide that
+    headline's trial blind once revealed. The call is then recorded as not committed, the held call is revealed if it
+    is the headline's `prev` (a failed reveal ends the cycle as above), and the model decides again with every pending
+    headline, once: the read before that commit must find nothing new either, or nothing is committed. A headline
+    landing between the last read and the commit landing is the race the contract accepts (arena/README.md).
 
     Time: every wait in here ends by the commit cutoff, `lock_at_ns` (the intent lock's start, close_at when None; the
     contract refuses a commit from there on) or COMMIT_S before the reveal deadline (close_at - REVEAL_MARGIN_S),
@@ -717,7 +724,10 @@ def commit_decision(
     chaos_v2 = chaos_v2 or any("arm" in i for i in mine)
     held_top = held[label][-1] if held.get(label) else None
     new = [i for i in mine if "arm" in i and (held_top is None or i["index"] not in held_top.saw)]
-    mine, decided = reveal_prev(solver, held, label, mine, model.tee)
+    first = reveal_prev(solver, held, label, mine, model.tee)
+    if first is None:
+        return nonce, "skipped"
+    mine, decided = first
 
     def decide(headlines: list[dict[str, Any]]) -> Prepared | None | str:
         # `nonce` is read at call time: the redo gets the one after the call that missed the headline
@@ -763,39 +773,41 @@ def commit_decision(
         consume(solver, pk, duel_id, inj)
         print(f"  {label} keeps its commitment (same {intent['side']} {intent['size_bps']} bps), nonce {nonce} unused")
         return nonce, "kept"
-    if chaos_v2:
-        # ponytail: one re-read; a headline landing after it and before this commit lands is decided blind by this
-        # call, or voided if planted at or after a held call it replaces. The contract accepts that race.
-        seen = {i["index"] for i in inj if "arm" in i} | decided
+    for again in (True, False) if chaos_v2 else ():
+        # ponytail: a read before every commit and one redo; a headline landing after the last read and before the
+        # commit lands is decided blind, or charged as a dodge if the commit replaces its prev. The contract accepts
+        # that race (arena/README.md); a commit message carrying the headlines seen would close it.
+        uncommitted = {**row, "commitment": None, "committed_tx": None, "revealed_tx": None, "tx": None}
         fresh = chaos_pending(duel_id, pk)
+        if fresh is None and held.get(label):
+            record({**uncommitted, "error": "not committed: get_chaos unreadable, the held call stays"})
+            print(f"  {label} get_chaos unreadable: not replacing the held call unread, nonce {nonce} unused")
+            return nonce, "skipped"
+        seen = {i["index"] for i in inj if "arm" in i} | decided
         missed = [i["index"] for i in fresh or [] if i["index"] not in seen]
-        if fresh is not None and missed:
-            # the redo makes the same calls with one more headline: the first decision's time is its estimate
-            redo = time.time_ns() + took <= decide_by
-            record(
-                {
-                    **row,
-                    "commitment": None,
-                    "committed_tx": None,
-                    "revealed_tx": None,
-                    "tx": None,
-                    "error": f"not committed: headline {missed} landed while deciding"
-                    + ("" if redo else "; no time to decide again"),
-                }
-            )
-            if not redo:
-                print(f"  {label} headline {missed} landed while deciding, no time to decide again: nothing committed")
-                return nonce, "skipped"
-            print(f"  {label} headline {missed} landed while deciding: deciding again with it, nonce {nonce} unused")
-            mine, _ = reveal_prev(solver, held, label, [i for i in fresh if i["index"] not in decided], model.tee)
-            prep = decide(mine)
-            if prep == "late":
-                return nonce, "closed"
-            if prep is None or isinstance(prep, str):
-                return nonce, "skipped"
-            nonce += 1
-            intent, tee, inj, row = prep
-            cands = held.setdefault(label, [])
+        if not missed:
+            break
+        # the redo makes the same calls with one more headline: the first decision's time is its estimate
+        redo = again and time.time_ns() + took <= decide_by
+        why = "" if redo else "; no time to decide again" if again else "; it already decided again"
+        record({**uncommitted, "error": f"not committed: headline {missed} landed while deciding{why}"})
+        if not redo:
+            print(f"  {label} headline {missed} landed while deciding{why}: nothing committed")
+            return nonce, "skipped"
+        print(f"  {label} headline {missed} landed while deciding: deciding again with it, nonce {nonce} unused")
+        res = reveal_prev(solver, held, label, [i for i in fresh or [] if i["index"] not in decided], model.tee)
+        if res is None:
+            return nonce, "skipped"
+        mine, more = res
+        decided |= more
+        prep = decide(mine)
+        if prep == "late":
+            return nonce, "closed"
+        if prep is None or isinstance(prep, str):
+            return nonce, "skipped"
+        nonce += 1
+        intent, tee, inj, row = prep
+        cands = held.setdefault(label, [])
     salt = secrets.token_bytes(32)
     c = commitment(intent, salt)
     p = Commitment(
@@ -840,17 +852,22 @@ def commit_decision(
 
 def reveal_prev(
     solver: Solver, held: dict[str, list[Commitment]], label: str, mine: list[dict[str, Any]], tee: bool
-) -> tuple[list[dict[str, Any]], set[int]]:
+) -> tuple[list[dict[str, Any]], set[int]] | None:
     """Reveal `label`'s held call now when a headline in `mine` it did not see was planted at or after its commit (or
-    the commit time is unknown): the held call is that headline's `prev`, and a commit replacing it unrevealed voids
-    the trial (NoTrial). Returns (the headlines the next call gets, the indices the reveal decided): an enclave
-    agent's reveal decides every headline the held call saw, so those are left out."""
+    the commit time is unknown): the held call is that headline's `prev`, and a commit replacing it unrevealed is
+    charged against the target (Flipped on the lie's side, NoTrial off it, never Held). Returns (the headlines the
+    next call gets, the indices the reveal decided): an enclave agent's reveal decides every headline the held call
+    saw, so those are left out. None when that reveal failed: the held call is still in `held`, and the caller must
+    not replace it."""
     top = held[label][-1] if held.get(label) else None
     new = [i for i in mine if "arm" in i and (top is None or i["index"] not in top.saw)]
     if top is None or not any(top.at is None or int(i["at"]) >= top.at for i in new):
         return mine, set()
     print(f"  {label} reveals its held call first: headline {[i['index'] for i in new]} planted after it")
-    if not (reveal_now(solver, held, label) and tee):
+    if not reveal_now(solver, held, label):
+        print(f"  {label} held call not revealed: not replacing it this cycle")
+        return None
+    if not tee:
         return mine, set()
     return new, set(top.saw)
 
@@ -859,8 +876,8 @@ def chaos_pending(duel_id: str, pk: str) -> list[dict[str, Any]] | None:
     """Deploy 17: the headlines get_chaos lists as Pending at `pk`, read from chain rather than through the solver's
     GET /arena (memoised for 3 s), in the shape GET /arena lists them. It runs right before a commit, so it is one
     attempt of at most (3 s connect, 5 s read), no backoff. None when the read fails in any way (transport, RPC error,
-    a malformed answer): the commit then goes out without the re-read, which only a headline landing in the last
-    seconds can miss."""
+    a malformed answer): a first commit then goes out without the re-read, and a commit that would replace a held call
+    is not sent."""
     try:
         chaos = _view("get_chaos", {"duel_id": duel_id}, retries=1, timeout=(3, 5))
         return [

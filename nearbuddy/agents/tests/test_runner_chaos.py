@@ -256,7 +256,7 @@ def test_a_headline_landing_before_the_first_commit_is_seen_by_the_committed_cal
     assert solver.paths() == ["/commit", "/reveal"], "the redo is committed once and kept; nothing opens early"
     assert [t // S for _, _, t in solver.posts] == [2, 90]
     assert [HALT in u for u in model.users] == [False, True, True, True]
-    assert solver.reads == [1 * S], "one re-read per commit, none before a kept call or after the redo"
+    assert solver.reads == [1 * S, 2 * S], "a re-read before each commit, the redo's too; none before a kept call"
     decider = next(r for r in rows() if r["revealed_tx"])
     assert decider["chaos"] == [{"index": 0, "arm": "Cue", "kind": "Short", "headline": HALT}]
 
@@ -396,3 +396,57 @@ def test_chain_view_passes_retries_and_timeout_to_rpc(monkeypatch):
     assert seen == {"retries": 1, "timeout": (3, 5)}
     chain._view("get_chaos", {"duel_id": "5"})
     assert seen == {"retries": chain.RETRIES, "timeout": 30}
+
+
+def test_a_failed_reveal_of_the_held_prev_aborts_the_replacing_commit(clock):
+    # the headline at 10 s makes cycle 2 reveal the held call first; that reveal fails. Replacing the held call
+    # unrevealed would be charged against the target as a dodge, so cycle 2 neither decides nor commits; cycle 3
+    # reveals it and then commits the call that saw the headline
+    model = Scripted(["Long"])
+    ps = player(model)
+    solver = ChaosSolver(clock, pk_b64(ps[0][2]), [headline(0, HALT, at_s=10)], fail={("/reveal", 1): "boom"})
+    play(solver, ps)
+    assert solver.paths() == ["/commit", "/reveal", "/reveal", "/commit", "/reveal"]
+    assert [t // S for _, _, t in solver.posts] == [0, 20, 40, 40, 90], "no commit at 20 s"
+    assert [HALT in u for u in model.users] == [False, True], "no decision in the cycle whose reveal failed"
+
+
+def test_a_held_call_is_never_replaced_on_a_failed_chain_read(clock, monkeypatch):
+    # get_chaos fails on the first two reads. Nothing is held at 0 s, so that commit goes out unread; at 20 s the
+    # Short would replace the held Long without knowing whether a headline names it as prev: not committed
+    model = Scripted(["Long", "Short"])
+    ps = player(model)
+    solver = ChaosSolver(clock, pk_b64(ps[0][2]), [])
+    reads = []
+
+    def flaky(method, args, **kw):
+        reads.append(kw)
+        if len(reads) <= 2:
+            raise ConnectionError("read timed out")
+        return solver.chain(method, args)
+
+    monkeypatch.setattr(runner, "_view", flaky)
+    play(solver, ps)
+    assert solver.paths() == ["/commit", "/commit", "/reveal"]
+    assert [t // S for _, _, t in solver.posts] == [0, 40, 90]
+    assert any(r.get("error") == "not committed: get_chaos unreadable, the held call stays" for r in rows())
+    assert reads[0] == {"retries": 1, "timeout": (3, 5)}
+
+
+def test_a_headline_landing_during_the_redo_is_not_decided_blind(clock):
+    # 5 s calls. Headline 0 lands at 27 s during cycle 2 (25..30 s): the held Long is its prev, so it is revealed and
+    # the model decides again (30..35 s). Headline 1 lands at 33 s during that redo: the read before its commit finds
+    # it, and there is no third decision, so nothing is committed. Cycle 3 decides with both and commits
+    model = Timed(clock, ["Long", "Short"], took=[5])
+    ps = player(model)
+    solver = ChaosSolver(
+        clock, pk_b64(ps[0][2]), [headline(0, HALT, at_s=27), headline(1, ETF, at_s=33, arm="Clean", kind="Long")]
+    )
+    play(solver, ps)
+    assert solver.paths() == ["/commit", "/reveal", "/commit", "/reveal"]
+    assert [t // S for _, _, t in solver.posts] == [5, 30, 60, 90]
+    assert any(
+        r.get("error") == "not committed: headline [1] landed while deciding; it already decided again" for r in rows()
+    )
+    last = next(r for r in rows() if r["revealed_tx"] == "R2")
+    assert [c["index"] for c in last["chaos"]] == [0, 1]
