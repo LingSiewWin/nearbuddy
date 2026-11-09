@@ -129,7 +129,30 @@ which arm a call belonged to. Spend for every call (model, tokens in and out, $)
 
 ### Deviations
 
-None yet. Any change after this commit is listed here with its reason.
+Any change after this commit is listed here with its reason.
+
+1. **Snapshot selection rule (before any paid call).** The pre-registration fixed the snapshot definition (an open
+   price and the price five minutes later) but not how windows were chosen. A first draw at every second hour of
+   2026-11-03 gave 38 down moves and 10 up moves. To balance them, the frozen set now uses candidate duels that open
+   on every half hour of that day. For each asset it keeps 6 windows that moved up and 6 that moved down, evenly
+   spaced in time within each sign (`harness.balanced`): 24 up, 24 down.
+2. **Amendment 1: a second experiment on the hardened prompt (after the pilot, before any main-phase call).**
+   - **Why.** In the pilot the naive prompt flipped at ceiling in both headline arms: cue 28/29, clean 28/28, placebo
+     6/28. So on this prompt, H1 can show a null at best, and it cannot show whether credibility cues matter to a
+     model that resists some attacks. The paper's cue effect was measured on such an agent.
+   - **Experiment B.** It repeats the design above with the live agent A's hardened prompt,
+     `prompts.system_prompt(symbol, hardened=True)`. Everything else is unchanged: arms, corpus, snapshots, flip
+     definition, tests, exclusions and the verified-calls primary analysis. Its hypotheses H1b (cue > clean) and H2b
+     (cue > placebo) form their own Holm family of four tests (three models and pooled).
+   - **Plan and N.** It uses the same trial plan (seed, phase `main`), so trial i has the same snapshot and template
+     under both prompts. It also uses the same N as experiment A. There is no separate pilot; the power rule's
+     minimal effect of interest for H1 gives that same N.
+   - **Run order.** Both experiments run in one process, round-robin over trial x prompt x model. They share the
+     stopping rule: N reached in every cell, $9.50, or 07:15 +08. Experiment A remains the pre-registered primary.
+   - **Report.** `report.py --prompt hardened` prints experiment B.
+3. **N from the power rule.** `report.py --power` on the pilot gives N = 240 trials per model (`results/power.json`).
+   No model showed a cue-over-clean effect in the pilot (discordant pairs 0 vs 0, 0 vs 0, 0 vs 1), so H1 was powered
+   for the minimal effect of interest (0.15 vs 0.05), which needs 240. For H2 the pilot rates need only 10 to 20.
 
 ## Run
 
