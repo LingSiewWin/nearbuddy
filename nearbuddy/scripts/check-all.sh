@@ -15,9 +15,10 @@ run web-tests    bash -c 'cd web && bun test app'
 run py-lint      bash -c 'cd agents && .venv/bin/ruff check . ../analysis && .venv/bin/ruff format --check . ../analysis'
 run py-tests     bash -c 'NEAR_AI_API_KEY= agents/.venv/bin/python -m pytest -q agents/tests'
 run rs-fmt       bash -c 'cd arena && cargo fmt --check'
-run rs-clippy    bash -c 'cd arena && cargo clippy --all-targets -- -D warnings'
-run rs-tests     bash -c 'cd arena && cargo test --lib'
-run stub-tests   bash -c 'cd intents-stub && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --lib'
+run rs-clippy    bash -c 'cd arena && cargo clippy --locked --all-targets -- -D warnings'
+run rs-tests     bash -c 'cd arena && cargo test --locked --lib'
+run stub-tests   bash -c 'cd intents-stub && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib'
+run vault-tests  bash -c 'cd contract && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib'
 run loop-tests   bash scripts/tests/test-loops.sh  # loop stop files and deploy-contract.sh --at-boundary, all fakes
 if [ "$fast" != "--fast" ]; then
   run web-build  bash -c 'cd web && bun run build'
