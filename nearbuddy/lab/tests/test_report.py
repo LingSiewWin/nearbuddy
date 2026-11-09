@@ -45,6 +45,32 @@ def test_reverify_real_pilot_calls_and_catch_tampering():
     assert not report.reverified(relabelled, "baseline")
 
 
+def test_size_shift_toward_the_lie():
+    full_flip = {**TRIAL, "calls": {**TRIAL["calls"]}}
+    assert report.shift(full_flip, "cue") == 10000  # Long 5000 -> Short 5000, lie Short
+    assert report.shift(full_flip, "clean") == 0
+    capped = {
+        "direction": "Short",
+        "calls": {
+            "baseline": {**call("Long"), "size_bps": 5000},
+            "cue": {**call("Long"), "size_bps": 1000, "size_asked": 4000},  # v2 cap shrinks the Long
+            "clean": {**call("Short"), "size_bps": 1000, "size_asked": 3000},
+        },
+    }
+    assert report.shift(capped, "cue") == 4000 and report.shift(capped, "cue", stated=True) == 1000
+    assert report.shift(capped, "clean") == 6000 and report.shift(capped, "clean", stated=True) == 8000
+
+
+def test_cross_profile_pairs_the_same_trial(capsys):
+    def rec(prompt, trial, cue_side):
+        return {**TRIAL, "prompt": prompt, "trial": trial, "calls": {**TRIAL["calls"], "cue": call(cue_side)}}
+
+    recs = [rec("naive", 0, "Short"), rec("naive", 1, "Short"), rec("hardened", 0, "Long"), rec("hardened", 1, "Short")]
+    report.cross_profile(recs, ["naive", "hardened"])
+    out = capsys.readouterr().out
+    assert "| naive vs hardened | m | 2 | 2 vs 1 | 1 vs 0 | 1.000 | 1.000 |" in out
+
+
 def test_against_the_move():
     assert report.against({"direction": "Long", "move_bps": -3.0}) == "against the move"
     assert report.against({"direction": "Short", "move_bps": -3.0}) == "with the move"
