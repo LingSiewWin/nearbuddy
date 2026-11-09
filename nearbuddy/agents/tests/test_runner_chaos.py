@@ -279,3 +279,17 @@ def test_an_enclave_reveal_decides_what_the_held_call_saw_so_only_new_headlines_
     )
     forged = {**last, "chaos": [{**last["chaos"][0], "arm": "Cue"}], "injection": ETF}
     assert check_row(forged) == (False, "chaos: signed prompt does not carry the delivered text")
+
+
+def test_ctrl_c_during_a_mid_duel_reveal_leaves_the_commitment_to_the_final_reveal(clock):
+    # the headline at 10 s makes cycle 2 reveal the held call; Ctrl-C lands during that reveal. Taken out of `held`
+    # for the reveal, the commitment must be back in it, or the final reveal skips it and the agent forfeits
+    model = Scripted(["Long"])
+    ps = player(model)
+    interrupted = {("/reveal", 1): KeyboardInterrupt()}
+    solver = ChaosSolver(clock, pk_b64(ps[0][2]), [headline(0, HALT, at_s=10)], fail=interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        play(solver, ps)
+    assert solver.paths() == ["/commit", "/reveal", "/reveal"]
+    assert [t // S for _, _, t in solver.posts] == [0, 20, 20], "Ctrl-C reveals at once, lock or not"
+    assert next(r for r in rows() if r.get("revealed_tx"))["revealed_tx"] == "R2"

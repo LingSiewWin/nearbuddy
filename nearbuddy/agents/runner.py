@@ -808,12 +808,16 @@ NOT_ON_CHAIN = ("commitment mismatch", "no commitment")
 
 def reveal_now(solver: Solver, held: dict[str, list[Commitment]], label: str) -> bool:
     """Reveal `label`'s held commitment during the duel (a headline was planted after it). True when it was revealed;
-    False puts the candidates back in `held`, so the next `reveal_prev` or the final reveal tries again."""
+    False puts the candidates back in `held`, so the next `reveal_prev` or the final reveal tries again; so does Ctrl-C
+    during the reveal, or play_duel's final reveal would skip a commitment that may still be on chain (slashed)."""
     cands = held.pop(label, [])
-    if reveal_held(solver, {label: cands}):
-        held[label] = cands
-        return False
-    return True
+    revealed = False
+    try:
+        revealed = not reveal_held(solver, {label: cands})
+    finally:
+        if not revealed:
+            held[label] = cands
+    return revealed
 
 
 def reveal_held(solver: Solver, held: dict[str, list[Commitment]]) -> list[str]:
