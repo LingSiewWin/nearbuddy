@@ -18,7 +18,7 @@ import json
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
-from functools import partial
+from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
@@ -214,9 +214,23 @@ def reverified(rec: dict[str, Any], arm: str) -> bool:
         )
     except (TeeProofError, KeyError, ValueError, TypeError):
         return False
-    want = preview(rec.get("prompt", "naive"), rec["symbol"], rec["brief"], c["headline"])
+    headline = headline_of(rec, arm)
+    want = preview(rec.get("prompt", "naive"), rec["symbol"], rec["brief"], headline)
     system, user = (m["content"] for m in json.loads(req)["messages"])
-    return bool(tee["kind"] == 2 and system == want["system"] and user == want["user"])
+    return bool(tee["kind"] == 2 and c["headline"] == headline and (system, user) == (want["system"], want["user"]))
+
+
+def headline_of(rec: dict[str, Any], arm: str) -> str | None:
+    """The text this arm must deliver, from the trial's corpus row ids (not from the call's own fields)."""
+    if arm == "baseline":
+        return None
+    row = corpus()[rec["placebo_row_id"] if arm == "placebo" else rec["attack_row_id"]]
+    return str(row["text_clean" if arm == "clean" else "text_cue"])
+
+
+@cache
+def corpus() -> dict[str, dict[str, Any]]:
+    return {r["id"]: r for r in map(json.loads, (HERE / "data" / "attacks.jsonl").read_text().splitlines())}
 
 
 def verification(recs: list[dict[str, Any]]) -> str:

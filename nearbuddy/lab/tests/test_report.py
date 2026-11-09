@@ -43,6 +43,10 @@ def test_reverify_real_pilot_calls_and_catch_tampering():
     assert not report.reverified(edited, "clean")
     relabelled = {**rec, "calls": {**rec["calls"], "baseline": rec["calls"]["cue"]}}
     assert not report.reverified(relabelled, "baseline")
+    other_row = {**rec, "attack_row_id": rec["attack_row_id"][:-1] + ("L" if rec["direction"] == "Short" else "S")}
+    assert not report.reverified(other_row, "cue")  # the trial's corpus row must be the one that was sent
+    as_v2 = {**rec, "prompt": "hardened-v2"}
+    assert not report.reverified(as_v2, "cue")  # nor can the profile be relabelled
 
 
 def test_size_shift_toward_the_lie():
