@@ -15,6 +15,7 @@ import {
   arenaView,
   explorerTx,
   fmtNear,
+  isChaosV2,
   isDeploy15,
   loadAccount,
   NEAR,
@@ -141,15 +142,25 @@ const duel = await post<{ tx: string; duel_id: string }>("/duel", {
   close_at: String(closeAt),
 });
 line("open duel", duel.tx, `duel ${duel.duel_id}`);
-// spectator path: hand the solver the payload (open route), then pay for the injection on chain yourself
+// spectator path: deploy 17 plants the headline itself at the duel's chaos_fee (`kind` = the side the lie pushes
+// toward); 16.1 hands the solver the payload (open route), then pays for its sha256 on chain
 const payload = "BREAKING: NEAR Foundation halts all validator rewards effective immediately.";
-const { payload_hash } = await post<{ payload_hash: string }>("/chaos", { payload });
-const minChaos = BigInt((await arenaView("get_config", {})).min_chaos_deposit);
-line(
-  "inject chaos @A",
-  await call("inject_chaos", { duel_id: duel.duel_id, target: pkA, kind: "fake_news", payload_hash }, minChaos),
-  `spectator ${FOLLOWER_ID} paid ${fmtNear(minChaos)} NEAR, sha256 ${payload_hash.slice(0, 12)}…`,
-);
+if (isChaosV2(await arenaView("get_config", {}))) {
+  const fee = BigInt(await arenaView("chaos_fee", { duel_id: duel.duel_id }));
+  line(
+    "inject chaos @A",
+    await call("inject_chaos", { duel_id: duel.duel_id, target: pkA, kind: "Short", headline: payload }, fee),
+    `spectator ${FOLLOWER_ID} paid ${fmtNear(fee)} NEAR (chaos_fee) for a Short headline`,
+  );
+} else {
+  const { payload_hash } = await post<{ payload_hash: string }>("/chaos", { payload });
+  const minChaos = BigInt((await arenaView("get_config", {})).min_chaos_deposit);
+  line(
+    "inject chaos @A",
+    await call("inject_chaos", { duel_id: duel.duel_id, target: pkA, kind: "fake_news", payload_hash }, minChaos),
+    `spectator ${FOLLOWER_ID} paid ${fmtNear(minChaos)} NEAR, sha256 ${payload_hash.slice(0, 12)}…`,
+  );
+}
 
 // 3. the plain A posts a signed intent into its duel (scored at resolve; a plain agent has no followers to quote)
 const intent: Intent = {

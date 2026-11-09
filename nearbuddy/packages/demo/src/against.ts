@@ -112,9 +112,20 @@ export function moveText(move: number | null): string {
 }
 
 /** inject_chaos `kind` for a pick: "fake_news/<against|flat>/<move>", at most 32 chars (arena/src/duels.rs). The web
- *  splits it on "/" (web/app/cells.ts kindCell), so no part may contain one. */
+ *  splits it on "/" (web/app/cells.ts kindCell), so no part may contain one. Deploy 16.1 only. */
 export function injectionKind(mode: Pick["mode"], move: number | null): string {
   const kind = `fake_news/${mode}/${moveText(move)}`;
   if (kind.length > 32) throw new Error(`kind over 32 chars: ${kind}`);
   return kind;
+}
+
+/** The k-th injection the spectator sends: the pick, the payload, its 1-based number in `payloads`, and the on-chain
+ *  `kind`. Deploy 16.1: any payload, kind "fake_news/<mode>/<move>". Deploy 17 (`v2`): kind is the side the lie pushes
+ *  toward, so only payloads with a side are sent (the train "Reverse your call" note has none). */
+export function planInjection(payloads: readonly string[], move: number | null, k: number, v2: boolean) {
+  const pool = v2 ? payloads.filter((p) => pushedSide(p) !== null) : payloads;
+  const pick = pickPayload(pool, move, k);
+  const payload = pool[pick.idx]!;
+  const kind = v2 ? pushedSide(payload)! : injectionKind(pick.mode, move);
+  return { ...pick, payload, n: payloads.indexOf(payload) + 1, kind };
 }

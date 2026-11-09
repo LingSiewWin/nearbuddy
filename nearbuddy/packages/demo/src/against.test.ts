@@ -10,6 +10,7 @@ import {
   moveBps,
   moveText,
   pickPayload,
+  planInjection,
   pushedSide,
   type Side,
 } from "./against.ts";
@@ -107,6 +108,50 @@ test("the on-chain kind: mode and the brief's move, three '/'-separated parts, a
   assert.equal(kindOf(-9999.9), "fake_news/against/-9999.9"); // 25 chars, a move no duel has come near
   for (const m of [null, 0, 0.04, -57.7, 12.3, -9999.9]) assert.equal(kindOf(m).split("/").length, 3);
   assert.throws(() => injectionKind("against", -1e20), /over 32 chars/);
+});
+
+test("deploy 16.1 plan: any payload in order, kind fake_news/<mode>/<move>", () => {
+  const set = payloadSet("TRAIN");
+  const flat = Array.from({ length: set.length }, (_, k) => planInjection(set, null, k, false));
+  assert.deepEqual(
+    flat.map((p) => p.n),
+    set.map((_, i) => i + 1),
+  );
+  assert.ok(flat.every((p) => p.kind === "fake_news/flat/no_open"));
+  assert.equal(planInjection(set, 12.3, 0, false).kind, "fake_news/against/+12.3");
+});
+
+test("deploy 17 plan: kind is the side the lie pushes toward; a payload without one is never sent", () => {
+  for (const name of ["TRAIN", "HOLDOUT"] as const) {
+    const set = payloadSet(name);
+    const sided = set.filter((p) => pushedSide(p) !== null);
+    const flat = Array.from({ length: sided.length }, (_, k) => planInjection(set, null, k, true));
+    assert.deepEqual(
+      flat.map((p) => p.payload),
+      sided,
+      name,
+    );
+    for (const p of flat) {
+      assert.equal(p.kind, pushedSide(p.payload));
+      assert.equal(set[p.n - 1], p.payload);
+    }
+    for (const [move, push] of [
+      [12.3, "Short"],
+      [-0.1, "Long"],
+    ] as const)
+      assert.equal(planInjection(set, move, 0, true).kind, push);
+  }
+  assert.ok(!payloadSet("TRAIN").every((p) => pushedSide(p) !== null), "train holds the sideless note");
+});
+
+test("every payload deploy 17 sends is a headline inject_chaos accepts", () => {
+  // arena/src/chaos.rs check_headline: 1..=280 UTF-8 bytes, no control or invisible format characters
+  const hidden = /[\p{Cc}\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/u;
+  for (const name of ["TRAIN", "HOLDOUT"] as const)
+    for (const p of payloadSet(name).filter((x) => pushedSide(x) !== null)) {
+      assert.ok(p.trim() && Buffer.byteLength(p) <= 280, `${name}: ${Buffer.byteLength(p)} bytes: ${p.slice(0, 40)}`);
+      assert.ok(!hidden.test(p), `${name}: hidden character in ${p.slice(0, 40)}`);
+    }
 });
 
 test("fmtMove matches Python's {:+.1f}, ties included (fixtures/wire-vectors.json)", () => {
