@@ -45,7 +45,8 @@ TEE decision committed after the headline decides it. Rows carry `chaos` (index,
 delivered). A headline planted after the held commitment is that call's "before": the contract accepts a commit that
 replaces it but voids the headline (NoTrial), so the held commitment is revealed first, then the agent decides with
 the headline and always commits, so the call that saw it is the one revealed next. Right before a commit the pending
-headlines are read again from chain (get_chaos), and a call that missed one decides again (`commit_decision`).
+headlines are read again from chain (get_chaos), and a call that missed one decides again if the time left allows
+(`commit_decision`).
 
 Second pair (`--pair-tag p2`, scripts/second-loop.sh): the same seeds derive a distinct key set per tag
 (keys.key_tag), so two loops with other NEAR_AI_MODEL_A/B never share an agent; every row carries `pair_tag`
@@ -111,6 +112,8 @@ class Tracked:
         self.client = client
         self.last = Completion("", None, client.model_id)
         self.calls: list[Completion] = []
+        # a decision `_prepare_by` stopped waiting for, maybe still running: it owns `last` and `calls` until it ends
+        self.busy: threading.Thread | None = None
 
     def __call__(self, system: str, user: str) -> str:
         self.last = self.client.complete(system, user)
@@ -595,6 +598,43 @@ S_NS = 1_000_000_000
 REVEAL_MARGIN_S = 5
 # hold_until_lock reveals by the local clock at the latest this long before close_at, chain read or not
 BACKSTOP_BEFORE_CLOSE_NS = (REVEAL_MARGIN_S + 2) * 1_000_000_000
+# A /commit round trip (one transaction through the solver, a few seconds on testnet). commit_decision stops waiting
+# for a decision this long before its commit cutoff, and keeps this long between the cutoff and the reveal deadline.
+COMMIT_S = 10
+
+
+def _prepare_by(deadline_ns: int, comp: Tracked, *args: Any) -> Prepared | None | str:
+    """`prepare_decision(*args)` on its own thread, waited for until `deadline_ns` (wall clock, polled every 50 ms):
+    one model, signature or attestation call can block for minutes, and neither the commit nor the held call's reveal
+    may wait for it. Returns its result; "late" when the deadline passed before or during the call (the call is
+    abandoned and keeps `comp.busy` until it ends); "busy" while an earlier abandoned call still runs, since it would
+    write into the same `comp.calls`."""
+    if comp.busy is not None and comp.busy.is_alive():
+        return "busy"
+    if time.time_ns() >= deadline_ns:
+        return "late"
+    box: list[Any] = []
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            box.append(prepare_decision(*args))
+        except BaseException as e:  # handed to the waiting thread, which raises it
+            box.append(e)
+        done.set()
+
+    t = threading.Thread(target=run, name="decide", daemon=True)
+    t.start()
+    while not done.wait(0.05):
+        if time.time_ns() >= deadline_ns:
+            # ponytail: the abandoned call runs on (a paid model call is not cancellable); comp.busy keeps the agent
+            # out of new decisions until it ends, at worst a few minutes
+            comp.busy = t
+            return "late"
+    if isinstance(box[0], BaseException):
+        raise box[0]
+    out: Prepared | None = box[0]
+    return out
 
 
 def _refused(e: RuntimeError) -> bool:
@@ -620,6 +660,7 @@ def commit_decision(
     model: ModelClient,
     attestations: dict[str, str | None],
     chaos_v2: bool = False,
+    lock_at_ns: int | None = None,
 ) -> tuple[int, str]:
     """Commit-reveal, step 1: decide as `post_decision` does, then post only sha256(intent bytes || salt), signed by
     the agent over `commit_message`. The contract stores one commitment per agent per duel and a new commit replaces
@@ -644,17 +685,44 @@ def commit_decision(
     solver's GET /arena, memoised for 3 s). A headline that landed while the model decided was never seen by this
     call, which would decide that headline's trial blind once revealed. The call is then recorded as not committed,
     the held call is revealed if it is the headline's `prev`, and the model decides again with every pending headline.
-    Returns (nonce, status): "committed", "kept", "skipped" or "closed" (inside the intent lock)."""
+
+    Time: every wait in here ends by the commit cutoff, `lock_at_ns` (the intent lock's start, close_at when None; the
+    contract refuses a commit from there on) or COMMIT_S before the reveal deadline (close_at - REVEAL_MARGIN_S),
+    whichever is first, so the held call's reveal never waits on this call. A decision is waited for until COMMIT_S
+    before the cutoff (`_prepare_by`), then abandoned: nothing is committed and the status is "closed". The decision
+    again runs only if the first one's measured time still fits before that point; if not, the call that missed the
+    headline is not committed and the held call stays the scored one. /commit is not sent after the cutoff and not
+    waited for past it.
+    Returns (nonce, status): "committed", "kept", "skipped" or "closed" (inside the intent lock or past the cutoff)."""
     pk = pk_b64(sk)
+    reveal_by = close_at_ns - (REVEAL_MARGIN_S + COMMIT_S) * S_NS
+    cutoff = reveal_by if lock_at_ns is None else min(lock_at_ns, reveal_by)
+    decide_by = cutoff - COMMIT_S * S_NS
     mine = [i for i in pending.get(pk, []) if i["duel_id"] == duel_id]
     chaos_v2 = chaos_v2 or any("arm" in i for i in mine)
     held_top = held[label][-1] if held.get(label) else None
     new = [i for i in mine if "arm" in i and (held_top is None or i["index"] not in held_top.saw)]
     mine, decided = reveal_prev(solver, held, label, mine, model.tee)
-    prep = prepare_decision(
-        duel_id, symbol, px, open_px, close_at_ns, {pk: mine}, nonce + 1, d, sk, comp, model, attestations
-    )
-    if prep is None:
+
+    def decide(headlines: list[dict[str, Any]]) -> Prepared | None | str:
+        # `nonce` is read at call time: the redo gets the one after the call that missed the headline
+        args = (duel_id, symbol, px, open_px, close_at_ns, {pk: headlines}, nonce + 1, d, sk, comp, model, attestations)
+        out = _prepare_by(decide_by, comp, *args)
+        if out == "late":
+            record(
+                {"duel_id": duel_id, "agent_pk": pk, "model": model.model_id, "error": "late: no decision by cutoff"}
+            )
+            print(f"  {label} decision not done {COMMIT_S} s before the commit cutoff; abandoned, nothing committed")
+        elif out == "busy":
+            print(f"  {label} an abandoned decision is still running; skipping this cycle")
+        return out
+
+    started = time.time_ns()
+    prep = decide(mine)
+    took = time.time_ns() - started
+    if prep == "late":
+        return nonce, "closed"
+    if prep is None or isinstance(prep, str):
         return nonce, "skipped"
     nonce += 1
     intent, tee, inj, row = prep
@@ -687,6 +755,8 @@ def commit_decision(
         fresh = chaos_pending(duel_id, pk)
         missed = [i["index"] for i in fresh or [] if i["index"] not in seen]
         if fresh is not None and missed:
+            # the redo makes the same calls with one more headline: the first decision's time is its estimate
+            redo = time.time_ns() + took <= decide_by
             record(
                 {
                     **row,
@@ -694,15 +764,19 @@ def commit_decision(
                     "committed_tx": None,
                     "revealed_tx": None,
                     "tx": None,
-                    "error": f"not committed: headline {missed} landed while deciding",
+                    "error": f"not committed: headline {missed} landed while deciding"
+                    + ("" if redo else "; no time to decide again"),
                 }
             )
+            if not redo:
+                print(f"  {label} headline {missed} landed while deciding, no time to decide again: nothing committed")
+                return nonce, "skipped"
             print(f"  {label} headline {missed} landed while deciding: deciding again with it, nonce {nonce} unused")
             mine, _ = reveal_prev(solver, held, label, [i for i in fresh if i["index"] not in decided], model.tee)
-            prep = prepare_decision(
-                duel_id, symbol, px, open_px, close_at_ns, {pk: mine}, nonce + 1, d, sk, comp, model, attestations
-            )
-            if prep is None:
+            prep = decide(mine)
+            if prep == "late":
+                return nonce, "closed"
+            if prep is None or isinstance(prep, str):
                 return nonce, "skipped"
             nonce += 1
             intent, tee, inj, row = prep
@@ -727,12 +801,13 @@ def commit_decision(
         "sig": sign_b64(sk, commit_message(ARENA, duel_id, c)),
     }
     try:
-        committed = solver.post("/commit", body)
+        committed = solver.post("/commit", body, deadline_ns=cutoff)
     except RuntimeError as e:
-        if not _refused(e):
+        unsent = isinstance(e, DeadlineError)  # the cutoff passed before the POST: nothing reached the chain
+        if not (unsent or _refused(e)):
             raise  # may have landed: stays a candidate next to the older one, the final reveal settles it
         cands.remove(p)
-        late = _late(e)
+        late = "commit cutoff" if unsent else _late(e)
         if late is None:
             raise
         record({**p.row, "revealed_tx": None, "tx": None, "error": late})
@@ -966,7 +1041,9 @@ def play_duel(
                     # SIGTERM waits until `held` matches the chain: a kill between a landed commit and the update
                     # of `held` would leave the final reveal opening a replaced commitment first
                     with sigterm_deferred():
-                        nonce, status = commit_decision(solver, held, *args, attestations, chaos_v2)
+                        nonce, status = commit_decision(
+                            solver, held, *args, attestations, chaos_v2, close_at_ns - lock_s * S_NS
+                        )
                 if status == "closed":
                     closed = True
                     break

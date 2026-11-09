@@ -6,6 +6,7 @@ decides again. `check_row` recomputes the delivered text from the arms and finds
 
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -59,6 +60,7 @@ class ChaosSolver:
         self.clock, self.pk, self.headlines, self.land_s = clock, pk, headlines, land_s
         self.fail = fail or {}
         self.posts: list[tuple[str, dict, int]] = []
+        self.deadlines: dict[str, list[int | None]] = {}  # path -> the deadline_ns of each POST
         self.reads: list[int] = []  # clock of every get_chaos read
         clock.chain = self.chain
 
@@ -81,6 +83,7 @@ class ChaosSolver:
 
     def post(self, path, body, deadline_ns=None):
         self.posts.append((path, body, self.clock.ns))
+        self.deadlines.setdefault(path, []).append(deadline_ns)
         n = sum(1 for p, _, _ in self.posts if p == path)
         if (path, n) in self.fail:
             err = self.fail[(path, n)]
@@ -293,3 +296,74 @@ def test_ctrl_c_during_a_mid_duel_reveal_leaves_the_commitment_to_the_final_reve
     assert solver.paths() == ["/commit", "/reveal", "/reveal"]
     assert [t // S for _, _, t in solver.posts] == [0, 20, 20], "Ctrl-C reveals at once, lock or not"
     assert next(r for r in rows() if r.get("revealed_tx"))["revealed_tx"] == "R2"
+
+
+class Timed(Scripted):
+    """A model call that takes `took[n]` seconds of the fake clock (the last value repeats); `hang_at` (a call index)
+    then blocks until `gate` is set, like a model call that never answers."""
+
+    def __init__(self, clock, sides, took, hang_at=None):
+        super().__init__(sides)
+        self.clock, self.took, self.hang_at = clock, list(took), hang_at
+        self.gate = threading.Event()
+
+    def complete(self, system, user):
+        n = len(self.users)
+        self.clock.sleep(self.took[min(n, len(self.took) - 1)])
+        out = super().complete(system, user)
+        if n == self.hang_at:
+            self.gate.wait(10)
+        return out
+
+
+# CLOSE_NS 100 s, LOCK_S 10: the commit cutoff is min(lock 90 s, close - REVEAL_MARGIN_S - COMMIT_S = 85 s) = 85 s and
+# a decision is waited for until COMMIT_S before it, 75 s
+CUTOFF_NS = 85 * S
+
+
+def test_no_redo_when_the_first_decision_took_longer_than_the_time_left(clock):
+    # every call takes 20 s. Cycle 2 decides 40..60 s while a headline lands at 50 s; at 60 s a redo would end at 80 s,
+    # past 75 s. The Short that missed the headline is not committed (revealed, it would decide the trial blind) and
+    # the held Long of cycle 1 stays the scored call, revealed in the lock
+    model = Timed(clock, ["Long", "Short"], took=[20])
+    ps = player(model)
+    solver = ChaosSolver(clock, pk_b64(ps[0][2]), [headline(0, HALT, at_s=50)])
+    play(solver, ps)
+    assert solver.paths() == ["/commit", "/reveal"]
+    assert [t // S for _, _, t in solver.posts] == [20, 90]
+    assert len(model.users) == 2, "no third, late call"
+    blind = next(r for r in rows() if r.get("error", "").startswith("not committed"))
+    assert blind["error"] == "not committed: headline [0] landed while deciding; no time to decide again"
+    revealed = next(r for r in rows() if r["revealed_tx"])
+    assert revealed["intent"]["side"] == "Long" and revealed["chaos"] is None
+    assert solver.deadlines["/commit"] == [CUTOFF_NS], "the commit is not sent or waited for past the cutoff"
+
+
+def test_the_redo_runs_when_the_measured_time_fits(clock):
+    # the same race with 5 s calls: the headline lands at 27 s during cycle 2 (25..30 s); a redo from 30 s ends at
+    # 35 s, well before 75 s, so the call that saw it is decided and committed
+    model = Timed(clock, ["Long", "Short", "Short"], took=[5])
+    ps = player(model)
+    solver = ChaosSolver(clock, pk_b64(ps[0][2]), [headline(0, HALT, at_s=27)])
+    play(solver, ps)
+    assert [HALT in u for u in model.users][:3] == [False, False, True]
+    assert next(r for r in rows() if r["revealed_tx"] == "R2")["injection"] == HALT
+
+
+def test_a_decision_that_hangs_past_the_cutoff_is_abandoned_and_the_held_call_revealed_in_time(clock):
+    # cycle 2's model call jumps the clock to 80 s and never answers: commit_decision gives up at 75 s, so the duel
+    # loop ends and the held Long is revealed inside the lock, before close_at - REVEAL_MARGIN_S
+    model = Timed(clock, ["Long", "Short"], took=[0, 60], hang_at=1)
+    ps = player(model)
+    solver = ChaosSolver(clock, pk_b64(ps[0][2]), [])
+    try:
+        play(solver, ps)
+        assert solver.paths() == ["/commit", "/reveal"]
+        reveal_at = solver.posts[1][2]
+        assert 90 * S <= reveal_at < CLOSE_NS - runner.REVEAL_MARGIN_S * S
+        assert any(r.get("error") == "late: no decision by cutoff" for r in rows())
+        comp = ps[0][3]
+        assert comp.busy is not None and comp.busy.is_alive()
+        assert runner._prepare_by(CLOSE_NS, comp) == "busy", "no new decision writes into the abandoned call's state"
+    finally:
+        model.gate.set()
