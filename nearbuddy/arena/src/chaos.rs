@@ -5,7 +5,8 @@
 //! stake is settled exactly once (`settle_records`) and pays the fee whatever its outcome: a flip
 //! returns the stake less the fee, plus a share taken from the loser's bond on top of its slash when
 //! the target lost the duel; a held stake, less the fee, goes to the target's bond as its resistance
-//! reward; no trial, or no decision before the end, returns the stake less the fee. Injectors claim
+//! reward; no trial, or no decision before the end, returns the stake less the fee. Only a stake
+//! that expired in a voided duel (the oracle never answered) comes back whole. Injectors claim
 //! what they are owed with `claim_chaos`.
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::{AccountId, Gas, NearToken, Promise, PromiseError, env, near, require};
@@ -126,7 +127,8 @@ pub(crate) struct Settlement {
 
 /// Settles every injection of a finished duel, once: a pending one expires, every stake pays
 /// `fee = stake * fee_bps / 10_000` to the owner whatever its outcome (so filling the slots with
-/// injections that never meet a trial is not free), then
+/// injections that never meet a trial is not free), except an expired one in a `void` (the oracle
+/// never answered, which is not the injector's doing: `fee = 0`), then
 /// - `NoTrial`, `Expired`: `payout = stake - fee`;
 /// - `Held`: `stake - fee` to the target's bond;
 /// - `Flipped`: `payout = stake - fee`, plus, when the target is `loser`, its share of `pot`, split
@@ -140,6 +142,7 @@ pub(crate) fn settle_records(
     loser: Option<&[u8]>,
     pot: u128,
     cfg: &ChaosConfig,
+    void: bool,
 ) -> Settlement {
     let fooled_loser =
         |c: &Chaos| c.outcome == ChaosOutcome::Flipped && loser == Some(c.target.0.as_slice());
@@ -154,7 +157,11 @@ pub(crate) fn settle_records(
             c.outcome = ChaosOutcome::Expired;
         }
         let stake = c.stake.0;
-        let fee = stake * cfg.fee_bps as u128 / 10_000;
+        let fee = if void && c.outcome == ChaosOutcome::Expired {
+            0
+        } else {
+            stake * cfg.fee_bps as u128 / 10_000
+        };
         s.taken += stake;
         s.fees += fee;
         match c.outcome {
@@ -272,13 +279,14 @@ impl Contract {
     /// `slashed` into the pool; the flips at it are paid on top, from its bond: at most
     /// `slashed * share_bps / 10_000`, bounded by what the bond still holds. So the winner keeps the
     /// whole slash, and an owner flipping its own losing agent through a second account only moves
-    /// its own money and pays the fee.
+    /// its own money and pays the fee. `void`: the duel was voided (no loser).
     pub(crate) fn settle_chaos(
         &mut self,
         id: u64,
         loser: Option<&[u8]>,
         slashed: u128,
         pool: u128,
+        void: bool,
     ) -> u128 {
         let Some(list) = self.chaos.get_mut(&id) else {
             return pool;
@@ -287,7 +295,7 @@ impl Contract {
             let bond = self.agents.get(pk).expect("agent missing").bond.0;
             (slashed * self.chaos_config.share_bps as u128 / 10_000).min(bond)
         });
-        let s = settle_records(list, loser, pot, &self.chaos_config);
+        let s = settle_records(list, loser, pot, &self.chaos_config, void);
         self.owner_fees += s.fees;
         if let Some(pk) = loser {
             self.agents.get_mut(pk).expect("agent missing").bond.0 -= s.shares;

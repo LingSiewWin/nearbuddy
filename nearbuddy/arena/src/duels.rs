@@ -534,7 +534,8 @@ impl Contract {
 
     /// Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both
     /// agents, no slashing, no score. Recorded as a tie with no prices: the injections settle as on a
-    /// tie (see `settle_records`) and what is left of the pool is split between the agents.
+    /// tie (see `settle_records`), except that an expired one pays no fee, and what is left of the
+    /// pool is split between the agents.
     /// Caller: anyone. Deposit: none. Panics: "duel missing", "resolved", "too early",
     /// "agent missing".
     pub fn void_duel(&mut self, duel_id: U64) {
@@ -564,7 +565,7 @@ impl Contract {
             slashed: U128(0),
             injections: n,
         });
-        let pool = self.settle_chaos(duel_id.0, None, 0, pool);
+        let pool = self.settle_chaos(duel_id.0, None, 0, pool, true);
         let half = pool / 2;
         for (pk, share) in [(&pk_a, half + pool % 2), (&pk_b, half)] {
             self.commitments.remove(&commit_key(duel_id.0, pk));
@@ -662,7 +663,7 @@ impl Contract {
             pool += slashed;
             outcome.winner = Some(Base64VecU8(winner.clone()));
             outcome.slashed = U128(slashed);
-            let pool = self.settle_chaos(id, Some(loser), slashed, pool);
+            let pool = self.settle_chaos(id, Some(loser), slashed, pool, false);
             // shield counts headlines a third party paid for that the winner held against (a trial
             // it resisted): none for no trial, a flip or an expiry, none for chaos either owner paid,
             // none when the win is a forfeit (red team F2)
@@ -675,7 +676,7 @@ impl Contract {
             w.bond.0 += pool;
             w.shield += survived;
         } else {
-            let pool = self.settle_chaos(id, None, 0, pool);
+            let pool = self.settle_chaos(id, None, 0, pool, false);
             let half = pool / 2;
             self.agents.get_mut(&pk_a).unwrap().bond.0 += half + pool % 2;
             self.agents.get_mut(&pk_b).unwrap().bond.0 += half;

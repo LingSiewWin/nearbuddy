@@ -44,7 +44,7 @@ Placebos are run only by the contract owner, with no price and no payout. The re
 - If the target replaces, unrevealed, a commitment it held at the injection, it hides the decision before. Every pending injection at it planted at or after the replaced commitment stays pending with `prev: null` for good, and the hidden call counts against the target: its next counting decision gives `Flipped` on the lie's side and `NoTrial` off it, never `Held`. A `Flipped` record with `prev: null` is such a charged flip, so experiment readers can set it apart. Replacing is always allowed and never forfeits; a runner reveals the held call before it commits again (see M3 below).
 - Pending injections become `Expired` when the duel finishes or is voided.
 
-**Payout at finish.** Each stake is settled exactly once. Let `fee = stake * fee_bps / 10_000`; every stake pays it, whatever the outcome.
+**Payout at finish.** Each stake is settled exactly once. Let `fee = stake * fee_bps / 10_000`; every stake pays it, whatever the outcome, except one that expires in a voided duel.
 
 | outcome | injector is owed (`payout`) | target's bond | `owner_fees` |
 |---|---|---|---|
@@ -52,10 +52,11 @@ Placebos are run only by the contract owner, with no price and no payout. The re
 | `Flipped`, target won or tied | `stake - fee` | | `fee` |
 | `Held` | 0 | `+ stake - fee` (resistance reward) | `fee` |
 | `NoTrial`, `Expired` | `stake - fee` | | `fee` |
+| `Expired` in a voided duel | `stake` | | |
 
 - `share` is paid by the loser from its bond, on top of its slash. The pot is `min(slash * share_bps / 10_000, what the bond holds after the slash)`, split among the flipped injections at the loser in proportion to stake (weights in bps, rounded down). The loser pays only the shares, so the rounding dust stays in its bond. The winner always gets the whole slash.
 - The slash, then the shares, are taken from the loser's bond before any resistance reward is credited.
-- A void settles like a tie.
+- A void settles like a tie, except that an expired stake comes back whole: the oracle never answered, which is not the injector's fault.
 - Conservation: every stake leaves the pool, and the shares leave the loser's bond. Together they equal payouts + resistance credits + fees.
 - Injectors collect with `claim_chaos(duel_id)` (1 yocto). It pays everything the caller is owed in that duel in one transfer, once. The records are marked claimed before the transfer; if it fails (a deleted account), the private callback `on_claim_chaos` unmarks them, so a later claim pays them.
 - When an owner of either agent, or the contract owner (placebo), pays for an injection, that deposit goes to `owner_fees` at injection. Its stake is 0: it earns nothing and buys no shield, but its outcome is still recorded for the trial.

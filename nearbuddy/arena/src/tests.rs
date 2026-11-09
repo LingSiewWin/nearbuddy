@@ -4735,6 +4735,7 @@ fn void_settles_the_headlines_as_a_tie() {
     let late = plant(&mut c, d, 1, ChaosKind::Short, NOW + 3);
     let (h, l) = (chaos_at(&c, d, held).stake.0, chaos_at(&c, d, late).stake.0);
     let (bond_a, bond_b) = (bond(&c, 1), bond(&c, 2));
+    let fees = c.get_config().owner_fees.0;
     ctx_at(FOLLOWER, 0, CLOSE + VOID_AFTER_NS);
     c.void_duel(U64(d));
     assert_eq!(bond(&c, 1), bond_a + h - h * 500 / 10_000);
@@ -4742,7 +4743,13 @@ fn void_settles_the_headlines_as_a_tie() {
     let s = chaos_at(&c, d, late);
     assert_eq!(
         (s.outcome, s.payout.0),
-        (ChaosOutcome::Expired, l - l * 500 / 10_000)
+        (ChaosOutcome::Expired, l),
+        "the oracle never answered: an expired stake comes back whole"
+    );
+    assert_eq!(
+        c.get_config().owner_fees.0,
+        fees + h * 500 / 10_000,
+        "only the decided stake pays the fee"
     );
 }
 
@@ -4820,10 +4827,11 @@ fn set_chaos_config_guards_its_terms() {
     assert_eq!(c.get_config().chaos, pricier);
 }
 
-/// Every combination of up to three injections over small stakes, outcomes, targets, losers,
-/// slashes and terms: settling conserves value (what leaves the pool is paid out, credited or
-/// fee'd, exactly), shares never exceed the slash's pot, every injection ends settled with one
-/// final outcome, every stake pays the fee once, and a reward goes only to a decided injection.
+/// Every combination of up to three injections over small stakes, outcomes, targets, losers (or a
+/// void), slashes and terms: settling conserves value (what leaves the pool is paid out, credited
+/// or fee'd, exactly), shares never exceed the slash's pot, every injection ends settled with one
+/// final outcome, every stake pays the fee once (none for one that expires in a void), and a
+/// reward goes only to a decided injection.
 #[test]
 fn settle_records_conserves_and_pays_once_over_small_ranges() {
     use ChaosOutcome::*;
@@ -4868,7 +4876,12 @@ fn settle_records_conserves_and_pays_once_over_small_ranges() {
     };
     let mut runs = 0u64;
     for list in &lists {
-        for loser in [None, Some(&a), Some(&b)] {
+        for (loser, void) in [
+            (None, false),
+            (None, true),
+            (Some(&a), false),
+            (Some(&b), false),
+        ] {
             for slashed in [0u128, 999] {
                 for fee_bps in [0u16, 500, 1_000] {
                     for share_bps in [0u16, 3_333, 10_000] {
@@ -4886,8 +4899,16 @@ fn settle_records_conserves_and_pays_once_over_small_ranges() {
                             loser.map(|v| v.as_slice()),
                             pot,
                             &cfg,
+                            void,
                         );
                         runs += 1;
+                        let fee_of = |stake: u128, before: ChaosOutcome| {
+                            if void && before == Pending {
+                                0
+                            } else {
+                                stake * fee_bps as u128 / 10_000
+                            }
+                        };
                         let stakes: u128 = list.iter().map(|x| x.0).sum();
                         let paid: u128 = recs.iter().map(|r| r.payout.0).sum();
                         let credited: u128 = s.credits.iter().map(|c| c.1).sum();
@@ -4904,10 +4925,10 @@ fn settle_records_conserves_and_pays_once_over_small_ranges() {
                             r.outcome == Flipped && r.stake.0 > 0 && loser == Some(&r.target.0)
                         });
                         assert!(flipped_loser || s.shares == 0, "a share without a flip");
-                        let fees: u128 = list.iter().map(|x| x.0 * fee_bps as u128 / 10_000).sum();
+                        let fees: u128 = list.iter().map(|x| fee_of(x.0, x.1)).sum();
                         assert_eq!(s.fees, fees, "every stake pays the fee, once");
                         for (r, (stake, before, _)) in recs.iter().zip(list) {
-                            let fee = stake * fee_bps as u128 / 10_000;
+                            let fee = fee_of(*stake, *before);
                             match (before, r.outcome) {
                                 (Pending, Expired) | (NoTrial, NoTrial) => {
                                     assert_eq!(r.payout.0, stake - fee, "a refund less the fee")

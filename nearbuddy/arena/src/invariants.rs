@@ -750,22 +750,29 @@ fn model_fee(cfg: &ChaosConfig, n: usize) -> u128 {
 
 /// Settles a finished duel's records in the model: `(fees, resistance credit per side, taken out of
 /// the pool, shares taken from the loser's bond)`, and sets each payout. `loser_b`: `Some(true)` when
-/// side b lost; `pot`: what the loser's bond pays the flips at it, at most.
+/// side b lost; `pot`: what the loser's bond pays the flips at it, at most; `void`: the duel was
+/// voided, so an expiring stake pays no fee.
 fn settle_model(
     recs: &mut [ChaosM],
     loser_b: Option<bool>,
     pot: u128,
     cfg: &ChaosConfig,
+    void: bool,
 ) -> (u128, [u128; 2], u128, u128) {
     let at_loser = |r: &ChaosM| loser_b == Some(r.side_b) && r.outcome == ChaosOutcome::Flipped;
     let weight: u128 = recs.iter().filter(|r| at_loser(r)).map(|r| r.stake).sum();
     let (mut fees, mut credit, mut taken, mut shares) = (0, [0u128; 2], 0, 0);
     for r in recs.iter_mut() {
-        if r.outcome == ChaosOutcome::Pending {
+        let expired = r.outcome == ChaosOutcome::Pending;
+        if expired {
             r.outcome = ChaosOutcome::Expired;
         }
-        // every stake pays the fee, whatever its outcome
-        let fee = r.stake * cfg.fee_bps as u128 / 10_000;
+        // every stake pays the fee, whatever its outcome; none expires into a fee in a void
+        let fee = if void && expired {
+            0
+        } else {
+            r.stake * cfg.fee_bps as u128 / 10_000
+        };
         taken += r.stake;
         fees += fee;
         match r.outcome {
@@ -1786,9 +1793,10 @@ impl World {
                 {
                     let post = self.snap();
                     let (a, b, pool) = (self.duels[d].a, self.duels[d].b, pre.duels[d].pool.0);
-                    // a void settles the injections as a tie, then splits what is left
+                    // a void settles the injections as a tie (an expiring one pays no fee), then
+                    // splits what is left
                     let (fees, credit, taken, _) =
-                        settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos);
+                        settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos, true);
                     let rest = pool - taken;
                     let (sa, sb) = (rest / 2 + rest % 2 + credit[0], rest / 2 + credit[1]);
                     assert_eq!(post.fees, pre.fees + fees, "void chaos fees");
@@ -1975,7 +1983,7 @@ impl World {
             None => {
                 assert!(o.winner.is_none() && o.slashed.0 == 0, "tie must not slash");
                 let (f, credit, taken, _) =
-                    settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos);
+                    settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos, false);
                 let rest = pool - taken;
                 na += rest / 2 + rest % 2 + credit[0];
                 nb += rest / 2 + credit[1];
@@ -1998,8 +2006,13 @@ impl World {
                 // loser's bond before any resistance reward reaches it
                 *lb -= slashed;
                 let pot = (slashed * self.cfg.chaos.share_bps as u128 / 10_000).min(*lb);
-                let (f, credit, taken, shares) =
-                    settle_model(&mut self.duels[d].recs, Some(a_wins), pot, &self.cfg.chaos);
+                let (f, credit, taken, shares) = settle_model(
+                    &mut self.duels[d].recs,
+                    Some(a_wins),
+                    pot,
+                    &self.cfg.chaos,
+                    false,
+                );
                 assert!(shares <= pot, "shares above the pot");
                 *lb -= shares;
                 // every stake leaves the pool; the winner keeps the whole slash

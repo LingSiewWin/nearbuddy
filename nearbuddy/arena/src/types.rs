@@ -178,8 +178,8 @@ pub struct Chaos {
     pub decided_by: Option<U64>,
     pub outcome: ChaosOutcome,
     /// Owed to `injector` once the duel finished: the stake back less the fee (no trial, expired or
-    /// flipped) plus, for a flip at the duel's loser, a share the loser pays from its bond on
-    /// top of its slash.
+    /// flipped; the whole stake when it expired in a voided duel) plus, for a flip at the duel's
+    /// loser, a share the loser pays from its bond on top of its slash.
     pub payout: U128,
     pub claimed: bool,
 }
@@ -187,7 +187,8 @@ pub struct Chaos {
 /// Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel
 /// (placebos not counted) needs a deposit of at least
 /// `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step.
-/// At finish `fee_bps` of every stake, whatever its outcome, goes to `owner_fees`. The loser pays
+/// At finish `fee_bps` of every stake, whatever its outcome, goes to `owner_fees` (not of one that
+/// expired in a voided duel: the oracle never answered). The loser pays
 /// `share_bps` of its slash again, from its bond on top of the slash (bounded by the bond), split pro
 /// rata by stake among the injections that flipped it; the winner keeps the whole slash.
 #[near(serializers = [json, borsh])]
