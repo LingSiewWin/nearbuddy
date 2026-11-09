@@ -60,6 +60,9 @@ jobs:
       - run: uv run --locked ruff format --check . ../analysis
       - run: uv run --locked mypy .
       - run: uv run --locked pytest -q
+      # headline manipulation detector (scripts/check-all.sh sentinel); tests use cached fixtures, no network
+      - run: uv sync --locked && uv run --locked ruff check . && uv run --locked ruff format --check . && uv run --locked pytest -q
+        working-directory: nearbuddy/sentinel
 
   rust:
     runs-on: ubuntu-latest
