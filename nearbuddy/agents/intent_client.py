@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import struct
 import time
 from dataclasses import dataclass
@@ -50,16 +51,46 @@ def _vec(b: bytes) -> bytes:
     return struct.pack("<I", len(b)) + b
 
 
+# The contract's JSON ingress is the reference (fixtures/wire-vectors.json "edges"): anything it refuses, the
+# encoder refuses too, so an agent never signs bytes for a call the contract would read differently or reject.
+_SIDE = {"Long": 0, "Short": 1}
+_U64 = re.compile(r"\+?[0-9]+")
+
+
+def _u64(v: Any) -> int:
+    """near-sdk `U64`: a decimal string, optional '+', leading zeros allowed, at most 2^64 - 1."""
+    if not isinstance(v, str) or not _U64.fullmatch(v) or int(v) >= 1 << 64:
+        raise ValueError(f"bad u64: {v!r}")
+    return int(v)
+
+
+def _u16(v: Any) -> int:
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 0xFFFF:
+        raise ValueError(f"bad u16: {v!r}")
+    return v
+
+
+def b64decode_strict(s: Any) -> bytes:
+    """near-sdk `Base64VecU8`: standard alphabet, padded, canonical (`AR==` is refused, `AQ==` is not)."""
+    if not isinstance(s, str):
+        raise ValueError(f"bad base64: {s!r}")
+    b = base64.b64decode(s, validate=True)
+    if base64.b64encode(b).decode() != s:
+        raise ValueError(f"non-canonical base64: {s!r}")
+    return b
+
+
 def intent_message(i: dict[str, Any]) -> bytes:
-    side = 0 if i["side"] == "Long" else 1
+    if i["side"] not in _SIDE:
+        raise ValueError(f"bad side: {i['side']!r}")
     body = (
-        _vec(base64.b64decode(i["agent_pk"]))
-        + struct.pack("<Q", int(i["duel_id"]))
-        + struct.pack("<B", side)
-        + struct.pack("<H", int(i["size_bps"]))
-        + struct.pack("<Q", int(i["nonce"]))
-        + struct.pack("<Q", int(i["expires_at"]))
-        + _vec(base64.b64decode(i["proof_hash"]))
+        _vec(b64decode_strict(i["agent_pk"]))
+        + struct.pack("<Q", _u64(i["duel_id"]))
+        + struct.pack("<B", _SIDE[i["side"]])
+        + struct.pack("<H", _u16(i["size_bps"]))
+        + struct.pack("<Q", _u64(i["nonce"]))
+        + struct.pack("<Q", _u64(i["expires_at"]))
+        + _vec(b64decode_strict(i["proof_hash"]))
     )
     return INTENT_DOMAIN + body
 

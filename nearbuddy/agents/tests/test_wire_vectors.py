@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest  # noqa: E402
 from nacl.signing import SigningKey, VerifyKey  # noqa: E402
 
 from intent_client import (  # noqa: E402
@@ -19,8 +20,28 @@ from intent_client import (  # noqa: E402
     sign_intent,
     tee_text,
 )
+from prices import brief  # noqa: E402
 
 W = json.loads((Path(__file__).resolve().parents[2] / "fixtures" / "wire-vectors.json").read_text())
+EDGES = W["edges"]
+
+
+@pytest.mark.parametrize("edge", EDGES["reject"], ids=[e["name"] for e in EDGES["reject"]])
+def test_edge_rejected_like_the_contract(edge):
+    with pytest.raises(ValueError):
+        intent_message({**W["intent"], **edge["patch"]})
+
+
+@pytest.mark.parametrize("edge", EDGES["same"], ids=[e["name"] for e in EDGES["same"]])
+def test_edge_encodes_like_the_contract(edge):
+    assert intent_message({**W["intent"], **edge["patch"]}).hex() == W["intent_hex"]
+
+
+def test_brief_move_format():
+    for move, text in W["move_format"]["cases"]:
+        assert f"{move:+.1f}" == text
+    for open8, spot8, text in W["move_format"]["briefs"]:
+        assert f"Move since duel open: {text} bps." in brief("NEAR/USD", spot8, open8)
 
 
 def test_intent_bytes():
