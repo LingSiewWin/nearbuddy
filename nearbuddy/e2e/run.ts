@@ -1418,16 +1418,26 @@ async function main() {
       const h = answer ? await eventHeight(answer.hash, oracleAcct.accountId, "resolve") : null;
       if (h === null) check(sc, "settlement at finish", false, "no resolve receipt in the oracle's close answer");
       else {
-        const at = async (height: number) => ({
-          a: BigInt((await viewAtHeight(height, "get_agent", { agent_pk: d.a })).bond),
-          b: BigInt((await viewAtHeight(height, "get_agent", { agent_pk: d.b })).bond),
-          fees: BigInt((await viewAtHeight(height, "get_config")).owner_fees),
-        });
+        const at = async (height: number) => {
+          const [a, b] = [
+            await viewAtHeight(height, "get_agent", { agent_pk: d.a }),
+            await viewAtHeight(height, "get_agent", { agent_pk: d.b }),
+          ];
+          return {
+            a: BigInt(a.bond),
+            b: BigInt(b.bond),
+            shieldA: a.shield as number,
+            shieldB: b.shield as number,
+            fees: BigInt((await viewAtHeight(height, "get_config")).owner_fees),
+            pool: BigInt((await viewAtHeight(height, "get_duel", { duel_id: duelId })).pool),
+          };
+        };
         const [pre, post] = [await at(h - 1), await at(h)];
         const end = await view("get_duel", { duel_id: duelId });
         const o = end.outcome;
         const slashed = BigInt(o?.slashed ?? "0");
-        const slashBps = BigInt((await view("get_config")).slash_bps);
+        const endCfg = await view("get_config");
+        const slashBps = BigInt(endCfg.slash_bps);
         // amounts from the contract's own views, so a change of the fee or share rule does not break the run
         check(
           sc,
@@ -1435,16 +1445,53 @@ async function main() {
           o?.winner === d.a && slashed === (pre.b * slashBps) / 10_000n && slashed > 0n && BigInt(cb.payout) > 0n,
           `winner ${String(o?.winner).slice(0, 8)}, slashed ${slashed} of ${pre.b}, flip payout ${cb.payout}, held payout ${ca.payout}`,
         );
-        // what the finish moves: the escrowed stakes (pool) go to bonds, owner fees and payouts; the slash moves from
-        // the loser's bond and is accounted for inside the same sum
-        const stakes = BigInt(cb.stake) + BigInt(ca.stake);
-        const payouts = BigInt(cb.payout) + BigInt(ca.payout);
-        const moved = post.a - pre.a + (post.b - pre.b) + (post.fees - pre.fees) + payouts;
+        // what the finish moves (duels.rs finish, chaos.rs settle_chaos / settle_records), loser B, winner A:
+        // every stake pays fee = stake * fee_bps / 10_000 to owner_fees; a Held stake less its fee goes to the target's
+        // bond and pays no payout; a flip is paid stake - fee, plus, at the loser, its stake-weighted share of
+        // pot = min(slashed * share_bps / 10_000, loser bond after the slash), taken from the loser's bond ON TOP of
+        // the slash; the winner gets the whole slash plus what the stakes leave in the pool (nothing). Shield: one per
+        // third-party headline the winner Held. So:
+        //   dA = slashed + held(A) + (pool - stakes),  dB = held(B) - slashed - shares,  dFees = sum(fee),
+        //   dA + dB + dFees + payouts = pool = stakes,  the pool ends at 0.
+        const { fee_bps: feeBps, share_bps: shareBps } = endCfg.chaos as { fee_bps: number; share_bps: number };
+        const fee = (c: J) => (BigInt(c.stake) * BigInt(feeBps)) / 10_000n;
+        const sum = (xs: bigint[]) => xs.reduce((x, y) => x + y, 0n);
+        const [cut, room] = [(slashed * BigInt(shareBps)) / 10_000n, pre.b - slashed];
+        // biome-ignore lint/complexity/useMathMinMax: bigint operands, Math.min takes numbers only
+        const pot = room < cut ? room : cut;
+        const fooled = list.filter((c) => c.outcome === "Flipped" && c.target === d.b);
+        const weight = sum(fooled.map((c) => BigInt(c.stake)));
+        const share = (c: J) => (fooled.includes(c) ? (pot * ((BigInt(c.stake) * 10_000n) / weight)) / 10_000n : 0n);
+        const shares = sum(fooled.map(share));
+        const held = (pk: string) =>
+          sum(list.filter((c) => c.outcome === "Held" && c.target === pk).map((c) => BigInt(c.stake) - fee(c)));
+        const wantPayout = (c: J) => (c.outcome === "Held" ? 0n : BigInt(c.stake) - fee(c) + share(c));
+        const stakes = sum(list.map((c) => BigInt(c.stake)));
+        const payouts = sum(list.map((c) => BigInt(c.payout)));
+        const [dA, dB, dFees] = [post.a - pre.a, post.b - pre.b, post.fees - pre.fees];
+        const want = {
+          a: slashed + held(d.a) + pre.pool - stakes,
+          b: held(d.b) - slashed - shares,
+          fees: sum(list.map(fee)),
+        };
+        const shieldA = list.filter((c) => c.outcome === "Held" && c.target === d.a).length;
         check(
           sc,
           "at finish: bonds + owner fees + payouts account for every stake exactly; the pool is emptied",
-          moved === stakes && post.b === pre.b - slashed && post.a > pre.a && end.pool === "0",
-          `A +${post.a - pre.a}, B ${post.b - pre.b}, fees +${post.fees - pre.fees}, payouts ${payouts}: ${moved} vs stakes ${stakes}, pool ${end.pool}`,
+          dA === want.a &&
+            dB === want.b &&
+            dFees === want.fees &&
+            list.every((c) => BigInt(c.payout) === wantPayout(c)) &&
+            shares > 0n &&
+            pre.pool === stakes &&
+            dA + dB + dFees + payouts === pre.pool &&
+            end.pool === "0" &&
+            post.shieldA - pre.shieldA === shieldA &&
+            post.shieldB === pre.shieldB,
+          `A +${dA} (want ${want.a}), B ${dB} (want ${want.b}: slash ${slashed} + flip share ${shares}), ` +
+            `fees +${dFees} (want ${want.fees}), payouts ${payouts} (want ${sum(list.map(wantPayout))}): ` +
+            `${dA + dB + dFees + payouts} vs pool ${pre.pool} = stakes ${stakes}, pool after ${end.pool}, ` +
+            `shield A +${post.shieldA - pre.shieldA} (want ${shieldA}) B +${post.shieldB - pre.shieldB}`,
         );
         const balance = async (id: string) =>
           BigInt(
