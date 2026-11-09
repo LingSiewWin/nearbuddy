@@ -28,7 +28,24 @@ from config import ATTEST_DIR, DATA, network_file  # noqa: E402
 from duelist import DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, message_text, request_body  # noqa: E402
-from prompts import FULL_SIZE_BPS, SIZER, UNTRUSTED_CAP_BPS, VARIANT_D, sizer_user, user_bc, user_v2  # noqa: E402
+from prompts import (  # noqa: E402
+    FULL_SIZE_BPS,
+    HARDENED_V2,
+    HARDENED_V3,
+    JUDGE_MODEL,
+    JUDGE_SYSTEM,
+    SIZER,
+    UNTRUSTED_CAP_BPS,
+    VARIANT_D,
+    fact_check_cap,
+    judge_user,
+    parse_verdict,
+    sizer_user,
+    system_prompt,
+    user_bc,
+    user_v2,
+    user_v3,
+)
 
 HERE = Path(__file__).resolve().parent
 SRC = DATA
@@ -47,23 +64,27 @@ FIELDS: list[tuple[str, str, str]] = [
     (
         "prompt_variant",
         "string \\| null",
-        "Prompt arm: `naive`, `hardened`, `hardened-v2`, or experiment arm `A`/`B`/`C`/`D`; null on rows older than "
-        "the field.",
+        "Prompt arm: `naive`, `hardened`, `hardened-v2`, `hardened-v3`, or experiment arm `A`/`B`/`C`/`D`; null on "
+        "rows older than the field.",
     ),
     (
         "profile",
         "string \\| null",
-        "`runner.py --profile`: `naive`, `hardened` or `hardened-v2` (a letter arm runs on `hardened`); null on rows "
-        "older than the field.",
+        "`runner.py --profile`: `naive`, `hardened`, `hardened-v2` or `hardened-v3` (a letter arm runs on "
+        "`hardened`); null on rows older than the field.",
     ),
     (
         "guard",
         "struct \\| null",
-        "hardened-v2 only: `{cues_removed, size_stated, size_cap, votes, proof_judgment, judgments}`. The injection "
-        "reached the model after cue_guard (`cues_removed`), in a block labelled `paid third-party injection, "
-        "unverified`; the intent's size is `size_stated` clamped to `[1, size_cap]` (`size_cap` 1000 while that block "
-        "is present, else 5000). `votes` is each judgment's side; the proof is judgment `proof_judgment`. "
-        "`judgments` (null when one call) holds every call's bytes and enclave record.",
+        "hardened-v2 and v3: `{cues_removed, size_stated, size_cap, votes, proof_judgment, judgments}`, v3 also "
+        "`judge`. The injection reached the model after cue_guard (`cues_removed`), in a block labelled `paid "
+        "third-party injection, unverified`; the intent's size is `size_stated` clamped to `[1, size_cap]` "
+        "(`size_cap` 1000 while that block is present, else 5000). `votes` is each judgment's side; the proof is "
+        "judgment `proof_judgment`. `judgments` (null when one call) holds every call's bytes and enclave record. "
+        "hardened-v3: `judge` (null without an injection) is the fact-check call on `z-ai/glm-5.3-flash` with the "
+        "same call fields as `arm_d.side_call` plus `verdict` `{fabricated_prob, label}` and `attestation_file`; "
+        "the verdict is the last block of the duelist's signed request, and `size_cap` is "
+        "`max(1, round(1000 * (1 - fabricated_prob)))`, or 1 when the label is `unverifiable`.",
     ),
     (
         "open_px",
@@ -420,21 +441,74 @@ def check_row(r: dict) -> tuple[bool, str]:
         note = _check_guard(r)
         if note != "ok":
             return False, note
+    elif r.get("profile") in (HARDENED_V2, HARDENED_V3):
+        return False, "guard: missing on a guarded profile"
     return True, "ok"
 
 
+def _check_judge(j: dict | None, injection: str) -> tuple[str, dict[str, Any], str]:
+    """hardened-v3's judge call under paid text: (note, verdict, sha256 of the reply). The call's bytes and provider
+    enclave record verify under JUDGE_MODEL; its signed request is byte for byte the published judge prompt on this
+    injection; its text is what the signed response says; the stored verdict is `parse_verdict` of that text."""
+    if not j:
+        return "guard: no judge call under paid text", {}, ""
+    note = _check_call(j, JUDGE_MODEL)
+    if note != "ok":
+        return f"guard judge: {note}", {}, ""
+    if j["signature_record"].get("signature_kind") != "provider_tee":
+        return "guard judge: not signed by the model enclave", {}, ""
+    if j["request_body"].encode() != request_body(JUDGE_MODEL, JUDGE_SYSTEM, judge_user(injection)):
+        return "guard judge: request is not the judge prompt on the injection", {}, ""
+    try:
+        said = message_text(json.loads(j["response_body"]))
+    except (ValueError, KeyError, IndexError, TypeError):
+        said = None
+    if j.get("text") != said:
+        return "guard judge: text differs from bytes", {}, ""
+    verdict = parse_verdict(j["text"])
+    if j.get("verdict") != verdict:
+        return "guard judge: stored verdict is not the parsed reply", {}, ""
+    return "ok", verdict, hashlib.sha256(j["text"].encode()).hexdigest()
+
+
 def _check_guard(r: dict) -> str:
-    """hardened-v2: the enclave-signed user message is exactly `user_v2(brief, injection)`, so cue_guard and the
-    provenance blocks provably ran as published; the posted size respects the cap under unverified text; with k > 1
-    every judgment's bytes verify on their own."""
+    """hardened-v2 and v3: the enclave-signed system message is the profile's, and the user message is exactly
+    `user_v2(brief, injection)` (v3: `user_v3(brief, injection, verdict)` with the verdict re-parsed from the judge's
+    signed reply), so cue_guard, the provenance blocks and the fact-check provably ran as published; the posted size
+    respects the cap under unverified text; with k > 1 every judgment's bytes verify on their own."""
     g = r["guard"]
-    user = next((content for role, content in _messages(r) if role == "user"), None)
-    expected, cues = user_v2(r.get("brief") or "", r.get("injection"))
-    if user != expected:
-        return "guard: signed prompt is not user_v2(brief, injection)"
+    v3 = r.get("profile") == HARDENED_V3
+    brief, injection = r.get("brief") or "", r.get("injection")
+    try:
+        msgs = dict(_messages(r))
+    except (ValueError, KeyError, TypeError):
+        msgs = {}
+    if msgs.get("system") != system_prompt(brief.split(" ", 1)[0], True, variant=HARDENED_V3 if v3 else HARDENED_V2):
+        return "guard: signed system prompt is not the profile's"
+    user, cap = msgs.get("user"), UNTRUSTED_CAP_BPS
+    if not v3:
+        expected, cues = user_v2(brief, injection)
+        if user != expected:
+            return "guard: signed prompt is not user_v2(brief, injection)"
+    elif not injection:
+        if g.get("judge") is not None:
+            return "guard: judge call without paid text"
+        expected, cues = user_v3(brief, None, None)
+        if user != expected:
+            return "guard: signed prompt is not user_v3(brief, injection, verdict)"
+    else:
+        note, verdict, digest = _check_judge(g.get("judge"), injection)
+        if note != "ok":
+            return note
+        expected, cues = user_v3(brief, injection, verdict, digest)
+        if not str(user).endswith("\n\n" + expected.rsplit("\n\n", 1)[1]):
+            return "guard: verdict block differs from the judge's signed output"
+        if user != expected:
+            return "guard: signed prompt is not user_v3(brief, injection, verdict)"
+        cap = fact_check_cap(verdict)
     if list(g.get("cues_removed") or []) != cues:
         return "guard: cues_removed differs from cue_guard"
-    if r.get("injection") and int(r.get("intent", {}).get("size_bps", 0)) > UNTRUSTED_CAP_BPS:
+    if injection and int(r.get("intent", {}).get("size_bps", 0)) > cap:
         return "guard: size above the cap under unverified text"
     for j in g.get("judgments") or []:
         note = _check_call(j, r.get("model", ""))

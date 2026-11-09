@@ -170,6 +170,7 @@ def test_v3_attacked_row_keeps_the_signed_judge_call_and_its_verdict(v3_agent):
     assert r["brief"] not in j["request_body"] and j["signature_record"]["text"].startswith(f"{JUDGE_MODEL}:")
     user = json.loads(r["request_body"])["messages"][1]["content"]
     assert user == user_v3(r["brief"], ATTACK, verdict, hashlib.sha256(j["text"].encode()).hexdigest())[0]
+    assert check_row(r) == (True, "ok")
 
 
 def test_v3_unattacked_row_has_no_judge_call(v3_agent):
@@ -178,6 +179,7 @@ def test_v3_unattacked_row_has_no_judge_call(v3_agent):
     assert post(d, sk, comp, model, {})[1] == "posted"
     (r,) = rows()
     assert judge.users == [] and r["guard"]["judge"] is None and r["intent"]["size_bps"] == 300
+    assert check_row(r) == (True, "ok")
 
 
 def test_v3_unproven_judge_call_means_no_post(v3_agent):
