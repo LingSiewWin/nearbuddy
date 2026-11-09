@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -26,18 +27,10 @@ from intent_client import (  # noqa: E402
 from nearai import StubClient  # noqa: E402
 from prices import normalise  # noqa: E402
 
-# Same fixture as packages/protocol/src/intent.test.ts and arena/src/tests.rs intent_message_len_matches_ts.
-FIXTURE = {
-    "agent_pk": base64.b64encode(bytes([1] * 32)).decode(),
-    "duel_id": "7",
-    "side": "Short",
-    "size_bps": 5000,
-    "nonce": "3",
-    "expires_at": "1700000000000000000",
-    "proof_hash": base64.b64encode(ZERO_PROOF).decode(),
-}
-# Printed by `cargo test intent_message_len_matches_ts -- --nocapture` (INTENT_HEX).
-RUST_HEX = "6e65617262756464792d696e74656e742d76312000000001010101010101010101010101010101010101010101010101010101010101010700000000000000018813030000000000000000002a36fe9c9717200000000000000000000000000000000000000000000000000000000000000000000000"  # noqa: E501
+# Inputs and expected bytes live in fixtures/wire-vectors.json, shared with the Rust and TS tests.
+WIRE = json.loads((Path(__file__).resolve().parents[2] / "fixtures" / "wire-vectors.json").read_text())
+FIXTURE = WIRE["intent"]
+RUST_HEX = WIRE["intent_hex"]
 
 # Real record from NEAR AI Cloud, 2026-11-06 (deepseek-ai/DeepSeek-V4.1-Flash-1017, provider_tee, ed25519).
 REAL_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
@@ -60,20 +53,12 @@ def test_intent_bytes_match_rust_and_ts():
     assert m.hex() == RUST_HEX
 
 
-# Same vectors as packages/protocol/src/intent.test.ts (COMMITMENT_HEX, COMMIT_MSG_HEX, CONSENT_MSG_HEX).
-CONTRACT = "arena.nearbuddy-solver.testnet"
-SALT = bytes([2] * 32)
-COMMITMENT_HEX = "77b102ffbab3f871bf96bf1306405e68db6968a26d3814d27146cbd641cb25d8"
-COMMIT_MSG_HEX = (
-    "6e65617262756464792d636f6d6d69742d76316172656e612e6e65617262756464792d736f6c7665722e746573746e6574"
-    "070000000000000077b102ffbab3f871bf96bf1306405e68db6968a26d3814d27146cbd641cb25d8"
-)
-CONSENT_MSG_HEX = (
-    "6e65617262756464792d6475656c2d76316172656e612e6e65617262756464792d736f6c7665722e746573746e6574"
-    "0101010101010101010101010101010101010101010101010101010101010101"
-    "0303030303030303030303030303030303030303030303030303030303030303"
-    "777261702e6e65617200002a36fe9c9717"
-)
+CONTRACT = WIRE["contract"]
+SALT = bytes.fromhex(WIRE["commit"]["salt_hex"])
+CONSENT = WIRE["consent"]
+COMMITMENT_HEX = WIRE["commit"]["commitment_hex"]
+COMMIT_MSG_HEX = WIRE["commit"]["message_hex"]
+CONSENT_MSG_HEX = WIRE["consent"]["message_hex"]
 
 
 def test_commit_and_consent_bytes_match_ts():
@@ -82,9 +67,9 @@ def test_commit_and_consent_bytes_match_ts():
     assert c == hashlib.sha256(bytes.fromhex(RUST_HEX) + SALT).digest()
     assert commit_message(CONTRACT, "7", c).hex() == COMMIT_MSG_HEX
     assert commit_message(CONTRACT, 7, c) == commit_message(CONTRACT, "7", c)
-    pk_a, pk_b = base64.b64encode(bytes([1] * 32)).decode(), base64.b64encode(bytes([3] * 32)).decode()
-    assert consent_message(CONTRACT, pk_a, pk_b, "wrap.near", "1700000000000000000").hex() == CONSENT_MSG_HEX
-    assert consent_message(CONTRACT, pk_b, pk_a, "wrap.near", "1700000000000000000").hex() != CONSENT_MSG_HEX
+    pk_a, pk_b, symbol, close_at = CONSENT["a"], CONSENT["b"], CONSENT["symbol"], CONSENT["close_at"]
+    assert consent_message(CONTRACT, pk_a, pk_b, symbol, close_at).hex() == CONSENT_MSG_HEX
+    assert consent_message(CONTRACT, pk_b, pk_a, symbol, close_at).hex() != CONSENT_MSG_HEX
 
 
 def test_sign_verify_roundtrip():
