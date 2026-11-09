@@ -30,12 +30,20 @@ from duelist import GUARDED, DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, message_text, request_body  # noqa: E402
 from prompts import (  # noqa: E402
+    FACT_CHECK_ORIGIN,
     FULL_SIZE_BPS,
+    HARDENED_V2,
     HARDENED_V3,
     JUDGE_MODEL,
     JUDGE_SYSTEM,
+    LABELS,
+    PROMPT_V2,
+    PROMPT_V3,
     SIZER,
+    TRUSTED_FEED,
+    TRUSTED_MANDATE,
     UNTRUSTED_CAP_BPS,
+    UNTRUSTED_ORIGIN,
     VARIANT_D,
     fact_check_cap,
     judge_user,
@@ -212,11 +220,15 @@ FIELDS: list[tuple[str, str, str]] = [
     ("verify_note", "string", "Added by the exporter: `ok` or the first check that failed (e.g. `no tee bytes`)."),
 ]
 
-# Runs as-is in tests/test_export_dataset.py against real rows; keep it equivalent to check_row.
+# Runs as-is in tests/test_export_dataset.py against real rows; keep it equivalent to check_row, except that it takes
+# the cleaned headline from the signed request instead of re-running cue_guard (the card says so).
 _SNIPPET = r'''import base64
 import hashlib
+import html
 import json
+import math
 import re
+from collections import Counter
 
 from nacl.signing import VerifyKey  # pip install pynacl
 
@@ -233,6 +245,17 @@ SIZE_HEAD = re.compile(
     r"side_call_sha256: ([0-9a-f]{64})\n\[/POSITION\]\n\n\[TELEMETRY\]\n",
     re.DOTALL,
 )
+# hardened-v2 and v3: each profile's system prompt (format with the symbol), the block origins, the size caps, and
+# hardened-v3's judge (model, system prompt, labels)
+GUARD_SYSTEM = __GUARD_SYSTEM__
+FEED, MANDATE, UNVERIFIED, FACT_CHECK = __ORIGINS__
+UNTRUSTED_CAP_BPS = __UNTRUSTED_CAP_BPS__
+CUE_GUARD_VERSIONS = __CUE_GUARD_VERSIONS__
+JUDGE_MODEL = __JUDGE_MODEL__
+JUDGE_SYSTEM = __JUDGE_SYSTEM__
+LABELS = __LABELS__
+UNVERIFIED_BLOCK = re.compile(rf'\n\n<input origin="{UNVERIFIED}" cues_removed="(\d+)">\n(.*?)\n</input>', re.DOTALL)
+FENCE = re.compile(r"`{3}(?:json)?\s*(.*?)\s*`{3}", re.DOTALL)
 
 
 def verify_call(call: dict, model: str) -> str:
@@ -278,6 +301,150 @@ def client_body(model: str, system: str, user: str) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
+def call_text(call: dict) -> str | None:
+    """The text a completion's signed response says (content, else the reasoning), as the runner reads it."""
+    try:
+        msg = json.loads(call["response_body"])["choices"][0]["message"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+    return msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
+
+
+def block(origin: str, escaped: str, **attrs) -> str:
+    extra = "".join(f' {k}="{v}"' for k, v in attrs.items())
+    return f'<input origin="{origin}"{extra}>\n{escaped}\n</input>'
+
+
+def parse_verdict(raw: str) -> dict:
+    """The judge's verdict as the runner parses it: the whole reply (one json fence allowed) is exactly the keys
+    fabricated_prob (a finite number in [0, 1]) and label, which agree; anything else is unverifiable."""
+    unverifiable = {"fabricated_prob": None, "label": "unverifiable"}
+    text = (raw or "").strip()
+    fenced = FENCE.fullmatch(text)
+    try:
+        obj = json.loads(fenced.group(1) if fenced else text)
+    except ValueError:
+        return unverifiable
+    if not isinstance(obj, dict) or set(obj) != {"fabricated_prob", "label"}:
+        return unverifiable
+    p, label = obj["fabricated_prob"], obj["label"]
+    if isinstance(p, bool) or not isinstance(p, (int, float)) or not math.isfinite(p) or not 0 <= p <= 1:
+        return unverifiable
+    if label not in LABELS or (label == "plausible" and p >= 0.5) or (label == "likely_fabricated" and p < 0.5):
+        return unverifiable
+    return {"fabricated_prob": float(p), "label": label}
+
+
+def verify_judge(j: dict | None, clean: str) -> tuple[str, dict]:
+    """hardened-v3's fact-check call: (note, verdict). It verifies under JUDGE_MODEL's enclave, its signed request is
+    the judge prompt on the cleaned headline alone, and the stored verdict is the parse of its signed reply."""
+    if not j:
+        return "guard: no judge call under paid text", {}
+    note = verify_call(j, JUDGE_MODEL)
+    if note != "ok":
+        return f"guard judge: {note}", {}
+    if j["signature_record"]["signature_kind"] != "provider_tee":
+        return "guard judge: not signed by the model enclave", {}
+    headline = "^".join(re.split(r"\s+", clean.strip()))  # datamarked: words joined by ^
+    if j["request_body"] != client_body(JUDGE_MODEL, JUDGE_SYSTEM, f"<headline>\n{headline}\n</headline>"):
+        return "guard judge: request is not the judge prompt on the injection", {}
+    if j.get("text") != call_text(j):
+        return "guard judge: text differs from bytes", {}
+    verdict = parse_verdict(j["text"])
+    if j.get("verdict") != verdict:
+        return "guard judge: stored verdict is not the parsed reply", {}
+    return "ok", verdict
+
+
+def verify_votes(row: dict, g: dict) -> str:
+    """Every judgment (k = 1: the row's own call) verifies under the row's signer on the row's request bytes; votes
+    recount from their texts (None: unparseable); the proof is the row's call and the first on the majority side
+    (ties: the side seen first), which is the posted side."""
+    calls = g.get("judgments") or [row]
+    votes = []
+    for i, j in enumerate(calls):
+        note = verify_call(j, row["model"])
+        if note != "ok":
+            return f"guard judgment {i}: {note}"
+        if j["signature_record"]["signing_address"] != row["signature_record"]["signing_address"]:
+            return f"guard judgment {i}: signer differs"
+        if j["request_body"] != row["request_body"]:
+            return f"guard judgment {i}: request is not the row's"
+        if j.get("text") != call_text(j):
+            return f"guard judgment {i}: text differs from bytes"
+        votes.append(direction(j["text"]))
+    if g.get("votes") != votes:
+        return "guard: votes differ from the judgments' signed outputs"
+    proof = g.get("proof_judgment")
+    if type(proof) is not int or not 0 <= proof < len(calls):
+        return "guard: proof_judgment is not a judgment"
+    p, own = calls[proof], (row["request_hash"], row["response_hash"], row.get("text"))
+    if (p["request_hash"], p["response_hash"], p.get("text")) != own:
+        return "guard: proof judgment is not the row's call"
+    tally = Counter(v for v in votes if v)
+    side = tally.most_common(1)[0][0] if tally else None
+    if side is None or side != row["intent"]["side"]:
+        return "guard: majority side is not the posted side"
+    if votes.index(side) != proof:
+        return "guard: proof is not the first judgment on the majority side"
+    return "ok"
+
+
+def verify_guard(row: dict) -> str:
+    """hardened-v2 and v3: the whole signed request is the client's body for the profile's prompt, rebuilt from the
+    row's brief, the cleaned headline the signed request carries and (v3) the verdict parsed from the judge's signed
+    reply; the size respects the cap; the side is the majority of the signed judgments. NOT checked here: that the
+    cleaned headline and cues_removed are cue_guard's output for `injection` (that needs agents/cue_guard.py)."""
+    g = row.get("guard")
+    labels = {row.get("profile"), row.get("prompt_variant")} - {None}
+    if not labels & set(GUARD_SYSTEM) and g is None:
+        return "ok"
+    if not isinstance(g, dict):
+        return "guard: missing on a guarded profile"
+    if len(labels) != 1 or not labels <= set(GUARD_SYSTEM):
+        return "guard: profile and prompt_variant are not one guarded profile"
+    profile = labels.pop()
+    version = g.get("cue_guard", 1)
+    if type(version) is not int or version not in CUE_GUARD_VERSIONS:
+        return "guard: unknown cue_guard version"
+    brief, injection = row.get("brief") or "", row.get("injection")
+    system = GUARD_SYSTEM[profile].format(symbol=brief.split(" ", 1)[0].upper())
+    mandate = f"max_size_bps: {FULL_SIZE_BPS}\nsize_cap_with_unverified_bps: {UNTRUSTED_CAP_BPS}"
+    user = block(FEED, html.escape(brief, quote=False)) + "\n\n" + block(MANDATE, mandate)
+    cap = FULL_SIZE_BPS
+    if injection:
+        try:
+            signed_user = messages(row)[1][1]
+        except (ValueError, KeyError, IndexError, TypeError):
+            signed_user = ""
+        m = UNVERIFIED_BLOCK.search(signed_user)
+        if not m:
+            return "guard: signed prompt has no unverified block"
+        if int(m.group(1)) != len(g.get("cues_removed") or []):
+            return "guard: cues_removed differs from the signed block"
+        clean = m.group(2)  # cue_guard's output, escaped, as the enclave signed it
+        user += "\n\n" + block(UNVERIFIED, clean, cues_removed=m.group(1))
+        cap = UNTRUSTED_CAP_BPS
+        if profile == "hardened-v3":
+            note, verdict = verify_judge(g.get("judge"), clean)
+            if note != "ok":
+                return note
+            text = f"fabricated_prob: {json.dumps(verdict['fabricated_prob'])}\nlabel: {verdict['label']}"
+            digest = hashlib.sha256(g["judge"]["text"].encode()).hexdigest()
+            user += "\n\n" + block(FACT_CHECK, text, model=JUDGE_MODEL, reply_sha256=digest)
+            p = verdict["fabricated_prob"]
+            cap = 1 if verdict["label"] == "unverifiable" else max(1, round(UNTRUSTED_CAP_BPS * (1 - p)))
+    elif profile == "hardened-v3" and g.get("judge") is not None:
+        return "guard: judge call without paid text"
+    if row["request_body"] != client_body(row["model"], system, user):
+        return "guard: signed request is not the client's body"
+    if g.get("size_cap") != cap:
+        return "guard: size_cap is not the policy cap"
+    if int(row["intent"].get("size_bps", 0)) > cap:
+        return "guard: size above the cap"
+    return verify_votes(row, g)
+
+
 def verify(row: dict) -> str:
     """'ok' when the bytes, the enclave signature and the on-chain proof_hash agree (for arm D also the side call
     and its link to the posted intent); else the failed check."""
@@ -289,7 +456,7 @@ def verify(row: dict) -> str:
         return "proof_hash differs"
     d = row.get("arm_d")
     if not d:
-        return "ok"
+        return verify_guard(row)
     side = d["side_call"]
     note = verify_call(side, row["model"])
     if note != "ok":
@@ -330,7 +497,7 @@ def verify(row: dict) -> str:
         symbol = row["brief"].split(" ", 1)[0].upper()
         if row["request_body"] != client_body(row["model"], SIZER_SYSTEM.format(symbol=symbol), user):
             return "arm_d size request is not the client's body"
-    return "ok"
+    return verify_guard(row)
 '''
 VERIFY_SNIPPET = (
     _SNIPPET.replace("__ARM_D_SYSTEM__", repr(VARIANT_D))
@@ -338,6 +505,13 @@ VERIFY_SNIPPET = (
     .replace("__FULL_SIZE_BPS__", repr(FULL_SIZE_BPS))
     .replace("__MAX_TOKENS__", repr(MAX_TOKENS))
     .replace("__DEFAULT_MAX_TOKENS__", repr(DEFAULT_MAX_TOKENS))
+    .replace("__GUARD_SYSTEM__", repr({HARDENED_V2: PROMPT_V2, HARDENED_V3: PROMPT_V3}))
+    .replace("__ORIGINS__", repr((TRUSTED_FEED, TRUSTED_MANDATE, UNTRUSTED_ORIGIN, FACT_CHECK_ORIGIN)))
+    .replace("__UNTRUSTED_CAP_BPS__", repr(UNTRUSTED_CAP_BPS))
+    .replace("__CUE_GUARD_VERSIONS__", repr(sorted(CUE_GUARDS)))
+    .replace("__JUDGE_MODEL__", repr(JUDGE_MODEL))
+    .replace("__JUDGE_SYSTEM__", repr(JUDGE_SYSTEM))
+    .replace("__LABELS__", repr(LABELS))
 )
 
 # Head of arm D's size-call user message (prompts.sizer_user): brief, quoted side and side digest, before the
@@ -687,6 +861,23 @@ checks `arm_d.side_call` under the same signer: its `text` is what its signed re
 the posted side, and its signed request is byte for byte the body the runner's client sends for the oracle-only
 prompt on the row's `brief` (no telemetry, no sampling fields, the model's `max_tokens`). The size call's signed
 request must be the client's body too, quoting the same brief, `sha256(side_call.text)` and the posted side.
+
+hardened-v2 and hardened-v3 rows (`guard`): the snippet rebuilds the duelist's request from the profile's published
+system prompt, the row's `brief`, the operator mandate and the cleaned headline, and requires the signed request to be
+exactly that body, so no extra message, sampling field or other `max_tokens` steered the call. For hardened-v3 it
+also verifies the judge call (`guard.judge`) under its own enclave record, requires its signed request to be the
+published judge prompt on that headline alone, re-parses its verdict and rebuilds the fact-check block from it. It
+checks `size_cap` and that the posted size is within it, and recounts `votes` from every signed judgment: the
+judgments must share the row's signer and request bytes, `proof_judgment` must be the row's own call and the first
+judgment on the majority side, and that side must be `intent.side`.
+
+What the snippet does not check: it takes the cleaned headline from the signed request instead of re-running
+cue_guard on `injection`, and compares only the number of `cues_removed`. So a row whose `injection` text or
+`guard.cue_guard` was edited after signing still passes the snippet. That the cleaned text and the list are
+cue_guard's output for `injection` needs `agents/cue_guard.py` (version `guard.cue_guard`; a row without it used
+version 1, `agents/cue_guard_v1.py`) from the source repo; `export_dataset.check_row` there runs every check,
+including that one, and fills `verifiable`.
+
 Recompute it offline:
 
 ```python
