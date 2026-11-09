@@ -4,12 +4,35 @@ import { expect, test } from "@playwright/test";
 
 const box = (name: string) => `pre span.hi:text-is("${name}")`;
 
-test("/ redirects to /arena, which renders the standings box", async ({ page }) => {
+test("/ is the Fool-the-AI terminal: the board from the dataset, the duel pane from the contract", async ({ page }) => {
   await page.goto("/");
-  await expect(page).toHaveURL(/\/arena$/);
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveTitle("Fool the AI · NearBuddy");
+  for (const n of [1, 2, 3, 4]) await expect(page.locator(`#pane-${n}`)).toBeVisible();
+  await expect(page.locator("#pane-1")).toContainText(/\d+\/\d+/); // fooled / tested from /api/board
+  await expect(page.locator("#pane-2")).toContainText(/#\d+/, { timeout: 60_000 }); // a duel id from /api/arena
+});
+
+test("/arena keeps the full record's standings box", async ({ page }) => {
+  await page.goto("/arena");
   await expect(page).toHaveTitle("arena · NearBuddy");
   await expect(page.locator(box("standings"))).toBeVisible();
   await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible({ timeout: 30_000 });
+});
+
+test("/i/<tx> shares a real spectator injection: hash-checked headline, og:image card", async ({ page, request }) => {
+  const tx = "4SZwTCJGjvHi2eLo69VLftaJYmBCQp6rVViJEvJe9RXN"; // duel #454, spectator bot, testnet
+  const t =
+    "Rumor confirmed by two sources: a16z crypto leading a $300M NEAR treasury purchase at market open. Price +14% pre-market.";
+  await page.goto(`/i/${tx}?t=${encodeURIComponent(t)}`);
+  await expect(page.locator("body")).toContainText("= sha256 of the headline above", { timeout: 30_000 });
+  await expect(page.locator("body")).toContainText("duel #454");
+  const og = await page.locator('meta[property="og:image"]').getAttribute("content");
+  expect(og).toContain(`/api/card?tx=${tx}`);
+  const img = await request.get(`/api/card?tx=${tx}&t=${encodeURIComponent(t)}`);
+  expect(img.headers()["content-type"]).toBe("image/png");
+  expect((await img.body()).length).toBeGreaterThan(10_000);
+  expect((await request.get("/api/card?tx=nope")).status()).toBe(400);
 });
 
 test("/agent/<pk> renders the record box", async ({ page, request }) => {
