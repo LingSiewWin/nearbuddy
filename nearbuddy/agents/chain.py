@@ -5,10 +5,12 @@ from __future__ import annotations
 import base64
 import json
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import requests
 
+from arena_types import ArenaView, Outcome
 from config import ENV, NET, NETWORK
 
 RPC = ENV.get("NEAR_RPC", NET["rpc"])
@@ -59,7 +61,7 @@ def rpc(
     raise RuntimeError(f"after {retries} attempts: {last}")
 
 
-def view(method: str, args: dict[str, Any]) -> Any:
+def _view(method: str, args: Mapping[str, object]) -> Any:
     result = rpc(
         "query",
         {
@@ -72,6 +74,10 @@ def view(method: str, args: dict[str, Any]) -> Any:
         method,
     )
     return json.loads(bytes(result["result"]).decode())
+
+
+# every call is checked against the contract ABI: method name, args and result type (arena_types.py)
+view: ArenaView = _view
 
 
 _now_reads = 0  # chain_now_ns alternates endpoints across calls, one attempt each
@@ -99,7 +105,7 @@ def warn_if_arena_missing(network: str = NETWORK, arena: str = ARENA, rpc: str =
     silent."""
     if network != "mainnet":
         return False
-    body = {
+    body: dict[str, Any] = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "query",
@@ -121,7 +127,7 @@ def agent_tier_on_chain(pk: str) -> bool | None:
     return None if a is None else bool(a.get("tee"))
 
 
-def wait_outcome(duel_id: str, timeout_s: int = 90) -> dict[str, Any] | None:
+def wait_outcome(duel_id: str, timeout_s: int = 90) -> Outcome | None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:

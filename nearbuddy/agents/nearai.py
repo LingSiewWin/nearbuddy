@@ -50,7 +50,7 @@ STUB_MODEL = re.compile(r"(^|/)stub(/|$)")
 def is_stub_model(model_id: str | None) -> bool:
     """A stub agent, not a model: `stub` as a whole path segment (`stub/deterministic`, `redteam/stub`), so a real
     model named e.g. `stubborn-model` is not one. Same rule as `isStubModel` in web/app/cells.ts."""
-    return bool(model_id) and STUB_MODEL.search(model_id) is not None
+    return model_id is not None and STUB_MODEL.search(model_id) is not None
 
 
 class StubClient:

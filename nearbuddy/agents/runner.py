@@ -812,12 +812,13 @@ def oracle_open_px(duel_id: str, symbol: str, wait_s: float) -> tuple[int, str]:
     deadline = time.time() + wait_s
     while True:
         try:
-            d = view("get_duel", {"duel_id": duel_id}) or {}
+            d = view("get_duel", {"duel_id": duel_id})
         except RuntimeError as e:
             print(f"  get_duel {duel_id}: {str(e)[:80]}")
-            d = {}
-        if d.get("open_price"):
-            return int(d["open_price"]), "oracle"
+            d = None
+        open_px = d.get("open_price") if d else None
+        if open_px:
+            return int(open_px), "oracle"
         if time.time() >= deadline:
             return price(symbol, ENV.get("PYTH_API_KEY")), "spot"
         time.sleep(2)
@@ -869,6 +870,8 @@ def run_single(
         )
         duel_id = wait_for_duel(solver, pk, poll_seconds, skip=last)
         duel = view("get_duel", {"duel_id": duel_id})
+        if duel is None:  # the solver read `in_duel` from chain, so the duel exists unless an RPC lags behind
+            raise RuntimeError(f"duel {duel_id} from the solver is not on chain")
         close_at_ns = int(duel["close_at"])
         sym = next((s for s, a in ASSETS.items() if a == duel["symbol"]), symbol)
         # the oracle's open price, waiting briefly for its callback; our own spot only when it never lands
@@ -923,12 +926,11 @@ def free_agents(solver: Solver, pks: list[str]) -> None:
     """After a crash an agent can still be `in_duel`; wait for that duel to close and resolve it before opening."""
     for pk in pks:
         a = view("get_agent", {"agent_pk": pk})
-        stuck = a and a.get("in_duel") is not None
-        if not stuck:
+        if a is None or a["in_duel"] is None:
             continue
-        duel_id = str(a["in_duel"])
-        d = view("get_duel", {"duel_id": duel_id}) or {}
-        wait_ns = int(d.get("close_at", "0")) + 2_000_000_000 - time.time_ns()
+        duel_id = a["in_duel"]
+        d = view("get_duel", {"duel_id": duel_id})
+        wait_ns = (int(d["close_at"]) if d else 0) + 2_000_000_000 - time.time_ns()
         print(f"{pk[:8]} still in duel {duel_id}; resolving it first ({max(0, wait_ns) // 1_000_000_000} s to close)")
         if wait_ns > 0:
             time.sleep(wait_ns / 1e9)
@@ -949,7 +951,7 @@ def resolve_stuck(solver: Solver, pair_tag: str = "") -> list[str]:
     still `in_duel` afterwards, e.g. when the oracle callback has not landed yet."""
     pks = arena_pks(pair_tag)
     free_agents(solver, pks)
-    return [pk for pk in pks if (view("get_agent", {"agent_pk": pk}) or {}).get("in_duel") is not None]
+    return [pk for pk in pks if (a := view("get_agent", {"agent_pk": pk})) and a["in_duel"] is not None]
 
 
 def run(

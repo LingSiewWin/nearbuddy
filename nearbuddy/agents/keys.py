@@ -5,11 +5,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from collections.abc import Callable
-from typing import Any
 
 from nacl.signing import SigningKey
 
+from arena_types import ArenaView
 from config import ENV
 
 REGISTER_DOMAIN = b"nearbuddy-register-v1"  # deploy 14 and before; deploy 15 signs v2 with the contract id
@@ -42,7 +41,7 @@ def key_tag(pair_tag: str, swap: bool) -> str:
     return (f"pair:{pair_tag}:" if pair_tag else "") + ("swap" if swap else "")
 
 
-def register_message(owner: str, view: Callable[[str, dict[str, Any]], Any] | None = None) -> bytes:
+def register_message(owner: str, view: ArenaView | None = None) -> bytes:
     """The exact bytes the deployed contract verifies for `register_agent` by `owner`, from its `register_message`
     view (v1 `domain || owner` up to deploy 14, v2 `domain || contract || 0x00 || owner` from deploy 15). When the
     view cannot be read, the v1 bytes: a deploy-15 contract then refuses the registration, it never misreads it."""
@@ -56,6 +55,6 @@ def register_message(owner: str, view: Callable[[str, dict[str, Any]], Any] | No
         return REGISTER_DOMAIN + owner.encode()
 
 
-def register_sig(sk: SigningKey, owner: str, view: Callable[[str, dict[str, Any]], Any] | None = None) -> str:
+def register_sig(sk: SigningKey, owner: str, view: ArenaView | None = None) -> str:
     """Proof of key possession for `register_agent`: ed25519 over `register_message(owner)`."""
     return base64.b64encode(sk.sign(register_message(owner, view)).signature).decode()

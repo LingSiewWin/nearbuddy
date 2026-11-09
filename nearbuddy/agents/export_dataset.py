@@ -355,17 +355,15 @@ def _check_arm_d(r: dict) -> str:
     if chose != r.get("intent", {}).get("side"):
         return "arm_d side call direction differs"
     brief = str(r.get("brief") or "")
-    oracle_only = [
-        ("system", VARIANT_D.format(symbol=brief.split(" ", 1)[0].upper())),
-        ("user", user_bc(brief, None)),
-    ]
+    system, user = VARIANT_D.format(symbol=brief.split(" ", 1)[0].upper()), user_bc(brief, None)
+    oracle_only = [("system", system), ("user", user)]
     try:
         if _messages(side) != oracle_only:
             return "arm_d side request is not oracle-only"
     except (ValueError, KeyError, TypeError):
         return "arm_d side request is not oracle-only"
     # byte for byte what the runner's client sends: no temperature, logit_bias or other max_tokens can steer it
-    if side["request_body"].encode() != request_body(r["model"], *(content for _, content in oracle_only)):
+    if side["request_body"].encode() != request_body(r["model"], system, user):
         return "arm_d side request is not the client's body"
     proof = side if d.get("proof_call") == "side" else d.get("size_call") or {}
     if (proof.get("request_hash"), proof.get("response_hash")) != (r["request_hash"], r["response_hash"]):

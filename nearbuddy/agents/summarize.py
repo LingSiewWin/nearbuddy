@@ -9,18 +9,20 @@ import base64
 import json
 import re
 from collections import defaultdict
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import requests
 
+from arena_types import ArenaView
 from config import DATA, ENV, NET
 
 RPC = ENV.get("NEAR_RPC", NET["rpc"])
 ARENA = ENV.get("ARENA_CONTRACT", NET["arena"])
 
 
-def view(method: str, args: dict[str, Any]) -> Any:
+def _view(method: str, args: Mapping[str, object]) -> Any:
     body: dict[str, Any] = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -41,6 +43,9 @@ def view(method: str, args: dict[str, Any]) -> Any:
     if "error" in r.get("result", {}):
         return None  # contract-level: no such duel
     return json.loads(bytes(r["result"]["result"]))
+
+
+view: ArenaView = _view  # one RPC, no retries; a contract-level error reads as None (no such duel)
 
 
 # Kept identical to analysis/injection_effects.py (a test checks). The last words of each list read the holdout
