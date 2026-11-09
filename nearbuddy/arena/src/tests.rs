@@ -810,6 +810,33 @@ fn wire_vectors_match_shared_file() {
     ));
 }
 
+/// The edge list the TS and Python encoders must agree with: the contract's JSON ingress is the reference.
+#[test]
+fn wire_vector_edges_match_contract_ingress() {
+    use near_sdk::serde_json::{Value, from_str, from_value};
+    let v: Value = from_str(WIRE).unwrap();
+    let patched = |e: &Value| {
+        let mut i = v["intent"].clone();
+        for (k, x) in e["patch"].as_object().unwrap() {
+            i[k] = x.clone();
+        }
+        i
+    };
+    for e in v["edges"]["reject"].as_array().unwrap() {
+        let r = from_value::<Intent>(patched(e));
+        assert!(r.is_err(), "contract accepted edge {}", e["name"]);
+    }
+    for e in v["edges"]["same"].as_array().unwrap() {
+        let i: Intent = from_value(patched(e)).unwrap();
+        assert_eq!(
+            hex(&intent_message(&i)),
+            v["intent_hex"].as_str().unwrap(),
+            "{}",
+            e["name"]
+        );
+    }
+}
+
 // ---------------------------------------------------------------- vault, mandates, settle_follow
 
 pub fn mandate(cap: u128, allowance: u128, tokens: Vec<&str>) -> Mandate {

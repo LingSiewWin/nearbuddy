@@ -45,5 +45,223 @@
     },
     "message_hex": "6e65617262756464792d696e74656e742d763120000000ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c0700000000000000018813030000000000000000002a36fe9c9717200000000000000000000000000000000000000000000000000000000000000000000000",
     "signature_hex": "3b43ecf87f83f931a50aedfb0ee8abff233e85f19e74317d2b492dc5b19a7d37090c68a533a3eb2a7772a5eef7c73b2805567c5e176de99f59da6d992be5230c"
+  },
+  "edges": {
+    "_": "Patches applied to `intent`. reject: every encoder refuses it, as the contract's JSON ingress does. same: encodes to intent_hex (the contract parses u64 with an optional '+' and leading zeros).",
+    "reject": [
+      {
+        "name": "side lowercase",
+        "patch": {
+          "side": "long"
+        }
+      },
+      {
+        "name": "side uppercase",
+        "patch": {
+          "side": "LONG"
+        }
+      },
+      {
+        "name": "side empty",
+        "patch": {
+          "side": ""
+        }
+      },
+      {
+        "name": "u64 leading space",
+        "patch": {
+          "duel_id": " 7"
+        }
+      },
+      {
+        "name": "u64 hex",
+        "patch": {
+          "duel_id": "0x7"
+        }
+      },
+      {
+        "name": "u64 underscore",
+        "patch": {
+          "duel_id": "0_7"
+        }
+      },
+      {
+        "name": "u64 negative",
+        "patch": {
+          "duel_id": "-7"
+        }
+      },
+      {
+        "name": "u64 empty",
+        "patch": {
+          "duel_id": ""
+        }
+      },
+      {
+        "name": "u64 plus only",
+        "patch": {
+          "duel_id": "+"
+        }
+      },
+      {
+        "name": "u64 json number",
+        "patch": {
+          "duel_id": 7
+        }
+      },
+      {
+        "name": "u64 overflow",
+        "patch": {
+          "nonce": "18446744073709551616"
+        }
+      },
+      {
+        "name": "u16 overflow",
+        "patch": {
+          "size_bps": 70000
+        }
+      },
+      {
+        "name": "u16 negative",
+        "patch": {
+          "size_bps": -1
+        }
+      },
+      {
+        "name": "u16 fraction",
+        "patch": {
+          "size_bps": 5000.5
+        }
+      },
+      {
+        "name": "u16 string",
+        "patch": {
+          "size_bps": "5000"
+        }
+      },
+      {
+        "name": "u16 bool",
+        "patch": {
+          "size_bps": true
+        }
+      },
+      {
+        "name": "base64 url-safe",
+        "patch": {
+          "proof_hash": "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s="
+        }
+      },
+      {
+        "name": "base64 non-canonical",
+        "patch": {
+          "proof_hash": "AR=="
+        }
+      },
+      {
+        "name": "base64 unpadded",
+        "patch": {
+          "agent_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        }
+      },
+      {
+        "name": "base64 whitespace",
+        "patch": {
+          "agent_pk": " AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+        }
+      }
+    ],
+    "same": [
+      {
+        "name": "u64 plus sign",
+        "patch": {
+          "duel_id": "+7"
+        }
+      },
+      {
+        "name": "u64 leading zeros",
+        "patch": {
+          "duel_id": "007"
+        }
+      }
+    ]
+  },
+  "move_format": {
+    "_": "The brief's `{move:+.1f}` (agents/prices.py) and its TS copy fmtMove: Python rounds exact binary ties half to even.",
+    "cases": [
+      [
+        0.25,
+        "+0.2"
+      ],
+      [
+        -0.25,
+        "-0.2"
+      ],
+      [
+        0.75,
+        "+0.8"
+      ],
+      [
+        1.25,
+        "+1.2"
+      ],
+      [
+        -1.25,
+        "-1.2"
+      ],
+      [
+        0.35,
+        "+0.3"
+      ],
+      [
+        -0.05,
+        "-0.1"
+      ],
+      [
+        -0.04,
+        "-0.0"
+      ],
+      [
+        0.0,
+        "+0.0"
+      ],
+      [
+        2.5,
+        "+2.5"
+      ],
+      [
+        12.75,
+        "+12.8"
+      ]
+    ],
+    "briefs": [
+      [
+        400000000,
+        400010000,
+        "+0.2"
+      ],
+      [
+        400000000,
+        399990000,
+        "-0.2"
+      ],
+      [
+        366000000,
+        367830000,
+        "+50.0"
+      ]
+    ]
+  },
+  "event_json": {
+    "_": "The contract logs u64 fields as bare JSON numbers; parsers must keep every digit.",
+    "log": "EVENT_JSON:{\"standard\":\"nearbuddy-arena\",\"version\":\"1.1.0\",\"event\":\"intent\",\"data\":{\"duel_id\":18446744073709551615,\"agent_pk\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\",\"side\":\"Short\",\"size_bps\":5000,\"nonce\":18446744073709551614,\"tee\":0}}",
+    "duel_id": "18446744073709551615",
+    "nonce": "18446744073709551614",
+    "string_log": "EVENT_JSON:{\"standard\":\"nep141\",\"version\":\"1.0.0\",\"event\":\"ft_transfer\",\"data\":[{\"old_owner_id\":\"a.near\",\"new_owner_id\":\"b.near\",\"amount\":\"1\",\"memo\":\"fill [1234567890123456], a,9999999999999999999,b\"}]}",
+    "memo": "fill [1234567890123456], a,9999999999999999999,b"
+  },
+  "hex_0x": {
+    "_": "Signer hex may carry a 0x prefix; it decodes to the same bytes.",
+    "in": "0x236f5a6b91dd47dc3b7b36e43d4eb531a042ffb8f8fbf3a1555b78cef4fdda4c",
+    "bytes_hex": "236f5a6b91dd47dc3b7b36e43d4eb531a042ffb8f8fbf3a1555b78cef4fdda4c"
   }
 }
