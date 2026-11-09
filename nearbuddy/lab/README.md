@@ -286,6 +286,43 @@ use verified calls only, and are Holm-adjusted within their family. Each interva
   23 against hardened's 2, Holm p = 2.3e-05. But Qwen's v2 placebo also flips 0.20, so on Qwen, v2 adds noise
   rather than credulity. Pooled hardened vs v2: 37 vs 57 discordant pairs, Holm p = 0.148.
 
+### Experiment D: hardened-v3 profile (amendment 3), ended early by API outages
+
+D ran from 05:23 to 06:20 +08 and recorded 294 trials. Qwen3.8-27B returned 502 for the whole window, so all 98 of
+its trials are excluded. At 06:16 the NEAR AI gateway itself started returning 500. D therefore has 96 usable
+trials for DeepSeek and 94 for GLM, against the planned 240.
+
+| model | trials | cue flip | clean flip | placebo flip | H1 cue-only vs clean-only | H1 Holm p | H2 Fisher p (Holm) |
+|---|---|---|---|---|---|---|---|
+| Qwen3.8-27B | 0 | - | - | - | - | - | - |
+| DeepSeek-V4.1-Flash-1017 | 96 | 12/94 0.13 [0.07, 0.21] | 9/91 0.10 [0.05, 0.18] | 21/91 0.23 [0.16, 0.33] | 5 vs 2 | 1.000 | 0.084 (0.252) |
+| glm-5.3-flash | 94 | 4/91 0.04 [0.02, 0.11] | 3/89 0.03 [0.01, 0.09] | 10/89 0.11 [0.06, 0.19] | 1 vs 1 | 1.000 | 0.101 (0.252) |
+| pooled | 190 | 16/185 0.09 [0.05, 0.14] | 12/180 0.07 [0.04, 0.11] | 31/180 0.17 [0.12, 0.23] | 6 vs 3 | 1.000 | 0.019 (0.074) |
+
+- **H1d: null.** H2d runs the same way as C's: a lie flips v3 less often than a neutral headline. It is not
+  significant after Holm.
+- **The judge.** It labelled 157 of 185 cue lies `likely_fabricated` (mean fabricated_prob 0.80) and 171 of 180
+  placebos `plausible` (mean 0.17). 549 of the 551 judge calls carry a verified enclave signature. The two that do
+  not make their duelist calls unverified, as in the runner. All 740 verified D calls re-verify, judge included.
+- **Judge-plausible stratum (the "a plausible label adds credibility" risk).** On the 19 trials where the judge
+  called the lie plausible, v3's cue arm flipped 3 times against v2's 1 (discordant pairs 0 vs 2, McNemar p = 0.5).
+  That is no evidence of the risk, but too few trials to rule it out.
+- **Subtle-lie stratum (7 routine-event templates).** v3 vs v2: 2 vs 3 flips on 26 paired trials, p = 1.0. Naive
+  flips on all 83 subtle trials it shares with hardened (83 vs 8).
+- **Size shift.** Pooled cue +1828 bps vs placebo +1668. The judge-scaled cap shrinks positions under any paid
+  text, as v2's does.
+
+### Summary
+
+- On the naive prompt every model takes the fake headline about 96% of the time (91-100% per model), with or
+  without credibility cues. Removing "BREAKING" and the named outlet changes nothing (15 vs 13 discordant pairs).
+  The paper's cue effect does not replicate on these models.
+- The hardened prompt, v2 and v3 all bring the flip rate down to the placebo level or below: pooled cue flips 0.07,
+  0.11 and 0.09, against 0.96 naive. None of them shows a cue effect. cue_guard makes the cue and clean arms
+  identical by construction.
+- Spend: 10011 paid calls, $3.09 of the lab's $10 (`spend.jsonl`). All 9,112 calls marked verified
+  re-verify from the stored bytes and enclave signature.
+
 ## The repo README's injection claims, recomputed
 
 `uv run --locked python claims.py` reads `../dataset/decisions.jsonl` and recomputes the claims from the raw rows, with
