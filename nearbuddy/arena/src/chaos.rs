@@ -8,7 +8,7 @@
 //! reward; no trial, or no decision before the end, returns the stake less the fee. Injectors claim
 //! what they are owed with `claim_chaos`.
 use near_sdk::json_types::{Base64VecU8, U64, U128};
-use near_sdk::{NearToken, Promise, env, near, require};
+use near_sdk::{AccountId, Gas, NearToken, Promise, PromiseError, env, near, require};
 
 use crate::{
     Arm, Chaos, ChaosConfig, ChaosKind, ChaosOutcome, Contract, ContractExt, Injection,
@@ -17,6 +17,8 @@ use crate::{
 
 /// Longest headline, in UTF-8 bytes.
 pub const MAX_HEADLINE: usize = 280;
+/// Gas for `on_claim_chaos`: at worst it rewrites one duel's 32 records.
+const CLAIM_CALLBACK_GAS: Gas = Gas::from_tgas(10);
 
 /// Invisible format characters (zero-width, bidi overrides and isolates, word joiners, BOM): a
 /// headline holding them reads differently to the model than on a page.
@@ -386,6 +388,8 @@ impl Contract {
     }
 
     /// Pay the caller everything its injections in a finished duel are owed (`Chaos.payout`), once.
+    /// The records are marked claimed before the transfer; `on_claim_chaos` unmarks them if the
+    /// transfer fails, so a later claim pays them.
     /// Caller: the injector. Deposit: 1 yoctoNEAR. Panics: "duel missing", "duel open",
     /// "nothing to claim".
     #[payable]
@@ -405,7 +409,34 @@ impl Contract {
             }
         }
         require!(amt > 0, "nothing to claim");
-        Promise::new(who).transfer(NearToken::from_yoctonear(amt))
+        Promise::new(who.clone())
+            .transfer(NearToken::from_yoctonear(amt))
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(CLAIM_CALLBACK_GAS)
+                    .on_claim_chaos(duel_id, who),
+            )
+    }
+
+    /// Outcome of `claim_chaos`'s transfer. On failure (a deleted account) the NEAR came back to
+    /// this contract: `injector`'s records in that duel are unclaimed again. That claim marked every
+    /// one of them with a payout, and no other claim could run before this callback (it would have
+    /// found nothing to claim), so exactly those are unmarked. Returns whether the transfer landed.
+    /// Never panics. Caller: this contract (private). Deposit: none.
+    #[private]
+    pub fn on_claim_chaos(&mut self, duel_id: U64, injector: AccountId) -> bool {
+        if !matches!(env::promise_result_checked(0, 0), Err(PromiseError::Failed)) {
+            return true;
+        }
+        if let Some(list) = self.chaos.get_mut(&duel_id.0) {
+            for c in list
+                .iter_mut()
+                .filter(|c| c.injector == injector && c.payout.0 > 0)
+            {
+                c.claimed = false;
+            }
+        }
+        false
     }
 
     /// Every headline planted in a duel, in `Duel.injections` order, with its arm, outcome and

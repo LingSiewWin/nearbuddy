@@ -5182,3 +5182,65 @@ fn a_replacement_still_decides_a_headline_planted_before_the_held_call() {
         (Some(Side::Long), Some(Side::Short), ChaosOutcome::Flipped)
     );
 }
+
+/// L2: `claim_chaos` marks the records claimed before its transfer. When the transfer fails (the
+/// injector's account was deleted) the NEAR comes back and `on_claim_chaos` unmarks exactly that
+/// injector's records, so a later claim pays them; a landed transfer keeps them claimed, and another
+/// injector's claimed records are never touched.
+#[test]
+fn a_failed_claim_transfer_unmarks_the_records_for_a_later_claim() {
+    let (mut c, ska, skb, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+    decide_b(&mut c, &skb, d, Side::Long, 1, NOW);
+    let mine = [
+        plant(&mut c, d, 1, ChaosKind::Short, NOW + 1),
+        plant(&mut c, d, 1, ChaosKind::Short, NOW + 1),
+    ];
+    let (_, theirs) = plant_as(&mut c, SYBIL, d, 2, ChaosKind::Short, NOW + 1);
+    resolve_at_close(&mut c, d, UP); // a tie: every headline expired, owed its stake less the fee
+    let claimed = |c: &Contract| mine.map(|ix| chaos_at(c, d, ix).claimed);
+    let owed: u128 = mine.iter().map(|&ix| chaos_at(&c, d, ix).payout.0).sum();
+    let claim = |c: &mut Contract, who: &str, landed: bool| {
+        ctx_at(who, 1, CLOSE);
+        let _ = c.claim_chaos(U64(d));
+        let paid = refunded_to(who);
+        let back = near_sdk::test_utils::get_created_receipts()
+            .iter()
+            .any(|r| {
+                r.receiver_id.as_str() == CONTRACT && r.actions.iter().any(|a| {
+                    matches!(a, near_sdk::mock::MockAction::FunctionCallWeight { method_name, .. }
+                        if method_name == b"on_claim_chaos")
+                })
+            });
+        assert!(back, "the transfer has a callback");
+        let result = if landed {
+            PromiseResult::Successful(vec![])
+        } else {
+            PromiseResult::Failed
+        };
+        callback_ctx(CLOSE, vec![result]);
+        assert_eq!(c.on_claim_chaos(U64(d), who.parse().unwrap()), landed);
+        paid
+    };
+    claim(&mut c, SYBIL, true);
+    assert!(chaos_at(&c, d, theirs).claimed);
+    assert_eq!(claim(&mut c, SPECTATOR, false), owed);
+    assert_eq!(
+        claimed(&c),
+        [false; 2],
+        "a bounced claim is unclaimed again"
+    );
+    assert!(
+        chaos_at(&c, d, theirs).claimed,
+        "another injector's claim stays"
+    );
+    assert_eq!(
+        claim(&mut c, SPECTATOR, true),
+        owed,
+        "the retry pays it all"
+    );
+    assert_eq!(claimed(&c), [true; 2]);
+    ctx_at(SPECTATOR, 1, CLOSE);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(c.claim_chaos(U64(d)))));
+    assert_eq!(panic_msg(r.unwrap_err()), "nothing to claim");
+}

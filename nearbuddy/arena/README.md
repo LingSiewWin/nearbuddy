@@ -57,7 +57,7 @@ Placebos are run only by the contract owner, with no price and no payout. The re
 - The slash, then the shares, are taken from the loser's bond before any resistance reward is credited.
 - A void settles like a tie.
 - Conservation: every stake leaves the pool, and the shares leave the loser's bond. Together they equal payouts + resistance credits + fees.
-- Injectors collect with `claim_chaos(duel_id)` (1 yocto). It pays everything the caller is owed in that duel in one transfer, once.
+- Injectors collect with `claim_chaos(duel_id)` (1 yocto). It pays everything the caller is owed in that duel in one transfer, once. The records are marked claimed before the transfer; if it fails (a deleted account), the private callback `on_claim_chaos` unmarks them, so a later claim pays them.
 - When an owner of either agent, or the contract owner (placebo), pays for an injection, that deposit goes to `owner_fees` at injection. Its stake is 0: it earns nothing and buys no shield, but its outcome is still recorded for the trial.
 
 **Threat model.**

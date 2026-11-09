@@ -170,9 +170,11 @@ enum Op {
         kind: u8,
         under: bool,
     },
-    /// `claim_chaos` by an injector owed something (or anyone, when nobody is).
+    /// `claim_chaos` by an injector owed something (or anyone, when nobody is), then its callback
+    /// with the transfer landing or, with `fail`, bouncing.
     ClaimChaos {
         pick: usize,
+        fail: bool,
     },
     Resolve {
         duel: usize,
@@ -545,8 +547,19 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                 // duel 0 (closed by now) finishes: its headlines settle and their injectors claim
                 vec![
                     Op::Resolve { duel: 0, move_bps },
-                    Op::ClaimChaos { pick: 0 },
-                    Op::ClaimChaos { pick: 1 },
+                    // the first transfer bounces (a deleted account), the retry lands
+                    Op::ClaimChaos {
+                        pick: 0,
+                        fail: true,
+                    },
+                    Op::ClaimChaos {
+                        pick: 0,
+                        fail: false,
+                    },
+                    Op::ClaimChaos {
+                        pick: 1,
+                        fail: false,
+                    },
                 ],
             ]
             .concat()
@@ -624,7 +637,7 @@ fn op() -> impl Strategy<Value = Op> {
         10 => post(),
         6 => reveal(),
         4 => chaos(),
-        2 => (0..8usize).prop_map(|pick| Op::ClaimChaos { pick }),
+        2 => (0..8usize, prop::bool::weighted(0.25)).prop_map(|(pick, fail)| Op::ClaimChaos { pick, fail }),
         3 => (0..8usize, prop_oneof![Just(0i64), -500i64..500]).prop_map(|(duel, move_bps)| Op::Resolve { duel, move_bps }),
         5 => (fol, followable(), vec(fill, 0..5)).prop_map(|(who, agent, fills)| Op::Settle { who, agent, fills }),
         1 => (0..8usize).prop_map(|duel| Op::Void { duel }),
@@ -1667,7 +1680,7 @@ impl World {
                     ),
                 }
             }
-            Op::ClaimChaos { pick } => {
+            Op::ClaimChaos { pick, fail } => {
                 let mut owed: Vec<(usize, String)> = (0..self.duels.len())
                     .filter(|&d| pre.duels[d].resolved)
                     .flat_map(|d| {
@@ -1698,7 +1711,31 @@ impl World {
                         for r in self.duels[d].recs.iter_mut().filter(|r| r.injector == who) {
                             r.claimed |= r.payout > 0;
                         }
-                        kind = Kind::Exact(1);
+                        self.check_money(&pre, bal0, &trie0, Kind::Exact(1));
+                        // the transfer's outcome: a bounce refunds the NEAR to the contract, and the
+                        // callback must unclaim exactly this injector's records in that duel
+                        let (mid, bal1, trie1) = (self.snap(), self.balance, self.trie.clone());
+                        if fail {
+                            self.balance += due;
+                        }
+                        self.results = vec![if fail { None } else { Some(vec![]) }];
+                        let landed = self
+                            .call(CONTRACT, 0, |c| {
+                                c.on_claim_chaos(U64(d as u64), who.parse().unwrap())
+                            })
+                            .expect("on_claim_chaos never panics");
+                        self.results.clear();
+                        assert_eq!(landed, !fail);
+                        if fail {
+                            for r in self.duels[d]
+                                .recs
+                                .iter_mut()
+                                .filter(|r| r.injector == who && r.payout > 0)
+                            {
+                                r.claimed = false;
+                            }
+                        }
+                        return self.check_money(&mid, bal1, &trie1, Kind::Neutral);
                     }
                     Err(e) => assert!(
                         !pre.duels[d].resolved || due == 0,
