@@ -25,12 +25,11 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import ATTEST_DIR, DATA, network_file  # noqa: E402
-from duelist import DuelistError, parse_decision  # noqa: E402
+from duelist import GUARDED, DuelistError, parse_decision  # noqa: E402
 from intent_client import TeeProofError, proof_hash, tee_proof  # noqa: E402
 from nearai import DEFAULT_MAX_TOKENS, MAX_TOKENS, message_text, request_body  # noqa: E402
 from prompts import (  # noqa: E402
     FULL_SIZE_BPS,
-    HARDENED_V2,
     HARDENED_V3,
     JUDGE_MODEL,
     JUDGE_SYSTEM,
@@ -79,8 +78,10 @@ FIELDS: list[tuple[str, str, str]] = [
         "hardened-v2 and v3: `{cues_removed, size_stated, size_cap, votes, proof_judgment, judgments}`, v3 also "
         "`judge`. The injection reached the model after cue_guard (`cues_removed`), in a block labelled `paid "
         "third-party injection, unverified`; the intent's size is `size_stated` clamped to `[1, size_cap]` "
-        "(`size_cap` 1000 while that block is present, else 5000). `votes` is each judgment's side; the proof is "
-        "judgment `proof_judgment`. `judgments` (null when one call) holds every call's bytes and enclave record. "
+        "(`size_cap` 1000 while that block is present, else 5000). `votes` is each judgment's side in call order "
+        "(null: its output did not parse); the posted side is the majority (ties: the side seen first) and the "
+        "proof is judgment `proof_judgment`, the first on that side. `judgments` (null when one call) holds every "
+        "call's bytes and enclave record, all on the same signed request. "
         "hardened-v3: `judge` (null without an injection) is the fact-check call on `z-ai/glm-5.3-flash` with the "
         "same call fields as `arm_d.side_call` plus `verdict` `{fabricated_prob, label}` and `attestation_file`; "
         "the verdict is the last block of the duelist's signed request, and `size_cap` is "
@@ -385,11 +386,7 @@ def _check_arm_d(r: dict) -> str:
             return "arm_d side text differs from bytes"
     except (ValueError, KeyError, IndexError, TypeError):
         return "arm_d side text differs from bytes"
-    try:
-        chose = "Long" if parse_decision(side["text"]).direction > 0 else "Short"
-    except DuelistError:
-        chose = None
-    if chose != r.get("intent", {}).get("side"):
+    if _side(side["text"]) != r.get("intent", {}).get("side"):
         return "arm_d side call direction differs"
     brief = str(r.get("brief") or "")
     system, user = VARIANT_D.format(symbol=brief.split(" ", 1)[0].upper()), user_bc(brief, None)
@@ -437,12 +434,10 @@ def check_row(r: dict) -> tuple[bool, str]:
         note = _check_arm_d(r)
         if note != "ok":
             return False, note
-    if r.get("guard"):
+    if {r.get("profile"), r.get("prompt_variant")} & set(GUARDED) or r.get("guard") is not None:
         note = _check_guard(r)
         if note != "ok":
             return False, note
-    elif r.get("profile") in (HARDENED_V2, HARDENED_V3):
-        return False, "guard: missing on a guarded profile"
     return True, "ok"
 
 
@@ -471,21 +466,77 @@ def _check_judge(j: dict | None, injection: str) -> tuple[str, dict[str, Any], s
     return "ok", verdict, hashlib.sha256(j["text"].encode()).hexdigest()
 
 
-def _check_guard(r: dict) -> str:
-    """hardened-v2 and v3: the enclave-signed system message is the profile's, and the user message is exactly
-    `user_v2(brief, injection)` (v3: `user_v3(brief, injection, verdict)` with the verdict re-parsed from the judge's
-    signed reply), so cue_guard, the provenance blocks and the fact-check provably ran as published; the posted size
-    respects the cap under unverified text; with k > 1 every judgment's bytes verify on their own."""
-    g = r["guard"]
-    v3 = r.get("profile") == HARDENED_V3
-    brief, injection = r.get("brief") or "", r.get("injection")
+def _side(text: object) -> str | None:
+    """'Long' / 'Short' as the runner parses a decision, None when it does not parse."""
     try:
-        msgs = dict(_messages(r))
+        return "Long" if parse_decision(str(text)).direction > 0 else "Short"
+    except DuelistError:
+        return None
+
+
+def _check_votes(r: dict, g: dict) -> str:
+    """The side is recounted from signed outputs. Every judgment (k = 1: the row's own call) verifies under the row's
+    signer, on the row's exact request bytes, with its stored text what its signed response says; `votes` is each
+    text's side as the runner parses it (None: unparseable); judgment `proof_judgment` is the row's own call and the
+    first one on the majority side (ties: the side seen first), and that side is the posted one."""
+    calls = g.get("judgments") or [r]
+    votes = []
+    for i, j in enumerate(calls):
+        note = _check_call(j, r.get("model", ""))
+        if note != "ok":
+            return f"guard judgment {i}: {note}"
+        if j["signature_record"].get("signing_address") != r["signature_record"].get("signing_address"):
+            return f"guard judgment {i}: signer differs"
+        if j["request_body"] != r["request_body"]:
+            return f"guard judgment {i}: request is not the row's"
+        try:
+            said = message_text(json.loads(j["response_body"]))
+        except (ValueError, KeyError, IndexError, TypeError):
+            said = None
+        if j.get("text") != said:
+            return f"guard judgment {i}: text differs from bytes"
+        votes.append(_side(j["text"]))
+    if g.get("votes") != votes:
+        return "guard: votes differ from the judgments' signed outputs"
+    proof = g.get("proof_judgment")
+    if type(proof) is not int or not 0 <= proof < len(calls):
+        return "guard: proof_judgment is not a judgment"
+    p = calls[proof]
+    if (p["request_hash"], p["response_hash"], p.get("text")) != (r["request_hash"], r["response_hash"], r.get("text")):
+        return "guard: proof judgment is not the row's call"
+    tally = Counter(v for v in votes if v)
+    side = tally.most_common(1)[0][0] if tally else None  # Counter keeps first-seen order on ties, as the duelist
+    if side is None or side != r.get("intent", {}).get("side"):
+        return "guard: majority side is not the posted side"
+    if votes.index(side) != proof:
+        return "guard: proof is not the first judgment on the majority side"
+    return "ok"
+
+
+def _check_guard(r: dict) -> str:
+    """hardened-v2 and v3: the whole signed request is byte for byte the client's body for the profile's system
+    prompt and `user_v2(brief, injection)` (v3: `user_v3(brief, injection, verdict)` with the verdict re-parsed from the
+    judge's signed reply), so cue_guard, the provenance blocks and the fact-check provably ran as published and no
+    other message or sampling field steered the call; the posted size respects the cap; the side is the majority of
+    the signed judgments (`_check_votes`)."""
+    g = r.get("guard")
+    if not isinstance(g, dict):
+        return "guard: missing on a guarded profile"
+    labels = {r.get("profile"), r.get("prompt_variant")} - {None}
+    if len(labels) != 1 or not labels <= set(GUARDED):
+        return "guard: profile and prompt_variant are not one guarded profile"
+    profile = labels.pop()
+    v3 = profile == HARDENED_V3
+    brief, injection = str(r.get("brief") or ""), r.get("injection")
+    system = system_prompt(brief.split(" ", 1)[0], True, variant=profile)
+    try:
+        msgs = _messages(r)
     except (ValueError, KeyError, TypeError):
-        msgs = {}
-    if msgs.get("system") != system_prompt(brief.split(" ", 1)[0], True, variant=HARDENED_V3 if v3 else HARDENED_V2):
+        msgs = []
+    if not msgs or msgs[0] != ("system", system):
         return "guard: signed system prompt is not the profile's"
-    user, cap = msgs.get("user"), UNTRUSTED_CAP_BPS
+    user = msgs[1][1] if len(msgs) > 1 else None
+    cap = UNTRUSTED_CAP_BPS if injection else FULL_SIZE_BPS
     if not v3:
         expected, cues = user_v2(brief, injection)
         if user != expected:
@@ -506,15 +557,16 @@ def _check_guard(r: dict) -> str:
         if user != expected:
             return "guard: signed prompt is not user_v3(brief, injection, verdict)"
         cap = fact_check_cap(verdict)
+    # byte for byte: a second user message, a temperature or another max_tokens is not the runner's call
+    if r["request_body"].encode() != request_body(r.get("model", ""), system, expected):
+        return "guard: signed request is not the client's body"
     if list(g.get("cues_removed") or []) != cues:
         return "guard: cues_removed differs from cue_guard"
-    if injection and int(r.get("intent", {}).get("size_bps", 0)) > cap:
-        return "guard: size above the cap under unverified text"
-    for j in g.get("judgments") or []:
-        note = _check_call(j, r.get("model", ""))
-        if note != "ok":
-            return f"guard judgment: {note}"
-    return "ok"
+    if g.get("size_cap") != cap:
+        return "guard: size_cap is not the policy cap"
+    if int(r.get("intent", {}).get("size_bps", 0)) > cap:
+        return "guard: size above the cap"
+    return _check_votes(r, g)
 
 
 def write_parquet(rows: list[dict[str, Any]], path: Path) -> bool:
