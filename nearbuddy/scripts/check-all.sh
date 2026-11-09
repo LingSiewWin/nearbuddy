@@ -15,6 +15,7 @@ run web-tests    bash -c 'cd web && bun test app'
 run py-lint      bash -c 'cd agents && uv run --locked ruff check . ../analysis && uv run --locked ruff format --check . ../analysis'
 run py-types     bash -c 'cd agents && uv run --locked mypy .'
 run py-tests     bash -c 'cd agents && NEAR_AI_API_KEY= uv run --locked pytest -q'  # --locked: a stale uv.lock fails
+run sentinel     bash -c 'cd sentinel && uv run --locked ruff check . && uv run --locked ruff format --check . && NEAR_AI_API_KEY= uv run --locked pytest -q'
 run rs-fmt       bash -c 'cd arena && cargo fmt --check'
 run rs-clippy    bash -c 'cd arena && cargo clippy --locked --all-targets -- -D warnings'
 run rs-tests     bash -c 'cd arena && cargo test --locked --lib'
