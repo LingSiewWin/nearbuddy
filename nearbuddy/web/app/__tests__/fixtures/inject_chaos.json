@@ -1,0 +1,154 @@
+{
+  "transaction": {
+    "signer_id": "nearbuddy-owner.testnet",
+    "public_key": "ed25519:8WsLpxek66rgok6PcTw4D23W9aC1yYjvj53jN8XGsXuX",
+    "nonce": 276307590000287,
+    "receiver_id": "arena.nearbuddy-solver.testnet",
+    "actions": [
+      {
+        "FunctionCall": {
+          "method_name": "inject_chaos",
+          "args": "eyJkdWVsX2lkIjoiNDU0IiwidGFyZ2V0IjoiWWFBME9Oc2I4ckF1N01qVTNrZEFGUE1GSGlQb3hsQnVlc25YSmJmN3RFRT0iLCJraW5kIjoiZmFrZV9uZXdzL2FnYWluc3QvLTE2LjMiLCJwYXlsb2FkX2hhc2giOiJvb0dZVHdpQTM4d3pmRzlybEZMRzV4cmZFdEZ6dnBGZEMzZFBnOFBJRy9VPSJ9",
+          "gas": 60000000000000,
+          "deposit": "100000000000000000000000"
+        }
+      }
+    ],
+    "priority_fee": 0,
+    "signature": "ed25519:2MhpDaahogmg13Q2XQJyWtZMdEEHGQdjFhR84fLsFLSnoe5kSV1HyyHNr99f29PoMXWhPixd6TFwKBnCKxX1KkCu",
+    "hash": "4SZwTCJGjvHi2eLo69VLftaJYmBCQp6rVViJEvJe9RXN"
+  },
+  "execution_outcome": {
+    "block_hash": "DYNUdUhDoc6ctc3W5DPXzd8f9dn2ryNRKJCkcdX25AEm",
+    "block_timestamp": 1793997042369769788,
+    "block_height": 276534368,
+    "index": 0,
+    "id": "4SZwTCJGjvHi2eLo69VLftaJYmBCQp6rVViJEvJe9RXN",
+    "outcome": {
+      "logs": [],
+      "receipt_ids": ["2KTC5rNZ4a4Qjb6Y42a1ZPAdNTN8eoYBXNmiZXmbRLov"],
+      "gas_burnt": 316642568700,
+      "tokens_burnt": "31664256870000000000",
+      "executor_id": "nearbuddy-owner.testnet",
+      "status": {
+        "SuccessReceiptId": "2KTC5rNZ4a4Qjb6Y42a1ZPAdNTN8eoYBXNmiZXmbRLov"
+      },
+      "metadata": {
+        "version": 1,
+        "gas_profile": null
+      }
+    }
+  },
+  "receipts": [
+    {
+      "execution_outcome": {
+        "block_hash": "5CEHhXrCri8Bt2sXVBjkoB2RvfcDbcuRzH4yhuvFt3iU",
+        "block_timestamp": 1793997042938065661,
+        "block_height": 276534369,
+        "index": 0,
+        "id": "2KTC5rNZ4a4Qjb6Y42a1ZPAdNTN8eoYBXNmiZXmbRLov",
+        "outcome": {
+          "logs": [],
+          "receipt_ids": ["4mGSqtVsi1jNNmSDHNBQyzMAKGzMNpHpfxobCfzW5R69"],
+          "gas_burnt": 2238853971062,
+          "tokens_burnt": "223885397106200000000",
+          "executor_id": "arena.nearbuddy-solver.testnet",
+          "status": {
+            "SuccessValue": ""
+          },
+          "metadata": {
+            "version": 4,
+            "gas_profile": null,
+            "contracts": [
+              {
+                "local": "CiL5SFDGH1tqKTMYajgqq9PMB4WzeYr22c3trJKJCbCv"
+              }
+            ]
+          }
+        }
+      },
+      "receipt": {
+        "block_height": 276534369,
+        "block_hash": "5CEHhXrCri8Bt2sXVBjkoB2RvfcDbcuRzH4yhuvFt3iU",
+        "block_timestamp": 1793997042938065661,
+        "receipt_index": 0,
+        "predecessor_id": "nearbuddy-owner.testnet",
+        "receiver_id": "arena.nearbuddy-solver.testnet",
+        "receipt_id": "2KTC5rNZ4a4Qjb6Y42a1ZPAdNTN8eoYBXNmiZXmbRLov",
+        "receipt": {
+          "Action": {
+            "signer_id": "nearbuddy-owner.testnet",
+            "signer_public_key": "ed25519:8WsLpxek66rgok6PcTw4D23W9aC1yYjvj53jN8XGsXuX",
+            "gas_price": "1000000000",
+            "output_data_receivers": [],
+            "input_data_ids": [],
+            "actions": [
+              {
+                "FunctionCall": {
+                  "method_name": "inject_chaos",
+                  "args": "eyJkdWVsX2lkIjoiNDU0IiwidGFyZ2V0IjoiWWFBME9Oc2I4ckF1N01qVTNrZEFGUE1GSGlQb3hsQnVlc25YSmJmN3RFRT0iLCJraW5kIjoiZmFrZV9uZXdzL2FnYWluc3QvLTE2LjMiLCJwYXlsb2FkX2hhc2giOiJvb0dZVHdpQTM4d3pmRzlybEZMRzV4cmZFdEZ6dnBGZEMzZFBnOFBJRy9VPSJ9",
+                  "gas": 60000000000000,
+                  "deposit": "100000000000000000000000"
+                }
+              }
+            ],
+            "is_promise_yield": false
+          }
+        },
+        "priority": 0
+      }
+    },
+    {
+      "execution_outcome": {
+        "block_hash": "AMBzxc8vy4QeJV9F6fMLkA5sfu9a4wYGuDPuiuooT9fE",
+        "block_timestamp": 1793997043578794645,
+        "block_height": 276534370,
+        "index": 2,
+        "id": "4mGSqtVsi1jNNmSDHNBQyzMAKGzMNpHpfxobCfzW5R69",
+        "outcome": {
+          "logs": [],
+          "receipt_ids": [],
+          "gas_burnt": 223182562500,
+          "tokens_burnt": "0",
+          "executor_id": "nearbuddy-owner.testnet",
+          "status": {
+            "SuccessValue": ""
+          },
+          "metadata": {
+            "version": 4,
+            "gas_profile": null,
+            "contracts": [null]
+          }
+        }
+      },
+      "receipt": {
+        "block_height": 276534370,
+        "block_hash": "AMBzxc8vy4QeJV9F6fMLkA5sfu9a4wYGuDPuiuooT9fE",
+        "block_timestamp": 1793997043578794645,
+        "receipt_index": 0,
+        "predecessor_id": "system",
+        "receiver_id": "nearbuddy-owner.testnet",
+        "receipt_id": "4mGSqtVsi1jNNmSDHNBQyzMAKGzMNpHpfxobCfzW5R69",
+        "receipt": {
+          "Action": {
+            "signer_id": "nearbuddy-owner.testnet",
+            "signer_public_key": "ed25519:8WsLpxek66rgok6PcTw4D23W9aC1yYjvj53jN8XGsXuX",
+            "gas_price": "0",
+            "output_data_receivers": [],
+            "input_data_ids": [],
+            "actions": [
+              {
+                "Transfer": {
+                  "deposit": "60664576571013800000000"
+                }
+              }
+            ],
+            "is_promise_yield": false
+          }
+        },
+        "priority": 0
+      }
+    }
+  ],
+  "data_receipts": []
+}
