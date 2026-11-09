@@ -1,4 +1,5 @@
-// The share page for one planted headline: /i/<tx>?t=<headline>. Its og:image is /api/card for the same tx and text,
+// The share page for one planted headline: /i/<tx> (deploy 17: headline and outcome read from chain) or
+// /i/<tx>?t=<headline> (deploy 16: only the chain's hash). Its og:image is /api/card for the same tx and text,
 // so a post on X shows the card; the page itself says what the chain confirms and links to the duel and its proofs.
 import type { Metadata } from "next";
 import { Suspense } from "react";
@@ -52,9 +53,13 @@ async function Planted({ params, searchParams }: Props) {
             <span className="warn">“{c.text}”</span>
           ) : (
             <span className="dim">
-              {text
-                ? "this link's headline does not match the hash on chain, so it is not shown"
-                : "no headline in this link"}
+              {!p.landed
+                ? "the contract refused this call, so its headline is not shown"
+                : p.headline !== null
+                  ? "the headline could not be read from chain just now"
+                  : text
+                    ? "this link's headline does not match the hash on chain, so it is not shown"
+                    : "no headline in this link"}
             </span>
           )}
           {"\n\n"}
@@ -63,8 +68,16 @@ async function Planted({ params, searchParams }: Props) {
               ? "FOOLED: its next call took the lie's side"
               : c.verdict === "held"
                 ? "HELD: its next call did not take the lie's side"
-                : "did it take the bait? its next call decides"}
+                : c.verdict === "untested"
+                  ? "NOT COUNTED: it already sat on the lie's side, or had no call yet"
+                  : c.verdict === "expired"
+                    ? "EXPIRED: the duel ended before its next proved call"
+                    : "did it take the bait? its next call decides"}
           </span>
+          {c.decided_by ? <span className="dim">{` · decided by its proved call #${c.decided_by}`}</span> : null}
+          {c.arm ? (
+            <span className="dim">{`\ndelivered ${c.arm === "Clean" ? "with its credibility cues removed (clean arm)" : c.arm === "Cue" ? "as written (cue arm)" : "as a placebo"}`}</span>
+          ) : null}
           {"\n\n"}
           <span className="dim">tx </span>
           <a href={txHref(tx)} target="_blank" rel="noreferrer">
@@ -73,7 +86,11 @@ async function Planted({ params, searchParams }: Props) {
           <span className={p.landed ? "ok" : "bad"}>{p.landed ? "  on chain" : "  refused by the contract"}</span>
           {"\n"}
           <span className="dim">payload sha256 {p.payload_hash}</span>
-          {c.text ? <span className="ok"> = sha256 of the headline above</span> : null}
+          {c.text ? (
+            <span className="ok">
+              {p.headline !== null ? " (the headline above is stored on chain)" : " = sha256 of the headline above"}
+            </span>
+          ) : null}
           {"\n\n"}
           <a href={duelHref(p.duel_id)}>verify duel #{p.duel_id} yourself</a>
         </>

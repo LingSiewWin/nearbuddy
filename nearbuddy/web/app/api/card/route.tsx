@@ -1,6 +1,7 @@
 // GET /api/card?tx=<inject_chaos tx>&t=<headline>: the 1200x630 share image for one planted headline. Everything on it
-// comes from the chain (duel, target, deposit, signer) except the headline, which is printed only when its sha256 is
-// the payload_hash that tx put on chain; a link with any other text gets a card without it.
+// comes from the chain (duel, target, deposit, signer; on deploy 17 the headline and its outcome too). On deploy 16
+// the headline is printed only when its sha256 is the payload_hash that tx put on chain; a link with any other text
+// gets a card without it.
 import { ImageResponse } from "next/og";
 import { TX_RE } from "../../lib/card";
 import { NETWORK_ID } from "../../network";
@@ -43,15 +44,27 @@ export async function GET(req: Request) {
       ? { t: "FOOLED: it took the bait", c: C.bad }
       : c.verdict === "held"
         ? { t: "HELD: it did not take the bait", c: C.ok }
-        : { t: "did it take the bait?", c: C.warn };
+        : c.verdict === "untested"
+          ? { t: "NOT COUNTED: it already sat on that side", c: C.dim }
+          : c.verdict === "expired"
+            ? { t: "EXPIRED: the duel ended first", c: C.dim }
+            : { t: "did it take the bait?", c: C.warn };
   const lines = {
     top: `FOOL THE AI · NEAR ${NETWORK_ID}`,
     target: p
       ? `planted in ${c.model ?? short(p.target, 8)} · duel #${p.duel_id} · ${near(p.deposit)} NEAR`
       : "transaction not found yet",
-    text: c.text ? `"${c.text}"` : p ? "headline not shown: none given, or it does not match the hash on chain" : "",
+    text: c.text
+      ? `"${c.text}"`
+      : !p
+        ? ""
+        : !p.landed
+          ? "headline not shown: the contract refused this call"
+          : p.headline !== null
+            ? "headline not readable from chain just now"
+            : "headline not shown: none given, or it does not match the hash on chain",
     foot: p
-      ? `signed by ${p.signer} · tx ${short(tx, 10)}${c.text ? " · sha256 matches the chain" : ""}${p.landed ? "" : " · REFUSED on chain"}`
+      ? `signed by ${p.signer} · tx ${short(tx, 10)}${c.text ? (p.headline != null ? " · headline stored on chain" : " · sha256 matches the chain") : ""}${c.arm ? ` · ${c.arm.toLowerCase()} arm` : ""}${p.landed ? "" : " · REFUSED on chain"}`
       : `tx ${short(tx, 10)}`,
   };
   const font = await mono(Object.values(lines).join("") + verdict.t);
@@ -94,7 +107,10 @@ export async function GET(req: Request) {
       height: 630,
       ...(font ? { fonts: [{ name: "Mono", data: font, weight: 500 as const, style: "normal" as const }] } : {}),
       // an unindexed tx must not stick in previews
-      headers: { "cache-control": p?.at_ms ? "public, max-age=300" : "no-store" },
+      // nor a deploy-17 card whose record was not read (no headline, no outcome)
+      headers: {
+        "cache-control": p?.at_ms && (p.headline === null || !p.landed || c.text) ? "public, max-age=300" : "no-store",
+      },
     },
   );
 }
