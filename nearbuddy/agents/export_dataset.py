@@ -47,7 +47,23 @@ FIELDS: list[tuple[str, str, str]] = [
     (
         "prompt_variant",
         "string \\| null",
-        "Prompt arm: `naive`, `hardened`, or experiment arm `A`/`B`/`C`/`D`; null on rows older than the field.",
+        "Prompt arm: `naive`, `hardened`, `hardened-v2`, or experiment arm `A`/`B`/`C`/`D`; null on rows older than "
+        "the field.",
+    ),
+    (
+        "profile",
+        "string \\| null",
+        "`runner.py --profile`: `naive`, `hardened` or `hardened-v2` (a letter arm runs on `hardened`); null on rows "
+        "older than the field.",
+    ),
+    (
+        "guard",
+        "struct \\| null",
+        "hardened-v2 only: `{cues_removed, size_stated, size_cap, votes, proof_judgment, judgments}`. The injection "
+        "reached the model after cue_guard (`cues_removed`), in a block labelled `paid third-party injection, "
+        "unverified`; the intent's size is `size_stated` clamped to `[1, size_cap]` (`size_cap` 1000 while that block "
+        "is present, else 5000). `votes` is each judgment's side; the proof is judgment `proof_judgment`. "
+        "`judgments` (null when one call) holds every call's bytes and enclave record.",
     ),
     (
         "open_px",

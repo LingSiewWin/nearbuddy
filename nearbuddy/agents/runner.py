@@ -13,6 +13,11 @@ call never sees the telemetry, and when there is telemetry a sizer call may only
 carries the proof of the last call (the sizer when it ran; its signed request quotes the side and sha256 of the
 side call's output); both calls are kept in the row's `arm_d`, and an unproven side call means no post.
 
+Profiles (`--profile naive|hardened|hardened-v2`, agent A's or the `--only` agent's; every row carries `profile`):
+hardened-v2 runs the injection through cue_guard, puts it in a block labelled "paid third-party injection, unverified"
+next to the trusted price-feed and mandate blocks, and caps the size in code while that block is present. Rows gain
+`guard` (cues removed, stated size, cap, votes). `--judgments K` asks K times and takes the majority side.
+
 Self-hosted (one side only; the solver's PAIR_EVERY_S loop opens the duel, this process finds it via GET /agent_duel):
 
     AGENT_KEY_B=<seed> NEAR_AI_MODEL_B=<model> SOLVER_URL=https://... ARENA_SECRET=<shared> \\
@@ -79,7 +84,7 @@ from intent_client import (
 from keys import agent_key, key_tag, pk_b64, register_sig
 from nearai import Completion, ModelClient, client_from_env
 from prices import brief, price
-from prompts import VARIANTS, pick_variant
+from prompts import HARDENED_V2, PROFILES, VARIANTS, pick_variant
 
 
 class Tracked:
@@ -210,6 +215,7 @@ def prepare_decision(
                 "model": model.model_id,
                 "hardened": d.hardened,
                 "prompt_variant": d.prompt_variant,
+                "profile": d.profile,
                 "error": str(e),
                 "injection": injection_text,
                 "brief": brief(symbol, px, open_px),
@@ -233,6 +239,7 @@ def prepare_decision(
                 "model": model.model_id,
                 "hardened": d.hardened,
                 "prompt_variant": d.prompt_variant,
+                "profile": d.profile,
                 "error": f"transient: model {str(e)[:200]}",
                 "injection": injection_text,
                 "brief": brief(symbol, px, open_px),
@@ -248,6 +255,7 @@ def prepare_decision(
                 "model": model.model_id,
                 "hardened": d.hardened,
                 "prompt_variant": d.prompt_variant,
+                "profile": d.profile,
                 "error": f"model body not UTF-8: {str(e)[:200]}",
                 "injection": injection_text,
                 "brief": brief(symbol, px, open_px),
@@ -255,7 +263,9 @@ def prepare_decision(
         )
         print("  model body not UTF-8; skipping this cycle")
         return None
-    c = comp.last  # the call the intent's proof binds: variant D's sizer call when it ran, else the only call
+    # the call the intent's proof binds: hardened-v2's first judgment on the majority side, variant D's sizer call when
+    # it ran, else the only call
+    c = comp.calls[decision.proof_index] if decision.proof_index is not None else comp.last
     sig_record, tee, sig_error = _prove(model, c, pk)
     arm_d = None
     if d.variant == "D":
@@ -273,16 +283,34 @@ def prepare_decision(
             "size_asked": decision.size_asked,
             "size_note": decision.size_note,
         }
+    guard = None
+    if d.variant == HARDENED_V2:
+        guard = {
+            "cues_removed": decision.cues_removed,
+            "size_stated": decision.size_asked,
+            "size_cap": decision.size_cap,
+            "votes": ["Long" if v > 0 else "Short" for v in decision.votes],
+            "proof_judgment": decision.proof_index,
+            # k > 1: every judgment's bytes and enclave record, so the majority can be recounted from signed outputs
+            "judgments": [
+                _call_record(x, sig_record, tee) if x is c else _call_record(x, *_prove(model, x, pk)[:2])
+                for x in comp.calls
+            ]
+            if len(comp.calls) > 1
+            else None,
+        }
     if model.tee and not tee:
         record(
             {
                 "duel_id": duel_id,
                 "agent_pk": pk,
                 "model": model.model_id,
+                "profile": d.profile,
                 "error": sig_error or "no tee proof",
                 "chat_id": c.chat_id,
                 "signature_record": sig_record,
                 **({"arm_d": arm_d} if arm_d else {}),
+                **({"guard": guard} if guard else {}),
             }
         )
         print(f"  {pk[:8]} no verifiable enclave signature for {c.chat_id}; decision not posted")
@@ -302,12 +330,14 @@ def prepare_decision(
         "model": model.model_id,
         "hardened": d.hardened,
         "prompt_variant": d.prompt_variant,
+        "profile": d.profile,
         "brief": brief(symbol, px, open_px),
         "injection": injection_text,
         **_call_record(c, sig_record, tee),
         "attestation_file": attestations.get(model.model_id),
         "intent": intent,
         **({"arm_d": arm_d} if arm_d else {}),
+        **({"guard": guard} if guard else {}),
     }
     return intent, tee, inj, row
 
@@ -833,6 +863,8 @@ def run_single(
     solver_url: str,
     bond: str,
     commit_reveal: bool = False,
+    profile: str | None = None,
+    judgments: int = 1,
 ) -> None:
     """Self-hosted mode: drive one agent (`AGENT_KEY_<name>` or the derived key) from this machine. The solver
     pairs it (PAIR_EVERY_S) and opens the duel; this process only decides, proves and posts for its own side,
@@ -844,6 +876,9 @@ def run_single(
     solver = Solver(solver_url, ENV["ARENA_SECRET"])
     model = client_from_env(ENV, name)
     d, sk, comp = make_duelist(name, model, hardened=hardened)
+    if profile:
+        d.profile = profile
+    d.judgments = judgments
     pk = pk_b64(sk)
     if agent_tier_on_chain(pk) is None:
         solver_id = ENV.get("SOLVER_ID", NET["solver"])
@@ -865,7 +900,7 @@ def run_single(
     last: str | None = None
     while True:
         print(
-            f"{name} {pk[:8]} {'hardened' if hardened else 'naive'} waiting for pairing "
+            f"{name} {pk[:8]} {profile or ('hardened' if hardened else 'naive')} waiting for pairing "
             f"(GET /agent_duel every {poll_seconds} s)"
         )
         duel_id = wait_for_duel(solver, pk, poll_seconds, skip=last)
@@ -966,6 +1001,8 @@ def run(
     commit_reveal: bool = False,
     consent: bool = False,
     pair_tag: str = "",
+    profile: str = "hardened",
+    judgments: int = 1,
 ) -> list[dict[str, Any]]:
     if not ENV.get("ARENA_SECRET"):
         raise SystemExit("ARENA_SECRET missing in the env file: the solver refuses every POST without it")
@@ -985,6 +1022,7 @@ def run(
         model_a, model_b = model_b, model_a
     tag = key_tag(pair_tag, swap)
     a, ska, ca = make_duelist("A", model_a, hardened=True, tag=tag)
+    a.profile, a.judgments = profile, judgments  # the treatment slot; B stays the naive control
     b, skb, cb = make_duelist("B", model_b, hardened=False, tag=tag)
     print(f"pair {pair_tag or 'main'}: A {pk_b64(ska)[:8]} {model_a.model_id}, B {pk_b64(skb)[:8]} {model_b.model_id}")
     solver_id = ENV.get("SOLVER_ID", NET["solver"])  # the account that signs register_agent = on-chain owner
@@ -1094,6 +1132,18 @@ if __name__ == "__main__":
         help="with --only: poll GET /agent_duel until the solver's pairing loop opens a duel",
     )
     p.add_argument("--hardened", action="store_true", help="with --only: use the hardened prompt (default naive)")
+    p.add_argument(
+        "--profile",
+        choices=PROFILES,
+        help="agent A's prompt profile (B stays naive), or the --only agent's; default hardened (--only: naive)",
+    )
+    p.add_argument(
+        "--judgments",
+        type=int,
+        default=1,
+        metavar="K",
+        help="hardened-v2: K independent calls per decision, majority side; each decision costs K calls",
+    )
     p.add_argument("--poll-seconds", type=int, default=10)
     p.add_argument(
         "--pair-tag",
@@ -1120,6 +1170,12 @@ if __name__ == "__main__":
     arms = "".join(args.variants.upper().split(","))
     if arms and (len(set(arms)) != len(arms) or not set(arms) <= set(VARIANTS)):
         p.error(f"--variants takes distinct arms from {','.join(VARIANTS)}; got {args.variants!r}")
+    if args.judgments < 1 or (args.judgments > 1 and args.profile != HARDENED_V2):
+        p.error("--judgments takes K >= 1, and K > 1 only with --profile hardened-v2")
+    if arms and args.profile not in (None, "hardened"):
+        p.error("--variants sets agent A's prompt per duel; it runs on the hardened profile")
+    if args.only and args.hardened and args.profile not in (None, "hardened"):
+        p.error(f"--hardened and --profile {args.profile} disagree")
     if args.pair_tag and not re.fullmatch(r"[a-z0-9]{1,16}", args.pair_tag):
         p.error(f"--pair-tag takes 1-16 lowercase letters or digits; got {args.pair_tag!r}")
     if args.pair_tag and (args.only or any(ENV.get(f"AGENT_KEY_{n}") for n in "AB")):
@@ -1161,6 +1217,8 @@ if __name__ == "__main__":
             ENV.get("SOLVER_URL", "http://127.0.0.1:4020"),
             args.bond,
             args.commit_reveal,
+            args.profile,
+            args.judgments,
         )
         raise SystemExit(0)
     out = run(
@@ -1175,5 +1233,7 @@ if __name__ == "__main__":
         args.commit_reveal,
         args.consent,
         PAIR_TAG,
+        args.profile or "hardened",
+        args.judgments,
     )
     print(json.dumps(out, indent=2))
