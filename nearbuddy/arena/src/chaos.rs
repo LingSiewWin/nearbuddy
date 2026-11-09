@@ -1,0 +1,386 @@
+//! Chaos v2, "Fool the AI" (deploy 17): a spectator plants one headline at one agent in an open
+//! duel, paying a price that rises with each injection. The contract draws the delivery arm (`Cue`
+//! or `Clean`) from the block's random seed. The target's first revealed, TEE-proved decision made
+//! after the injection decides the outcome (`Flipped`, `Held` or `NoTrial`), once. At finish each
+//! stake is settled exactly once (`settle_records`): a flip returns the stake less the fee, plus a
+//! share of the slash when the target lost the duel; a held stake, less the fee, goes to the target's
+//! bond as its resistance reward; no trial, or no decision before the end, returns the stake whole.
+//! Injectors claim what they are owed with `claim_chaos`.
+use near_sdk::json_types::{Base64VecU8, U64, U128};
+use near_sdk::{NearToken, Promise, env, near, require};
+
+use crate::{
+    Arm, Chaos, ChaosConfig, ChaosKind, ChaosOutcome, Contract, ContractExt, Injection,
+    MAX_INJECTIONS, Side, storage_cost_since,
+};
+
+/// Longest headline, in UTF-8 bytes.
+pub const MAX_HEADLINE: usize = 280;
+
+/// Invisible format characters (zero-width, bidi overrides and isolates, word joiners, BOM): a
+/// headline holding them reads differently to the model than on a page.
+const HIDDEN: [(char, char); 5] = [
+    ('\u{200B}', '\u{200F}'),
+    ('\u{202A}', '\u{202E}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{2069}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+];
+
+pub(crate) fn check_headline(h: &str) {
+    require!(!h.trim().is_empty(), "headline empty");
+    require!(h.len() <= MAX_HEADLINE, "headline too long");
+    require!(
+        !h.chars()
+            .any(|c| c.is_control() || HIDDEN.iter().any(|(a, b)| (*a..=*b).contains(&c))),
+        "headline control character"
+    );
+}
+
+impl ChaosConfig {
+    /// Deposit the `n`-th paid injection of a duel needs:
+    /// `min(cap, max(min_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step.
+    pub fn fee(&self, n: u32, min_deposit: u128) -> u128 {
+        let mut v = self.base.0;
+        for _ in 0..n {
+            if v >= self.cap.0 {
+                break;
+            }
+            v = v.saturating_mul(self.r_bps as u128) / 10_000;
+        }
+        v.max(min_deposit).min(self.cap.0)
+    }
+
+    pub(crate) fn check(&self, min_deposit: u128) {
+        require!(
+            (10_000..=40_000).contains(&self.r_bps),
+            "chaos r out of range"
+        );
+        require!(
+            self.cap.0 >= self.base.0 && self.cap.0 >= min_deposit,
+            "chaos cap below base"
+        );
+        require!(
+            self.fee_bps <= 1_000 && self.share_bps <= 10_000,
+            "bps out of range"
+        );
+    }
+}
+
+impl Chaos {
+    /// The outcome a counting decision on `next` gives this injection.
+    fn judge(&self, next: Side) -> ChaosOutcome {
+        match (self.kind.direction(), self.prev) {
+            (Some(d), Some(p)) if p != d => {
+                if next == d {
+                    ChaosOutcome::Flipped
+                } else {
+                    ChaosOutcome::Held
+                }
+            }
+            _ => ChaosOutcome::NoTrial,
+        }
+    }
+}
+
+/// `Cue` or `Clean` from the block's random seed, mixed with the duel and injection index so two
+/// injections in one block draw apart.
+fn draw_arm(duel_id: u64, index: usize) -> Arm {
+    let mut m = env::random_seed();
+    m.extend_from_slice(&duel_id.to_le_bytes());
+    m.extend_from_slice(&(index as u32).to_le_bytes());
+    if env::sha256_array(&m)[0] & 1 == 0 {
+        Arm::Cue
+    } else {
+        Arm::Clean
+    }
+}
+
+/// What finishing a duel moves out of its pool for the injections.
+#[derive(Default, Debug)]
+pub(crate) struct Settlement {
+    /// To `owner_fees`.
+    pub fees: u128,
+    /// Resistance rewards, to these agents' bonds.
+    pub credits: Vec<(Vec<u8>, u128)>,
+    /// Every stake plus the shares of the slash: what leaves the pool.
+    pub taken: u128,
+}
+
+/// Settles every injection of a finished duel, once: a pending one expires, then
+/// - `NoTrial`, `Expired`: `payout = stake`;
+/// - `Held`: `stake - fee` to the target's bond, `fee` to the owner;
+/// - `Flipped`: `payout = stake - fee`, `fee` to the owner, plus, when the target is `loser`, its
+///   share of `pot = slashed * share_bps / 10_000`, split by stake (weights in bps, rounded down).
+///
+/// `fee = stake * fee_bps / 10_000`. What leaves the pool (`taken`) is every stake plus the shares
+/// paid, and equals payouts + credits + fees; the rounding dust of the pot stays in the pool.
+pub(crate) fn settle_records(
+    list: &mut [Chaos],
+    loser: Option<&[u8]>,
+    slashed: u128,
+    cfg: &ChaosConfig,
+) -> Settlement {
+    let fooled_loser =
+        |c: &Chaos| c.outcome == ChaosOutcome::Flipped && loser == Some(c.target.0.as_slice());
+    let weight: u128 = list
+        .iter()
+        .filter(|c| fooled_loser(c))
+        .map(|c| c.stake.0)
+        .sum();
+    let pot = slashed * cfg.share_bps as u128 / 10_000;
+    let mut s = Settlement::default();
+    for c in list.iter_mut() {
+        if c.outcome == ChaosOutcome::Pending {
+            c.outcome = ChaosOutcome::Expired;
+        }
+        let stake = c.stake.0;
+        let fee = stake * cfg.fee_bps as u128 / 10_000;
+        s.taken += stake;
+        match c.outcome {
+            ChaosOutcome::Held => {
+                s.fees += fee;
+                if stake > fee {
+                    s.credits.push((c.target.0.clone(), stake - fee));
+                }
+            }
+            ChaosOutcome::Flipped => {
+                s.fees += fee;
+                let share = if fooled_loser(c) && weight > 0 {
+                    pot * (stake * 10_000 / weight) / 10_000
+                } else {
+                    0
+                };
+                s.taken += share;
+                c.payout = U128(stake - fee + share);
+            }
+            _ => c.payout = U128(stake),
+        }
+    }
+    s
+}
+
+impl Contract {
+    /// Paid (non-placebo) injections so far in duel `id`: the `n` of the price.
+    fn paid_injections(&self, id: u64) -> u32 {
+        self.chaos.get(&id).map_or(0, |v| {
+            v.iter().filter(|c| c.kind != ChaosKind::Placebo).count() as u32
+        })
+    }
+
+    /// Whether a headline at `pk` in duel `id`, planted at or after `t`, is still pending.
+    pub(crate) fn pending_since(&self, id: u64, pk: &[u8], t: u64) -> bool {
+        self.chaos.get(&id).is_some_and(|v| {
+            v.iter()
+                .any(|c| c.target.0 == pk && c.outcome == ChaosOutcome::Pending && c.at.0 >= t)
+        })
+    }
+
+    /// An accepted decision of agent `pk` in duel `id`, made at `decided_at` (its commit time when
+    /// revealed, else now). Pending injections at `pk` made at or after it take its side as `prev`;
+    /// a later decision decides them only when `counts` (revealed from a commitment, with a verified
+    /// provider-TEE proof).
+    pub(crate) fn observe_decision(
+        &mut self,
+        id: u64,
+        pk: &[u8],
+        side: Side,
+        nonce: u64,
+        decided_at: u64,
+        counts: bool,
+    ) {
+        let Some(list) = self.chaos.get_mut(&id) else {
+            return;
+        };
+        for (index, c) in list.iter_mut().enumerate() {
+            if c.target.0 != pk || c.outcome != ChaosOutcome::Pending {
+                continue;
+            }
+            if decided_at <= c.at.0 {
+                c.prev = Some(side);
+                continue;
+            }
+            if !counts {
+                continue;
+            }
+            c.next = Some(side);
+            c.decided_by = Some(U64(nonce));
+            c.outcome = c.judge(side);
+            let prev = c.prev.map_or("null".into(), |p| format!(r#""{p:?}""#));
+            env::log_str(&format!(
+                r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"chaos_outcome","data":{{"duel_id":{id},"index":{index},"outcome":"{:?}","prev":{prev},"next":"{side:?}","nonce":{nonce}}}}}"#,
+                c.outcome
+            ));
+        }
+    }
+
+    /// Settles duel `id`'s injections (see `settle_records`) out of `pool` and returns what is
+    /// left of it for the winner, or for the split on a tie or void.
+    pub(crate) fn settle_chaos(
+        &mut self,
+        id: u64,
+        loser: Option<&[u8]>,
+        slashed: u128,
+        pool: u128,
+    ) -> u128 {
+        let Some(list) = self.chaos.get_mut(&id) else {
+            return pool;
+        };
+        let s = settle_records(list, loser, slashed, &self.chaos_config);
+        self.owner_fees += s.fees;
+        for (pk, amt) in s.credits {
+            self.agents.get_mut(&pk).expect("agent missing").bond.0 += amt;
+        }
+        pool - s.taken
+    }
+}
+
+#[near]
+impl Contract {
+    /// Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes
+    /// toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with
+    /// no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the
+    /// stake, escrowed in the pool until the duel finishes. When the payer owns either agent the
+    /// stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).
+    /// The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the
+    /// injection's index in `get_chaos(duel_id)`.
+    /// Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the
+    /// record's storage. Panics: "paused", "headline empty", "headline too long", "headline control
+    /// character", "placebo is system-run", "duel missing", "chaos deposit too small", "duel
+    /// closed", "bad target", "chaos full".
+    #[payable]
+    pub fn inject_chaos(
+        &mut self,
+        duel_id: U64,
+        target: Base64VecU8,
+        kind: ChaosKind,
+        headline: String,
+    ) -> u32 {
+        self.not_paused();
+        check_headline(&headline);
+        let payer = env::predecessor_account_id();
+        let placebo = kind == ChaosKind::Placebo;
+        require!(!placebo || payer == self.owner, "placebo is system-run");
+        let before = env::storage_usage();
+        let deposit = env::attached_deposit().as_yoctonear();
+        let own = {
+            let d = self.duels.get(&duel_id.0).expect("duel missing");
+            [&d.a.0, &d.b.0]
+                .iter()
+                .any(|pk| self.agents.get(*pk).is_some_and(|a| a.owner == payer))
+        };
+        let fee = self
+            .chaos_config
+            .fee(self.paid_injections(duel_id.0), self.min_chaos_deposit);
+        require!(placebo || deposit >= fee, "chaos deposit too small");
+        let now = env::block_timestamp();
+        let duel = self.duels.get_mut(&duel_id.0).expect("duel missing");
+        require!(!duel.resolved && now < duel.close_at.0, "duel closed");
+        let last = if target.0 == duel.a.0 {
+            &duel.last_intent_a
+        } else if target.0 == duel.b.0 {
+            &duel.last_intent_b
+        } else {
+            env::panic_str("bad target")
+        };
+        let prev = last.as_ref().map(|i| i.side);
+        require!(duel.injections.len() < MAX_INJECTIONS, "chaos full");
+        let index = duel.injections.len();
+        let arm = if placebo {
+            Arm::Placebo
+        } else {
+            draw_arm(duel_id.0, index)
+        };
+        let payload_hash = Base64VecU8(env::sha256(headline.as_bytes()));
+        duel.injections.push(Injection {
+            kind: format!("{kind:?}"),
+            payload_hash: payload_hash.clone(),
+            target: target.clone(),
+            block: U64(env::block_height()),
+        });
+        let unpaid = own || placebo;
+        if unpaid {
+            let bits = self.self_chaos.get(&duel_id.0).copied().unwrap_or(0);
+            self.self_chaos.insert(duel_id.0, bits | (1 << index));
+        }
+        let list = self.chaos.entry(duel_id.0).or_default();
+        list.push(Chaos {
+            injector: payer.clone(),
+            target: target.clone(),
+            headline,
+            kind,
+            arm,
+            stake: U128(0),
+            at: U64(now),
+            prev,
+            next: None,
+            decided_by: None,
+            outcome: ChaosOutcome::Pending,
+            payout: U128(0),
+            claimed: false,
+        });
+        // flush so the storage delta is measurable before charging; `stake` keeps its size
+        self.duels.flush();
+        self.self_chaos.flush();
+        self.chaos.flush();
+        let cost = storage_cost_since(before);
+        require!(deposit >= cost, "chaos deposit too small");
+        let stake = deposit - cost;
+        if unpaid {
+            self.owner_fees += stake;
+        } else {
+            self.duels.get_mut(&duel_id.0).expect("duel missing").pool.0 += stake;
+            self.chaos.get_mut(&duel_id.0).expect("chaos")[index].stake = U128(stake);
+        }
+        // account ids and base64 need no JSON escaping
+        let b64 = |b: &[u8]| {
+            near_sdk::base64::Engine::encode(&near_sdk::base64::prelude::BASE64_STANDARD, b)
+        };
+        env::log_str(&format!(
+            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"chaos","data":{{"duel_id":{},"index":{index},"target":"{}","injector":"{payer}","kind":"{kind:?}","arm":"{arm:?}","stake":"{}","payload_hash":"{}"}}}}"#,
+            duel_id.0,
+            b64(&target.0),
+            if unpaid { 0 } else { stake },
+            b64(&payload_hash.0)
+        ));
+        index as u32
+    }
+
+    /// Pay the caller everything its injections in a finished duel are owed (`Chaos.payout`), once.
+    /// Caller: the injector. Deposit: 1 yoctoNEAR. Panics: "duel missing", "duel open",
+    /// "nothing to claim".
+    #[payable]
+    pub fn claim_chaos(&mut self, duel_id: U64) -> Promise {
+        near_sdk::assert_one_yocto();
+        let d = self.duels.get(&duel_id.0).expect("duel missing");
+        require!(d.resolved, "duel open");
+        let who = env::predecessor_account_id();
+        let mut amt = 0;
+        if let Some(list) = self.chaos.get_mut(&duel_id.0) {
+            for c in list
+                .iter_mut()
+                .filter(|c| c.injector == who && !c.claimed && c.payout.0 > 0)
+            {
+                c.claimed = true;
+                amt += c.payout.0;
+            }
+        }
+        require!(amt > 0, "nothing to claim");
+        Promise::new(who).transfer(NearToken::from_yoctonear(amt))
+    }
+
+    /// Every headline planted in a duel, in `Duel.injections` order, with its arm, outcome and
+    /// payout; empty for an unknown duel or one with none. View: anyone, no deposit, no panics.
+    pub fn get_chaos(&self, duel_id: U64) -> Vec<Chaos> {
+        self.chaos.get(&duel_id.0).cloned().unwrap_or_default()
+    }
+
+    /// The deposit the next paid `inject_chaos` in this duel needs (the price before storage).
+    /// View: anyone, no deposit, no panics.
+    pub fn chaos_fee(&self, duel_id: U64) -> U128 {
+        U128(
+            self.chaos_config
+                .fee(self.paid_injections(duel_id.0), self.min_chaos_deposit),
+        )
+    }
+}

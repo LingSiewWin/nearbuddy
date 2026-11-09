@@ -4,10 +4,9 @@ use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::{AccountId, Gas, NearToken, Promise, env, ext_contract, near, require};
 
 use crate::{
-    Contract, ContractExt, Duel, Injection, Intent, MAX_DUEL_NS, MAX_INJECTIONS, OraclePrice,
-    Outcome, PriceData, Side, SignedIntent, TeeProof, VOID_AFTER_NS, commit_bytes, commit_key,
-    consent_bytes, intent_message, nonce_key, proof_hash, set_entry_cost, storage_cost_since,
-    tee_text, verify,
+    Contract, ContractExt, Duel, Intent, MAX_DUEL_NS, OraclePrice, Outcome, PriceData, Side,
+    SignedIntent, TeeProof, VOID_AFTER_NS, commit_bytes, commit_key, consent_bytes, intent_message,
+    nonce_key, proof_hash, set_entry_cost, storage_cost_since, tee_text, verify,
 };
 
 const ORACLE_GAS: Gas = Gas::from_tgas(150);
@@ -223,17 +222,19 @@ impl Contract {
     pub fn post_intent(&mut self, signed: SignedIntent, tee: Option<TeeProof>) {
         self.not_paused();
         require!(!self.commit_reveal, "commit first");
-        self.accept_intent(&signed, tee, true);
+        self.accept_intent(&signed, tee, None);
     }
 
     /// Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for
     /// this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
     /// signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
     /// should be 32 random bytes: the intent space is small enough to brute-force without it.
+    /// While a headline planted at this agent after its held commitment is pending, that
+    /// commitment must be revealed before it is replaced.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     /// "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
-    /// "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
-    /// "bond exhausted".
+    /// "duel closed", "intent lock", "bad target", "commitment used", "reveal first",
+    /// "agent missing", "bond exhausted".
     pub fn commit_intent(
         &mut self,
         duel_id: U64,
@@ -271,6 +272,15 @@ impl Contract {
         let mut used = key.clone();
         used.extend_from_slice(&hash);
         require!(!self.used_commitments.contains(&used), "commitment used");
+        // a held commitment made at or before a pending headline at this agent is its decision
+        // before that headline: it is revealed (and becomes the headline's `prev`) before a newer
+        // one may replace it, so a replaced call cannot leave a stale `prev` behind
+        if let Some(&(_, held_at)) = self.commitments.get(&key) {
+            require!(
+                !self.pending_since(duel_id.0, &agent_pk.0, held_at),
+                "reveal first"
+            );
+        }
         let before = env::storage_usage();
         self.commitments.insert(key, (hash, now));
         self.commitments.flush();
@@ -293,7 +303,8 @@ impl Contract {
     /// Open a commitment: the intent and salt must hash to the stored commitment for
     /// `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,
     /// except that the reveal may land inside the intent lock (the decision was fixed when it was
-    /// committed, before the lock) up to `close_at`. The commitment is deleted.
+    /// committed, before the lock) up to `close_at`. The commitment is deleted. The decision counts
+    /// as made at its commit time, which is what decides planted headlines (see `Chaos`).
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     /// "no commitment", "commitment mismatch", then as `post_intent` minus "intent lock" and
     /// "commit first".
@@ -305,7 +316,7 @@ impl Contract {
     ) {
         let i = &signed.intent;
         let key = commit_key(i.duel_id.0, &i.agent_pk.0);
-        let (hash, _) = *self
+        let (hash, committed_at) = *self
             .commitments
             .get(&key)
             .unwrap_or_else(|| env::panic_str("no commitment"));
@@ -313,11 +324,18 @@ impl Contract {
         preimage.extend_from_slice(&salt.0);
         require!(env::sha256_array(&preimage) == hash, "commitment mismatch");
         self.commitments.remove(&key);
-        self.accept_intent(&signed, tee, false);
+        self.accept_intent(&signed, tee, Some(committed_at));
     }
 
-    /// The checks and effects of `post_intent`; `lock` = refuse inside the intent lock.
-    fn accept_intent(&mut self, signed: &SignedIntent, tee: Option<TeeProof>, lock: bool) {
+    /// The checks and effects of `post_intent`. `committed_at` is set for a reveal: it may land
+    /// inside the intent lock, and the decision counts as made at its commit time.
+    fn accept_intent(
+        &mut self,
+        signed: &SignedIntent,
+        tee: Option<TeeProof>,
+        committed_at: Option<u64>,
+    ) {
+        let lock = committed_at.is_none();
         let before = env::storage_usage();
         let i = &signed.intent;
         require!(i.agent_pk.0.len() == 32, "agent_pk length");
@@ -383,9 +401,20 @@ impl Contract {
         if tee_kind != 0 {
             self.used_proofs.insert(i.proof_hash.0.clone());
         }
+        // a direct post never decides a planted headline: its side is readable before it lands
+        self.observe_decision(
+            i.duel_id.0,
+            &i.agent_pk.0,
+            i.side,
+            i.nonce.0,
+            committed_at.unwrap_or(env::block_timestamp()),
+            committed_at.is_some() && tee_kind == 2,
+        );
         self.duels.flush();
         self.nonce_times.flush();
-        // includes the nonce_times entry (flushed) and the used_proofs one (LookupSet writes at insert)
+        self.chaos.flush();
+        // includes the nonce_times entry (flushed), the used_proofs one (LookupSet writes at insert)
+        // and the outcome fields a decided injection fills in
         let cost = storage_cost_since(before);
         let agent = self.agents.get_mut(&i.agent_pk.0).expect("agent missing");
         require!(agent.bond.0 > cost, "bond exhausted");
@@ -419,65 +448,6 @@ impl Contract {
             proof_hash(&p.request_hash.0, &p.response_hash.0) == proof,
             "proof_hash mismatch"
         );
-    }
-
-    /// Spectator pays to attack one agent in an open duel. Only the hash goes on chain; the solver
-    /// delivers the payload to the runner. Deposit, minus the record's storage, joins the duel pool;
-    /// when the payer owns either agent it goes to `owner_fees` instead and the injection earns no
-    /// shield, so an owner cannot buy shield or recycle chaos through its own pairing.
-    /// Caller: anyone (spectator). Deposit: at least `min_chaos_deposit` and above the record's
-    /// storage. Panics: "paused", "chaos deposit too small", "payload_hash length", "kind too long",
-    /// "duel missing", "duel closed", "bad target", "chaos full".
-    #[payable]
-    pub fn inject_chaos(
-        &mut self,
-        duel_id: U64,
-        target: Base64VecU8,
-        kind: String,
-        payload_hash: Base64VecU8,
-    ) {
-        self.not_paused();
-        let before = env::storage_usage();
-        let deposit = env::attached_deposit().as_yoctonear();
-        require!(deposit >= self.min_chaos_deposit, "chaos deposit too small");
-        require!(payload_hash.0.len() == 32, "payload_hash length");
-        require!(kind.len() <= 32, "kind too long");
-        // chaos paid by either agent's owner: no shield for it, and its deposit is a fee, not pool
-        let payer = env::predecessor_account_id();
-        let own = {
-            let d = self.duels.get(&duel_id.0).expect("duel missing");
-            [&d.a.0, &d.b.0]
-                .iter()
-                .any(|pk| self.agents.get(*pk).is_some_and(|a| a.owner == payer))
-        };
-        let duel = self.duels.get_mut(&duel_id.0).expect("duel missing");
-        require!(
-            !duel.resolved && env::block_timestamp() < duel.close_at.0,
-            "duel closed"
-        );
-        require!(target.0 == duel.a.0 || target.0 == duel.b.0, "bad target");
-        require!(duel.injections.len() < MAX_INJECTIONS, "chaos full");
-        let index = duel.injections.len();
-        duel.injections.push(Injection {
-            kind,
-            payload_hash,
-            target,
-            block: U64(env::block_height()),
-        });
-        if own {
-            let bits = self.self_chaos.get(&duel_id.0).copied().unwrap_or(0);
-            self.self_chaos.insert(duel_id.0, bits | (1 << index));
-        }
-        // flush so the storage delta is measurable before charging
-        self.duels.flush();
-        self.self_chaos.flush();
-        let cost = storage_cost_since(before);
-        require!(deposit > cost, "chaos deposit too small");
-        if own {
-            self.owner_fees += deposit - cost;
-        } else {
-            self.duels.get_mut(&duel_id.0).expect("duel missing").pool.0 += deposit - cost;
-        }
     }
 
     /// After `close_at`, anyone asks the oracle for the close price; the answer arrives in
@@ -562,7 +532,8 @@ impl Contract {
     }
 
     /// Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both
-    /// agents, split the pool between them, no slashing, no score. Recorded as a tie with no prices.
+    /// agents, no slashing, no score. Recorded as a tie with no prices: the injections settle as on a
+    /// tie (see `settle_records`) and what is left of the pool is split between the agents.
     /// Caller: anyone. Deposit: none. Panics: "duel missing", "resolved", "too early",
     /// "agent missing".
     pub fn void_duel(&mut self, duel_id: U64) {
@@ -592,6 +563,7 @@ impl Contract {
             slashed: U128(0),
             injections: n,
         });
+        let pool = self.settle_chaos(duel_id.0, None, 0, pool);
         let half = pool / 2;
         for (pk, share) in [(&pk_a, half + pool % 2), (&pk_b, half)] {
             self.commitments.remove(&commit_key(duel_id.0, pk));
@@ -605,8 +577,10 @@ impl Contract {
         ));
     }
 
-    /// Scores both agents, slashes the loser into the pool, pays the pool to the winner, counts the
-    /// injections the winner survived, frees both agents, prunes the injection list.
+    /// Scores both agents, slashes the loser into the pool, settles the injections out of the pool
+    /// (see `settle_records`; the slash is taken before any resistance reward reaches a bond), pays
+    /// what is left to the winner, counts the injections the winner survived, frees both agents,
+    /// prunes the injection list (the `chaos` records stay).
     ///
     /// A side that left a commitment unrevealed forfeits: it loses whatever its pnl, its alpha takes
     /// no gain, and on top of the loss slash it pays `no_reveal_bps` of its bond straight to the
@@ -686,6 +660,7 @@ impl Contract {
             pool += slashed;
             outcome.winner = Some(Base64VecU8(winner.clone()));
             outcome.slashed = U128(slashed);
+            let pool = self.settle_chaos(id, Some(loser), slashed, pool);
             // shield counts chaos a third party paid for and the winner outlasted on the price: none
             // for chaos either owner paid, none when the win is a forfeit (red team F2)
             let survived = if nr == [false; 2] {
@@ -701,6 +676,7 @@ impl Contract {
             w.bond.0 += pool;
             w.shield += survived;
         } else {
+            let pool = self.settle_chaos(id, None, 0, pool);
             let half = pool / 2;
             self.agents.get_mut(&pk_a).unwrap().bond.0 += half + pool % 2;
             self.agents.get_mut(&pk_b).unwrap().bond.0 += half;

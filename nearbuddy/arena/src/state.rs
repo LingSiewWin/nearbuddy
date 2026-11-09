@@ -6,7 +6,9 @@ use near_sdk::{
     require,
 };
 
-use crate::{Agent, Duel, MAX_DUEL_NS, MandateV1, VersionedMandate, follow::follow_key};
+use crate::{
+    Agent, Chaos, ChaosConfig, Duel, MAX_DUEL_NS, MandateV1, VersionedMandate, follow::follow_key,
+};
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -33,6 +35,7 @@ pub(crate) enum StorageKey {
     Sweeping,
     SelfChaos,
     NonceTimes,
+    Chaos,
 }
 
 /// Most accounts one `reconcile_vault_total` reads, so the call stays inside one transaction's gas.
@@ -170,14 +173,17 @@ pub struct Contract {
     /// intent accepted from deploy 16 on; it replaces `used_nonces` for them. A fill for an intent
     /// accepted at or after its mandate's revoke or expiry is refused, whatever the grace (deploy 16).
     pub(crate) nonce_times: LookupMap<Vec<u8>, u64>,
+    /// Duel id to its planted headlines, in `Duel.injections` order (deploy 17). Kept after the duel
+    /// finishes: the outcomes are the record, and the payouts are claimed from it.
+    pub(crate) chaos: LookupMap<u64, Vec<Chaos>>,
+    pub(crate) chaos_config: ChaosConfig,
 }
 
-/// State layout of deploy 15 (verified settlement, vault delay and cap, per-duel lock, self-chaos).
-/// Read once by `migrate_v16`.
+/// State layout of deploys 16 and 16.1. Read once by `migrate_v17`.
 #[allow(dead_code)]
 #[derive(near_sdk::borsh::BorshDeserialize)]
 #[borsh(crate = "near_sdk::borsh")]
-pub struct ContractV15 {
+pub struct ContractV16 {
     owner: AccountId,
     oracle_account: AccountId,
     oracle_deposit: u128,
@@ -220,6 +226,8 @@ pub struct ContractV15 {
     duel_locks: LookupMap<u64, u64>,
     sweeping: LookupMap<String, u128>,
     self_chaos: LookupMap<u64, u64>,
+    max_vault_per_account: u128,
+    nonce_times: LookupMap<Vec<u8>, u64>,
 }
 
 /// Seconds to ns, at most `MAX_DUEL_NS`: a floor above the longest duel `open_duel` accepts would
@@ -350,22 +358,33 @@ impl Contract {
             self_chaos: LookupMap::new(StorageKey::SelfChaos),
             max_vault_per_account: max_vault_total.0,
             nonce_times: LookupMap::new(StorageKey::NonceTimes),
+            chaos: LookupMap::new(StorageKey::Chaos),
+            // flat price at `min_chaos_deposit`, no fee, no share: `set_chaos_config` sets real terms
+            chaos_config: ChaosConfig {
+                base: min_chaos_deposit,
+                r_bps: 10_000,
+                cap: min_chaos_deposit,
+                fee_bps: 0,
+                share_bps: 0,
+            },
         }
     }
 
     // ---------------------------------------------------------------- migration
 
-    /// Deploy 15 → 16: a per-account vault cap (`max_vault_per_account`) and the accept time of
-    /// each new intent (`nonce_times`; intents accepted before keep only `used_nonces`, so their
-    /// fills keep the deploy-15 grace rule). Every deploy-15 field is
-    /// carried over unchanged, so existing vaults, mandates, holdings and duels read as before.
-    /// `vault_total` keeps its deploy-15 value; `reconcile_vault_total` clears its drift.
-    /// Caller: the contract itself (private), once after the deploy-16 code lands. Deposit:
-    /// none. Panics: "no state", or the SDK private-method panic for any other caller.
+    /// Deploy 16.1 → 17 ("Fool the AI"): planted headlines with a rising price, a random arm, the
+    /// outcome read from the target's next revealed TEE decision and a payout per injection at
+    /// finish (`chaos`, `chaos_config`). Every deploy-16 field is carried over unchanged. Run only at
+    /// a batch boundary (no open duel): `Duel.injections` keeps its layout, but the stakes of a duel
+    /// open across the deploy would have no `chaos` records to settle them.
+    /// Caller: the contract itself (private), once after the deploy-17 code lands. Deposit: none.
+    /// Panics: "no state", as `set_chaos_config` on bad terms, or the SDK private-method panic for
+    /// any other caller.
     #[private]
     #[init(ignore_state)]
-    pub fn migrate_v16(max_vault_per_account: U128) -> Self {
-        let old: ContractV15 = env::state_read().expect("no state");
+    pub fn migrate_v17(chaos: ChaosConfig) -> Self {
+        let old: ContractV16 = env::state_read().expect("no state");
+        chaos.check(old.min_chaos_deposit);
         Self {
             owner: old.owner,
             oracle_account: old.oracle_account,
@@ -409,8 +428,10 @@ impl Contract {
             duel_locks: old.duel_locks,
             sweeping: old.sweeping,
             self_chaos: old.self_chaos,
-            max_vault_per_account: max_vault_per_account.0,
-            nonce_times: LookupMap::new(StorageKey::NonceTimes),
+            max_vault_per_account: old.max_vault_per_account,
+            nonce_times: old.nonce_times,
+            chaos: LookupMap::new(StorageKey::Chaos),
+            chaos_config: chaos,
         }
     }
 
@@ -504,6 +525,24 @@ impl Contract {
         );
         self.commit_reveal = enabled;
         self.no_reveal_bps = no_reveal_bps;
+    }
+
+    /// `inject_chaos` terms (see `ChaosConfig`). The price applies to later injections; `fee_bps`
+    /// and `share_bps` decide the payouts of stakes already escrowed, so they may not change while
+    /// a duel is open. Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "chaos r out of
+    /// range" (outside 10_000..=40_000), "chaos cap below base" (cap under base or
+    /// `min_chaos_deposit`), "bps out of range" (fee over 1_000 or share over 10_000), "duels open".
+    #[payable]
+    pub fn set_chaos_config(&mut self, chaos: ChaosConfig) {
+        self.only_owner_yocto();
+        chaos.check(self.min_chaos_deposit);
+        let old = &self.chaos_config;
+        require!(
+            self.open_duels == 0
+                || (chaos.fee_bps, chaos.share_bps) == (old.fee_bps, old.share_bps),
+            "duels open"
+        );
+        self.chaos_config = chaos;
     }
 
     /// With `required` on, `open_duel` is refused and pairing needs both agents' signatures

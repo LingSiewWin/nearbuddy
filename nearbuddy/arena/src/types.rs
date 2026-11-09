@@ -84,6 +84,8 @@ pub struct AgentView {
     pub tee: bool,
 }
 
+/// One injection as `Duel.injections` lists it. From deploy 17 `kind` is the `ChaosKind` name and
+/// `payload_hash` is `sha256(headline)`, computed on chain; the full record is in `get_chaos`.
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Debug)]
 pub struct Injection {
@@ -91,6 +93,102 @@ pub struct Injection {
     pub payload_hash: Base64VecU8,
     pub target: Base64VecU8,
     pub block: U64,
+}
+
+/// The side a planted headline's lie pushes the target toward, or `Placebo`: a neutral headline,
+/// injected only by the contract owner as the control arm.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ChaosKind {
+    Long,
+    Short,
+    Placebo,
+}
+
+impl ChaosKind {
+    pub fn direction(self) -> Option<Side> {
+        match self {
+            ChaosKind::Long => Some(Side::Long),
+            ChaosKind::Short => Some(Side::Short),
+            ChaosKind::Placebo => None,
+        }
+    }
+}
+
+/// How the runner must deliver the headline: `Cue` as written, `Clean` after the cue guard strips
+/// its credibility cues, `Placebo` as written (a placebo carries no cues). The contract draws `Cue`
+/// or `Clean` from the block's random seed; the injector does not choose.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Arm {
+    Cue,
+    Clean,
+    Placebo,
+}
+
+/// What the target's first counting decision after the injection showed (see `Chaos`).
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ChaosOutcome {
+    /// No counting decision after the injection yet.
+    Pending,
+    /// The decision before the injection was not on the lie's side and the next one is.
+    Flipped,
+    /// The decision before the injection was not on the lie's side and the next one is not either.
+    Held,
+    /// No trial: no known decision before the injection, the target already held the lie's side,
+    /// or a placebo. Still records `prev` and `next`.
+    NoTrial,
+    /// The duel finished (or was voided) before a counting decision.
+    Expired,
+}
+
+/// One planted headline (deploy 17). `Duel.injections[i]` and `get_chaos(duel)[i]` are the same
+/// injection.
+///
+/// `prev` is the side of the target's last decision made at or before `at` (a decision's time is
+/// its commit time when revealed, else its accept time), updated while the injection is pending.
+/// The first decision made after `at` that is revealed from a commitment and carries a verified
+/// provider-TEE proof (kind 2) decides the outcome, once; direct posts never decide, since their
+/// side is readable before they land.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug)]
+pub struct Chaos {
+    pub injector: AccountId,
+    pub target: Base64VecU8,
+    /// UTF-8, 1..=280 bytes, no control or invisible format characters.
+    pub headline: String,
+    pub kind: ChaosKind,
+    pub arm: Arm,
+    /// Escrowed in the duel pool until it finishes. 0 when the contract owner (placebo) or the
+    /// owner of either agent paid: that deposit went to `owner_fees` at injection.
+    pub stake: U128,
+    /// Block time of the injection (ns).
+    pub at: U64,
+    pub prev: Option<Side>,
+    pub next: Option<Side>,
+    /// Nonce of the revealed intent that decided the outcome.
+    pub decided_by: Option<U64>,
+    pub outcome: ChaosOutcome,
+    /// Owed to `injector` once the duel finished: the stake back (no trial, expired, or flipped
+    /// less the fee) plus, for a flip at the duel's loser, a share of its slash.
+    pub payout: U128,
+    pub claimed: bool,
+}
+
+/// Price and payout terms of `inject_chaos` (deploy 17). The `n`-th paid injection of a duel
+/// (placebos not counted) needs a deposit of at least
+/// `min(cap, max(min_chaos_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step.
+/// At finish `fee_bps` of a decided stake (flipped or held) goes to `owner_fees`, and `share_bps` of
+/// the loser's slash is split pro rata by stake among the injections that flipped it.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChaosConfig {
+    pub base: U128,
+    pub r_bps: u16,
+    pub cap: U128,
+    pub fee_bps: u16,
+    pub share_bps: u16,
 }
 
 #[near(serializers = [json, borsh])]
@@ -103,7 +201,8 @@ pub struct Duel {
     pub symbol: String,
     pub open_at: U64,
     pub close_at: U64,
-    /// Chaos deposits plus the loser's slashed bond; paid to the winner on resolve.
+    /// Chaos stakes, escrowed until the duel finishes and then settled per injection (see `Chaos`),
+    /// plus the loser's slashed bond, paid to the winner less the flipped injections' share.
     pub pool: U128,
     /// Cleared when the duel finishes; the count survives in `Outcome.injections`.
     pub injections: Vec<Injection>,
@@ -487,6 +586,8 @@ pub struct Config {
     pub vault_total: U128,
     /// `follows` is being re-keyed by `migrate_follows`; follow and settle are refused meanwhile.
     pub migrating: bool,
+    /// `inject_chaos` price and payout terms (deploy 17).
+    pub chaos: ChaosConfig,
 }
 
 // ---------------------------------------------------------------- Outlayer price oracle wire types

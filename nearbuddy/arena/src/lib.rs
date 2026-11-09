@@ -26,6 +26,7 @@
 //! Every state-growing call pays its own storage (`storage_byte_cost` x bytes added) out of the
 //! value it brings: bond, chaos deposit, vault deposit, or the attached deposit.
 mod agents;
+mod chaos;
 mod duels;
 mod follow;
 mod invariants;

@@ -159,12 +159,20 @@ enum Op {
         pick: usize,
         late: bool,
     },
+    /// `inject_chaos` paying the model's price plus `milli`, or one yocto under it with `under`.
     Chaos {
         duel: usize,
         b_side: bool,
         milli: u64,
         /// Paid by the owner of side a (shield farming): a fee, never shield.
         own: bool,
+        /// 0 Long, 1 Short, 2 Placebo (paid by the contract owner).
+        kind: u8,
+        under: bool,
+    },
+    /// `claim_chaos` by an injector owed something (or anyone, when nobody is).
+    ClaimChaos {
+        pick: usize,
     },
     Resolve {
         duel: usize,
@@ -284,6 +292,59 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
             },
         ]
     });
+    // agent 0 (TEE) in duel 0 makes a call (mostly against the first lie), then two headlines are
+    // planted at it (a spectator's mostly; an agent owner's or a placebo sometimes); with
+    // commit-reveal on, that call is revealed (the decision before) and a second later it commits
+    // again and reveals (the decision that decides both: flipped, held or no trial)
+    let plant = (
+        prop_oneof![8 => 0u8..2, 1 => Just(2u8)],
+        prop::bool::weighted(0.15),
+        0u64..300,
+    )
+        .prop_map(|(kind, own, milli)| Op::Chaos {
+            duel: 0,
+            b_side: false,
+            milli,
+            own,
+            kind,
+            under: false,
+        });
+    let fool = (
+        plant.clone(),
+        plant,
+        prop::bool::weighted(0.8),
+        any::<bool>(),
+    )
+        .prop_map(|(first, second, against, long)| {
+            let lie_long = matches!(first, Op::Chaos { kind: 0, .. });
+            vec![
+                Op::Post {
+                    duel: 0,
+                    b_side: false,
+                    long: lie_long != against,
+                    size_bps: 5_000,
+                    reuse_nonce: false,
+                },
+                first,
+                second,
+                Op::Reveal {
+                    pick: 0,
+                    late: false,
+                },
+                Op::Advance { secs: 1 },
+                Op::Post {
+                    duel: 0,
+                    b_side: false,
+                    long,
+                    size_bps: 5_000,
+                    reuse_nonce: false,
+                },
+                Op::Reveal {
+                    pick: 0,
+                    late: false,
+                },
+            ]
+        });
     (
         regs,
         deps,
@@ -291,8 +352,10 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
         opens,
         vec(post(), 4..8),
         vec(reveal(), 2..4),
+        fool,
+        -500i64..500,
     )
-        .prop_map(|(r, d, f, o, p, v)| {
+        .prop_map(|(r, d, f, o, p, v, fool, move_bps)| {
             // outputs already delivered to the arena, so early settles find a receipt
             let deliver = vec![
                 Op::Deliver {
@@ -440,6 +503,7 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                 first1,
                 first2,
                 p0.to_vec(),
+                fool,
                 revoke,
                 p1.to_vec(),
                 refollow,
@@ -472,8 +536,33 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                     },
                 ],
                 vec![Op::ReconcileFinish],
+                // duel 0 (closed by now) finishes: its headlines settle and their injectors claim
+                vec![
+                    Op::Resolve { duel: 0, move_bps },
+                    Op::ClaimChaos { pick: 0 },
+                    Op::ClaimChaos { pick: 1 },
+                ],
             ]
             .concat()
+        })
+}
+
+fn chaos() -> impl Strategy<Value = Op> {
+    (
+        0..8usize,
+        any::<bool>(),
+        0u64..300,
+        prop::bool::weighted(0.25),
+        prop_oneof![4 => 0u8..2, 1 => Just(2u8)],
+        prop::bool::weighted(0.1),
+    )
+        .prop_map(|(duel, b_side, milli, own, kind, under)| Op::Chaos {
+            duel,
+            b_side,
+            milli,
+            own,
+            kind,
+            under,
         })
 }
 
@@ -528,7 +617,8 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(a, off, len_s, milli, open_price, consented)| Op::Open { a, b: (a + off) % AGENTS, len_s, milli, open_price, consented }),
         10 => post(),
         6 => reveal(),
-        3 => (0..8usize, any::<bool>(), 0u64..500, prop::bool::weighted(0.3)).prop_map(|(duel, b_side, milli, own)| Op::Chaos { duel, b_side, milli, own }),
+        4 => chaos(),
+        2 => (0..8usize).prop_map(|pick| Op::ClaimChaos { pick }),
         3 => (0..8usize, prop_oneof![Just(0i64), -500i64..500]).prop_map(|(duel, move_bps)| Op::Resolve { duel, move_bps }),
         5 => (fol, followable(), vec(fill, 0..5)).prop_map(|(who, agent, fills)| Op::Settle { who, agent, fills }),
         1 => (0..8usize).prop_map(|duel| Op::Void { duel }),
@@ -597,11 +687,86 @@ struct DuelM {
     a: usize,
     b: usize,
     close_at: u64,
-    chaos_in: u128,
-    /// Per accepted injection: (aimed at side b, paid by an agent owner).
+    /// Per accepted injection: (aimed at side b, paid by an agent owner or a placebo).
     chaos: Vec<(bool, bool)>,
+    /// Per accepted injection, the model's record (deploy 17).
+    recs: Vec<ChaosM>,
     /// Borsh bytes at the first check that saw it finished; must never change afterwards.
     final_bytes: Option<Vec<u8>>,
+}
+
+/// The model of one `Chaos` record, written apart from the contract's rules: `prev` is the last
+/// decision made at or before the injection, the first counting decision after it (revealed, TEE)
+/// decides once, and finishing settles each stake once.
+#[derive(Clone, Debug)]
+struct ChaosM {
+    side_b: bool,
+    /// The lie's side, `Some(true)` = Long; `None` for a placebo.
+    dir: Option<bool>,
+    at: u64,
+    prev: Option<bool>,
+    next: Option<bool>,
+    outcome: ChaosOutcome,
+    stake: u128,
+    injector: String,
+    payout: u128,
+    claimed: bool,
+}
+
+/// The model's price of the `n`-th paid injection.
+fn model_fee(cfg: &ChaosConfig, n: usize) -> u128 {
+    let mut v = cfg.base.0;
+    for _ in 0..n {
+        if v >= cfg.cap.0 {
+            break;
+        }
+        v = v * cfg.r_bps as u128 / 10_000;
+    }
+    v.max(MIN_CHAOS).min(cfg.cap.0)
+}
+
+/// Settles a finished duel's records in the model: `(fees, resistance credit per side, taken out of
+/// the pool)`, and sets each payout. `loser_b`: `Some(true)` when side b lost.
+fn settle_model(
+    recs: &mut [ChaosM],
+    loser_b: Option<bool>,
+    slashed: u128,
+    cfg: &ChaosConfig,
+) -> (u128, [u128; 2], u128) {
+    let at_loser = |r: &ChaosM| loser_b == Some(r.side_b) && r.outcome == ChaosOutcome::Flipped;
+    let weight: u128 = recs.iter().filter(|r| at_loser(r)).map(|r| r.stake).sum();
+    let pot = slashed * cfg.share_bps as u128 / 10_000;
+    let (mut fees, mut credit, mut taken) = (0, [0u128; 2], 0);
+    for r in recs.iter_mut() {
+        if r.outcome == ChaosOutcome::Pending {
+            r.outcome = ChaosOutcome::Expired;
+        }
+        let fee = r.stake * cfg.fee_bps as u128 / 10_000;
+        taken += r.stake;
+        match r.outcome {
+            ChaosOutcome::Held => {
+                fees += fee;
+                credit[r.side_b as usize] += r.stake - fee;
+            }
+            ChaosOutcome::Flipped => {
+                fees += fee;
+                // weight 0: every flip at the loser was unpaid (an owner's), nothing to split by
+                let share = if at_loser(r) && weight > 0 {
+                    pot * (r.stake * 10_000 / weight) / 10_000
+                } else {
+                    0
+                };
+                taken += share;
+                r.payout = r.stake - fee + share;
+            }
+            _ => r.payout = r.stake,
+        }
+    }
+    (fees, credit, taken)
+}
+
+fn side_of(long: bool) -> Side {
+    if long { Side::Long } else { Side::Short }
 }
 
 #[derive(Clone)]
@@ -624,6 +789,8 @@ struct Snap {
     accounted: [u128; 2],
     sweeping: [u128; 2],
     outflow_seq: u64,
+    /// Per duel, its `get_chaos` records.
+    chaos: Vec<Vec<Chaos>>,
 }
 
 impl Snap {
@@ -632,6 +799,13 @@ impl Snap {
             + self.vaults.iter().sum::<u128>()
             + self.duels.iter().map(|d| d.pool.0).sum::<u128>()
             + self.fees
+            + self
+                .chaos
+                .iter()
+                .flatten()
+                .filter(|c| !c.claimed)
+                .map(|c| c.payout.0)
+                .sum::<u128>()
     }
     fn mandate(&self, agent: usize, who: usize) -> Option<&Mandate> {
         self.mandates
@@ -651,6 +825,8 @@ struct Cfg {
     require_consent: bool,
     /// `max_vault_per_account` (deploy 16); `VAULT_CAP` = no tighter than the global cap.
     account_cap: u128,
+    /// `inject_chaos` terms (deploy 17).
+    chaos: ChaosConfig,
 }
 
 /// A follow window `(start, end)`; `end` is `None` while it is the current one.
@@ -659,8 +835,8 @@ type Window = (u64, Option<u64>);
 /// A mandate version `(terms, from)`; `terms` is `None` for the current one (see `World.versions`).
 type Version = (Option<Mandate>, u64);
 
-/// Intent, salt and TEE proof behind one unrevealed commitment.
-type Pending = (Intent, Vec<u8>, Option<TeeProof>);
+/// Intent, salt, TEE proof and commit time behind one unrevealed commitment.
+type Pending = (Intent, Vec<u8>, Option<TeeProof>, u64);
 
 struct World {
     trie: HashMap<Vec<u8>, Vec<u8>>,
@@ -761,6 +937,7 @@ impl World {
         c.set_commit_reveal(cfg.commit_reveal, cfg.no_reveal_bps);
         c.set_require_consent(cfg.require_consent);
         c.set_vault_account_cap(U128(cfg.account_cap));
+        c.set_chaos_config(cfg.chaos);
         env::state_write(&c);
         drop(c);
         w.balance = env::account_balance().as_yoctonear();
@@ -903,6 +1080,31 @@ impl World {
             accounted,
             sweeping,
             outflow_seq: c.outflow_seq,
+            chaos: (0..c.next_duel)
+                .map(|d| c.chaos.get(&d).cloned().unwrap_or_default())
+                .collect(),
+        }
+    }
+
+    /// An accepted decision of agent `ag` in duel `d` on `long`, made at `td`; `counts` when it was
+    /// revealed with a provider-TEE proof. Model of what it does to the duel's pending injections.
+    fn decided(&mut self, d: usize, ag: usize, long: bool, td: u64, counts: bool) {
+        let side_b = ag == self.duels[d].b;
+        for r in self.duels[d]
+            .recs
+            .iter_mut()
+            .filter(|r| r.side_b == side_b && r.outcome == ChaosOutcome::Pending)
+        {
+            if td <= r.at {
+                r.prev = Some(long);
+            } else if counts {
+                r.next = Some(long);
+                r.outcome = match (r.dir, r.prev) {
+                    (Some(lie), Some(p)) if p != lie && long == lie => ChaosOutcome::Flipped,
+                    (Some(lie), Some(p)) if p != lie => ChaosOutcome::Held,
+                    _ => ChaosOutcome::NoTrial,
+                };
+            }
         }
     }
 
@@ -1257,8 +1459,8 @@ impl World {
                         a,
                         b,
                         close_at,
-                        chaos_in: 0,
                         chaos: vec![],
+                        recs: vec![],
                         final_bytes: None,
                     });
                     if open_price {
@@ -1299,13 +1501,24 @@ impl World {
                         .to_bytes()
                         .to_vec();
                     let pk = Base64VecU8(self.pks[ag].clone());
-                    if self
-                        .call("relayer.testnet", 0, |c| {
-                            c.commit_intent(U64(d as u64), pk, Base64VecU8(hash), Base64VecU8(sig))
+                    // the held commitment is the decision before a headline planted after it
+                    let side_b = ag == self.duels[d].b;
+                    let must_reveal = self.pending.get(&(d, ag)).is_some_and(|p| {
+                        self.duels[d].recs.iter().any(|r| {
+                            r.side_b == side_b && r.outcome == ChaosOutcome::Pending && r.at >= p.3
                         })
-                        .is_ok()
-                    {
-                        self.pending.insert((d, ag), (i, salt, proof));
+                    });
+                    match self.call("relayer.testnet", 0, |c| {
+                        c.commit_intent(U64(d as u64), pk, Base64VecU8(hash), Base64VecU8(sig))
+                    }) {
+                        Ok(()) => {
+                            assert!(!must_reveal, "a commitment a headline needs was replaced");
+                            self.pending.insert((d, ag), (i, salt, proof, self.now));
+                        }
+                        Err(e) => assert!(
+                            e != "reveal first" || must_reveal,
+                            "a commit no headline waits on was refused"
+                        ),
                     }
                 } else {
                     let nonce = match self.posted[ag].last() {
@@ -1319,6 +1532,8 @@ impl World {
                         .is_ok()
                     {
                         self.accepted(ag, nonce);
+                        // a direct post never decides a headline, whoever the agent
+                        self.decided(d, ag, long, self.now, false);
                     }
                 }
             }
@@ -1330,7 +1545,7 @@ impl World {
                 }
                 keys.sort();
                 let (d, ag) = keys[pick % keys.len()];
-                let (i, salt, proof) = self.pending[&(d, ag)].clone();
+                let (i, salt, proof, committed_at) = self.pending[&(d, ag)].clone();
                 if late {
                     // inside the intent lock, still before close: only a reveal may land here
                     self.now = self.now.max(self.duels[d].close_at - SEC);
@@ -1344,6 +1559,9 @@ impl World {
                 {
                     self.pending.remove(&(d, ag));
                     self.accepted(ag, i.nonce.0);
+                    // only an enclave-proved reveal decides a headline
+                    let long = i.side == Side::Long;
+                    self.decided(d, ag, long, committed_at, is_tee(ag));
                 }
             }
             Op::Chaos {
@@ -1351,6 +1569,8 @@ impl World {
                 b_side,
                 milli,
                 own,
+                kind: k,
+                under,
             } => {
                 kind = Kind::PaysStorage;
                 let Some(d) = self.duel(duel, |i| {
@@ -1358,7 +1578,22 @@ impl World {
                 }) else {
                     return;
                 };
-                let amt = milli as u128 * MILLI;
+                let (ck, dir) = match k {
+                    0 => (ChaosKind::Long, Some(true)),
+                    1 => (ChaosKind::Short, Some(false)),
+                    _ => (ChaosKind::Placebo, None),
+                };
+                let paid_n = self.duels[d]
+                    .recs
+                    .iter()
+                    .filter(|r| r.dir.is_some())
+                    .count();
+                let fee = model_fee(&self.cfg.chaos, paid_n);
+                let amt = if under {
+                    fee - 1
+                } else {
+                    fee + milli as u128 * MILLI
+                };
                 let target = Base64VecU8(
                     self.pks[if b_side {
                         self.duels[d].b
@@ -1367,26 +1602,94 @@ impl World {
                     }]
                     .clone(),
                 );
-                let payer = if own {
-                    agent_owner(self.duels[d].a)
-                } else {
-                    "spectator.testnet".into()
+                let payer: String = match (dir, own) {
+                    (None, _) => OWNER.into(),
+                    (_, true) => agent_owner(self.duels[d].a),
+                    _ => "spectator.testnet".into(),
                 };
-                if self
-                    .call(&payer, amt, |c| {
-                        c.inject_chaos(
-                            U64(d as u64),
-                            target,
-                            "prompt".into(),
-                            Base64VecU8(vec![9; 32]),
-                        )
-                    })
-                    .is_ok()
-                {
-                    self.duels[d].chaos.push((b_side, own));
-                    if !own {
-                        self.duels[d].chaos_in += amt;
+                let ix = pre.duels[d].injections.len();
+                let r = self.call(&payer, amt, |c| {
+                    c.inject_chaos(U64(d as u64), target, ck, "BREAKING: rumour".into())
+                });
+                let open = !pre.duels[d].resolved && self.now < self.duels[d].close_at;
+                match r {
+                    Ok(index) => {
+                        assert_eq!(index as usize, ix, "chaos index is the injection index");
+                        assert!(
+                            dir.is_none() || !under,
+                            "an injection below the price was accepted"
+                        );
+                        // what the payer brought less the storage the record added
+                        let cost = env::storage_byte_cost().as_yoctonear();
+                        let stake = amt - bytes_added(&trie0, &self.trie) * cost;
+                        // an agent owner's or a placebo's deposit is a fee, never stake
+                        let unpaid = own || dir.is_none();
+                        let c = self.snap().chaos[d][ix].clone();
+                        assert_eq!(c.stake.0, if unpaid { 0 } else { stake }, "stake");
+                        assert_eq!(c.arm == Arm::Placebo, dir.is_none(), "placebo arm");
+                        let side_b = b_side as usize;
+                        let last = [&pre.duels[d].last_intent_a, &pre.duels[d].last_intent_b]
+                            [side_b]
+                            .as_ref()
+                            .map(|i| i.side == Side::Long);
+                        self.duels[d].chaos.push((b_side, unpaid));
+                        self.duels[d].recs.push(ChaosM {
+                            side_b: b_side,
+                            dir,
+                            at: self.now,
+                            prev: last,
+                            next: None,
+                            outcome: ChaosOutcome::Pending,
+                            stake: if unpaid { 0 } else { stake },
+                            injector: payer,
+                            payout: 0,
+                            claimed: false,
+                        });
                     }
+                    Err(e) if e == "chaos deposit too small" && under && dir.is_some() => {}
+                    Err(e) => assert!(
+                        !open || ix >= MAX_INJECTIONS,
+                        "an injection at the price was refused: {e}"
+                    ),
+                }
+            }
+            Op::ClaimChaos { pick } => {
+                let mut owed: Vec<(usize, String)> = (0..self.duels.len())
+                    .filter(|&d| pre.duels[d].resolved)
+                    .flat_map(|d| {
+                        self.duels[d]
+                            .recs
+                            .iter()
+                            .filter(|r| !r.claimed && r.payout > 0)
+                            .map(move |r| (d, r.injector.clone()))
+                    })
+                    .collect();
+                owed.sort();
+                owed.dedup();
+                let (d, who) = match owed.len() {
+                    0 if self.duels.is_empty() => return,
+                    0 => (pick % self.duels.len(), "spectator.testnet".to_string()),
+                    n => owed[pick % n].clone(),
+                };
+                let due: u128 = self.duels[d]
+                    .recs
+                    .iter()
+                    .filter(|r| r.injector == who && !r.claimed)
+                    .map(|r| r.payout)
+                    .sum();
+                let r = self.call(&who, 1, |c| drop(c.claim_chaos(U64(d as u64))));
+                match r {
+                    Ok(()) => {
+                        assert!(pre.duels[d].resolved && due > 0, "claimed nothing owed");
+                        for r in self.duels[d].recs.iter_mut().filter(|r| r.injector == who) {
+                            r.claimed |= r.payout > 0;
+                        }
+                        kind = Kind::Exact(1);
+                    }
+                    Err(e) => assert!(
+                        !pre.duels[d].resolved || due == 0,
+                        "an owed claim was refused: {e}"
+                    ),
                 }
             }
             Op::Resolve { duel, move_bps } => {
@@ -1421,7 +1724,12 @@ impl World {
                 {
                     let post = self.snap();
                     let (a, b, pool) = (self.duels[d].a, self.duels[d].b, pre.duels[d].pool.0);
-                    let (sa, sb) = (pool / 2 + pool % 2, pool / 2);
+                    // a void settles the injections as a tie, then splits what is left
+                    let (fees, credit, taken) =
+                        settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos);
+                    let rest = pool - taken;
+                    let (sa, sb) = (rest / 2 + rest % 2 + credit[0], rest / 2 + credit[1]);
+                    assert_eq!(post.fees, pre.fees + fees, "void chaos fees");
                     assert_eq!(post.bonds[a], pre.bonds[a].map(|x| x + sa), "void share a");
                     assert_eq!(post.bonds[b], pre.bonds[b].map(|x| x + sb), "void share b");
                     self.bond_in[a] += sa;
@@ -1598,11 +1906,18 @@ impl World {
             [false, false] if o.pnl_a == o.pnl_b => None,
             [false, false] => Some(o.pnl_a > o.pnl_b),
         };
+        // the pool holds exactly the escrowed stakes until the finish
+        let stakes: u128 = self.duels[d].recs.iter().map(|r| r.stake).sum();
+        assert_eq!(pool, stakes, "pool != escrowed stakes");
         match a_wins {
             None => {
                 assert!(o.winner.is_none() && o.slashed.0 == 0, "tie must not slash");
-                na += pool / 2 + pool % 2;
-                nb += pool / 2;
+                let (f, credit, taken) =
+                    settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos);
+                let rest = pool - taken;
+                na += rest / 2 + rest % 2 + credit[0];
+                nb += rest / 2 + credit[1];
+                fees += f;
             }
             Some(a_wins) => {
                 let (w, wb, lb) = if a_wins {
@@ -1617,9 +1932,28 @@ impl World {
                     Some(self.pks[w].clone()),
                     "winner"
                 );
+                // the slash comes off the loser's bond before any resistance reward reaches it
                 *lb -= slashed;
-                *wb += pool + slashed;
+                let (f, credit, taken) = settle_model(
+                    &mut self.duels[d].recs,
+                    Some(a_wins),
+                    slashed,
+                    &self.cfg.chaos,
+                );
+                *wb += pool + slashed - taken;
+                na += credit[0];
+                nb += credit[1];
+                fees += f;
             }
+        }
+        // a reward (resistance credit or share of the slash) only for an outcome a counting
+        // decision made after the injection decided: the model sets Held / Flipped nowhere else
+        for r in &self.duels[d].recs {
+            assert!(
+                r.next.is_some()
+                    || !matches!(r.outcome, ChaosOutcome::Held | ChaosOutcome::Flipped),
+                "a reward without a decision after the injection"
+            );
         }
         assert_eq!(post.bonds[a], Some(na), "bond a after resolution");
         assert_eq!(post.bonds[b], Some(nb), "bond b after resolution");
@@ -2192,9 +2526,35 @@ impl World {
                 }
             } else {
                 open += 1;
-                assert!(d.pool.0 <= m.chaos_in, "duel {i} pool above chaos paid in");
+                let stakes: u128 = m.recs.iter().map(|r| r.stake).sum();
+                assert_eq!(d.pool.0, stakes, "duel {i} pool != escrowed stakes");
                 assert_eq!(post.in_duel[m.a], Some(i as u64));
                 assert_eq!(post.in_duel[m.b], Some(i as u64));
+            }
+            // 4b. one record per injection, each with exactly the model's single outcome, and the
+            // payouts of a finished duel settled once
+            let recs = &post.chaos[i];
+            assert_eq!(recs.len(), m.recs.len(), "duel {i} chaos records");
+            let pk = |side_b: bool| &self.pks[if side_b { m.b } else { m.a }];
+            for (j, (c, r)) in recs.iter().zip(&m.recs).enumerate() {
+                let at = format!("duel {i} injection {j}");
+                assert_eq!(c.target.0, *pk(r.side_b), "{at} target");
+                assert_eq!(
+                    c.kind.direction().map(|s| s == Side::Long),
+                    r.dir,
+                    "{at} kind"
+                );
+                assert_eq!(c.outcome, r.outcome, "{at} outcome");
+                assert_eq!(c.prev, r.prev.map(side_of), "{at} prev");
+                assert_eq!(c.next, r.next.map(side_of), "{at} next");
+                assert_eq!(c.decided_by.is_some(), r.next.is_some(), "{at} decided_by");
+                assert_eq!((c.stake.0, c.at.0), (r.stake, r.at), "{at} stake");
+                assert_eq!(
+                    (c.payout.0, c.claimed),
+                    (r.payout, r.claimed),
+                    "{at} payout"
+                );
+                assert_eq!(c.injector.as_str(), r.injector, "{at} injector");
             }
             // commitments live exactly as long as the duel and match what was committed
             let held = [m.a, m.b].map(|ag| !d.resolved && self.pending.contains_key(&(i, ag)));
@@ -2256,9 +2616,17 @@ proptest! {
         cfg in (
             (0u16..=10_000, 0u16..=1_000, 0u16..=10_000, any::<bool>(), any::<bool>()),
             prop_oneof![Just(VAULT_CAP), (500u128..6_000).prop_map(|m| m * MILLI)],
+            (10u128..300, 10_000u16..=40_000, 1u128..20, 0u16..=1_000, 0u16..=10_000),
         )
-            .prop_map(|((slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent), account_cap)| Cfg {
+            .prop_map(|((slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent), account_cap, (base, r_bps, cap_x, chaos_fee, share_bps))| Cfg {
                 slash_bps, fee_bps, no_reveal_bps, commit_reveal, require_consent, account_cap,
+                chaos: ChaosConfig {
+                    base: U128(base * MILLI),
+                    r_bps,
+                    cap: U128((base * MILLI).max(MIN_CHAOS) * cap_x),
+                    fee_bps: chaos_fee,
+                    share_bps,
+                },
             }),
         ops in (setup(), vec(op(), 1..=40)).prop_map(|(s, t)| [s, t].concat()),
     ) {
