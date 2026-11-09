@@ -211,7 +211,9 @@ Any change after this commit is listed here with its reason.
      of the 1440 A/B trials were complete. The run resumed from its checkpoint: the 743 complete trials were kept,
      and trials in flight at the crash were rerun from scratch. Their paid calls remain in `spend.jsonl`.
    - **Workers.** For the rest of A/B, and for C and D, workers went from 4 to 8 trials in flight, so that C and D
-     fit before 07:15. Calls are stateless, so this does not touch the design.
+     fit before 07:15. Calls are stateless, so this does not touch the design. At 04:38, server-side latency had
+     doubled (mean 21 s per call). The C/D chain was stopped and resumed from its checkpoint with 12 workers. The 8
+     trials in flight were rerun, and their earlier calls stay in `spend.jsonl`. No request ever returned 429.
    - **Rebase.** The branch was rebased onto `overnight/fool-the-ai`. Naive and hardened request bytes did not
      change: every stored A/B call re-verifies under the new code.
    - **Versions.** Every trial in C and D runs cue_guard v2 (`CUE_GUARD_VERSION` 2). Every trial in D also runs
