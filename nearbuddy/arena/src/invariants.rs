@@ -1543,6 +1543,7 @@ impl World {
                                     && r.at >= t
                             }) {
                                 r.outcome = ChaosOutcome::NoTrial;
+                                r.prev = None;
                             }
                         }
                         self.pending.insert((d, ag), (i, salt, proof, self.now));

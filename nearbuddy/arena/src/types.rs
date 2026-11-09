@@ -138,7 +138,7 @@ pub enum ChaosOutcome {
     Held,
     /// No trial: no known decision before the injection, the target already held the lie's side,
     /// a placebo, or the target replaced, unrevealed, the commitment it held at the injection.
-    /// Still records `prev` and `next` (none for a replaced commitment).
+    /// Still records `prev` and `next` (neither for a replaced commitment).
     NoTrial,
     /// The duel finished (or was voided) before a counting decision.
     Expired,

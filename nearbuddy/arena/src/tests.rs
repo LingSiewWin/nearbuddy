@@ -4969,8 +4969,9 @@ fn replacing_a_held_call_after_a_headline_voids_it_instead_of_faking_a_flip() {
     commit_at(&mut c, &ska, &next, &[3; 32], NOW + 3);
     let s = chaos_at(&c, d, ix);
     assert_eq!(
-        (s.outcome, s.next, s.decided_by),
-        (ChaosOutcome::NoTrial, None, None)
+        (s.outcome, s.prev, s.next, s.decided_by),
+        (ChaosOutcome::NoTrial, None, None, None),
+        "the stale prev (Long) is cleared: the real one is unknowable"
     );
     reveal_a(&mut c, &ska, &tee, &next, NOW + 3);
     let s = chaos_at(&c, d, ix);

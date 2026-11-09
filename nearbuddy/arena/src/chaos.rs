@@ -189,8 +189,8 @@ impl Contract {
 
     /// Agent `pk` replaces, unrevealed, the commitment it made at `t` in duel `id`. That hidden
     /// decision was the last one at or before every headline planted at `pk` from `t` on, so their
-    /// `prev` can never be known: each one still pending becomes `NoTrial` (settled as a refund less
-    /// the fee). Headlines planted before `t` stay pending: the replacement decides them as the
+    /// `prev` can never be known: each one still pending becomes `NoTrial` with no `prev` (settled
+    /// as a refund less the fee). Headlines planted before `t` stay pending: the replacement decides them as the
     /// replaced call would have.
     pub(crate) fn void_since(&mut self, id: u64, pk: &[u8], t: u64) {
         let Some(list) = self.chaos.get_mut(&id) else {
@@ -199,6 +199,7 @@ impl Contract {
         for (index, c) in list.iter_mut().enumerate() {
             if c.target.0 == pk && c.outcome == ChaosOutcome::Pending && c.at.0 >= t {
                 c.outcome = ChaosOutcome::NoTrial;
+                c.prev = None;
                 env::log_str(&format!(
                     r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"chaos_outcome","data":{{"duel_id":{id},"index":{index},"outcome":"NoTrial","prev":null,"next":null,"nonce":null}}}}"#
                 ));
