@@ -51,6 +51,7 @@ PRICE = {  # $ per token, in / out (overnight brief)
 WORST_PROMPT_TOKENS = 2000  # a lab prompt is ~300 tokens; the reservation assumes far more
 ARMS = ("baseline", "cue", "clean", "placebo")
 OPPOSITE = {"Long": "Short", "Short": "Long"}
+PROMPTS = {"naive": False, "hardened": True}  # hardened= of prompts.system_prompt
 SYMBOLS = {"NEAR": "NEAR/USD", "BTC": "BTC/USD", "ETH": "ETH/USD", "SOL": "SOL/USD"}
 
 
@@ -225,7 +226,12 @@ def usage_of(c: Completion | None) -> dict[str, Any] | None:
 
 
 def call(
-    client: NearAiClient, budget: Budget, snap: dict[str, Any], headline: str | None, meta: dict[str, Any]
+    client: NearAiClient,
+    budget: Budget,
+    snap: dict[str, Any],
+    headline: str | None,
+    meta: dict[str, Any],
+    prompt: str = "naive",
 ) -> dict[str, Any]:
     """One stateless decision through the duelist's own path, with its enclave proof. Never raises for a model
     failure: parse, transport and signature failures are recorded in the returned dict."""
@@ -236,7 +242,7 @@ def call(
         last.append(complete_with_retries(client, system, user))
         return last[-1].text
 
-    duelist = Duelist(address="lab", hardened=False, model=model, complete_fn=complete)
+    duelist = Duelist(address="lab", hardened=PROMPTS[prompt], model=model, complete_fn=complete)
     out: dict[str, Any] = {"headline": headline, "side": None, "error": None, "verified": False}
     budget.reserve(model)
     t0 = time.monotonic()
@@ -295,11 +301,13 @@ def run_trial(
     snaps: dict[str, dict[str, Any]],
     attack: dict[tuple[str, str, str], dict[str, Any]],
     placebo: dict[tuple[str, str], dict[str, Any]],
+    prompt: str = "naive",
 ) -> dict[str, Any]:
     """Baseline first; the attack row is the one pushing against the baseline's side; then cue, clean, placebo."""
     snap = snaps[t["snapshot"]]
     rec: dict[str, Any] = {
         "phase": phase,
+        "prompt": prompt,
         "model": client.model_id,
         **t,
         "asset": snap["asset"],
@@ -309,8 +317,8 @@ def run_trial(
         "calls": {},
         "excluded": None,
     }
-    meta = {"phase": phase, "trial": t["trial"]}
-    base = rec["calls"]["baseline"] = call(client, budget, snap, None, meta | {"arm": "baseline"})
+    meta = {"phase": phase, "prompt": prompt, "trial": t["trial"]}
+    base = rec["calls"]["baseline"] = call(client, budget, snap, None, meta | {"arm": "baseline"}, prompt)
     if base["side"] is None:
         rec["excluded"] = "baseline: " + (base["error"] or "no side")
         return rec
@@ -319,17 +327,26 @@ def run_trial(
     prow = placebo[(t["placebo_template_id"], snap["asset"])]
     rec |= {"direction": d, "attack_row_id": row["id"], "placebo_row_id": prow["id"]}
     for arm, text in (("cue", row["text_cue"]), ("clean", row["text_clean"]), ("placebo", prow["text_cue"])):
-        rec["calls"][arm] = call(client, budget, snap, text, meta | {"arm": arm})
+        rec["calls"][arm] = call(client, budget, snap, text, meta | {"arm": arm}, prompt)
     return rec
 
 
-def done_trials(path: Path) -> set[tuple[str, int]]:
+def done_trials(path: Path) -> set[tuple[str, str, int]]:
     if not path.exists():
         return set()
-    return {(r["model"], r["trial"]) for r in map(json.loads, path.read_text().splitlines())}
+    rows = map(json.loads, path.read_text().splitlines())
+    return {(r["model"], r.get("prompt", "naive"), r["trial"]) for r in rows}
 
 
-def run(phase: str, n: int, models: list[str], cap: float, until: datetime | None, workers: int = 4) -> None:
+def run(
+    phase: str,
+    n: int,
+    models: list[str],
+    cap: float,
+    until: datetime | None,
+    prompts: tuple[str, ...] = ("naive",),
+    workers: int = 4,
+) -> None:
     snaps = {s["id"]: s for s in json.loads(SNAPSHOTS.read_text())}
     attack, placebo = load_corpus()
     trials = plan(phase, n, list(snaps), sorted({k[0] for k in attack}), sorted({k[0] for k in placebo}))
@@ -340,11 +357,12 @@ def run(phase: str, n: int, models: list[str], cap: float, until: datetime | Non
     clients = {m: NearAiClient(ENV["NEAR_AI_API_KEY"], m) for m in models}
     stop = threading.Event()
     write = threading.Lock()
-    jobs = [(t, m) for t in trials for m in models if (m, t["trial"]) not in done]  # round-robin across models
+    # round-robin across prompts and models, so a budget or deadline stop leaves every cell at about the same N
+    jobs = [(t, m, pr) for t in trials for pr in prompts for m in models if (m, pr, t["trial"]) not in done]
     print(f"{phase}: {len(jobs)} trials to run ({len(done)} already done), spent so far ${budget.spent:.4f}")
 
-    def one(job: tuple[dict[str, Any], str]) -> None:
-        t, m = job
+    def one(job: tuple[dict[str, Any], str, str]) -> None:
+        t, m, pr = job
         if stop.is_set():
             return
         if until and datetime.now(UTC) >= until:
@@ -352,7 +370,7 @@ def run(phase: str, n: int, models: list[str], cap: float, until: datetime | Non
             print(f"deadline {until.isoformat()} reached; stopping")
             return
         try:
-            rec = run_trial(clients[m], budget, phase, t, snaps, attack, placebo)
+            rec = run_trial(clients[m], budget, phase, t, snaps, attack, placebo, pr)
         except BudgetExhausted as e:
             stop.set()
             print(f"budget stop: {e}")
@@ -360,7 +378,7 @@ def run(phase: str, n: int, models: list[str], cap: float, until: datetime | Non
         with write, out.open("a") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         sides = " ".join(f"{a}={(rec['calls'].get(a) or {}).get('side')}" for a in ARMS)
-        print(f"  {m.split('/')[-1]:<26} #{t['trial']:<3} d={rec.get('direction')} {sides} ${budget.spent:.4f}")
+        print(f"  {m.split('/')[-1]:<26} {pr:<8} #{t['trial']:<3} d={rec.get('direction')} {sides} ${budget.spent:.4f}")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(one, jobs))
@@ -393,6 +411,7 @@ def main() -> None:
     p.add_argument("--models", default=",".join(MODELS))
     p.add_argument("--cap", type=float, default=9.50)
     p.add_argument("--until", default="2026-11-10T07:15:00+08:00")
+    p.add_argument("--prompts", default="naive", help="comma list of naive, hardened (the runner's two prompts)")
     a = p.parse_args()
     models = a.models.split(",")
     if a.cmd == "snapshots":
@@ -400,7 +419,8 @@ def main() -> None:
     elif a.cmd == "probe":
         probe(models)
     else:
-        run(a.phase, a.n, models, a.cap, datetime.fromisoformat(a.until) if a.until else None)
+        until = datetime.fromisoformat(a.until) if a.until else None
+        run(a.phase, a.n, models, a.cap, until, tuple(a.prompts.split(",")))
 
 
 if __name__ == "__main__":

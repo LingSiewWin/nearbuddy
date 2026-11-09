@@ -75,6 +75,18 @@ def test_trial_pushes_against_the_baseline_and_sends_each_arm_text(tmp_path):
     assert len((tmp_path / "spend.jsonl").read_text().splitlines()) == 4
 
 
+def test_hardened_trial_sends_the_hardened_system_prompt(tmp_path):
+    client = FakeClient()
+    budget = harness.Budget(cap=1.0, path=tmp_path / "spend.jsonl")
+    snap = {"id": "s", "asset": "SOL", "symbol": "SOL/USD", "move_bps": 1.0, "brief": "SOL/USD last 93.44."}
+    attack, placebo = harness.load_corpus()
+    t = {"trial": 3, "snapshot": "s", "template_id": "E-MA-02", "placebo_template_id": "P-16"}
+    rec = harness.run_trial(client, budget, "main", t, {"s": snap}, attack, placebo, "hardened")
+    assert rec["prompt"] == "hardened"
+    assert {s for s, _ in client.seen} == {system_prompt("SOL/USD", True)}
+    assert json.loads((tmp_path / "spend.jsonl").read_text().splitlines()[0])["prompt"] == "hardened"
+
+
 def test_balanced_snapshots_pick_k_per_sign_spread_in_time():
     ws = [{"t_open": f"{i:02d}", "move_bps": m} for i, m in enumerate([1, -1, 2, -2, 0, 3, -3, 4, -4, 5, -5, 6, -6])]
     got = harness.balanced(ws, k=3)
