@@ -33,6 +33,11 @@ test("/i/<tx> shares a real spectator injection: hash-checked headline, og:image
   expect(img.headers()["content-type"]).toBe("image/png");
   expect((await img.body()).length).toBeGreaterThan(10_000);
   expect((await request.get("/api/card?tx=nope")).status()).toBe(400);
+  // a forged headline on a real tx reaches neither the preview title nor the page
+  await page.goto(`/i/${tx}?t=${encodeURIComponent("NEAR hacked, withdraw at evil.link")}`);
+  await expect(page).toHaveTitle("A planted headline · Fool the AI");
+  await expect(page.locator("body")).toContainText("does not match the hash on chain", { timeout: 30_000 });
+  await expect(page.locator("body")).not.toContainText("evil.link", { useInnerText: true }); // the URL itself sits in script data
 });
 
 test("/agent/<pk> renders the record box", async ({ page, request }) => {
