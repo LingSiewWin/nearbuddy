@@ -17,4 +17,5 @@ def attest_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(runner, "ATTEST_DIR", d)
     monkeypatch.setattr(export_dataset, "ATTEST_DIR", d)
+    monkeypatch.setattr(runner, "_attest_refetched", {})  # no test's refetch throttles another's
     return d

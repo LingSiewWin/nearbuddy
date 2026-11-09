@@ -84,6 +84,7 @@ from chain import ARENA, ASSETS, agent_tier_on_chain, chain_now_ns, view, wait_o
 from config import ATTEST_DIR, DATA, ENV, NET
 from cue_guard import CUE_GUARD_VERSION
 from duelist import GUARDED, Duelist, DuelistError
+from export_dataset import _check_attested
 from intent_client import (
     DeadlineError,
     Solver,
@@ -167,19 +168,63 @@ def record(row: dict[str, Any]) -> None:
             f.write(line)
 
 
-def save_attestation(model_client: ModelClient) -> str | None:
-    """Fetch and keep the enclave attestation once per model per run; the file is the raw material a third
-    party feeds to NVIDIA NRAS and dcap-qvl to check the signer we trust on chain."""
-    att = model_client.attestation()
+def save_attestation(model_client: ModelClient, attempts: int = 4) -> str | None:
+    """Fetch and keep the enclave attestation (at the start of a run, and again by `attestation_file`); the file is
+    the raw material a third party feeds to NVIDIA NRAS and dcap-qvl to check the signer we trust on chain. Only a
+    report (status 200) is written: every row cites the file and check_row needs the row's signer listed in it. No
+    answer, a 429 or a 5xx is retried after 2, 4, 8 s, up to `attempts` fetches; another status is not. Returns the
+    file name, or None when no report came."""
+    att: dict[str, Any] | None = None
+    for i in range(attempts):
+        att = model_client.attestation()
+        if not att:
+            return None  # no enclave behind this client (stub)
+        if att.get("report"):
+            break
+        status = att.get("status")
+        retry = i + 1 < attempts and (status is None or status == 429 or status >= 500)
+        print(
+            f"attestation {model_client.model_id}: status {status} ({str(att.get('error'))[:80]}); "
+            + ("retrying" if retry else "not saved")
+        )
+        if not retry:
+            return None
+        time.sleep(2 ** (i + 1))
     if not att:
         return None
     ATTEST_DIR.mkdir(parents=True, exist_ok=True)
-    name = re.sub(r"[^A-Za-z0-9._-]", "_", model_client.model_id) + f"-{int(time.time())}.json"
+    stem = re.sub(r"[^A-Za-z0-9._-]", "_", model_client.model_id) + f"-{int(time.time())}"
+    name, n = f"{stem}.json", 1
+    while (ATTEST_DIR / name).exists():  # a second fetch in the same second must not overwrite a report rows cite
+        name, n = f"{stem}-{n}.json", n + 1
     (ATTEST_DIR / name).write_text(json.dumps(att))
-    report = att.get("report") or {}
-    signers = [m.get("signing_address") for m in report.get("model_attestations", [])]
+    signers = [m.get("signing_address") for m in att["report"].get("model_attestations", [])]
     print(f"attestation {model_client.model_id}: status {att.get('status')} signers {signers} -> {name}")
     return name
+
+
+ATTEST_RETRY_S = 60  # `attestation_file` fetches a model's report again at most this often
+_attest_refetched: dict[str, float] = {}  # model id -> time.monotonic() of its last fetch by attestation_file
+
+
+def attestation_file(
+    model: ModelClient, sig_record: dict[str, Any] | None, attestations: dict[str, str | None]
+) -> str | None:
+    """The saved report a row cites for a call `sig_record` signed. When it does not list the signer for this model
+    (the fetch at start failed, or the model gained an enclave node since), the report is fetched again, one attempt,
+    at most every ATTEST_RETRY_S per model, and kept in `attestations` for the rows after."""
+    name = attestations.get(model.model_id)
+    if not sig_record or _check_attested(sig_record, model.model_id, name, ATTEST_DIR) == "ok":
+        return name
+    last = _attest_refetched.get(model.model_id)
+    if last is not None and time.monotonic() - last < ATTEST_RETRY_S:
+        return name
+    _attest_refetched[model.model_id] = time.monotonic()
+    print(f"attestation {model.model_id}: signer {str(sig_record.get('signing_address'))[:12]} not listed; fetching")
+    fresh = save_attestation(model, attempts=1)
+    if fresh:
+        attestations[model.model_id] = fresh
+    return attestations.get(model.model_id)
 
 
 def resolve_duel(solver: Solver, duel_id: str, attempts: int = 4) -> dict[str, Any]:
@@ -351,7 +396,7 @@ def prepare_decision(
             guard["judge"] = {
                 **_call_record(jc, j_sig, j_tee),
                 "verdict": decision.verdict,
-                "attestation_file": attestations.get(judge.client.model_id),
+                "attestation_file": attestation_file(judge.client, j_sig, attestations),
             }
     if model.tee and not tee:
         record(
@@ -389,7 +434,7 @@ def prepare_decision(
         "injection": injection_text,
         "chaos": chaos,
         **_call_record(c, sig_record, tee),
-        "attestation_file": attestations.get(model.model_id),
+        "attestation_file": attestation_file(model, sig_record, attestations),
         "intent": intent,
         **({"arm_d": arm_d} if arm_d else {}),
         **({"guard": guard} if guard else {}),

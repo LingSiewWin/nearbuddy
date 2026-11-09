@@ -139,14 +139,19 @@ class NearAiClient:
 
     def attestation(self) -> dict[str, Any] | None:
         """Intel TDX quote + NVIDIA payload for the model's enclave, bound to a fresh nonce. Non-billable.
-        External (non-TEE) providers answer 503; the gateway's own attestation is at the same path without `model`."""
+        External (non-TEE) providers answer 503; the gateway's own attestation is at the same path without `model`.
+        One request: a non-200 answer, or none (`status` None: dropped connection, timeout), comes back as `status`
+        and `error` with no `report`; runner.save_attestation decides whether to retry."""
         nonce = secrets.token_hex(32)
-        r = requests.get(
-            f"{self._base}/attestation/report",
-            params={"model": self.model_id, "signing_algo": "ed25519", "nonce": nonce},
-            headers=self._headers,
-            timeout=90,
-        )
+        try:
+            r = requests.get(
+                f"{self._base}/attestation/report",
+                params={"model": self.model_id, "signing_algo": "ed25519", "nonce": nonce},
+                headers=self._headers,
+                timeout=90,
+            )
+        except (requests.ConnectionError, requests.Timeout) as e:
+            return {"model": self.model_id, "nonce": nonce, "status": None, "error": str(e)[:300]}
         if r.status_code != 200:
             return {"model": self.model_id, "nonce": nonce, "status": r.status_code, "error": r.text[:300]}
         return {"model": self.model_id, "nonce": nonce, "status": 200, "report": r.json()}
