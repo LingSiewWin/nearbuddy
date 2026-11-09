@@ -71,7 +71,7 @@ export async function GET(req: Request) {
     >
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 26, color: C.dim }}>
         <span style={{ color: C.warn }}>{lines.top}</span>
-        <span>{p ? `${new Date(p.at_ms).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""}</span>
+        <span>{p?.at_ms ? `${new Date(p.at_ms).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""}</span>
       </div>
       <div style={{ display: "flex", fontSize: 30, color: C.hi, marginTop: 28 }}>{lines.target}</div>
       <div
@@ -93,7 +93,8 @@ export async function GET(req: Request) {
       width: 1200,
       height: 630,
       ...(font ? { fonts: [{ name: "Mono", data: font, weight: 500 as const, style: "normal" as const }] } : {}),
-      headers: { "cache-control": "public, max-age=300" },
+      // an unindexed tx must not stick in previews
+      headers: { "cache-control": p?.at_ms ? "public, max-age=300" : "no-store" },
     },
   );
 }

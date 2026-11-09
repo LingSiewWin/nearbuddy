@@ -31,7 +31,8 @@ async function lookup(tx: string): Promise<Planted | null> {
     if (!r.ok) return null;
     const { transactions } = (await r.json()) as { transactions: TxBody[] };
     const p = transactions[0] ? plantedOf(transactions[0], ARENA) : null;
-    if (p) {
+    if (p?.at_ms) {
+      // only once its arena receipt is indexed: before that, landed and the time are unknown
       seen.set(tx, p);
       if (seen.size > 500) seen.delete(seen.keys().next().value as string);
     }
