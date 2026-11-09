@@ -5,7 +5,8 @@
     uv run --locked python harness.py snapshots           # freeze Coinbase candles into data/snapshots.json (free)
     uv run --locked python harness.py probe               # one signed call per model; drops unsigned models
     uv run --locked python harness.py run --phase pilot --n 10
-    uv run --locked python harness.py run --phase main --n 140
+    uv run --locked python harness.py run --phase main --n 240 --prompts naive,hardened     # experiments A and B
+    uv run --locked python harness.py run --phase main --n 240 --prompts hardened-v2        # experiment C
 
 Every paid call is logged to spend.jsonl (model, tokens in and out, $). A call is refused when its worst-case cost
 would take the logged spend past --cap. A trial is appended to results/<phase>.jsonl only once all its calls are
@@ -51,7 +52,6 @@ PRICE = {  # $ per token, in / out (overnight brief)
 WORST_PROMPT_TOKENS = 2000  # a lab prompt is ~300 tokens; the reservation assumes far more
 ARMS = ("baseline", "cue", "clean", "placebo")
 OPPOSITE = {"Long": "Short", "Short": "Long"}
-PROMPTS = {"naive": False, "hardened": True}  # hardened= of prompts.system_prompt
 SYMBOLS = {"NEAR": "NEAR/USD", "BTC": "BTC/USD", "ETH": "ETH/USD", "SOL": "SOL/USD"}
 
 
@@ -242,13 +242,18 @@ def call(
         last.append(complete_with_retries(client, system, user))
         return last[-1].text
 
-    duelist = Duelist(address="lab", hardened=PROMPTS[prompt], model=model, complete_fn=complete)
+    duelist = Duelist(address="lab", hardened=False, model=model, complete_fn=complete)
+    duelist.profile = prompt  # the runner's --profile setter: naive, hardened or hardened-v2
     out: dict[str, Any] = {"headline": headline, "side": None, "error": None, "verified": False}
     budget.reserve(model)
     t0 = time.monotonic()
     c: Completion | None = None
     try:
-        out["side"] = "Long" if duelist.decide(snap["symbol"], snap["brief"], headline).direction > 0 else "Short"
+        d = duelist.decide(snap["symbol"], snap["brief"], headline)
+        out["side"] = "Long" if d.direction > 0 else "Short"
+        # the size that trades; hardened-v2 also states one (size_asked) that policy_size caps under paid text
+        out |= {"size_bps": d.size_bps, "size_asked": d.size_asked, "size_cap": d.size_cap}
+        out["cues_removed"] = d.cues_removed
     except DuelistError as e:
         out["error"] = f"parse: {e}"[:300]
     except (requests.RequestException, UnicodeDecodeError) as e:
@@ -411,7 +416,7 @@ def main() -> None:
     p.add_argument("--models", default=",".join(MODELS))
     p.add_argument("--cap", type=float, default=9.50)
     p.add_argument("--until", default="2026-11-10T07:15:00+08:00")
-    p.add_argument("--prompts", default="naive", help="comma list of naive, hardened (the runner's two prompts)")
+    p.add_argument("--prompts", default="naive", help="comma list of runner profiles: naive, hardened, hardened-v2")
     a = p.parse_args()
     models = a.models.split(",")
     if a.cmd == "snapshots":
