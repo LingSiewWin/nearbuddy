@@ -13,6 +13,11 @@ the size in code while paid text is in the request. With `judgments` k > 1 it as
 and takes the majority side (ties: the first judgment's side); the aggregation is code, not another model call, so
 no narrative a judgment repeats can steer it. The proof binds the first judgment on the majority side.
 
+Profile hardened-v3 is hardened-v2 with one more call before the duelist's: `judge_fn` (the fact-check model) reads
+`prompts.judge_user(injection)` alone, `prompts.parse_verdict` reads its reply (failing closed to unverifiable), and the
+verdict plus sha256 of the reply become the last block of the duelist's request (`prompts.user_v3`). Under paid text
+the cap is `prompts.fact_check_cap(verdict)` instead of UNTRUSTED_CAP_BPS.
+
 The model client is injected as `complete_fn(system, user) -> str`, so the parsing logic is unit-tested
 with no network and the runner can swap the stub for NEAR AI Cloud.
 """
@@ -30,13 +35,21 @@ from typing import Any
 from prompts import (
     FULL_SIZE_BPS,
     HARDENED_V2,
+    HARDENED_V3,
+    JUDGE_SYSTEM,
     SIZER,
     UNTRUSTED_CAP_BPS,
+    fact_check_cap,
+    judge_user,
+    parse_verdict,
     sizer_user,
     system_prompt,
     user_prompt,
     user_v2,
+    user_v3,
 )
+
+GUARDED = (HARDENED_V2, HARDENED_V3)
 
 
 @dataclass
@@ -51,16 +64,22 @@ class Decision:
     cues_removed: list[str] = field(default_factory=list)  # hardened-v2: what cue_guard took out of the injection
     votes: list[int] = field(default_factory=list)  # hardened-v2: each parsed judgment's direction, in call order
     proof_index: int | None = None  # hardened-v2: the call the intent's proof binds (None: the last call)
+    verdict: dict[str, float | str | None] | None = None  # hardened-v3: the judge's parsed verdict; None: no call
 
 
-def policy_size(stated: int | None, untrusted: bool) -> tuple[int, int]:
-    """(size, cap) for hardened-v2. The cap is the mandate's UNTRUSTED_CAP_BPS while paid text is in the request, else
-    FULL_SIZE_BPS; the size is the model's stated size clamped to [1, cap], or the cap when it stated none.
+def policy_size(
+    stated: int | None, untrusted: bool, verdict: dict[str, float | str | None] | None = None
+) -> tuple[int, int]:
+    """(size, cap) for hardened-v2 and v3. The cap is the mandate's UNTRUSTED_CAP_BPS while paid text is in the
+    request (hardened-v3: `fact_check_cap(verdict)`, never more), else FULL_SIZE_BPS; the size is the model's stated
+    size clamped to [1, cap], or the cap when it stated none.
 
     >>> policy_size(9000, True), policy_size(300, True), policy_size(None, False), policy_size(-5, False)
     ((1000, 1000), (300, 1000), (5000, 5000), (1, 5000))
+    >>> policy_size(9000, True, {"fabricated_prob": 0.8, "label": "likely_fabricated"})
+    (200, 200)
     """
-    cap = UNTRUSTED_CAP_BPS if untrusted else FULL_SIZE_BPS
+    cap = (fact_check_cap(verdict) if verdict else UNTRUSTED_CAP_BPS) if untrusted else FULL_SIZE_BPS
     return (cap if stated is None else min(cap, max(1, stated))), cap
 
 
@@ -136,15 +155,17 @@ class Duelist:
         persona: str = "",
         variant: str | None = None,
         judgments: int = 1,
+        judge_fn: Callable[[str, str], str] | None = None,
     ) -> None:
         self.address = address
         self.hardened = hardened
         self.model = model
         self.persona = persona
-        # "A" | "B" | "C" | "D" from prompts.VARIANTS, prompts.HARDENED_V2, or None for the hardened/naive pair
+        # "A" | "B" | "C" | "D" from prompts.VARIANTS, prompts.HARDENED_V2 or _V3, or None for the hardened/naive pair
         self.variant = variant
-        self.judgments = judgments  # hardened-v2 only: k calls per decision, majority side
+        self.judgments = judgments  # hardened-v2 and v3: k calls per decision, majority side
         self._complete = complete_fn
+        self.judge = judge_fn  # hardened-v3: the fact-check model, called once per decision under paid text
 
     @property
     def prompt_variant(self) -> str:
@@ -153,19 +174,19 @@ class Duelist:
 
     @property
     def profile(self) -> str:
-        """`runner.py --profile`: naive, hardened or hardened-v2. A letter arm runs on the hardened agent."""
-        return HARDENED_V2 if self.variant == HARDENED_V2 else ("hardened" if self.hardened else "naive")
+        """`runner.py --profile`: naive, hardened, hardened-v2 or hardened-v3. A letter arm runs on `hardened`."""
+        return self.variant if self.variant in GUARDED else ("hardened" if self.hardened else "naive")
 
     @profile.setter
     def profile(self, name: str) -> None:
         self.hardened = name != "naive"
-        self.variant = HARDENED_V2 if name == HARDENED_V2 else None
+        self.variant = name if name in GUARDED else None
 
     def system_prompt(self, symbol: str) -> str:
         return system_prompt(symbol, self.hardened, self.persona, self.variant)
 
     def decide(self, symbol: str, market_brief: str, injection_text: str | None = None) -> Decision:
-        if self.variant == HARDENED_V2:
+        if self.variant in GUARDED:
             return self._decide_v2(symbol, market_brief, injection_text)
         user = user_prompt(market_brief, injection_text, self.variant)  # variant D: the telemetry is dropped here
         raw = self._complete(self.system_prompt(symbol), user)
@@ -200,9 +221,20 @@ class Duelist:
     def _decide_v2(self, symbol: str, brief: str, injection: str | None) -> Decision:
         """hardened-v2: `judgments` calls on the same system and user messages; the majority side wins and the first
         call on that side is the proof. An unparseable judgment does not vote; if none parses, the first error is
-        raised. The size is `policy_size` of the proof call's stated size."""
+        raised. The size is `policy_size` of the proof call's stated size.
+
+        hardened-v3 under paid text first asks the judge on the headline alone; its verdict and sha256 of its reply go
+        into the user message and set the cap. The judge never sees the brief."""
         system = self.system_prompt(symbol)
-        user, cues = user_v2(brief, injection)
+        verdict = None
+        if self.variant == HARDENED_V3 and injection:
+            if self.judge is None:
+                raise ValueError("hardened-v3 needs judge_fn, the fact-check model")
+            reply = self.judge(JUDGE_SYSTEM, judge_user(injection))
+            verdict = parse_verdict(reply)
+            user, cues = user_v3(brief, injection, verdict, hashlib.sha256(reply.encode()).hexdigest())
+        else:
+            user, cues = user_v2(brief, injection)
         judged: list[tuple[int, Decision, str]] = []
         errors: list[DuelistError] = []
         for i in range(max(1, self.judgments)):
@@ -219,7 +251,8 @@ class Duelist:
             decision.size_asked = parse_size(raw)
         except DuelistError:
             decision.size_asked = None
-        decision.size_bps, decision.size_cap = policy_size(decision.size_asked, bool(injection))
+        decision.size_bps, decision.size_cap = policy_size(decision.size_asked, bool(injection), verdict)
+        decision.verdict = verdict
         decision.cues_removed = cues
         decision.votes = [d.direction for _, d, _ in judged]
         decision.proof_index = index
