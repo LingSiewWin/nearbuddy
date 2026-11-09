@@ -2,12 +2,9 @@
 // config (commit-reveal fields when the contract has them) and get_no_reveal (null before commit-reveal).
 // Cached 20 s per id; a stale body beats a 500 while the RPC is throttled.
 import { NET } from "../../network";
-import { ARENA, json, jsonBody, RPC, viewOn } from "../near";
+import { ARENA, arenaView, json, jsonBody, RPC } from "../near";
 
 const ORACLE = process.env.ORACLE_ACCOUNT ?? NET.oracle;
-const view = viewOn(ARENA);
-
-type Duel = { id: string; a: string; b: string; resolved: boolean };
 
 const cache = new Map<string, { at: number; body: string }>();
 const inflight = new Map<string, Promise<string>>();
@@ -33,12 +30,12 @@ export async function GET(req: Request) {
 
 async function build(id: string): Promise<string> {
   const [duel, config, no_reveal] = await Promise.all([
-    view("get_duel", { duel_id: id }) as Promise<Duel | null>,
-    view("get_config", {}),
-    view("get_no_reveal", { duel_id: id }).catch(() => null), // view missing before commit-reveal
+    arenaView("get_duel", { duel_id: id }),
+    arenaView("get_config", {}),
+    arenaView("get_no_reveal", { duel_id: id }).catch(() => null), // view missing before commit-reveal
   ]);
   const [a, b] = duel
-    ? await Promise.all([view("get_agent", { agent_pk: duel.a }), view("get_agent", { agent_pk: duel.b })])
+    ? await Promise.all([arenaView("get_agent", { agent_pk: duel.a }), arenaView("get_agent", { agent_pk: duel.b })])
     : [null, null];
   const body = jsonBody({ at: Date.now(), rpc: RPC, contract: ARENA, oracle: ORACLE, config, no_reveal, duel, a, b });
   cache.set(id, { at: Date.now(), body });

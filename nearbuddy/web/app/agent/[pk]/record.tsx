@@ -5,6 +5,7 @@
 import { use, useEffect, useState } from "react";
 import { age, type Fill, followerQuality, sbps, vsCell } from "../../cells";
 import { NO_OUTCOME, pageEraFrom, type RowResult, recordCounts, type Tally } from "../../eras";
+import type { AgentView as Agent } from "../../lib/abi/arena"; // passed through unchanged by the API route
 import {
   addrHref,
   agentHref,
@@ -28,16 +29,6 @@ import {
   ZERO,
 } from "../../tui";
 
-type Agent = {
-  owner: string;
-  pk: string;
-  model_id: string;
-  bond: string;
-  alpha_bps: number;
-  shield: number;
-  in_duel: string | null;
-  tee: boolean;
-};
 type Mandate = { allowance: string; spent: string; per_tx_cap: string; expires_at: string; revoked: boolean };
 type DuelRow = {
   id: string;

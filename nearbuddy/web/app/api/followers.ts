@@ -2,7 +2,7 @@
 // the real fallback.
 import { SOLVER_URL } from "./near";
 
-type View = (method: string, args: Record<string, unknown>) => Promise<unknown>;
+type View = (method: "list_followers", args: { agent_pk: string }) => Promise<unknown>;
 
 /** An agent's followers as `[follower, mandate]`. Before deploy 15 the `list_followers` view; from deploy 15
  *  (`follows` keyed per pair, not enumerable on chain) that view is gone and the solver's GET /followers answers

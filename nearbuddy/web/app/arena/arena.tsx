@@ -22,6 +22,7 @@ import {
   shownPairs,
 } from "../cells";
 import type { EraSplit } from "../eras";
+import type { AgentView as Agent } from "../lib/abi/arena"; // passed through unchanged by the API route
 import {
   addrHref,
   agentHref,
@@ -56,16 +57,6 @@ type Intent = {
   nonce: string;
   expires_at: string;
   proof_hash: string;
-};
-type Agent = {
-  owner: string;
-  pk: string;
-  model_id: string;
-  bond: string;
-  alpha_bps: number;
-  shield: number;
-  in_duel: string | null;
-  tee: boolean;
 };
 type Injection = { kind: string; payload_hash: string; target: string; block: string };
 type Outcome = {

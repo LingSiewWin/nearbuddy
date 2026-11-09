@@ -1,26 +1,29 @@
 // Duel reads shared by /api/arena and /api/agent. A resolved duel never changes, so it is read once per
 // process and kept; open duels are read every time. A failed read is never cached: it is retried next build.
-import { ARENA, viewOn } from "./near";
+import type { Duel } from "../lib/abi/arena";
+import { arenaView } from "./near";
 
-const view = viewOn(ARENA);
-const resolved = new Map<string, unknown>(); // ponytail: one process, ~1 KB a duel; evicts oldest past 2000
+/** A `get_duel` result, plus `no_reveal` (`get_no_reveal`) once resolved and read. */
+export type ReadDuel = Duel & { no_reveal?: [boolean, boolean] };
+
+const resolved = new Map<string, ReadDuel>(); // ponytail: one process, ~1 KB a duel; evicts oldest past 2000
 
 /** `get_duel`, plus `no_reveal` from `get_no_reveal` once resolved when `noReveal` (deploy 14 on).
  *  Null when the duel does not exist or `get_duel` failed. A resolved duel whose `get_no_reveal` failed comes back
  *  uncached with `no_reveal` undefined, so a caller can tell an unread forfeit from "no forfeit" ([false, false]). */
-export async function readDuel<T extends { resolved: boolean }>(id: string, noReveal = false): Promise<T | null> {
-  const hit = resolved.get(id) as (T & { no_reveal?: unknown }) | undefined;
+export async function readDuel(id: string, noReveal = false): Promise<ReadDuel | null> {
+  const hit = resolved.get(id);
   // a duel kept before the contract had commit-reveal lacks no_reveal: re-read it rather than serve it as unread
   if (hit && (!noReveal || hit.no_reveal !== undefined)) return hit;
-  let d: (T & { no_reveal?: unknown }) | null;
+  let d: ReadDuel | null;
   try {
-    d = (await view("get_duel", { duel_id: id })) as (T & { no_reveal?: unknown }) | null;
+    d = await arenaView("get_duel", { duel_id: id });
   } catch {
     return null;
   }
   if (d?.resolved) {
     if (noReveal) {
-      const nr = await view("get_no_reveal", { duel_id: id }).catch(() => undefined);
+      const nr = await arenaView("get_no_reveal", { duel_id: id }).catch(() => undefined);
       if (nr === undefined) return d; // not cached: a failed read must not pin "no forfeit" for the process
       d.no_reveal = nr;
     }

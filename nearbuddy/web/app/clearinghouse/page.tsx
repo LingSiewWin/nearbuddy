@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import type { Config, Mandate, Solver, Vault } from "../lib/abi/vault";
 import { bottom, boxTitle, near, row, W } from "../tui";
 
 type Snap = {
@@ -9,17 +10,11 @@ type Snap = {
   owner: string;
   solverId: string;
   api: string;
-  config: { fee_bps: number; withdraw_delay_ns: string; min_solver_stake: string; max_batch: number } | null;
-  vault: { balance: string; pending_withdraw: [string, string] | null } | null;
-  solver: { stake: string; fees_earned: string; ious_settled: number } | null;
-  mandate: {
-    allowance: string;
-    spent: string;
-    per_tx_cap: string;
-    allowed_payees: string[];
-    expires_at: string;
-    revoked: boolean;
-  } | null;
+  // vault views, passed through unchanged by /api/state
+  config: Config | null;
+  vault: Vault | null;
+  solver: Solver | null;
+  mandate: Mandate | null;
   apiBalance: string | null;
   ledger: { carrying: number; exposure: { agent_pk: string; yocto: string }[] } | null;
 };

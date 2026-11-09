@@ -17,6 +17,7 @@ import {
   verifySummary,
 } from "../../cells";
 import { NO_OUTCOME, noOutcome } from "../../eras";
+import type { AgentView as Agent } from "../../lib/abi/arena"; // passed through unchanged by the API route
 import {
   addrHref,
   agentHref,
@@ -37,16 +38,6 @@ import {
   ZERO,
 } from "../../tui";
 
-type Agent = {
-  owner: string;
-  pk: string;
-  model_id: string;
-  bond: string;
-  alpha_bps: number;
-  shield: number;
-  in_duel: string | null;
-  tee: boolean;
-};
 type Intent = {
   agent_pk: string;
   duel_id: string;

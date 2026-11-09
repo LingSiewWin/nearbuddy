@@ -4,11 +4,11 @@
 // back to its first follow (the solver signs settle_follow, so those txs are not in the follower's own index).
 // Receipt-level success only (lib/follower). Parsed arena txs are kept across requests, so a repeat scan fetches only
 // new hashes. A body is kept 30 s per account, a failed build 45 s.
-import { type FollowerRec, type MandateView, type SettledFill, TOKENS } from "../../cells";
+import { type FollowerRec, type SettledFill, TOKENS } from "../../cells";
 import { followedAgents, followerActivity, forFollower, settledFills } from "../../lib/follower";
 import type { Tx } from "../../lib/verify";
 import { NET } from "../../network";
-import { ARENA, json, viewOn } from "../near";
+import { ARENA, arenaConfigAnyDeploy, arenaView, json } from "../near";
 
 const TX_API = process.env.FASTNEAR_TX_API ?? NET.txApi;
 const TTL = 30_000;
@@ -17,7 +17,6 @@ const OWN_PAGES = 3; // 200 txs a page: a follower's own history
 const ARENA_PAGES = 6; // ponytail: fills older than ~1200 arena txs before now are not read; index settles if that bites
 // NEAR account ids: 2-64 chars, lowercase parts joined by "-" / "_" inside a part and "." between parts
 const ACCOUNT_RE = /^(?=.{2,64}$)(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
-const view = viewOn(ARENA);
 
 const kept = new Map<string, { until: number; body: string; status: number }>(); // per account, oldest out past 500
 const inflight = new Map<string, Promise<string>>();
@@ -85,14 +84,12 @@ async function arenaFills(account: string, fromMs: number) {
   };
 }
 
-const maybe = <T>(p: Promise<unknown>) => p.then((x) => x as T).catch(() => null);
-
 async function build(account: string): Promise<string> {
-  const config = (await view("get_config", {})) as { intents_account?: string };
-  const deploy15 = !!config.intents_account;
+  const config = await arenaConfigAnyDeploy();
+  const deploy15 = !!config.intents_account; // absent on a contract before deploy 15
   const [vault, pending, own] = await Promise.all([
-    maybe<string>(view("get_vault", { account })),
-    maybe<[string, string] | null>(view("get_pending_withdraw", { account })),
+    arenaView("get_vault", { account }).catch(() => null),
+    arenaView("get_pending_withdraw", { account }).catch(() => null),
     txList(account, OWN_PAGES),
   ]);
   const activity = followerActivity(await txBodies(own.list.map((t) => t.hash)), ARENA, account);
@@ -100,8 +97,8 @@ async function build(account: string): Promise<string> {
   const mandates = await Promise.all(
     agents.map(async (agent_pk) => ({
       agent_pk,
-      model_id: ((await maybe<{ model_id: string }>(view("get_agent", { agent_pk }))) ?? { model_id: null }).model_id,
-      mandate: await maybe<MandateView>(view("get_follow", { agent_pk, follower: account })),
+      model_id: (await arenaView("get_agent", { agent_pk }).catch(() => null))?.model_id ?? null,
+      mandate: await arenaView("get_follow", { agent_pk, follower: account }).catch(() => null),
     })),
   );
   const tokens = new Set([
@@ -114,7 +111,7 @@ async function build(account: string): Promise<string> {
         await Promise.all(
           [...tokens].map(async (token) => ({
             token,
-            amount: (await maybe<string>(view("get_holding", { follower: account, token_id: token }))) ?? "0",
+            amount: (await arenaView("get_holding", { follower: account, token_id: token }).catch(() => null)) ?? "0",
           })),
         )
       ).filter((h) => h.amount !== "0" || TOKENS[h.token])

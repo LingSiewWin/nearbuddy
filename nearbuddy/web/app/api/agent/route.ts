@@ -6,38 +6,10 @@
 // ponytail: scans every duel of the era (memoised once resolved); a per-agent era tally in the contract or
 // an indexer when duel counts reach the thousands.
 import type { Fill } from "../../cells";
-import { isVoid, ORACLE_ERA_FROM, operatorIds, oracleIds, type ScoredDuel, tally, unread } from "../../eras";
-import { chunked, readDuel } from "../duels";
+import { isVoid, ORACLE_ERA_FROM, operatorIds, oracleIds, tally, unread } from "../../eras";
+import { chunked, type ReadDuel, readDuel } from "../duels";
 import { followersOf } from "../followers";
-import { ARENA, json, jsonBody, RPC, SOLVER_URL, viewOn } from "../near";
-
-const view = viewOn(ARENA);
-
-type Intent = { agent_pk: string; side: "Long" | "Short"; size_bps: number; nonce: string; proof_hash: string };
-type Outcome = {
-  open_price: string;
-  close_price: string;
-  pnl_a: number;
-  pnl_b: number;
-  winner: string | null;
-  slashed: string;
-  injections?: number;
-};
-type Duel = ScoredDuel & {
-  id: string;
-  a: string;
-  b: string;
-  symbol: string;
-  open_at: string;
-  close_at: string;
-  pool: string;
-  injections: { target: string; kind: string; payload_hash: string }[];
-  resolved: boolean;
-  last_intent_a: Intent | null;
-  last_intent_b: Intent | null;
-  outcome?: Outcome | null;
-  open_price?: string | null;
-};
+import { ARENA, arenaConfigAnyDeploy, arenaView, json, jsonBody, legacyArenaView, RPC, SOLVER_URL } from "../near";
 
 const cache = new Map<string, { at: number; body: string }>();
 const inflight = new Map<string, Promise<string>>();
@@ -65,14 +37,9 @@ export async function GET(req: Request) {
 
 async function build(pk: string, era: "oracle" | "operator"): Promise<string> {
   const [agent, config, followers, fills] = await Promise.all([
-    view("get_agent", { agent_pk: pk }) as Promise<{ alpha_bps: number } | null>,
-    view("get_config", {}) as Promise<{
-      next_duel: string;
-      slash_bps: number;
-      min_chaos_deposit: string;
-      no_reveal_bps?: number;
-    }>,
-    followersOf(view, pk),
+    arenaView("get_agent", { agent_pk: pk }),
+    arenaConfigAnyDeploy(),
+    followersOf(legacyArenaView, pk),
     fetch(`${SOLVER_URL}/execution`, { cache: "no-store", signal: AbortSignal.timeout(3000) })
       .then((r) => r.json())
       .then((j: { quality?: Fill[] }) => (Array.isArray(j?.quality) ? j.quality : null))
@@ -84,9 +51,9 @@ async function build(pk: string, era: "oracle" | "operator"): Promise<string> {
   // Era ranges are scanned, not read from agent_duels: the live index holds only an agent's recent duels
   // (8dPZ: 20 ids from #324 against 63 oracle-era duels), so it cannot carry a per-era sum. Resolved duels
   // are memoised in ../duels, shared with /api/arena, so a warm process reads only the open ones.
-  const nr = config.no_reveal_bps != null;
-  const readAll = (list: string[]) => chunked(list, 8, (id) => readDuel<Duel>(id, nr));
-  const ours = (ds: (Duel | null)[]) => ds.filter((d): d is Duel => !!d && (d.a === pk || d.b === pk));
+  const nr = config.no_reveal_bps != null; // absent before commit-reveal (deploy 14): no get_no_reveal
+  const readAll = (list: string[]) => chunked(list, 8, (id) => readDuel(id, nr));
+  const ours = (ds: (ReadDuel | null)[]) => ds.filter((d): d is ReadDuel => !!d && (d.a === pk || d.b === pk));
   const ids = era === "oracle" ? oracleIds(n) : operatorIds(n);
   const oracleReads = await readAll(oracleIds(n));
   const oracleDuels = ours(oracleReads);

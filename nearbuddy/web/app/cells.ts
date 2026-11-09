@@ -1,6 +1,7 @@
 // Pure data-to-cells helpers for the commit-reveal and execution rows: no React state, no fetch, so
 // bun test checks them directly (app/__tests__). Every field is optional: a deploy-13 contract (no
 // commit-reveal) and a solver without quality data render as "off" or "none", never as an error.
+import type { Mandate } from "./lib/abi/arena";
 import { addrHref, agentHref, type Cell, near, price8, short, txHref } from "./tui";
 
 /** The commit-reveal fields of `get_config`; absent on contracts that predate commit-reveal. */
@@ -345,16 +346,8 @@ export type SettledFill = {
   amount_out: string;
   swap_tx: string;
 };
-export type MandateView = {
-  allowance: string;
-  spent: string;
-  per_tx_cap: string;
-  allowed_tokens: string[];
-  expires_at: string;
-  revoked: boolean;
-  min_out_per_near?: string;
-  revoked_at?: string;
-};
+/** `get_follow`, passed through unchanged by /api/follower. */
+export type MandateView = Mandate;
 export type FollowerRec = {
   at: number;
   account: string;

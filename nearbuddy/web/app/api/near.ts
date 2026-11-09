@@ -1,5 +1,7 @@
 // Shared by the API routes: one public-RPC provider, contract views, and the JSON response shape.
 import { FailoverRpcProvider, JsonRpcProvider } from "near-api-js";
+import type { ArenaViews, Config } from "../lib/abi/arena";
+import type { VaultViews } from "../lib/abi/vault";
 import { NET } from "../network";
 
 export const RPC = process.env.NEAR_RPC ?? NET.rpc; // NEAR_NETWORK picks the row in network.ts
@@ -13,8 +15,32 @@ export const provider =
     ? new FailoverRpcProvider([new JsonRpcProvider({ url: RPC }), new JsonRpcProvider({ url: RPC_FALLBACK })])
     : new JsonRpcProvider({ url: RPC });
 
-export const viewOn = (contractId: string) => (method: string, args: Record<string, unknown>) =>
-  provider.callFunction({ contractId, method, args });
+/** Arena view; the method name picks args and result from the generated ABI types (abi/arena.json). */
+export const arenaView = <M extends keyof ArenaViews>(method: M, args: ArenaViews[M]["args"]) =>
+  provider.callFunction({ contractId: ARENA, method, args }) as Promise<ArenaViews[M]["result"]>;
+/** Fields `get_config` gained over time. abi/arena.json describes the current source; an older arena omits them
+ *  (commit-reveal and consent arrived by deploy 14; vault caps, pause and `intents_account` with deploy 15). */
+type LateConfigField =
+  | "commit_reveal"
+  | "no_reveal_bps"
+  | "require_consent"
+  | "intents_account"
+  | "max_vault_per_account"
+  | "max_vault_total"
+  | "migrating"
+  | "paused"
+  | "vault_total"
+  | "withdraw_delay_s";
+/** `get_config` as any deployed arena answers it. Code that supports older deploys reads this type, so tsc makes it
+ *  handle every late field being absent. */
+export type ArenaConfigAnyDeploy = Omit<Config, LateConfigField> & Partial<Pick<Config, LateConfigField>>;
+export const arenaConfigAnyDeploy = (): Promise<ArenaConfigAnyDeploy> => arenaView("get_config", {});
+/** Vault (clearinghouse) view, typed from abi/vault.json. */
+export const vaultView = <M extends keyof VaultViews>(method: M, args: VaultViews[M]["args"]) =>
+  provider.callFunction({ contractId: CONTRACT, method, args }) as Promise<VaultViews[M]["result"]>;
+/** Arena views gone from the ABI that older deploys still answer: `list_followers` (deploy 14, see followers.ts). */
+export const legacyArenaView = (method: "list_followers", args: { agent_pk: string }) =>
+  provider.callFunction({ contractId: ARENA, method, args });
 
 /** near-api-js returns bigint in some view responses; stringify them. */
 export const jsonBody = (v: unknown) => JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
