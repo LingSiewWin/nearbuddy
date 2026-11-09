@@ -341,6 +341,8 @@ export default function Term() {
   const activate = (p: Pane, i: number) => {
     if (p === 1 && models[i]) return run(`agent ${shortModel(models[i].model)}`);
     if (p === 2 && duel && duelActions[i]) {
+      // a closed duel takes no headline: its side rows open that model's record instead
+      if (!open) return run(`agent ${modelOf(duelActions[i] === "A" ? duel.a : duel.b)}`);
       setTarget(duelActions[i]);
       setLine(injectLine(duel.id, duelActions[i], text));
       focusPane(4);
@@ -525,7 +527,7 @@ export default function Term() {
               key={t}
               w={P}
               sel={pane === 2 && sel[2] === i}
-              onClick={open ? () => activate(2, i) : () => run(`agent ${modelOf(t === "A" ? duel.a : duel.b)}`)}
+              onClick={() => activate(2, i)}
               label={open ? `target side ${t} with a headline` : `open side ${t}'s record`}
               cells={callCells(t)}
             />
@@ -620,7 +622,8 @@ export default function Term() {
                 f.reply
                   ? { t: `"${f.reply}"`, title: f.reply }
                   : { t: f.verdict === "waiting" ? "next call pending" : "", c: "dim" },
-                f.tx ? { t: `  tx ${short(f.tx, 6)}`, href: txHref(f.tx), title: f.tx, c: "dim" } : "",
+                f.tx ? "  " : "",
+                f.tx ? { t: `tx ${short(f.tx, 6)}`, href: txHref(f.tx), title: f.tx, c: "dim" } : "",
               ]}
             />
           </div>
@@ -888,7 +891,7 @@ export default function Term() {
                     : " tap a pane, or : for commands"}
             </span>
             <span className="grow" />
-            <span className="dim">{`${statusRight} `}</span>
+            {two ? <span className="dim">{` ${statusRight} `}</span> : null}
           </div>
           <div className="cmd">
             <label htmlFor="cmdline" className="colon">
