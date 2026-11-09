@@ -108,3 +108,11 @@ test("the on-chain kind: mode and the brief's move, three '/'-separated parts, a
   for (const m of [null, 0, 0.04, -57.7, 12.3, -9999.9]) assert.equal(kindOf(m).split("/").length, 3);
   assert.throws(() => injectionKind("against", -1e20), /over 32 chars/);
 });
+
+test("fmtMove matches Python's {:+.1f}, ties included (fixtures/wire-vectors.json)", () => {
+  const W = JSON.parse(read("../../../fixtures/wire-vectors.json")) as {
+    move_format: { cases: [number, string][]; briefs: [number, number, string][] };
+  };
+  for (const [move, text] of W.move_format.cases) assert.equal(fmtMove(move), text, String(move));
+  for (const [open, spot, text] of W.move_format.briefs) assert.equal(fmtMove(moveBps(open, spot)), text);
+});

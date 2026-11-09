@@ -42,10 +42,17 @@ export function moveBps(open8: number, price8: number): number {
   return ((price8 - open8) / open8) * 10_000;
 }
 
-/** brief()'s `{move:+.1f}`. */
+/** brief()'s `{move:+.1f}`. Python rounds an exact binary tie (x.x5 with x*4 an odd integer: 0.25, 1.25, -0.75)
+ *  half to even where `toFixed` rounds it up, and keeps the sign of -0.0 (fixtures/wire-vectors.json "move_format"). */
 export function fmtMove(move: number): string {
-  const s = move.toFixed(1);
-  return move < 0 ? s : `+${s}`;
+  let s = move.toFixed(1);
+  // below 2^49, move * 10 is exact; a basis-point move never gets near that
+  if (Math.abs(move) < 2 ** 49 && Number.isInteger(move * 4) && !Number.isInteger(move * 2)) {
+    const lo = Math.floor(move * 10); // move * 10 is exact here: an odd multiple of 2.5
+    s = ((lo % 2 === 0 ? lo : lo + 1) / 10).toFixed(1);
+  }
+  const negative = move < 0 || Object.is(move, -0);
+  return negative ? (s.startsWith("-") ? s : `-${s}`) : `+${s}`;
 }
 
 // Oracle asset id -> the symbol the runner prices (agents/chain.py ASSETS) and its Pyth feed (agents/prices.py FEEDS).
