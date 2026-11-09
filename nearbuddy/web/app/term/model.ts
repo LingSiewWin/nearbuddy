@@ -1,5 +1,6 @@
 // What the terminal shows, derived from the API bodies without React: which duel is live, the event feed, and the
 // flat field map whose changes between two polls make cells flash. bun test covers it (app/__tests__/term.test.ts).
+import type { Arm, Chaos, ChaosKind, ChaosOutcome } from "../lib/abi/arena";
 import type { Attack, Score, Side } from "../lib/fool";
 
 export type Intent = { agent_pk: string; side: Side; size_bps: number; nonce: string; proof_hash: string };
@@ -25,13 +26,18 @@ export type Duel = {
     injections?: number;
   } | null;
   open_price?: string | null;
+  /** Deploy 17: every planted headline with its arm and outcome (get_chaos); null when that read failed. */
+  chaos?: Chaos[] | null;
+  /** Deploy 17: the deposit the next paid attack on this duel needs (chaos_fee). */
+  chaos_fee?: string | null;
 };
 export type Agent = { pk: string; model_id: string; tee: boolean; in_duel: string | number | null };
 /** The slice of GET /api/arena the terminal reads. */
 export type Snap = {
   at: number;
   contract: string;
-  config: { next_duel: string; min_chaos_deposit: string; commit_reveal?: boolean };
+  /** `chaos` (price terms) is present from deploy 17 on: the feature the inject path is picked by. */
+  config: { next_duel: string; min_chaos_deposit: string; commit_reveal?: boolean; chaos?: unknown };
   leaderboard: Agent[];
   duels: (Duel | null)[];
   solver: null | { pending?: Record<string, { kind: string; payload: string; payload_hash?: string }[]> };
@@ -40,13 +46,14 @@ export type Snap = {
 export type Board = { source: string; rows: number; models: Score[]; recent: Attack[] };
 /** GET /api/duel, normalised to what pane 2 needs. */
 export type DuelRec = { duel: Duel | null; a: Agent | null; b: Agent | null };
-/** An attack this browser signed, kept for the session; `before` is the target's call nonce when it was signed. */
+/** An attack this browser signed, kept for the session; `before` is the target's call nonce when it was signed.
+ *  `hash` is the solver's payload_hash on deploy 16; deploy 17 puts the text itself on chain (null here). */
 export type Mine = {
   tx: string;
   duel: string;
   target: string;
   text: string;
-  hash: string;
+  hash: string | null;
   before: string | null;
   at: number;
 };
@@ -83,14 +90,30 @@ export type FeedItem = {
   /** The model's call after the lie (null until one is known to be newer), and its words when the dataset has them. */
   after: Side | null;
   reply: string | null;
-  /** answered: a call newer than this browser's attack landed; whether it took the bait needs the lie's side. */
-  verdict: "fooled" | "held" | "untested" | "waiting" | "answered";
+  /** answered: a call newer than this browser's attack landed; whether it took the bait needs the lie's side.
+   *  expired: deploy 17 only, the duel ended before a proved call decided it. */
+  verdict: "fooled" | "held" | "untested" | "waiting" | "answered" | "expired";
   tx: string | null;
   mine: boolean;
+  /** Deploy 17: how the runner delivers it (Cue as written, Clean without credibility cues, Placebo). */
+  arm?: Arm | null;
+  /** Deploy 17: the nonce of the revealed, enclave-proved call that decided the outcome. */
+  decided_by?: string | null;
 };
 
-/** Newest first: this browser's own attacks, then the other attacks on open duels (on chain now), then the dataset's.
- *  `texts` maps payload_hash to headline for attacks whose text this page has seen. */
+/** A deploy-17 outcome as the feed's verdict. */
+export const VERDICT_OF: Record<ChaosOutcome, FeedItem["verdict"]> = {
+  Pending: "waiting",
+  Flipped: "fooled",
+  Held: "held",
+  NoTrial: "untested",
+  Expired: "expired",
+};
+const pushedOf = (k: ChaosKind): Side | null => (k === "Placebo" ? null : k);
+
+/** Newest first: this browser's own attacks, then the attacks on chain (deploy 17: every record of the shown duels,
+ *  with headline and outcome; deploy 16: open duels' hashes), then the dataset's. `texts` maps payload_hash to
+ *  headline for deploy-16 attacks whose text this page has seen. */
 export function feed(s: Snap | null, b: Board | null, mine: Mine[], texts: Record<string, string> = {}): FeedItem[] {
   const ownHashes = new Set(mine.map((m) => `${m.duel}:${m.hash}`));
   const model = (pk: string) => {
@@ -100,28 +123,59 @@ export function feed(s: Snap | null, b: Board | null, mine: Mine[], texts: Recor
   const intentOf = (d: Duel | undefined, pk: string) =>
     (d && (pk === d.a ? d.last_intent_a : pk === d.b ? d.last_intent_b : null)) ?? null;
   const duels = (s?.duels ?? []).filter((d): d is Duel => !!d);
-  const own: FeedItem[] = [...mine].reverse().map((m) => {
-    const it = intentOf(
-      duels.find((d) => d.id === m.duel),
-      m.target,
-    );
-    const newer = !!it && it.nonce !== m.before; // the call on chain when it was signed came before the lie
-    return {
-      key: `mine:${m.tx}`,
-      duel: m.duel,
-      model: model(m.target),
-      lie: m.text,
-      hash: m.hash,
-      pushed: null,
-      after: newer ? (it?.side ?? null) : null,
-      reply: null,
-      verdict: newer ? "answered" : "waiting",
-      tx: m.tx,
-      mine: true,
-    };
-  });
+  // deploy 17: a record this browser signed is shown once, as the chain's record, with this browser's tx
+  const matched = new Set<Mine>();
+  // newest first: the snapshot lists the newest duel first, and a duel's records oldest first
+  const records: FeedItem[] = duels.flatMap((d) =>
+    (d.chaos ?? [])
+      .map((c, i): FeedItem => {
+        const m = mine.find(
+          (x) => !matched.has(x) && x.duel === d.id && x.target === c.target && x.text === c.headline,
+        );
+        if (m) matched.add(m);
+        return {
+          key: `chain:${d.id}:${i}`,
+          duel: d.id,
+          model: model(c.target),
+          lie: c.headline,
+          hash: null,
+          pushed: pushedOf(c.kind),
+          after: c.next,
+          reply: null,
+          verdict: VERDICT_OF[c.outcome],
+          tx: m?.tx ?? null,
+          mine: !!m,
+          arm: c.arm,
+          decided_by: c.decided_by,
+        };
+      })
+      .reverse(),
+  );
+  const own: FeedItem[] = [...mine]
+    .reverse()
+    .filter((m) => !matched.has(m))
+    .map((m) => {
+      const it = intentOf(
+        duels.find((d) => d.id === m.duel),
+        m.target,
+      );
+      const newer = !!it && it.nonce !== m.before; // the call on chain when it was signed came before the lie
+      return {
+        key: `mine:${m.tx}`,
+        duel: m.duel,
+        model: model(m.target),
+        lie: m.text,
+        hash: m.hash,
+        pushed: null,
+        after: newer ? (it?.side ?? null) : null,
+        reply: null,
+        verdict: newer ? "answered" : "waiting",
+        tx: m.tx,
+        mine: true,
+      };
+    });
   const live: FeedItem[] = duels
-    .filter((d) => !d.resolved)
+    .filter((d) => !d.resolved && !d.chaos) // deploy 17's records already list these, with their text
     .flatMap((d) =>
       d.injections.flatMap((j, i) =>
         ownHashes.has(`${d.id}:${j.payload_hash}`)
@@ -145,20 +199,23 @@ export function feed(s: Snap | null, b: Board | null, mine: Mine[], texts: Recor
       ),
     )
     .reverse();
-  const past: FeedItem[] = (b?.recent ?? []).map((a) => ({
-    key: `data:${a.duel_id}:${a.agent_pk}:${a.text.slice(0, 24)}`,
-    duel: a.duel_id,
-    model: shortModel(a.model),
-    lie: a.text,
-    hash: null,
-    pushed: a.pushed,
-    after: a.after,
-    reply: a.reply,
-    verdict: a.verdict,
-    tx: a.tx,
-    mine: false,
-  }));
-  return [...own, ...live, ...past];
+  const onChain = new Set(duels.flatMap((d) => (d.chaos ?? []).map((c) => `${d.id}:${c.target}:${c.headline}`)));
+  const past: FeedItem[] = (b?.recent ?? [])
+    .filter((a) => !onChain.has(`${a.duel_id}:${a.agent_pk}:${a.text}`)) // the chain's record is listed already
+    .map((a) => ({
+      key: `data:${a.duel_id}:${a.agent_pk}:${a.text.slice(0, 24)}`,
+      duel: a.duel_id,
+      model: shortModel(a.model),
+      lie: a.text,
+      hash: null,
+      pushed: a.pushed,
+      after: a.after,
+      reply: a.reply,
+      verdict: a.verdict,
+      tx: a.tx,
+      mine: false,
+    }));
+  return [...own, ...records, ...live, ...past];
 }
 
 /** Every value a cell shows, by a stable key; two polls' maps differ exactly where cells must flash. */
@@ -169,10 +226,11 @@ export function fields(s: Snap | null, b: Board | null, d: Duel | null): Record<
     out[`duel:${d.id}:a`] = d.last_intent_a ? `${d.last_intent_a.side}:${d.last_intent_a.size_bps}` : "";
     out[`duel:${d.id}:b`] = d.last_intent_b ? `${d.last_intent_b.side}:${d.last_intent_b.size_bps}` : "";
     out[`duel:${d.id}:pot`] = d.pool;
-    out[`duel:${d.id}:attacks`] = String(d.injections.length);
+    out[`duel:${d.id}:attacks`] = String(d.chaos?.length ?? d.injections.length);
     out[`duel:${d.id}:state`] = d.resolved ? "resolved" : "open";
+    for (const [i, c] of (d.chaos ?? []).entries()) out[`duel:${d.id}:chaos:${i}`] = c.outcome;
   }
-  if (s) out.price = s.config.min_chaos_deposit;
+  if (s) out.price = d?.chaos_fee ?? s.config.min_chaos_deposit;
   return out;
 }
 

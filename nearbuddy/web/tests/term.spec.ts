@@ -230,3 +230,117 @@ test.describe("phone 390", () => {
     await expect(page.locator("#cmdline")).toBeFocused();
   });
 });
+
+// Deploy 17 (chaos v2): get_config carries `chaos`, each duel its get_chaos records and chaos_fee. The headline goes
+// on chain, so the solver being down blocks nothing; the contract's headline rules refuse before any wallet opens.
+const chaos = (headline: string, outcome: string, extra: Record<string, unknown> = {}) => ({
+  arm: "Cue",
+  at: NS(now - 30_000),
+  claimed: false,
+  decided_by: null,
+  headline,
+  injector: "spectator.testnet",
+  kind: "Short",
+  next: null,
+  outcome,
+  payout: "0",
+  prev: "Long",
+  stake: "120000000000000000000000",
+  target: PK_B,
+  ...extra,
+});
+const arena17 = () => {
+  const a = arena("Long", false); // no solver: deploy 17 does not need one
+  const live = {
+    ...duel("Long"),
+    chaos: [
+      chaos("BREAKING: Reuters says NEAR halts withdrawals", "Flipped", { arm: "Clean", next: "Short", decided_by: "41" }),
+      chaos("Binance delists NEAR at midnight", "Pending", { at: NS(now - 5_000) }),
+    ],
+    chaos_fee: "156250000000000000000000",
+  };
+  const done = {
+    ...duel("Short"),
+    id: "479",
+    resolved: true,
+    close_at: NS(now - 600_000),
+    chaos: [chaos("Exchange hot wallet drained", "Held", { decided_by: "38", next: "Long" })],
+    chaos_fee: "100000000000000000000000",
+  };
+  return {
+    ...a,
+    config: { ...a.config, chaos: { base: "100000000000000000000000", cap: "1000000000000000000000000", fee_bps: 500, r_bps: 12500, share_bps: 5000 } },
+    duels: [live, done],
+  };
+};
+
+test.describe("deploy 17", () => {
+  test.use({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
+
+  test("chain records in the duel and tail panes, price from chaos_fee, push side, no solver needed", async ({ page }) => {
+    await stub(page, arena17);
+    let relayed = 0;
+    await page.route("**/api/chaos", (r) => {
+      relayed++;
+      return r.fulfill({ status: 410, json: { error: "off" } });
+    });
+    await page.goto("/");
+    await expect(pane(page, 2)).toContainText("next attack 0.156 NEAR");
+    await expect(pane(page, 2)).toContainText("attacks 2");
+    await expect(pane(page, 2)).toContainText("FOOLED");
+    await expect(pane(page, 2)).toContainText("clean");
+    await expect(pane(page, 2)).toContainText('"BREAKING: Reuters says NEAR halts'); // cut at the box edge
+    await expect(pane(page, 3)).toContainText("decided by its proved call #41");
+    await expect(pane(page, 3)).toContainText("Binance delists NEAR at midnight"); // the headline from chain, no solver
+    await expect(pane(page, 3)).toContainText("Exchange hot wallet drained");
+    await expect(pane(page, 4)).toContainText("costs 0.156 NEAR");
+    await expect(pane(page, 4)).not.toContainText("solver offline");
+    // B's call is LONG: the push defaults to short, against it; the click types the direction into the command
+    await pane(page, 2).getByRole("button", { name: "target side B with a headline" }).click();
+    await expect(pane(page, 4)).toContainText("[x] short");
+    await expect(page.locator("#cmdline")).toHaveValue('inject 480 B short ""');
+    // 71 emoji = 284 UTF-8 bytes: the contract's rule, shown before any signing
+    await page.keyboard.type("😀".repeat(71));
+    await expect(pane(page, 4)).toContainText("284/280 bytes");
+    await expect(pane(page, 4)).toContainText("the contract would refuse this: headline too long");
+    await pane(page, 4).getByRole("button", { name: "[plant it]" }).click();
+    await expect(page.locator(".status")).toContainText("the contract would refuse this: headline too long · nothing was signed");
+    await page.getByLabel("your fake headline").fill("BREAKING: NEAR Foundation sells 40M NEAR");
+    await pane(page, 4).getByRole("button", { name: "the lie pushes long" }).click();
+    await expect(page.locator("#cmdline")).toHaveValue('inject 480 B long "BREAKING: NEAR Foundation sells 40M NEAR"');
+    await pane(page, 4).getByRole("button", { name: "[plant it]" }).click();
+    await expect(page.locator(".status")).toContainText("connect a NEAR testnet wallet first");
+    expect(relayed).toBe(0); // deploy 17 never touches the relay
+    await shot(page, "term-v17-1280");
+  });
+
+  test("claim: a typed claim on a finished duel asks for the wallet that planted; an open duel is refused", async ({
+    page,
+  }) => {
+    await stub(page, arena17);
+    await page.route("**/api/duel?id=479", (r) => r.fulfill({ json: { duel: arena17().duels[1], a: null, b: null } }));
+    await page.goto("/");
+    await expect(pane(page, 2)).toContainText("#480");
+    const cmd = page.locator("#cmdline");
+    await cmd.fill("claim 479");
+    await cmd.press("Enter");
+    await expect(page.locator(".status")).toContainText("connect the wallet that planted the headlines first");
+    await cmd.fill("duel 479");
+    await cmd.press("Enter");
+    await expect(pane(page, 2)).toContainText("HELD");
+    await expect(pane(page, 2)).toContainText("next attack -"); // a finished duel has no price
+  });
+});
+
+test.describe("deploy 17 phone 390", () => {
+  test.use({ viewport: { width: 390, height: 844 }, colorScheme: "dark", hasTouch: true });
+
+  test("records and the push row fit one column with no sideways scroll", async ({ page }) => {
+    await stub(page, arena17);
+    await page.goto("/");
+    await expect(pane(page, 2)).toContainText("FOOLED");
+    await expect(pane(page, 4)).toContainText("push");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await shot(page, "term-v17-390");
+  });
+});

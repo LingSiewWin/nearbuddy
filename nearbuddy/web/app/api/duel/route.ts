@@ -1,8 +1,11 @@
 // One duel read from the arena contract on the public RPC: the duel record plus both agents' views, the
-// config (commit-reveal fields when the contract has them) and get_no_reveal (null before commit-reveal).
+// config (commit-reveal fields when the contract has them) and get_no_reveal (null before commit-reveal). On deploy
+// 17 the duel also carries `chaos` (get_chaos) and `chaos_fee`.
 // Cached 20 s per id; a stale body beats a 500 while the RPC is throttled.
+import { isChaosV2 } from "../../lib/inject";
 import { NET } from "../../network";
-import { ARENA, arenaView, json, jsonBody, RPC } from "../near";
+import { chaosOf } from "../duels";
+import { ARENA, arenaConfigAnyDeploy, arenaView, json, jsonBody, RPC } from "../near";
 
 const ORACLE = process.env.ORACLE_ACCOUNT ?? NET.oracle;
 
@@ -29,11 +32,13 @@ export async function GET(req: Request) {
 }
 
 async function build(id: string): Promise<string> {
-  const [duel, config, no_reveal] = await Promise.all([
+  const [found, config, no_reveal] = await Promise.all([
     arenaView("get_duel", { duel_id: id }),
-    arenaView("get_config", {}),
+    arenaConfigAnyDeploy(),
     arenaView("get_no_reveal", { duel_id: id }).catch(() => null), // view missing before commit-reveal
   ]);
+  // deploy 17: the duel carries its chaos records and the next attack's price
+  const duel = found && isChaosV2(config) ? { ...found, ...(await chaosOf(id)) } : found;
   const [a, b] = duel
     ? await Promise.all([arenaView("get_agent", { agent_pk: duel.a }), arenaView("get_agent", { agent_pk: duel.b })])
     : [null, null];

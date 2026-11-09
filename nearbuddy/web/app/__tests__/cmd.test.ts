@@ -12,12 +12,28 @@ test("every command parses, with or without the leading colon", () => {
     k: "inject",
     duel: "477",
     side: "B",
+    kind: null,
     text: "BREAKING: NEAR halts withdrawals",
   });
+  expect(parse('inject 477 b SHORT "BREAKING: NEAR halts withdrawals"')).toEqual({
+    k: "inject",
+    duel: "477",
+    side: "B",
+    kind: "Short",
+    text: "BREAKING: NEAR halts withdrawals",
+  });
+  // a lone long/short is the headline, not a direction; a quoted headline starting with it stays whole
+  expect(parse("inject 477 A long")).toMatchObject({ kind: null, text: "long" });
+  expect(parse('inject 477 A "long squeeze ahead"')).toMatchObject({ kind: null, text: "long squeeze ahead" });
+  expect(parse("inject 477 A constructor halts")).toMatchObject({ kind: null, text: "constructor halts" });
+  expect(parse("claim 470")).toEqual({ k: "claim", duel: "470" });
+  expect(parse("CLAIM #470")).toEqual({ k: "claim", duel: "470" });
+  expect(parse("DUEL 470")).toEqual({ k: "duel", id: "470" });
   expect(parse("inject 477 A ETF approved today")).toEqual({
     k: "inject",
     duel: "477",
     side: "A",
+    kind: null,
     text: "ETF approved today",
   });
   for (const k of ["connect", "disconnect", "help", "copy"]) expect(parse(k)).toEqual({ k } as never);
@@ -32,6 +48,7 @@ test("a malformed line says what is missing instead of guessing", () => {
   expect(parse("inject 477 A")).toMatchObject({ k: "error" });
   expect(parse('inject 477 A ""')).toMatchObject({ k: "error" });
   expect(parse("agent")).toMatchObject({ k: "error" });
+  expect(parse("claim")).toEqual({ k: "error", msg: "claim needs a duel number" });
   expect(parse("rm -rf /")).toEqual({ k: "error", msg: 'unknown command "rm": type help' });
   expect(parse("")).toMatchObject({ k: "error" });
 });
@@ -54,11 +71,21 @@ test("Tab completes command names, duel ids, models and the side", () => {
   expect(complete("agent g", known)).toEqual({ line: "agent glm-5.3-flash ", options: [] });
   expect(complete("inject 477 ", known)).toEqual({ line: "inject 477 ", options: ["A", "B"] });
   expect(complete("inject 477 b", known)).toEqual({ line: "inject 477 B ", options: [] });
+  expect(complete("inject 477 B ", known)).toEqual({ line: "inject 477 B ", options: ["long", "short"] });
+  expect(complete("inject 477 B s", known)).toEqual({ line: "inject 477 B short ", options: [] });
+  expect(complete("claim 47", known)).toEqual({ line: "claim 47", options: ["477", "476", "470"] });
   expect(complete("zz", known)).toEqual({ line: "zz", options: [] });
 });
 
 test("a click's line parses back to the same command, quotes in the headline included", () => {
   const line = injectLine("477", "B", 'CEO says "we halt" today');
-  expect(parse(line)).toEqual({ k: "inject", duel: "477", side: "B", text: "CEO says 'we halt' today" });
+  expect(parse(line)).toEqual({ k: "inject", duel: "477", side: "B", kind: null, text: "CEO says 'we halt' today" });
+  expect(parse(injectLine("477", "A", "long squeeze", "Short"))).toEqual({
+    k: "inject",
+    duel: "477",
+    side: "A",
+    kind: "Short",
+    text: "long squeeze",
+  });
   for (const c of COMMANDS) expect(parse(c.fill).k === "error" ? c.fill.endsWith(" ") : true).toBe(true);
 });

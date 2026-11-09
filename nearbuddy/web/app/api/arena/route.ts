@@ -1,4 +1,5 @@
-// Read-only arena snapshot from the public RPC: config, leaderboard, the last 3 duels in full, followers
+// Read-only arena snapshot from the public RPC: config, leaderboard, the last 3 duels in full (on deploy 17 with
+// their `get_chaos` records and `chaos_fee`), followers
 // per agent, and counts over the last SCAN duels (verified decisions, attacks). The solver's /arena route
 // is optional enrichment (intent txs, injection payloads, quotes, fills); the page renders without it.
 // Cached 20 s and built once at a time however many tabs poll; a stale body beats a 500 while the RPC
@@ -10,7 +11,8 @@
 import { proven as hasProof, pairsOf } from "../../cells";
 import { eraSplit, ORACLE_ERA_FROM, oracleIds, unread } from "../../eras";
 import type { AgentView, Intent } from "../../lib/abi/arena";
-import { chunked, type ReadDuel, readDuel } from "../duels";
+import { isChaosV2 } from "../../lib/inject";
+import { chaosOf, chunked, type ReadDuel, readDuel } from "../duels";
 import { followersOf } from "../followers";
 import { ARENA, arenaConfigAnyDeploy, arenaView, json, jsonBody, legacyArenaView, RPC, SOLVER_URL } from "../near";
 
@@ -92,13 +94,23 @@ async function build(): Promise<string> {
     attacks: seen.reduce((s, d) => s + (d.resolved ? (d.outcome?.injections ?? 0) : d.injections.length), 0),
     pairs: pairsOf(seen), // who has been dueling whom in the last SCAN duels
   };
+  // deploy 17: the shown duels carry their chaos records and next price; a failed read leaves them null (no price,
+  // so nothing can be signed against a stale one)
+  const v2 = isChaosV2(config);
+  const duels = await Promise.all(
+    scanned
+      .slice(0, SHOW)
+      .map(async (d) =>
+        d && v2 ? { ...d, ...(await chaosOf(d.id).catch(() => ({ chaos: null, chaos_fee: null }))) } : d,
+      ),
+  );
   const body = jsonBody({
     at: Date.now(),
     rpc: RPC,
     contract: ARENA,
     config,
     leaderboard,
-    duels: scanned.slice(0, SHOW),
+    duels,
     stats,
     eras,
     followers,

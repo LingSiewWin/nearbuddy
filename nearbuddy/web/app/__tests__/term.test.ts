@@ -1,7 +1,8 @@
 // The terminal's view model: which duel pane 2 follows, the feed's order and verdicts, and the field diff that makes
 // changed cells flash after a poll.
 import { expect, test } from "bun:test";
-import { changed, type Duel, feed, fields, pickLive, type Snap, shortModel, textsOf } from "../term/model";
+import type { Chaos } from "../lib/abi/arena";
+import { changed, type Duel, feed, fields, pickLive, type Snap, shortModel, textsOf, VERDICT_OF } from "../term/model";
 
 const NS = (ms: number) => String(BigInt(ms) * 1_000_000n);
 const now = Date.UTC(2026, 10, 9, 12);
@@ -86,6 +87,74 @@ test("the feed puts this browser's attacks first, then attacks on open duels, th
   ]);
   expect(textsOf(snap)).toEqual({ h1: "ETF approved" });
   expect(feed(null, null, [])).toEqual([]);
+});
+
+test("deploy 17: the feed lists every chain record with its headline, arm and outcome, this browser's tx kept", () => {
+  const rec = (target: string, headline: string, outcome: Chaos["outcome"], extra: Partial<Chaos> = {}): Chaos => ({
+    arm: "Cue",
+    at: "1",
+    claimed: false,
+    decided_by: null,
+    headline,
+    injector: "x.testnet",
+    kind: "Short",
+    next: null,
+    outcome,
+    payout: "0",
+    prev: "Long",
+    stake: "1",
+    target,
+    ...extra,
+  });
+  const snap: Snap = {
+    at: now,
+    contract: "arena.t",
+    config: { next_duel: "13", min_chaos_deposit: "1", chaos: {} },
+    leaderboard: [{ pk: "B=", model_id: "Qwen/Qwen3.8-27B", tee: true, in_duel: "12" }],
+    duels: [
+      duel("12", now + 60_000, false, {
+        injections: [{ kind: "Short", payload_hash: "h", target: "B=", block: "1" }], // listed once, as a record
+        chaos: [
+          rec("B=", "ETF halted", "Flipped", { arm: "Clean", next: "Short", decided_by: "41" }),
+          rec("B=", "mine", "Pending", { kind: "Long" }),
+        ],
+        chaos_fee: "125",
+      }),
+      duel("11", now - 600_000, true, { chaos: [rec("B=", "too late", "Expired")] }),
+    ],
+    solver: null,
+  };
+  const board = {
+    source: "d",
+    rows: 1,
+    models: [],
+    recent: [
+      {
+        duel_id: "12",
+        model: "Qwen/Qwen3.8-27B",
+        agent_pk: "B=",
+        text: "ETF halted", // the dataset's copy of the same attack: shown once
+        pushed: "Short" as const,
+        test: "with" as const,
+        before: "Long" as const,
+        after: "Short" as const,
+        verdict: "fooled" as const,
+        reply: "r",
+        tx: "T",
+      },
+    ],
+  };
+  const mine = [{ tx: "TX", duel: "12", target: "B=", text: "mine", hash: null, before: null, at: now }];
+  expect(
+    feed(snap, board, mine).map((i) => [i.key, i.lie, i.pushed, i.arm, i.verdict, i.after, i.decided_by, i.tx, i.mine]),
+  ).toEqual([
+    ["chain:12:1", "mine", "Long", "Cue", "waiting", null, null, "TX", true],
+    ["chain:12:0", "ETF halted", "Short", "Clean", "fooled", "Short", "41", null, false],
+    ["chain:11:0", "too late", "Short", "Cue", "expired", null, null, null, false], // the older duel last
+  ]);
+  const f = fields(snap, null, snap.duels[0] ?? null);
+  expect([f.price, f["duel:12:attacks"], f["duel:12:chaos:0"]]).toEqual(["125", "2", "Flipped"]);
+  expect(Object.keys(VERDICT_OF).sort()).toEqual(["Expired", "Flipped", "Held", "NoTrial", "Pending"]);
 });
 
 test("only values that changed between two polls flash; a value seen for the first time does not", () => {

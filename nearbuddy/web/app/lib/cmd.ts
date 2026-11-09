@@ -1,11 +1,14 @@
 // The terminal's command language: parse one line, complete the word under the cursor, and the list the empty
 // palette and `help` show. Pure, so bun test covers it; the page maps a parsed command to what it does.
+import type { Direction } from "./inject";
+
 export type Target = "A" | "B";
 export type Cmd =
   | { k: "watch" }
   | { k: "duel"; id: string }
   | { k: "agent"; who: string }
-  | { k: "inject"; duel: string; side: Target; text: string }
+  | { k: "inject"; duel: string; side: Target; kind: Direction | null; text: string }
+  | { k: "claim"; duel: string }
   | { k: "verify"; duel: string }
   | { k: "connect" }
   | { k: "disconnect" }
@@ -16,10 +19,16 @@ export type Parsed = Cmd | { k: "error"; msg: string };
 /** Every command once, in menu order: the empty palette lists these, and clicking one types its `fill`. */
 export const COMMANDS = [
   { name: "watch", args: "", fill: "watch", what: "follow the live duel" },
-  { name: "inject", args: '<duel> <A|B> "<headline>"', fill: "inject ", what: "plant a fake headline in one model" },
+  {
+    name: "inject",
+    args: '<duel> <A|B> [long|short] "<headline>"',
+    fill: "inject ",
+    what: "plant a fake headline in one model; long|short is the side the lie pushes",
+  },
   { name: "duel", args: "<id>", fill: "duel ", what: "show one duel in pane 2" },
   { name: "agent", args: "<model|pk>", fill: "agent ", what: "open a model's full record" },
   { name: "verify", args: "<duel>", fill: "verify ", what: "check a duel's proofs yourself" },
+  { name: "claim", args: "<duel>", fill: "claim ", what: "collect what your headlines earned in a finished duel" },
   { name: "connect", args: "", fill: "connect", what: "connect a NEAR testnet wallet" },
   { name: "copy", args: "", fill: "copy", what: "copy the link to what you are looking at" },
   { name: "help", args: "", fill: "help", what: "keys, commands and what every word means" },
@@ -27,6 +36,10 @@ export const COMMANDS = [
 const NAMES: readonly string[] = [...COMMANDS.map((c) => c.name), "disconnect"];
 
 const ID_RE = /^\d{1,12}$/;
+const DIRS = new Map<string, Direction>([
+  ["long", "Long"],
+  ["short", "Short"],
+]);
 /** Words split on spaces; a double-quoted run is one word, quotes dropped. An unclosed quote runs to the end. */
 export const words = (line: string): string[] => {
   const out: string[] = [];
@@ -51,9 +64,12 @@ export function parse(line: string): Parsed {
     case "?":
       return { k: "help" };
     case "duel":
-    case "verify": {
-      const d = id(a, name);
-      return typeof d === "string" ? (name === "duel" ? { k: "duel", id: d } : { k: "verify", duel: d }) : d;
+    case "verify":
+    case "claim": {
+      const n = name.toLowerCase() as "duel" | "verify" | "claim";
+      const d = id(a, n);
+      if (typeof d !== "string") return d;
+      return n === "duel" ? { k: "duel", id: d } : { k: n, duel: d };
     }
     case "agent":
       return a ? { k: "agent", who: a } : { k: "error", msg: "agent needs a model name or key" };
@@ -62,9 +78,14 @@ export function parse(line: string): Parsed {
       if (typeof d !== "string") return d;
       const side = b?.toUpperCase();
       if (side !== "A" && side !== "B") return { k: "error", msg: "inject needs a side: A or B" };
-      const text = w.slice(3).join(" ").trim();
-      if (!text) return { k: "error", msg: 'inject needs a headline in quotes: inject 12 B "..."' };
-      return { k: "inject", duel: d, side, text };
+      // an optional long|short before the headline: the side the lie pushes (deploy 17 needs it)
+      const dir = w.length > 4 ? DIRS.get((w[3] ?? "").toLowerCase()) : undefined;
+      const text = w
+        .slice(dir ? 4 : 3)
+        .join(" ")
+        .trim();
+      if (!text) return { k: "error", msg: 'inject needs a headline in quotes: inject 12 B short "..."' };
+      return { k: "inject", duel: d, side, kind: dir ?? null, text };
     }
     default:
       return { k: "error", msg: `unknown command "${name}": type help` };
@@ -84,13 +105,15 @@ export function complete(line: string, known: Known): { line: string; options: s
   const pool =
     i === 0
       ? NAMES
-      : i === 1 && (cmd === "duel" || cmd === "verify" || cmd === "inject")
+      : i === 1 && (cmd === "duel" || cmd === "verify" || cmd === "inject" || cmd === "claim")
         ? known.duels
         : i === 1 && cmd === "agent"
           ? known.agents
           : i === 2 && cmd === "inject"
             ? ["A", "B"]
-            : [];
+            : i === 3 && cmd === "inject"
+              ? ["long", "short"]
+              : [];
   const options = [...new Set(pool)].filter((o) => o.toLowerCase().startsWith(word.toLowerCase()));
   if (!options.length) return { line, options };
   let pre = options[0]!;
@@ -102,5 +125,5 @@ export function complete(line: string, known: Known): { line: string; options: s
 }
 
 /** The command line a click stands for, so every click teaches its typed form. */
-export const injectLine = (duel: string, side: Target, text: string) =>
-  `inject ${duel} ${side} "${text.replace(/"/g, "'")}"`;
+export const injectLine = (duel: string, side: Target, text: string, kind: Direction | null = null) =>
+  `inject ${duel} ${side}${kind ? ` ${kind.toLowerCase()}` : ""} "${text.replace(/"/g, "'")}"`;

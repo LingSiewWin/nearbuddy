@@ -5,9 +5,10 @@
 // /api/board (dataset snapshot), /api/spot (10 s), /api/duel for a pinned duel. Wallet: NEAR Connect (lib/wallet).
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import type { Arm } from "../lib/abi/arena";
 import { COMMANDS, complete, injectLine, parse, type Target } from "../lib/cmd";
 import { wilson } from "../lib/fool";
-import { ADAPTER, Offline } from "../lib/inject";
+import { adapterFor, claimable, claimCall, type Direction, MAX_HEADLINE, Offline, utf8Bytes } from "../lib/inject";
 import * as wallet from "../lib/wallet";
 import { agentHref, countdown, duelHref, getJson, NETWORK_ID, near, short, txHref, ZERO } from "../tui";
 import { Box, type Cell, col, FlashCtx, Line, Note, Slot, wrap } from "./box";
@@ -24,6 +25,7 @@ import {
   type Snap,
   shortModel,
   textsOf,
+  VERDICT_OF,
 } from "./model";
 
 type Pane = 1 | 2 | 3 | 4;
@@ -42,6 +44,13 @@ const VERDICT: Record<FeedItem["verdict"], [string, string]> = {
   untested: ["not counted", "dim"],
   waiting: ["waiting", "open"],
   answered: ["answered", "hi"],
+  expired: ["expired", "dim"],
+};
+const opposite = (s: Direction | null | undefined): Direction => (s === "Long" ? "Short" : "Long");
+const ARM_TITLE: Record<Arm, string> = {
+  Cue: "delivered as written",
+  Clean: "delivered with its credibility cues (BREAKING, named sources) removed",
+  Placebo: "a neutral control headline",
 };
 
 /** Columns of monospace text that fit the terminal's width, measured from a probe span. */
@@ -94,6 +103,8 @@ export default function Term() {
   const [msg, setMsg] = useState<{ t: string; c?: string } | null>(null);
   const [account, setAccount] = useState<string | null>(null);
   const [target, setTarget] = useState<Target>("B");
+  /** The side the lie pushes (deploy 17); null: against the target's last call. */
+  const [kind, setKind] = useState<Direction | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
@@ -183,10 +194,22 @@ export default function Term() {
   const left = duel && open ? countdown(duel.close_at, now) : null;
   const items = feed(snap, board, mine, texts);
   const models = board?.models ?? [];
-  const solverDown = offline || snap?.solver === null;
-  const price = snap
-    ? ADAPTER.price({ contract: snap.contract, min_chaos_deposit: snap.config.min_chaos_deposit })
-    : null;
+  // the inject path by contract feature: deploy 17 puts the headline on chain and needs no solver
+  const adapter = adapterFor(snap?.config);
+  const v2 = adapter.needsKind;
+  const solverDown = !v2 && (offline || snap?.solver === null);
+  const chainOf = (s: Snap, d: Duel | null) => ({
+    contract: s.contract,
+    min_chaos_deposit: s.config.min_chaos_deposit,
+    chaos_fee: d?.chaos_fee ?? null,
+  });
+  const chain = snap ? chainOf(snap, duel) : null;
+  const price = chain ? adapter.price(chain) : null;
+  const lastSide = (t: Target) => (t === "A" ? duel?.last_intent_a : duel?.last_intent_b)?.side;
+  const push = kind ?? opposite(lastSide(target)); // a lie on the side it already sits on cannot flip it
+  const lineFor = (t: Target, k: Direction | null) => (duel ? injectLine(duel.id, t, text, v2 ? k : null) : "");
+  const owed = duel?.resolved ? claimable(duel.chaos, account) : 0n;
+  const refusal = text ? adapter.check(text) : null;
 
   // diff-based refresh: the cells whose value moved since the last poll flash once; new feed rows flash too
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs per poll result, not per 1 s clock tick
@@ -231,36 +254,46 @@ export default function Term() {
     return hits.find((a) => a.pk === duel?.a || a.pk === duel?.b) ?? hits[0] ?? null;
   };
 
-  // one attack at a time: a ref, so a double click lands on the guard before the busy re-render does
-  async function inject(id: string, side: Target, headline: string) {
-    if (sending.current) return say("one attack at a time: finish the one in progress first", "warn");
+  // one wallet call at a time: a ref, so a double click lands on the guard before the busy re-render does
+  async function once(f: () => Promise<void>) {
+    if (sending.current) return say("one at a time: finish the one in progress first", "warn");
     sending.current = true;
     try {
-      await injectOnce(id, side, headline);
+      await f();
     } finally {
       sending.current = false;
       setBusy(null);
     }
   }
-  async function injectOnce(id: string, side: Target, headline: string) {
-    if (!snap) return say("still reading the arena; try again in a moment", "warn");
-    let d: Duel | null = snap.duels.find((x) => x?.id === id) ?? (rec?.duel?.id === id ? rec.duel : null);
-    if (!d)
-      d = await getJson<DuelRec>(`/api/duel?id=${id}`)
+  /** A duel by id: the snapshot's, the pinned one, else read once. */
+  async function findDuel(id: string): Promise<Duel | null> {
+    const d = snap?.duels.find((x) => x?.id === id) ?? (rec?.duel?.id === id ? rec.duel : null);
+    return (
+      d ??
+      getJson<DuelRec>(`/api/duel?id=${id}`)
         .then((r) => r.duel)
-        .catch(() => null);
+        .catch(() => null)
+    );
+  }
+  async function injectOnce(id: string, side: Target, headline: string, dir: Direction | null) {
+    if (!snap) return say("still reading the arena; try again in a moment", "warn");
+    const d = await findDuel(id);
     if (!d) return say(`no duel #${id} on this contract`, "bad");
     if (d.resolved || Number(BigInt(d.close_at) / 1_000_000n) <= Date.now())
       return say(`duel #${id} is closed: a headline only lands while its duel is open`, "warn");
-    if (headline.length > ADAPTER.maxChars) return say(`keep it under ${ADAPTER.maxChars} characters`, "warn");
+    const bad = adapter.check(headline); // the contract's own rules, so a refusal shows before any signing
+    if (bad) return say(`the contract would refuse this: ${bad} · nothing was signed`, "warn");
+    if (adapter.needsKind && !dir)
+      return say(`say which way the lie pushes: inject ${id} ${side} short "${headline.slice(0, 20)}…"`, "warn");
     // /api/arena reads the same solver: when it is unreachable there, say so before asking for a wallet
-    if (snap.solver === null) return say("solver offline: attacks are paused, nothing was sent or signed", "bad");
+    if (!adapter.needsKind && snap.solver === null)
+      return say("solver offline: attacks are paused, nothing was sent or signed", "bad");
     if (!account) return say("connect a NEAR testnet wallet first: type connect, or press the connect button", "warn");
-    const chain = { contract: snap.contract, min_chaos_deposit: snap.config.min_chaos_deposit };
-    setBusy("handing the headline to the solver");
-    let call: Awaited<ReturnType<typeof ADAPTER.prepare>>;
+    const target = side === "A" ? d.a : d.b;
+    setBusy(adapter.needsKind ? "reading the price" : "handing the headline to the solver");
+    let call: Awaited<ReturnType<typeof adapter.prepare>>;
     try {
-      call = await ADAPTER.prepare({ duel_id: id, target: side === "A" ? d.a : d.b, text: headline }, chain);
+      call = await adapter.prepare({ duel_id: id, target, text: headline, kind: dir }, chainOf(snap, d));
     } catch (e) {
       if (e instanceof Offline) {
         setOffline(true);
@@ -269,17 +302,38 @@ export default function Term() {
       return say(`refused: ${e instanceof Error ? e.message : e}`, "bad");
     }
     setBusy(`sign in your wallet: ${near(call.deposit)} NEAR to ${call.receiverId}`);
-    const target = side === "A" ? d.a : d.b;
     const before = (side === "A" ? d.last_intent_a : d.last_intent_b)?.nonce ?? null;
     try {
       const tx = await wallet.send(call); // throws when the wallet declines or the contract refuses
-      setMine((m) => [
-        ...m,
-        { tx, duel: id, target, text: headline, hash: String(call.args.payload_hash), before, at: Date.now() },
-      ]);
-      setShare(`${location.origin}/i/${tx}?t=${encodeURIComponent(headline)}`);
+      const hash = typeof call.args.payload_hash === "string" ? call.args.payload_hash : null;
+      setMine((m) => [...m, { tx, duel: id, target, text: headline, hash, before, at: Date.now() }]);
+      // deploy 17's card reads the headline from chain; deploy 16's needs it in the link
+      setShare(`${location.origin}/i/${tx}${hash ? `?t=${encodeURIComponent(headline)}` : ""}`);
       setText("");
       say(`planted in duel #${id}, side ${side}: tx ${short(tx, 10)} · type copy for the share link`, "ok");
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      // chaos_fee rises with every paid attack: someone else's landed first
+      say(
+        m.includes("chaos deposit too small") ? `${m} · the price just rose; the pane shows the new one shortly` : m,
+        "bad",
+      );
+    }
+  }
+  async function claimOnce(id: string) {
+    if (!snap) return say("still reading the arena; try again in a moment", "warn");
+    if (!account) return say("connect the wallet that planted the headlines first: type connect", "warn");
+    const d = await findDuel(id);
+    if (!d) return say(`no duel #${id} on this contract`, "bad");
+    if (!d.chaos) return say(`duel #${id} has no on-chain chaos records to claim from (deploy 17 on)`, "warn");
+    if (!d.resolved) return say(`duel #${id} is still running: stakes settle when it finishes`, "warn");
+    const due = claimable(d.chaos, account);
+    if (!due) return say(`nothing to claim for ${account} in duel #${id}`, "warn");
+    const call = claimCall(snap.contract, id);
+    setBusy(`sign in your wallet: claim ${near(due.toString())} NEAR from duel #${id}`);
+    try {
+      const tx = await wallet.send(call);
+      say(`claimed ${near(due.toString())} NEAR from duel #${id}: tx ${short(tx, 10)}`, "ok");
     } catch (e) {
       say(e instanceof Error ? e.message : String(e), "bad");
     }
@@ -314,9 +368,12 @@ export default function Term() {
         return router.push(`${duelHref(c.duel)}`);
       case "inject":
         setTarget(c.side);
+        if (c.kind) setKind(c.kind);
         setText(c.text);
         focusPane(4);
-        return inject(c.duel, c.side, c.text);
+        return once(() => injectOnce(c.duel, c.side, c.text, c.kind));
+      case "claim":
+        return once(() => claimOnce(c.duel));
       case "connect":
         if (account) return say(`connected as ${account} · type disconnect to switch`);
         try {
@@ -355,20 +412,31 @@ export default function Term() {
     1: models.length,
     2: duelActions.length,
     3: feedShown.length,
-    4: 2,
+    4: v2 ? 3 : 2,
+  };
+  const pickTarget = (t: Target) => {
+    setTarget(t);
+    setKind(null); // the default push follows the new target's call
+    setLine(lineFor(t, opposite(lastSide(t))));
+  };
+  const pickKind = (k: Direction) => {
+    setKind(k);
+    setLine(lineFor(target, k));
   };
   const activate = (p: Pane, i: number) => {
     if (p === 1 && models[i]) return run(`agent ${shortModel(models[i].model)}`);
-    if (p === 2 && duel && duelActions[i]) {
+    const side = duelActions[i];
+    if (p === 2 && duel && side) {
       // a closed duel takes no headline: its side rows open that model's record instead
-      if (!open) return run(`agent ${modelOf(duelActions[i] === "A" ? duel.a : duel.b)}`);
-      setTarget(duelActions[i]);
-      setLine(injectLine(duel.id, duelActions[i], text));
+      if (!open) return run(`agent ${modelOf(side === "A" ? duel.a : duel.b)}`);
+      pickTarget(side);
       focusPane(4);
       return textRef.current?.focus();
     }
     if (p === 3 && feedShown[i]) return run(`duel ${feedShown[i].duel}`);
-    if (p === 4) return i === 0 ? setTarget(target === "A" ? "B" : "A") : textRef.current?.focus();
+    if (p === 4 && i === 0) return pickTarget(target === "A" ? "B" : "A");
+    if (p === 4 && v2 && i === 1) return pickKind(opposite(push));
+    if (p === 4) return textRef.current?.focus();
   };
 
   // keys outside text fields: 1-4 panes, j/k rows, Enter, i inject, v verify, ? help, : or Cmd-K command line
@@ -508,6 +576,11 @@ export default function Term() {
       it ? (proven ? { t: "enclave-signed", c: "ok" } : { t: "no proof", c: "unv" }) : "",
     ];
   };
+  // deploy 17: the duel's newest chaos records, read from chain (headline, arm, outcome)
+  const records = (duel?.chaos ?? [])
+    .map((c, i) => ({ c, i }))
+    .reverse()
+    .slice(0, cols < 122 ? 3 : 4);
   const openPx = duel?.open_price ? Number(duel.open_price) / 1e8 : null;
   const closePx = duel?.outcome?.close_price ? Number(duel.outcome.close_price) / 1e8 : null;
   const spotPx = duel?.resolved ? closePx : spot ? Number(spot.price) : null;
@@ -568,14 +641,46 @@ export default function Term() {
               { t: `${near(duel.pool)} NEAR`, k: `duel:${duel.id}:pot` },
               { t: "  attacks ", c: "dim" },
               {
-                t: String(duel.resolved ? (duel.outcome?.injections ?? 0) : duel.injections.length),
+                t: String(
+                  duel.chaos?.length ?? (duel.resolved ? (duel.outcome?.injections ?? 0) : duel.injections.length),
+                ),
                 k: `duel:${duel.id}:attacks`,
               },
               { t: "  next attack ", c: "dim" },
-              { t: price ? `${near(price)} NEAR` : "-", c: "warn", k: "price" },
+              { t: open && price ? `${near(price)} NEAR` : "-", c: "warn", k: "price" },
             ]}
           />
           <Line w={P} cells={[{ t: state, c: open ? "open" : "dim", k: `duel:${duel.id}:state` }]} />
+          {records.length ? <Line w={P} cells={[""]} /> : null}
+          {records.map(({ c, i }) => {
+            const [word, wc] = VERDICT[VERDICT_OF[c.outcome]];
+            const decided = c.decided_by ? ` by call #${c.decided_by}` : "";
+            return (
+              <Line
+                key={`${duel.id}:${i}`}
+                w={P}
+                cells={[
+                  { t: `#${String(i).padEnd(3)}`, c: "num" },
+                  { t: c.target === duel.a ? "A " : "B ", c: "hi" },
+                  { t: upper(c.kind).padEnd(8), c: "dim", title: "the side the lie pushes" },
+                  { t: c.arm.toLowerCase().padEnd(8), c: "dim", title: ARM_TITLE[c.arm] },
+                  {
+                    t: word.padEnd(12),
+                    c: wc,
+                    k: `duel:${duel.id}:chaos:${i}`,
+                    title: `${c.outcome}${decided}${c.injector === account ? " · yours" : ""}`,
+                  },
+                  { t: `"${c.headline}"`, c: "warn", title: c.headline },
+                ]}
+              />
+            );
+          })}
+          {(duel.chaos?.length ?? 0) > records.length ? (
+            <Line
+              w={P}
+              cells={[{ t: `+${(duel.chaos?.length ?? 0) - records.length} more in the tail (pane 3)`, c: "dim" }]}
+            />
+          ) : null}
           <Line
             w={P}
             cells={[
@@ -589,6 +694,15 @@ export default function Term() {
                 : []),
               { t: "[verify]", onClick: () => run(`verify ${duel.id}`) },
               " ",
+              owed
+                ? {
+                    t: `[claim ${near(owed.toString())} NEAR]`,
+                    c: "ok",
+                    onClick: () => run(`claim ${duel.id}`),
+                    label: `claim ${near(owed.toString())} NEAR your headlines earned in duel ${duel.id}`,
+                  }
+                : "",
+              owed ? " " : "",
               pinned ? { t: "[watch live]", onClick: () => run("watch") } : "",
             ]}
           />
@@ -637,6 +751,8 @@ export default function Term() {
               w={P}
               cells={[
                 { t: "  lie   ", c: "dim" },
+                f.pushed ? { t: `${upper(f.pushed)} `, c: "dim", title: "the side the lie pushes" } : "",
+                f.arm ? { t: `${f.arm.toLowerCase()} `, c: "dim", title: ARM_TITLE[f.arm] } : "",
                 f.lie
                   ? { t: `"${f.lie}"`, c: "warn", title: f.lie }
                   : { t: f.hash ? `sha256 ${short(f.hash, 12)} (text held by the solver)` : "-", c: "dim" },
@@ -650,12 +766,15 @@ export default function Term() {
                 f.reply
                   ? { t: `"${f.reply}"`, title: f.reply }
                   : {
-                      t:
-                        f.verdict === "waiting"
-                          ? "next call pending"
+                      t: f.decided_by
+                        ? `decided by its proved call #${f.decided_by}`
+                        : f.verdict === "waiting"
+                          ? "next proved call pending"
                           : f.verdict === "answered"
                             ? "its first call after your headline"
-                            : "",
+                            : f.verdict === "expired"
+                              ? "the duel ended before a proved call"
+                              : "",
                       c: "dim",
                     },
                 f.tx ? "  " : "",
@@ -670,12 +789,14 @@ export default function Term() {
   );
 
   // ---- pane 4: inject
-  const canSend = open && !solverDown && !busy && !!text.trim();
+  const canSend = open && !solverDown && !busy && !!text.trim() && !refusal;
   const tgtPk = duel ? (target === "A" ? duel.a : duel.b) : null;
+  const bytes = utf8Bytes(text);
   const pane4 = (
     <Box n={4} title="inject" extra="plant one fake headline" w={P} on={pane === 4} id="pane-4">
       <Line
         w={P}
+        sel={pane === 4 && sel[4] === 0}
         cells={[
           { t: "target ", c: "dim" },
           ...(duel
@@ -683,10 +804,7 @@ export default function Term() {
                 {
                   t: `[${target === t ? "x" : " "}] ${t} ${col(modelOf(t === "A" ? duel.a : duel.b), Math.max(6, Math.floor((W - 20) / 2))).trimEnd()}`,
                   c: target === t ? "hi" : "dim",
-                  onClick: () => {
-                    setTarget(t);
-                    setLine(injectLine(duel.id, t, text));
-                  },
+                  onClick: () => pickTarget(t),
                   label: `target side ${t}, ${modelOf(t === "A" ? duel.a : duel.b)}${target === t ? ", selected" : ""}`,
                 },
                 "  ",
@@ -694,13 +812,35 @@ export default function Term() {
             : [{ t: "no duel", c: "dim" }]),
         ]}
       />
+      {v2 ? (
+        <Line
+          w={P}
+          sel={pane === 4 && sel[4] === 1}
+          cells={[
+            { t: "push   ", c: "dim" },
+            ...(["Long", "Short"] as Direction[]).flatMap((k): Cell[] => [
+              {
+                t: `[${push === k ? "x" : " "}] ${k.toLowerCase()}`,
+                c: push === k ? "hi" : "dim",
+                onClick: () => pickKind(k),
+                label: `the lie pushes ${k.toLowerCase()}${push === k ? ", selected" : ""}`,
+              },
+              "  ",
+            ]),
+            lastSide(target)
+              ? { t: `its call now: ${upper(lastSide(target))}`, c: push === lastSide(target) ? "warn" : "dim" }
+              : "",
+          ]}
+        />
+      ) : null}
       <Slot rows={3}>
         <textarea
           ref={textRef}
           className="headline"
           aria-label="your fake headline"
+          aria-invalid={!!refusal}
           placeholder="BREAKING: ..."
-          maxLength={ADAPTER.maxChars}
+          maxLength={MAX_HEADLINE}
           rows={3}
           value={text}
           style={{ width: `${W}ch` }}
@@ -711,20 +851,23 @@ export default function Term() {
           onBlur={() => setMode("NORMAL")}
           onChange={(e) => {
             setText(e.target.value);
-            if (duel) setLine(injectLine(duel.id, target, e.target.value));
+            if (duel) setLine(injectLine(duel.id, target, e.target.value, v2 ? push : null));
           }}
           onKeyDown={(e) => {
             if (e.key === "Escape") e.currentTarget.blur();
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && duel) run(injectLine(duel.id, target, text));
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && duel) run(lineFor(target, push));
           }}
         />
       </Slot>
       <Line
         w={P}
         cells={[
-          { t: `${text.length}/${ADAPTER.maxChars}  `, c: "dim" },
+          {
+            t: `${bytes}/${MAX_HEADLINE}${v2 ? " bytes" : ""}  `,
+            c: bytes > MAX_HEADLINE ? "bad" : "dim",
+          },
           { t: "costs ", c: "dim" },
-          { t: price ? `${near(price)} NEAR` : "-", c: "warn" },
+          { t: open && price ? `${near(price)} NEAR` : "-", c: "warn" },
           { t: ` · signed by ${account ?? "your wallet"}`, c: "dim" },
         ]}
       />
@@ -739,12 +882,14 @@ export default function Term() {
           {
             t: "[plant it]",
             c: canSend && account ? "warn" : "dim",
-            onClick: () => (duel ? run(injectLine(duel.id, target, text)) : say("no duel to attack yet", "warn")),
+            onClick: () => (duel ? run(lineFor(target, push)) : say("no duel to attack yet", "warn")),
           },
         ]}
       />
       {busy ? (
         <Note w={P} text={`… ${busy}`} c="open" />
+      ) : refusal ? (
+        <Note w={P} text={`the contract would refuse this: ${refusal}`} c="bad" />
       ) : solverDown ? (
         <Note
           w={P}
@@ -754,7 +899,14 @@ export default function Term() {
       ) : !open ? (
         <Note w={P} text="no open duel to attack right now" />
       ) : tgtPk ? (
-        <Note w={P} text={`the lie reaches ${modelOf(tgtPk)} on its next call`} />
+        <Note
+          w={P}
+          text={
+            v2
+              ? `the lie reaches ${modelOf(tgtPk)} on its next call · the contract draws whether it arrives as written or with its cues removed`
+              : `the lie reaches ${modelOf(tgtPk)} on its next call`
+          }
+        />
       ) : null}
       {share ? (
         <Line
@@ -812,15 +964,33 @@ export default function Term() {
       "sealed",
       "Commit-reveal: a model's call stays hidden until it reveals at close, so the other side cannot copy it.",
     ],
-    [
-      "pot / price",
-      "The pot is what the duel pays its winner. An attack costs at least the contract's minimum chaos deposit; less storage, it goes into the pot (into protocol fees when the payer owns one of the two agents).",
-    ],
+    ...(v2
+      ? ([
+          [
+            "pot / price",
+            "An attack costs chaos_fee, which rises with every paid attack in a duel. Less storage it is your stake, held in the pot until the duel ends. Fooled: your stake back less a 5% fee, plus a share of the loser's slash when the fooled model lost. Held: your stake goes to the model that resisted. Not counted or expired: your stake back. Collect with claim <duel>.",
+          ],
+          [
+            "arm",
+            "The contract draws how your headline arrives: cue (as written) or clean (with credibility cues such as BREAKING and named sources removed). Every attack is one trial of whether those cues cause the flip.",
+          ],
+          [
+            "decided by",
+            "Only the target's next revealed call with an enclave proof decides an attack, once; its nonce is on the record.",
+          ],
+        ] as [string, string][])
+      : ([
+          [
+            "pot / price",
+            "The pot is what the duel pays its winner. An attack costs at least the contract's minimum chaos deposit; less storage, it goes into the pot (into protocol fees when the payer owns one of the two agents).",
+          ],
+        ] as [string, string][])),
     [
       "data",
       `Board and tail history: the published dataset (${board?.rows ?? "-"} decisions, ${board?.source ?? "-"}). Live duel and attacks: the arena contract on NEAR ${NETWORK_ID}.`,
     ],
-    ["inject path", ADAPTER.name],
+    ["inject path", adapter.name],
+    ["agents", "MCP server at /api/mcp (it never signs: it hands back the call to sign); manual at /llms.txt."],
     ["keys", "1-4 pane · j/k row · Enter open · i inject · v verify · : or Cmd-K command · ? help · Esc close"],
   ];
 

@@ -19,8 +19,10 @@ export const provider =
 export const arenaView = <M extends keyof ArenaViews>(method: M, args: ArenaViews[M]["args"]) =>
   provider.callFunction({ contractId: ARENA, method, args }) as Promise<ArenaViews[M]["result"]>;
 /** Fields `get_config` gained over time. abi/arena.json describes the current source; an older arena omits them
- *  (commit-reveal and consent arrived by deploy 14; vault caps, pause and `intents_account` with deploy 15). */
+ *  (commit-reveal and consent arrived by deploy 14; vault caps, pause and `intents_account` with deploy 15; the
+ *  `chaos` price terms with deploy 17). */
 type LateConfigField =
+  | "chaos"
   | "commit_reveal"
   | "no_reveal_bps"
   | "require_consent"

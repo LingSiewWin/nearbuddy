@@ -1,6 +1,6 @@
 // Duel reads shared by /api/arena and /api/agent. A resolved duel never changes, so it is read once per
 // process and kept; open duels are read every time. A failed read is never cached: it is retried next build.
-import type { Duel } from "../lib/abi/arena";
+import type { Chaos, Duel } from "../lib/abi/arena";
 import { arenaView } from "./near";
 
 /** A `get_duel` result, plus `no_reveal` (`get_no_reveal`) once resolved and read. */
@@ -31,6 +31,17 @@ export async function readDuel(id: string, noReveal = false): Promise<ReadDuel |
     if (resolved.size > 2000) resolved.delete(resolved.keys().next().value as string);
   }
   return d;
+}
+
+/** Deploy 17's view of one duel's attacks: every `get_chaos` record (headline, arm, outcome, payout) and the price of
+ *  the next one. Records change after a duel resolves (claims), so they are never memoised. */
+export type ChaosView = { chaos: Chaos[]; chaos_fee: string };
+export async function chaosOf(id: string): Promise<ChaosView> {
+  const [chaos, chaos_fee] = await Promise.all([
+    arenaView("get_chaos", { duel_id: id }),
+    arenaView("chaos_fee", { duel_id: id }),
+  ]);
+  return { chaos, chaos_fee };
 }
 
 /** Views in small chunks so a rate-limited RPC sees a trickle, not a burst. */
