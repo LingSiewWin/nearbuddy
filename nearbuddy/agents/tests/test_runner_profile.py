@@ -101,6 +101,16 @@ def test_attacked_row_carries_the_guard_and_verifies_with_check_row(agent):
     assert check_row(r) == (True, "ok")
 
 
+def test_an_unparseable_judgment_keeps_its_vote_slot(agent):
+    d, sk, comp, model = agent(['{"direction": "long", "size_bps": 300}', "no json", '{"direction": "long"}'], 3)
+    pending = {pk_b64(sk): [{"duel_id": "5", "payload": ATTACK, "block": "9"}]}
+    assert post(d, sk, comp, model, pending)[1] == "posted"
+    (r,) = rows()
+    g = r["guard"]
+    assert (g["votes"], g["proof_judgment"], len(g["judgments"])) == (["Long", None, "Long"], 0, 3)
+    assert check_row(r) == (True, "ok")
+
+
 def test_unattacked_row_keeps_the_stated_size_under_the_mandate(agent):
     d, sk, comp, model = agent(['{"direction": "long", "size_bps": 300}'])
     assert post(d, sk, comp, model, {})[1] == "posted"

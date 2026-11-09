@@ -62,7 +62,7 @@ class Decision:
     size_note: str = ""  # variant D: "no telemetry", "sized" or "malformed: <why>"
     size_cap: int | None = None  # hardened-v2: the policy cap applied to size_asked
     cues_removed: list[str] = field(default_factory=list)  # hardened-v2: what cue_guard took out of the injection
-    votes: list[int] = field(default_factory=list)  # hardened-v2: each parsed judgment's direction, in call order
+    votes: list[int] = field(default_factory=list)  # hardened-v2: each call's direction in call order, 0: unparseable
     proof_index: int | None = None  # hardened-v2: the call the intent's proof binds (None: the last call)
     verdict: dict[str, float | str | None] | None = None  # hardened-v3: the judge's parsed verdict; None: no call
 
@@ -220,8 +220,8 @@ class Duelist:
 
     def _decide_v2(self, symbol: str, brief: str, injection: str | None) -> Decision:
         """hardened-v2: `judgments` calls on the same system and user messages; the majority side wins and the first
-        call on that side is the proof. An unparseable judgment does not vote; if none parses, the first error is
-        raised. The size is `policy_size` of the proof call's stated size.
+        call on that side is the proof. An unparseable judgment does not vote (0 in `votes`, which stays one entry
+        per call); if none parses, the first error is raised. The size is `policy_size` of the proof call's stated size.
 
         hardened-v3 under paid text first asks the judge on the headline alone; its verdict and sha256 of its reply go
         into the user message and set the cap. The judge never sees the brief."""
@@ -237,12 +237,15 @@ class Duelist:
             user, cues = user_v2(brief, injection)
         judged: list[tuple[int, Decision, str]] = []
         errors: list[DuelistError] = []
+        votes: list[int] = []
         for i in range(max(1, self.judgments)):
             raw = self._complete(system, user)
             try:
                 judged.append((i, parse_decision(raw), raw))
+                votes.append(judged[-1][1].direction)
             except DuelistError as e:
                 errors.append(e)
+                votes.append(0)  # keeps votes[i] the vote of call i
         if not judged:
             raise errors[0]
         side = Counter(d.direction for _, d, _ in judged).most_common(1)[0][0]  # ties: first seen
@@ -254,6 +257,6 @@ class Duelist:
         decision.size_bps, decision.size_cap = policy_size(decision.size_asked, bool(injection), verdict)
         decision.verdict = verdict
         decision.cues_removed = cues
-        decision.votes = [d.direction for _, d, _ in judged]
+        decision.votes = votes
         decision.proof_index = index
         return decision

@@ -122,7 +122,7 @@ def test_k_judgments_take_the_majority_side_and_the_proof_is_the_first_on_it():
         return next(replies, None) or next(replies2)
 
     d = v2(model, judgments=4).decide("NEAR/USD", BRIEF, ATTACK)
-    assert (d.direction, d.votes, d.proof_index, d.size_asked, d.size_bps) == (1, [-1, 1, 1], 2, 300, 300)
+    assert (d.direction, d.votes, d.proof_index, d.size_asked, d.size_bps) == (1, [-1, 0, 1, 1], 2, 300, 300)
     assert len(seen) == 4 and len(set(seen)) == 1  # k independent calls on the same request
 
 

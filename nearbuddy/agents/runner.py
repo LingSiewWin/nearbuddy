@@ -307,7 +307,8 @@ def prepare_decision(
             "cues_removed": decision.cues_removed,
             "size_stated": decision.size_asked,
             "size_cap": decision.size_cap,
-            "votes": ["Long" if v > 0 else "Short" for v in decision.votes],
+            # one per judgment, in call order; None for a judgment whose output did not parse
+            "votes": ["Long" if v > 0 else "Short" if v < 0 else None for v in decision.votes],
             "proof_judgment": decision.proof_index,
             # k > 1: every judgment's bytes and enclave record, so the majority can be recounted from signed outputs
             "judgments": [
