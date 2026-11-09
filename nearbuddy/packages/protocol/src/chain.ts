@@ -144,8 +144,10 @@ export async function warnIfArenaMissing(
 }
 
 /** Fields `get_config` gained over time. abi/arena.json describes the current source; an older arena omits them
- *  (commit-reveal and consent arrived by deploy 14; vault caps, pause and `intents_account` with deploy 15). */
+ *  (commit-reveal and consent arrived by deploy 14; vault caps, pause and `intents_account` with deploy 15; the chaos
+ *  terms with deploy 17). */
 type LateConfigField =
+  | "chaos"
   | "commit_reveal"
   | "no_reveal_bps"
   | "require_consent"
@@ -162,6 +164,13 @@ export type ArenaConfigAnyDeploy = Omit<Config, LateConfigField> & Partial<Pick<
 export const arenaConfigAnyDeploy = (): Promise<ArenaConfigAnyDeploy> => arenaView("get_config", {});
 
 type ArenaView = typeof arenaView;
+
+/** Deploy 17 or later (chaos v2): `get_config` carries the `chaos` terms. The headline itself goes on chain with
+ *  `inject_chaos(duel_id, target, kind, headline)` at `chaos_fee(duel_id)`; before it (16.1) the solver held the text
+ *  (POST /chaos) and the call took its sha256, and `chaos_fee` does not exist. */
+export function isChaosV2(cfg: ArenaConfigAnyDeploy): boolean {
+  return cfg.chaos != null;
+}
 
 /** Deploy 15 or later (verified settlement): `get_config` names the intents account. */
 export async function isDeploy15(view: ArenaView = arenaView): Promise<boolean> {
