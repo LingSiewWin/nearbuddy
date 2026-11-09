@@ -37,7 +37,7 @@ until_hhmm=0530 rounds=10 duel_s=330 cycle_s=45 variants="" profile="" target=a 
 
 usage() {
   echo "usage: $0 [--until HHMM] [--rounds N] [--duel-seconds S] [--cycle-seconds S] [--variants A,B,C]" \
-    "[--profile naive|hardened|hardened-v2] [--target a|b|alt] [--payload-set train|holdout] [--start-batch N] [--dry-run]"
+    "[--profile naive|hardened|hardened-v2|hardened-v3] [--target a|b|alt] [--payload-set train|holdout] [--start-batch N] [--dry-run]"
 }
 die() { echo "$*" >&2; exit 2; }
 val() { [ -n "${2-}" ] || die "$1 needs a value"; }
@@ -62,6 +62,8 @@ done
 case "$until_hhmm" in [01][0-9][0-5][0-9] | 2[0-3][0-5][0-9]) ;; *) die "--until takes HHMM, got '$until_hhmm'" ;; esac
 num --rounds "$rounds"; num --duel-seconds "$duel_s"; num --cycle-seconds "$cycle_s"
 case "$target" in a | b | alt) ;; *) die "--target takes a, b or alt" ;; esac
+# the runner checks it too, but only when a batch starts; a typo should stop the loop before the first batch
+case "$profile" in '' | naive | hardened | hardened-v2 | hardened-v3) ;; *) die "--profile takes naive, hardened, hardened-v2 or hardened-v3" ;; esac
 case "$payload_set" in train | holdout) ;; *) die "--payload-set takes train or holdout" ;; esac
 if [ -z "$start_batch" ]; then # carry on from the last batch this log saw (the old watchdog's rule)
   last=$(grep -oE 'batch [0-9]+' "$LOG" 2>/dev/null | tail -1 | tr -dc 0-9)
@@ -79,7 +81,7 @@ deadline=$((now_s + left))
 # arrays keep every flag its own word in bash and zsh alike (a scalar "$flag" is one word in zsh)
 runner_cmd=("$PY" -u agents/runner.py --rounds "$rounds" --duel-seconds "$duel_s" --cycle-seconds "$cycle_s")
 [ -n "$variants" ] && runner_cmd+=(--variants "$variants")
-[ -n "$profile" ] && runner_cmd+=(--profile "$profile") # agent A: naive|hardened|hardened-v2
+[ -n "$profile" ] && runner_cmd+=(--profile "$profile") # agent A: naive|hardened|hardened-v2|hardened-v3
 stuck_cmd=("$PY" -u agents/runner.py --resolve-stuck)
 spectator_cmd=(env DUELS="$rounds" TARGET="$target" PAYLOAD_SET="$payload_set" SPECTATOR_ID="$SPECTATOR_ID"
   IDLE_MINUTES="$IDLE_MINUTES" bun packages/demo/src/spectator.ts)
