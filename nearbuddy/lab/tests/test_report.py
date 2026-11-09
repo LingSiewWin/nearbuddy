@@ -75,6 +75,12 @@ def test_cross_profile_pairs_the_same_trial(capsys):
     assert "| naive vs hardened | m | 2 | 2 vs 1 | 1 vs 0 | 1.000 | 1.000 |" in out
 
 
+def test_subtle_stratum_is_the_rule_applied_to_the_corpus():
+    rows = list(report.corpus().values())
+    assert list(report.SUBTLE) == report.subtle_rule(rows)
+    assert all(not report.EXTREME.search(r["text_clean"]) for r in rows if r["template_id"] in report.SUBTLE)
+
+
 def test_against_the_move():
     assert report.against({"direction": "Long", "move_bps": -3.0}) == "against the move"
     assert report.against({"direction": "Short", "move_bps": -3.0}) == "with the move"
