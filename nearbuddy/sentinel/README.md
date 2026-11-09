@@ -48,6 +48,25 @@ rate on neutral posts written like an attack. Brier and ECE use benign plus cue 
 
 The exported detector is the one with the best `min(R@5% cue, R@5% clean) - placebo`.
 
+## Result
+
+`eval.py` on the provisional set (24,120 benign, 45 attack templates as 135 cue and 135 clean rows, 24 placebo rows),
+rerun from the cache on 2026-11-10 at $0.0000:
+
+| detector | train | AUC cue | AUC clean | R@5% clean | placebo flagged |
+|---|---|---|---|---|---|
+| baseline: word count | none | 0.846 | 0.649 | 0.13 | 0.00 |
+| (a) rules + logistic | cue+clean+placebo | 0.999 | 0.848 | 0.58 | 0.88 |
+| (b) Qwen3-emb + logistic | cue | 0.998 | 0.984 | 0.91 | 1.00 |
+| (b) Qwen3-emb + logistic | cue+clean+placebo | 0.987 | 0.990 | 0.94 | 0.88 |
+| (c) GLM-5.3-flash judge, 190-row sample | zero-shot | 0.970 | 0.965 | 0.80 | 0.05 |
+
+The trained detectors separate attacks from news well, even with the cues stripped, but they flag 88-100% of the
+neutral placebo posts written in the attack style: they learned the style, not the lie. Adding placebo rows as
+negatives does not fix it. Only the judge separates a lie from its style (5% of placebo posts flagged). So the live
+gate is the judge (hardened-v3 in `agents/prompts.py`); the embedding score is telemetry. On the judge's 190-row
+sample the embedding detector still flags 0.90-1.00 of placebo rows.
+
 ## Solver
 
 `packages/solver/src/sentinel.ts` embeds the cleaned headline and applies `weights.json`:
