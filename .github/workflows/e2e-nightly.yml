@@ -60,7 +60,7 @@ jobs:
           curl -sfL "https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/${NEAR_SANDBOX_VERSION}/near-sandbox.tar.gz" |
             tar xz -C ~/.near-sandbox/"$NEAR_SANDBOX_VERSION" --strip-components 1 Linux-x86_64/near-sandbox
       - run: echo "NEAR_SANDBOX_BIN_PATH=$HOME/.near-sandbox/$NEAR_SANDBOX_VERSION/near-sandbox" >> "$GITHUB_ENV"
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3 (no floating v10 tag exists)
         with:
           version: "0.13.1"
           working-directory: nearbuddy/agents
