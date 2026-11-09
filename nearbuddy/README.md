@@ -88,9 +88,35 @@ route).
 - Fixtures: `fixtures/guard-rows-v1.jsonl`, `fixtures/guard-rows-v3-bound.jsonl` (five hardened-v3 rows signed under
   judge prompt version 2).
 
-> **Controlled experiment (pre-registered): results pending — see `lab/README.md`.** The pre-registered replication
-> of arXiv 2610.26438 with `Cue`, `Clean` and placebo arms lands with the lab merge. This README carries no
-> experiment numbers until then.
+### Controlled experiment (pre-registered, [`lab/README.md`](lab/README.md))
+
+A paired replication of the cue ablation in arXiv 2610.26438. It ran on the duelists' exact prompts inside NEAR AI
+Cloud: DeepSeek-V4.1-Flash, Qwen3.8-27B and GLM-5.3-Flash. The pre-registration, every amendment and the stopping rule
+are committed before the data. Each trial uses one frozen market snapshot × one headline in four arms: baseline, `Cue`
+(urgency tag + named source), `Clean` (same claim, cues stripped) and a neutral placebo. Flip = the decision moved to
+the lie's side from the baseline's side. Results come from `cd lab && uv run --locked python report.py`; only verified
+calls count. 10,011 calls cost $3.09; all 9,112 verified calls re-verify from the stored bytes and the enclave
+signature.
+
+| profile | cue flips | clean flips | placebo flips | cue vs clean (H1, Holm) | lie vs placebo (H2, Holm) |
+|---|---|---|---|---|---|
+| naive (pooled, 3 models) | 676/704 = 0.96 | 674/704 = 0.96 | 128/707 = 0.18 | p = 1.0 | p = 3.7e-223 |
+| hardened | 49/705 = 0.07 | 45/707 = 0.06 | 58/713 = 0.08 | p = 1.0 | p = 1.0 |
+| hardened-v2 | 68/618 = 0.11 | 71/624 = 0.11 | 111/657 = 0.17 | p = 1.0 | lie flips less, p = 0.011 |
+| hardened-v3 (stopped early by a NEAR AI outage; no Qwen) | 16/185 = 0.09 | 12/180 = 0.07 | 31/180 = 0.17 | p = 1.0 | p = 0.074 |
+
+- **The paper's cue effect did not replicate.** On the naive prompt, the claim alone flips about 96% of decisions,
+  with or without "BREAKING" and a named source. So the attack vector is the claim, not its credibility dressing.
+  That is why cue_guard alone is not the defense; the provenance blocks are.
+- **The defenses work.** Naive vs hardened, paired cue flips: 661 vs 49 (p = 1.7e-179). Under every hardened profile a
+  lie flips no more often than a neutral headline.
+- **v2 vs v3:** no difference on this sample (10 vs 12 discordant pairs, p = 1.0). In the 19-trial
+  "judge-plausible" stratum, v3's cue arm flipped 3 times and v2's once. That is too few to confirm or rule out the
+  risk that a "plausible" verdict adds credibility.
+- **The README's older injection claims, recomputed from raw rows** (`lab/claims.py`):
+  - Naive is 21/22 = 0.95 [0.78, 0.99], not 22/23; one duel carried two opposite payloads.
+  - The hardened "18/29" reproduces, but every one of those 18 pushed with the price move. Against the move it is
+    0/10.
 
 ## Chaos v2 mechanics (deploy 17)
 
@@ -735,7 +761,8 @@ agents registered under v1 stay registered, and clients sign whatever the `regis
 - **Headline delivery checked on chain (M1).** Today `check_row` proves off chain that the arm's text reached the
   model. The fix requires the request body on deciding reveals and a Rust port of `cue_guard`.
 - **Replacement race window.** The fix puts `seen = injections.len()` in the signed commit message.
-- **Controlled experiment results.** Pre-registered; results pending in `lab/README.md`.
+- **Controlled experiment results.** Pre-registered and done (A to C at full N; D stopped early by a NEAR AI
+  outage); see the table above and [`lab/README.md`](lab/README.md).
 
 ## Architecture
 
