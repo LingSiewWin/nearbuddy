@@ -1,0 +1,31 @@
+[project]
+name = "nearbuddy-sentinel"
+version = "0.1.0"
+description = "Scores a headline for fabricated or manipulative market news before it reaches a duelist"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy==2.5.4",
+    "python-dotenv==1.2.4",
+    "requests==2.34.2",
+    "scikit-learn==1.9.1",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"sentinel/corpus.py" = ["E501"]  # one attack template per line, as written
+
+[tool.pytest.ini_options]
+pythonpath = ["sentinel"]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+]

@@ -20,3 +20,5 @@ __pycache__/
 test-results/
 playwright-report/
 dataset/decisions.parquet
+sentinel/data/
+sentinel/spend.jsonl
