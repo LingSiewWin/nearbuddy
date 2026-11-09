@@ -273,7 +273,7 @@ use verified calls only, and are Holm-adjusted within their family. Each interva
 - **Size shift.** Pooled, the shift toward the lie is +1060 bps for cue and +1136 for placebo. That shift is the
   1000 bps cap shrinking the baseline's position under any paid text, not a move toward the lie. Under paid text
   every model stated a size at or below the cap, so the stated size equals the executed one.
-- **Exclusions.** Qwen3.8-27B lost 48 trials to `502 Bad Gateway` after 5 retries (a 04:20-05:00 Qwen outage;
+- **Exclusions.** Qwen3.8-27B lost 48 trials to `502 Bad Gateway` after 5 retries (a Qwen outage from 05:09 to 05:22 +08;
   counted, not replaced). It also hit its 600-token cap (`finish_reason: length`) on about 20% of headline calls.
   So Qwen's C cells hold 157-182 outcomes, not 240.
 - **Cross-profile (amendment 2, Holm over 12).** On the same trials, naive flips far more than hardened or v2 in
