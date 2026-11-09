@@ -728,7 +728,7 @@ fn set_oracle_bounds_lock_to_half_the_floor() {
 
 #[test]
 fn intent_message_len_matches_ts() {
-    // Mirrors packages/protocol/src/intent.test.ts: domain + (4+32) + 8 + 1 + 2 + 8 + 8 + (4+32).
+    // Layout: domain + (4+32) + 8 + 1 + 2 + 8 + 8 + (4+32). Exact bytes: wire_vectors_match_shared_file.
     let i = Intent {
         agent_pk: Base64VecU8(vec![1u8; 32]),
         duel_id: U64(7),
@@ -741,7 +741,73 @@ fn intent_message_len_matches_ts() {
     let m = intent_message(&i);
     assert_eq!(m.len(), 19 + 36 + 8 + 1 + 2 + 8 + 8 + 36);
     assert_eq!(m[19 + 36 + 8], 1);
-    println!("INTENT_HEX {}", hex(&m));
+}
+
+/// Shared with packages/protocol/src/wire-vectors.test.ts and agents/tests/test_wire_vectors.py;
+/// all three compare bytes, so a format drift in any language fails its own suite.
+const WIRE: &str = include_str!("../../fixtures/wire-vectors.json");
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn wire_vectors_match_shared_file() {
+    use near_sdk::serde_json::{Value, from_str, from_value};
+    let v: Value = from_str(WIRE).unwrap();
+    let s = |p: &str| v.pointer(p).and_then(Value::as_str).unwrap().to_string();
+    let contract: AccountId = s("/contract").parse().unwrap();
+    ctx(OWNER, 0); // env::sha256 and ed25519_verify need a VM context
+
+    let i: Intent = from_value(v["intent"].clone()).unwrap();
+    let m = intent_message(&i);
+    assert_eq!(hex(&m), s("/intent_hex"));
+
+    // `commitment` is the helper the reveal_intent tests feed to the contract
+    let c = commitment(&i, &unhex(&s("/commit/salt_hex")));
+    assert_eq!(hex(&c), s("/commit/commitment_hex"));
+    let duel: u64 = s("/commit/duel_id").parse().unwrap();
+    assert_eq!(
+        hex(&commit_bytes(&contract, duel, &c)),
+        s("/commit/message_hex")
+    );
+
+    let a: Base64VecU8 = from_value(v["consent"]["a"].clone()).unwrap();
+    let b: Base64VecU8 = from_value(v["consent"]["b"].clone()).unwrap();
+    let close: u64 = s("/consent/close_at").parse().unwrap();
+    let consent = consent_bytes(&contract, &a.0, &b.0, &s("/consent/symbol"), close);
+    assert_eq!(hex(&consent), s("/consent/message_hex"));
+
+    let (req, res) = (
+        unhex(&s("/tee/request_hash_hex")),
+        unhex(&s("/tee/response_hash_hex")),
+    );
+    let model = s("/tee/model");
+    assert_eq!(
+        tee_text(1, &model, &req, &res),
+        s("/tee/text_kind1").into_bytes()
+    );
+    assert_eq!(
+        tee_text(2, &model, &req, &res),
+        s("/tee/text_kind2").into_bytes()
+    );
+    assert_eq!(hex(&proof_hash(&req, &res)), s("/tee/proof_hash_hex"));
+
+    let seed: [u8; 32] = unhex(&s("/signed/seed_hex")).try_into().unwrap();
+    let sk = SigningKey::from_bytes(&seed);
+    let si: Intent = from_value(v["signed"]["intent"].clone()).unwrap();
+    assert_eq!(si.agent_pk.0, sk.verifying_key().to_bytes().to_vec());
+    assert_eq!(hex(&intent_message(&si)), s("/signed/message_hex"));
+    let signed = sign(&sk, &si);
+    assert_eq!(hex(&signed.signature.0), s("/signed/signature_hex"));
+    assert!(verify(
+        &si.agent_pk.0,
+        &intent_message(&si),
+        &signed.signature.0
+    ));
 }
 
 // ---------------------------------------------------------------- vault, mandates, settle_follow
