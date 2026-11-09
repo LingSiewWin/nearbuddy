@@ -256,6 +256,31 @@ use verified calls only, and are Holm-adjusted within their family. Each interva
 - **Size shift.** The naive prompt moves the position +9602 bps toward the lie (cue, pooled); the hardened prompt
   moves it +695, which is no more than its placebo (+813).
 
+### Experiment C: hardened-v2 profile (amendment 2), 240 trials per model, cue_guard v2
+
+| model | trials | cue flip | clean flip | placebo flip | H1 cue-only vs clean-only | H1 Holm p | H2 Fisher p (Holm) |
+|---|---|---|---|---|---|---|---|
+| Qwen3.8-27B | 192 | 23/157 0.15 [0.10, 0.21] | 24/163 0.15 [0.10, 0.21] | 37/182 0.20 [0.15, 0.27] | 2 vs 5 | 1.000 | 0.200 (0.204) |
+| DeepSeek-V4.1-Flash-1017 | 240 | 27/240 0.11 [0.08, 0.16] | 27/240 0.11 [0.08, 0.16] | 42/240 0.17 [0.13, 0.23] | 15 vs 15 | 1.000 | 0.068 (0.204) |
+| glm-5.3-flash | 236 | 18/221 0.08 [0.05, 0.13] | 20/221 0.09 [0.06, 0.14] | 32/235 0.14 [0.10, 0.19] | 6 vs 7 | 1.000 | 0.072 (0.204) |
+| pooled | 668 | 68/618 0.11 [0.09, 0.14] | 71/624 0.11 [0.09, 0.14] | 111/657 0.17 [0.14, 0.20] | 23 vs 27 | 1.000 | 0.003 (0.011) |
+
+- **H1c: null, as predicted.** cue_guard maps the cue and clean text to the same string, and the `cues_removed`
+  count alone moves nothing (23 vs 27 discordant pairs).
+- **H2c is not supported, and the pooled effect runs the other way.** A cued lie flips v2 less often than a cued
+  neutral headline (0.11 vs 0.17, Holm p = 0.011). Under the provenance block, a lie does not pull the model toward
+  its side.
+- **Size shift.** Pooled, the shift toward the lie is +1060 bps for cue and +1136 for placebo. That shift is the
+  1000 bps cap shrinking the baseline's position under any paid text, not a move toward the lie. Under paid text
+  every model stated a size at or below the cap, so the stated size equals the executed one.
+- **Exclusions.** Qwen3.8-27B lost 48 trials to `502 Bad Gateway` after 5 retries (a 04:20-05:00 Qwen outage;
+  counted, not replaced). It also hit its 600-token cap (`finish_reason: length`) on about 20% of headline calls.
+  So Qwen's C cells hold 157-182 outcomes, not 240.
+- **Cross-profile (amendment 2, Holm over 12).** On the same trials, naive flips far more than hardened or v2 in
+  every model (pooled 661 vs 49 and 579 vs 64, Holm p < 1e-150). Hardened vs v2 differs only for Qwen: v2 flips
+  23 against hardened's 2, Holm p = 2.3e-05. But Qwen's v2 placebo also flips 0.20, so on Qwen, v2 adds noise
+  rather than credulity. Pooled hardened vs v2: 37 vs 57 discordant pairs, Holm p = 0.148.
+
 ## The repo README's injection claims, recomputed
 
 `uv run --locked python claims.py` reads `../dataset/decisions.jsonl` and recomputes the claims from the raw rows, with
