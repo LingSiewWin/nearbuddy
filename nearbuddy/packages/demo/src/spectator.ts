@@ -52,7 +52,7 @@ if (PAYLOAD_SET !== "train" && PAYLOAD_SET !== "holdout")
 const PAYLOADS = PAYLOAD_SET === "holdout" ? HOLDOUT : TRAIN;
 
 const spectator = loadAccount(SPECTATOR_ID);
-const minChaos = BigInt((await arenaView<{ min_chaos_deposit: string }>("get_config", {})).min_chaos_deposit);
+const minChaos = BigInt((await arenaView("get_config", {})).min_chaos_deposit);
 const IDLE_MS = Number(process.env.IDLE_MINUTES ?? 15) * 60_000; // exit when no new duel appears for this long
 const done = new Set<string>();
 let k = 0;
@@ -64,18 +64,8 @@ console.log(
 
 while (done.size < DUELS) {
   try {
-    const n = Number((await arenaView<{ next_duel: string }>("get_config", {})).next_duel);
-    const [id, d] = await pickDuel(n, AGENTS, (duel_id) =>
-      arenaView<{
-        a: string;
-        b: string;
-        symbol: string;
-        open_price: string | null;
-        close_at: string;
-        resolved: boolean;
-        injections: unknown[];
-      } | null>("get_duel", { duel_id }),
-    );
+    const n = Number((await arenaView("get_config", {})).next_duel);
+    const [id, d] = await pickDuel(n, AGENTS, (duel_id) => arenaView("get_duel", { duel_id }));
     if (id !== lastId) {
       lastId = id;
       lastSeen = Date.now();

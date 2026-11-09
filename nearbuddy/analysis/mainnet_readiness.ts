@@ -8,6 +8,7 @@
 //   MAINNET_RPC=https://rpc.mainnet.fastnear.com OWNER_ID_MAINNET=nearbuddy.near SOLVER_ID_MAINNET=solver.nearbuddy.near
 import "../packages/protocol/src/env.ts";
 import { randomBytes } from "node:crypto";
+import type { ArenaViews, Config } from "../packages/protocol/src/abi/arena.ts";
 import { unhex } from "../packages/protocol/src/index.ts";
 import { NETWORKS } from "../packages/protocol/src/network.ts";
 import { quote, sellNearForUsdc, USDC_NEAR, WNEAR } from "../packages/solver/src/oneclick.ts";
@@ -242,26 +243,17 @@ const ARENA_RPC = process.env.NEAR_RPC ?? NETWORKS[ON_MAINNET ? "mainnet" : "tes
 // The testnet stand-in for intents.near that deploy 15 is migrated with (scripts/deploy15-testnet.sh).
 const INTENTS_STUB = process.env.INTENTS_STUB ?? "intents-stub.nearbuddy-solver.testnet";
 const MAX_VAULT_MAINNET = 27n * 10n ** 24n; // the week-4 cap: 100 USDC total
-type V15Config = {
-  owner: string;
-  oracle_account: string;
-  intent_lock_s: number;
-  min_duel_s: number;
-  next_duel: string;
-  intents_account?: string;
-  migrating?: boolean;
-  paused?: boolean;
-  withdraw_delay_s?: number;
-  max_vault_total?: string;
-  vault_total?: string;
-};
-const arenaCfg = await view<V15Config>(ARENA, "get_config", {}, ARENA_RPC).catch(() => null);
+/** A view on ARENA; the method name picks args and result from abi/arena.json (the current contract). */
+const arenaView = <M extends keyof ArenaViews>(method: M, args: ArenaViews[M]["args"]) =>
+  view<ArenaViews[M]["result"]>(ARENA, method, args, ARENA_RPC);
+const arenaCfg = await arenaView("get_config", {}).catch(() => null);
+// runtime check, not the type: deploy 14 and earlier have no intents_account although abi/arena.json does
 const v15 = typeof arenaCfg?.intents_account === "string";
 const notDeployed = (): [Row["result"], string] => [
   ON_MAINNET ? "FAIL" : "SKIP",
   arenaCfg ? "not deployed: get_config has no intents_account (deploy 14 or earlier)" : `cannot read ${ARENA}`,
 ];
-const v15check = (name: string, fn: (c: V15Config) => Promise<[Row["result"], string]>) =>
+const v15check = (name: string, fn: (c: Config) => Promise<[Row["result"], string]>) =>
   check(`${ARENA} ${name}`, async () => (v15 && arenaCfg ? fn(arenaCfg) : notDeployed()));
 
 await v15check("deploy 15: intents_account", async (c) => {
@@ -270,7 +262,7 @@ await v15check("deploy 15: intents_account", async (c) => {
 });
 await v15check("deploy 15: intents_account answers mt_batch_balance_of for the arena", async (c) => {
   const b = await view<string[]>(
-    c.intents_account!,
+    c.intents_account,
     "mt_batch_balance_of",
     { account_id: ARENA, token_ids: [USDC_NEAR, WNEAR] },
     ARENA_RPC,
@@ -295,25 +287,23 @@ await v15check("deploy 15: vault cap", async (c) => {
   ];
 });
 await v15check("deploy 15: register domain v2 (contract id bound)", async (c) => {
-  const m = Buffer.from(
-    await view<string>(ARENA, "register_message", { owner: c.owner }, ARENA_RPC),
-    "base64",
-  ).toString();
+  const m = Buffer.from(await arenaView("register_message", { owner: c.owner }), "base64").toString();
   const want = `nearbuddy-register-v2${ARENA}\u0000${c.owner}`;
   return [m === want ? "PASS" : "FAIL", JSON.stringify(m).slice(0, 90)];
 });
 await v15check("deploy 15: duel_lock readable", async (c) => {
   const last = Number(c.next_duel) - 1;
   if (last < 0) return ["SKIP", "no duel yet"];
-  const lock = await view<string | null>(ARENA, "duel_lock", { duel_id: String(last) }, ARENA_RPC);
+  const lock = await arenaView("duel_lock", { duel_id: String(last) });
   return [
     lock !== null ? "PASS" : "FAIL",
     `duel ${last}: lock ${lock === null ? "null" : `${Number(BigInt(lock) / 10n ** 9n)} s`}`,
   ];
 });
 await v15check("deploy 15: leaderboard pages, list_followers gone", async () => {
-  const page = await view<unknown[]>(ARENA, "leaderboard", { from: 0, limit: 1 }, ARENA_RPC);
-  // gone only on a MethodNotFound answer; any other error (RPC down, bad args) says nothing either way
+  const page = await arenaView("leaderboard", { from: 0, limit: 1 });
+  // gone only on a MethodNotFound answer; any other error (RPC down, bad args) says nothing either way. A removed
+  // view, so not in abi/arena.json: read untyped.
   const gone = await view(ARENA, "list_followers", { agent_pk: "" }, ARENA_RPC).then(
     () => false,
     (e) => {

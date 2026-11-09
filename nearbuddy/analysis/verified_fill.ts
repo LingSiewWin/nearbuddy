@@ -65,25 +65,18 @@ function row(step: string, out: Out | null, detail: string, want: boolean | null
   console.log(`${step}: ${out ? out.hash : ""} ${verdict}${detail}`);
 }
 
-const cfg = await arenaView<{ intents_account?: string; fee_bps: number; withdraw_delay_s: number }>("get_config", {});
+const cfg = await arenaView("get_config", {});
+// runtime check, not the type: a deploy-14 contract has no intents_account although abi/arena.json (current) does
 if (!cfg.intents_account) throw new Error(`${ARENA} has no intents_account: deploy 15 is not live there`);
 const STUB = cfg.intents_account;
 
 // a live enclave agent with an accepted (revealed) intent: its nonce backs the fill
-type AgentView = { pk: string; tee: boolean };
-type Duel = {
-  a: string;
-  b: string;
-  resolved: boolean;
-  last_intent_a: { nonce: string } | null;
-  last_intent_b: { nonce: string } | null;
-};
 let agent = process.env.AGENT_PK ?? "";
 let nonce = "";
-for (const a of await arenaView<AgentView[]>("leaderboard", { from: 0, limit: 100 })) {
+for (const a of await arenaView("leaderboard", { from: 0, limit: 100 })) {
   if (!a.tee || (agent && a.pk !== agent)) continue;
-  for (const id of await arenaView<string[]>("agent_duels", { agent_pk: a.pk, from: 0, limit: 8 })) {
-    const d = await arenaView<Duel | null>("get_duel", { duel_id: id });
+  for (const id of await arenaView("agent_duels", { agent_pk: a.pk, from: 0, limit: 8 })) {
+    const d = await arenaView("get_duel", { duel_id: id });
     const last = d?.a === a.pk ? d.last_intent_a : d?.b === a.pk ? d.last_intent_b : null;
     if (d?.resolved && last) {
       agent = a.pk;
@@ -110,7 +103,7 @@ const quoted = BigInt(q.quote.amountOut);
 const floor = priceFloor(amountIn, quoted);
 // the arena's unaccounted USDC on the stub: the refused fill must claim more than that
 const bal = BigInt(await viewAt<string>(STUB, "mt_balance_of", { account_id: ARENA, token_id: USDC_NEAR }));
-const accounted = BigInt(await arenaView<string>("get_accounted", { token_id: USDC_NEAR }));
+const accounted = BigInt(await arenaView("get_accounted", { token_id: USDC_NEAR }));
 const surplus = bal > accounted ? bal - accounted : 0n;
 const amountOut = surplus >= quoted ? surplus + 1n : quoted;
 console.log(
@@ -171,7 +164,7 @@ row(
   settled.ok ? JSON.stringify(report) : settled.failure,
   settled.ok && report?.settled === 1,
 );
-const holding = BigInt(await arenaView<string>("get_holding", { follower: FOLLOWER, token_id: USDC_NEAR }));
+const holding = BigInt(await arenaView("get_holding", { follower: FOLLOWER, token_id: USDC_NEAR }));
 row("holding == amount_out", null, `holding ${holding}, amount_out ${amountOut}`, holding === amountOut);
 const out = await send(follower, ARENA, "withdraw_token", { token_id: USDC_NEAR, amount: holding.toString() }, 1n);
 const onStub = BigInt(await viewAt<string>(STUB, "mt_balance_of", { account_id: FOLLOWER, token_id: USDC_NEAR }));
@@ -193,16 +186,13 @@ row(
   !early.ok && early.failure.includes("withdrawal delay not elapsed"),
 );
 if (!process.env.SKIP_DELAY) {
-  const [, readyAt] = (await arenaView<[string, string] | null>("get_pending_withdraw", { account: FOLLOWER })) ?? [
-    "0",
-    "0",
-  ];
+  const [, readyAt] = (await arenaView("get_pending_withdraw", { account: FOLLOWER })) ?? ["0", "0"];
   const waitMs = Math.max(0, Number((BigInt(readyAt) - BigInt(Date.now()) * 1_000_000n) / 1_000_000n)) + 20_000;
   console.log(`waiting ${Math.round(waitMs / 1000)} s for the delay`);
   await new Promise((r) => setTimeout(r, waitMs));
-  const before = BigInt(await arenaView<string>("get_vault", { account: FOLLOWER }));
+  const before = BigInt(await arenaView("get_vault", { account: FOLLOWER }));
   const paid = await send(follower, ARENA, "withdraw", {}, 1n);
-  const after = BigInt(await arenaView<string>("get_vault", { account: FOLLOWER }));
+  const after = BigInt(await arenaView("get_vault", { account: FOLLOWER }));
   row(
     "withdraw after the delay",
     paid,

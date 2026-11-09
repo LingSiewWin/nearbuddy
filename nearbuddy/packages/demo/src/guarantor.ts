@@ -8,9 +8,9 @@ import { readFileSync } from "node:fs";
 import { createWalletClient, formatUnits, type Hex, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
+import type { PullReport } from "../../protocol/src/abi/vault.ts";
 import type { SignedCert } from "../../protocol/src/cert.ts";
 import { CONTRACT, explorerTx, fmtNear, provider, view } from "../../protocol/src/chain.ts";
-import type { IssuerReserve, PullReport } from "../../solver/src/guarantor.ts";
 import { erc20, evm, PULLER, SEPOLIA_RPC, USDC } from "../../solver/src/pull.ts";
 
 const ISSUER = process.env.ISSUER_ID ?? "nearbuddy-api.testnet";
@@ -39,7 +39,7 @@ const box = (title: string, rows: string[]) => {
 const step = (s: string) => console.log(`\n▶ ${s}`);
 const post = async <T>(path: string, body: unknown): Promise<T> =>
   (await fetch(`${SOLVER_URL}${path}`, { method: "POST", body: JSON.stringify(body) })).json() as Promise<T>;
-const getIssuer = () => view<IssuerReserve | null>("get_issuer", { issuer: ISSUER });
+const getIssuer = () => view("get_issuer", { issuer: ISSUER });
 const usdc = (a: Hex) => evm.readContract({ address: USDC, abi: erc20, functionName: "balanceOf", args: [a] });
 const nearBal = async (id: string) => BigInt((await provider.viewAccount({ accountId: id })).amount);
 

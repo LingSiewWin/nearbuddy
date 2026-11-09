@@ -4,26 +4,12 @@
 // which pays the issuer from the reserve for every failed pull.
 import { type Account, KeyPair, teraToGas } from "near-api-js";
 import type { Hex } from "viem";
+import type { PullReport } from "../../protocol/src/abi/vault.ts";
 import { type GuaranteeCert, type PullSettlement, type SignedCert, signCert } from "../../protocol/src/cert.ts";
 import { CONTRACT, loadKey, view } from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import { Ledger } from "./ledger.ts";
 import { CHAIN_ID, observe, type PullResult, pull, USDC } from "./pull.ts";
-
-export interface IssuerReserve {
-  solver: string;
-  reserved: string;
-  paid_out: string;
-  fees_accrued: string;
-  pulls_ok: number;
-  pulls_failed: number;
-}
-export interface PullReport {
-  settled: number;
-  paid_out: string;
-  fees_accrued: string;
-  rejected: { index: number; reason: string }[];
-}
 
 /// yoctoNEAR the issuer is paid per failed pull. ponytail: flat; price it off the USDC amount later.
 const PAYOUT_YOCTO = BigInt(process.env.GUARANTEE_PAYOUT_YOCTO ?? (10n ** 22n).toString()); // 0.01 NEAR
@@ -66,7 +52,7 @@ export class Guarantor {
     payoutTo: Hex,
   ): Promise<{ ok: true; signed: SignedCert; ms: number } | { ok: false; reason: string; ms: number }> {
     const t0 = Date.now();
-    const ir = await view<IssuerReserve | null>("get_issuer", { issuer });
+    const ir = await view("get_issuer", { issuer });
     if (!ir || ir.solver !== this.solverId)
       return { ok: false, reason: "no reserve for this issuer", ms: Date.now() - t0 };
     const carried = [...this.open.values()].filter((o) => o.signed.cert.issuer === issuer && !o.result).length;

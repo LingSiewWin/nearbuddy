@@ -136,7 +136,7 @@ export function duelMid(
 /** NEAR/USD for an execution record: the duel's latest Outlayer price, else Coinbase spot (labelled), else null. */
 export async function oracleMid(duel_id: string, fetchFn: typeof fetch = fetch): Promise<OracleMid | null> {
   try {
-    const m = duelMid(await arenaView<Parameters<typeof duelMid>[0]>("get_duel", { duel_id }));
+    const m = duelMid(await arenaView("get_duel", { duel_id }));
     if (m) return m;
   } catch {
     /* fall through to spot */

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { KeyPair } from "near-api-js";
+import type { Mandate } from "../../protocol/src/abi/arena.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import {
   commitMessage,
@@ -19,6 +20,7 @@ import {
   teeText,
   ZERO_PROOF,
 } from "../../protocol/src/intent.ts";
+import { agent, config, configV14 } from "./arena.fixture.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "arena-routes-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
@@ -382,12 +384,12 @@ test("POST /duel with sig_a and sig_b checks both consents and calls open_duel_c
 });
 
 test("pairOnce skips the tick when require_consent is on, and pairs idle agents with plain open_duel when off", async () => {
-  const idle = (pk: string) => ({ pk, model_id: "m", bond: "1", tee: true, in_duel: null });
+  const idle = (pk: string) => agent(pk, { bond: "1" });
   for (const require_consent of [true, false]) {
     const { calls, account } = fakeSolver(() => 21);
     let boards = 0;
     const arena = new Arena(account, "s.testnet", {
-      config: async () => ({ oracle_deposit: "100", require_consent }),
+      config: async () => configV14({ oracle_deposit: "100", require_consent }),
       leaderboard: async () => {
         boards++;
         return [idle("P1"), idle("P2")];
@@ -435,7 +437,7 @@ test("GET /execution: a batched intent records every follower's fill against the
   const asked: string[] = [];
   const { account } = fakeSolver();
   const arena = new Arena(account, "s.testnet", {
-    config: async () => ({ oracle_deposit: "0" }),
+    config: async () => configV14(),
     listFollowers: async () => [
       ["f1.testnet", mandate("750000000000000000000000")], // 0.75 NEAR
       ["f2.testnet", mandate("250000000000000000000000")], // 0.25 NEAR
@@ -481,7 +483,7 @@ test("GET /execution: no oracle mid (no Outlayer price, spot down) records nothi
   ) as import("./oneclick.ts").Quote;
   const { account } = fakeSolver();
   const arena = new Arena(account, "s.testnet", {
-    config: async () => ({ oracle_deposit: "0" }),
+    config: async () => configV14(),
     listFollowers: async () => [
       [
         "f1.testnet",
@@ -513,8 +515,8 @@ test("B17: the day cap's ledger survives a solver restart (history file)", async
     readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8"),
   ) as import("./oneclick.ts").Quote;
   const deps = {
-    config: async () => ({ oracle_deposit: "0" }),
-    listFollowers: async (): Promise<[string, import("./arena.ts").Mandate][]> => [
+    config: async () => configV14(),
+    listFollowers: async (): Promise<[string, Mandate][]> => [
       [
         "f1.testnet",
         {
@@ -555,7 +557,7 @@ const MANDATE = {
   expires_at: "1900000000000000000",
   revoked: false,
 };
-const V15 = async () => ({ oracle_deposit: "0", intents_account: "intents-stub.testnet" });
+const V15 = async () => config({ intents_account: "intents-stub.testnet" });
 
 test("POST /intent: a landed intent answers 200 with its tx even when the follower view throws", async () => {
   const { calls, account } = fakeSolver();
@@ -678,7 +680,7 @@ test("deploy 15: a dry-quote fill is refused with 400 before any chain call", as
 
 test("deploy 14: settle passes fills through untouched (no stub credit)", async () => {
   const { calls, account } = fakeSolver();
-  const arena = new Arena(account, "s.testnet", { config: async () => ({ oracle_deposit: "0" }) });
+  const arena = new Arena(account, "s.testnet", { config: async () => configV14() });
   const fills = [{ intent_nonce: "1", token: "t", amount_in: "1", amount_out: "1", swap_tx: "dry-quote:1" }];
   await arena.route("POST", "/settle_follow", JSON.stringify({ agent_pk: "pk", follower: "f", fills }), KEY);
   assert.deepEqual(
@@ -690,7 +692,7 @@ test("deploy 14: settle passes fills through untouched (no stub credit)", async 
 test("pairOnce reads the leaderboard paged {from: 0, limit: 100}", async () => {
   let args: Record<string, unknown> | null = null;
   const arena = new Arena(fakeSolver().account, "s.testnet", {
-    config: async () => ({ oracle_deposit: "0", require_consent: false }),
+    config: async () => configV14({ require_consent: false }),
   });
   await withRpc(
     {

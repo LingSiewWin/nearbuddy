@@ -17,6 +17,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { JsonRpcProvider } from "near-api-js";
+import type { ArenaViews, Duel, Intent } from "../packages/protocol/src/abi/arena.ts";
+import type { ArenaConfigAnyDeploy } from "../packages/protocol/src/chain.ts";
 import { parseEventJson } from "../packages/protocol/src/index.ts";
 import { NET, NETWORK_ID, networkFile } from "../packages/protocol/src/network.ts";
 
@@ -39,18 +41,6 @@ const OUT = networkFile(
   new URL(REVEAL_AWARE ? "./data/copier-v2.jsonl" : "./data/copier.jsonl", import.meta.url).pathname,
 );
 
-type Intent = { agent_pk: string; side: "Long" | "Short"; size_bps: number; nonce: string };
-type Duel = {
-  id: string;
-  a: string;
-  b: string;
-  close_at: string;
-  resolved: boolean;
-  last_intent_a: Intent | null;
-  last_intent_b: Intent | null;
-  outcome: { open_price: string; close_price: string } | null;
-  open_price: string | null;
-};
 type Row = {
   duel_id: string;
   agent_pk: string;
@@ -81,8 +71,9 @@ type Phase = {
 };
 
 const provider = new JsonRpcProvider({ url: RPC });
-const view = <T>(method: string, args: Record<string, unknown>) =>
-  provider.callFunction({ contractId: ARENA, method, args }) as Promise<T>;
+/** chain.ts's arenaView on this script's own RPC: the method name picks args and result from abi/arena.json. */
+const view = async <M extends keyof ArenaViews>(method: M, args: ArenaViews[M]["args"]) =>
+  (await provider.callFunction({ contractId: ARENA, method, args })) as ArenaViews[M]["result"];
 const agentClass = (pk: string): Row["agent"] =>
   HARDENED.some((p) => pk.startsWith(p)) ? "hardened" : NAIVE.some((p) => pk.startsWith(p)) ? "naive" : "other";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -327,11 +318,11 @@ async function collect(minutes: number) {
   console.log(`watching ${ARENA} via ${RPC}, ${minutes} min, ${REVEAL_AWARE ? "reveal-aware, " : ""}rows -> ${OUT}`);
   while (Date.now() < deadline) {
     try {
-      const { next_duel, commit_reveal } = await view<{ next_duel: string; commit_reveal?: boolean }>("get_config", {});
+      const { next_duel, commit_reveal }: ArenaConfigAnyDeploy = await view("get_config", {});
       const newest = String(Number(next_duel) - 1);
       const ids = new Set([newest, ...tracked.keys()]);
       for (const id of ids) {
-        const d = await view<Duel | null>("get_duel", { duel_id: id });
+        const d = await view("get_duel", { duel_id: id });
         if (!d) continue;
         for (const it of [d.last_intent_a, d.last_intent_b]) {
           if (!it) continue;

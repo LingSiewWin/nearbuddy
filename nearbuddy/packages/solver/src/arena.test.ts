@@ -4,6 +4,8 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { Mandate } from "../../protocol/src/abi/arena.ts";
+import { agent, configV14, duel } from "./arena.fixture.ts";
 import { type Quote, type QuoteRequest, USDC_NEAR, WNEAR } from "./oneclick.ts";
 
 // Keep the unit tests away from the solver's real state files.
@@ -13,13 +15,11 @@ process.env.ARENA_HISTORY = join(scratch, "history.json");
 process.env.ARENA_SECRET ??= "route-test-secret"; // shared module cache: arena.routes.test.ts reads it back from the module
 const { Arena, fillRecipient, mandateOpen, meetsFloor, outputToken, pairIdle, quoteAmount, tokenAllowed } =
   await import("./arena.ts");
-type Mandate = import("./arena.ts").Mandate;
-type AgentView = import("./arena.ts").AgentView;
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 const NOW = 1_700_000_000_000_000_000n;
 /** `get_config` before deploy 15 (no `intents_account`), so quotesFor never reaches the network. */
-const V14 = async () => ({ oracle_deposit: "0" });
+const V14 = async () => configV14();
 const m = (over: Partial<Mandate> = {}): Mandate => ({
   allowance: "1000",
   spent: "0",
@@ -290,13 +290,13 @@ test("B17: two intents landing together cannot both fit under the day cap", asyn
 
 test("route: unknown path is null; pending = on-chain injections whose payload we hold, minus consumed", async () => {
   const arena = new Arena({} as never, "s.testnet", {
-    getDuel: async () => ({
-      resolved: false,
-      injections: [
-        { kind: "fake_news", payload_hash: "H1", target: "A", block: "1" },
-        { kind: "x", payload_hash: "UNKNOWN", target: "A", block: "2" },
-      ],
-    }),
+    getDuel: async () =>
+      duel({
+        injections: [
+          { kind: "fake_news", payload_hash: "H1", target: "A", block: "1" },
+          { kind: "x", payload_hash: "UNKNOWN", target: "A", block: "2" },
+        ],
+      }),
   });
   assert.equal(await arena.route("GET", "/nope", ""), null);
   arena.openDuels.add("1");
@@ -345,22 +345,14 @@ test("payload hash is sha256 of the payload bytes", () => {
 });
 
 test("pairIdle pairs idle enclave agents above the min bond, neighbours by pk, odd one waits", () => {
-  const ag = (pk: string, over: Partial<AgentView> = {}): AgentView => ({
-    pk,
-    model_id: "m",
-    bond: "100",
-    tee: true,
-    in_duel: null,
-    ...over,
-  });
   const board = [
-    ag("D"),
-    ag("B"),
-    ag("A"),
-    ag("C", { in_duel: "7" }),
-    ag("E", { tee: false }),
-    ag("F", { bond: "10" }),
-    ag("G"),
+    agent("D"),
+    agent("B"),
+    agent("A"),
+    agent("C", { in_duel: "7" }),
+    agent("E", { tee: false }),
+    agent("F", { bond: "10" }),
+    agent("G"),
   ];
   assert.deepEqual(pairIdle(board, 50n), [
     ["A", "B"],
@@ -370,7 +362,7 @@ test("pairIdle pairs idle enclave agents above the min bond, neighbours by pk, o
     ["A", "B"],
     ["D", "F"],
   ]); // min bond 0: F qualifies, G is the odd one out
-  assert.deepEqual(pairIdle([ag("A")]), []);
+  assert.deepEqual(pairIdle([agent("A")]), []);
 });
 
 test("route: GET /agent_duel returns the agent's open duel from get_agent, decoding a '+' in the pk", async () => {
@@ -378,7 +370,7 @@ test("route: GET /agent_duel returns the agent's open duel from get_agent, decod
   const arena = new Arena({} as never, "s.testnet", {
     getAgent: async (pk) => {
       seen.push(pk);
-      return pk === "a+b=" ? { pk, model_id: "m", bond: "1", tee: true, in_duel: "42" } : null;
+      return pk === "a+b=" ? agent(pk, { in_duel: "42" }) : null;
     },
   });
   const hit = (await arena.route("GET", "/agent_duel?pk=a%2Bb%3D", ""))!.body as {
@@ -397,7 +389,7 @@ test("route: GET /agent_duel returns the agent's open duel from get_agent, decod
 });
 
 test("pairIdle leaves excluded agents (the operator's own runner pair) alone", () => {
-  const mk = (pk: string) => ({ pk, tee: true, in_duel: null, bond: "1" }) as never;
+  const mk = (pk: string) => agent(pk, { bond: "1" });
   const pairs = pairIdle([mk("c"), mk("a"), mk("b"), mk("d")], 0n, new Set(["a"]));
   assert.deepEqual(pairs, [["b", "c"]]);
 });

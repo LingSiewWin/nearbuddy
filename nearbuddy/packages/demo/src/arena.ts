@@ -9,6 +9,7 @@
 import "../../protocol/src/env.ts";
 import { sign as edSign } from "node:crypto";
 import { teraToGas } from "near-api-js";
+import type { Outcome } from "../../protocol/src/abi/arena.ts";
 import {
   ARENA,
   arenaView,
@@ -75,23 +76,17 @@ const settle = async (fills: unknown[]): Promise<Settled & { refused?: string }>
 const shown = (s: Settled & { refused?: string }) => (s.refused ? `refused: ${s.refused}` : JSON.stringify(s.report));
 const line = (label: string, tx: string, extra = "") => console.log(`${label.padEnd(18)} ${explorerTx(tx)} ${extra}`);
 
-type DuelIntents = {
-  a: string;
-  b: string;
-  last_intent_a: { nonce: string } | null;
-  last_intent_b: { nonce: string } | null;
-};
 /** The agent's latest posted intent nonces, newest first, read from its duels on chain: `agent_duels` (indexed
  *  from deploy 10 on) first, then the tail of all duels when the index is missing or still short. */
 const agentNonces = async (pk: string, want: number): Promise<string[]> => {
-  const ids = await arenaView<string[]>("agent_duels", { agent_pk: pk, from: 0, limit: 8 }).catch(() => [] as string[]);
+  const ids = await arenaView("agent_duels", { agent_pk: pk, from: 0, limit: 8 }).catch(() => [] as string[]);
   if (ids.length < want + 1) {
-    const n = Number((await arenaView<{ next_duel: string }>("get_config", {})).next_duel);
+    const n = Number((await arenaView("get_config", {})).next_duel);
     for (let id = n - 1; id >= Math.max(0, n - 12); id--) if (!ids.includes(String(id))) ids.push(String(id));
   }
   const out: string[] = [];
   for (const id of ids) {
-    const d = await arenaView<DuelIntents | null>("get_duel", { duel_id: id });
+    const d = await arenaView("get_duel", { duel_id: id });
     const last = d?.a === pk ? d.last_intent_a : d?.b === pk ? d.last_intent_b : null;
     if (last && !out.includes(last.nonce)) out.push(last.nonce);
     if (out.length >= want) return out;
@@ -149,7 +144,7 @@ line("open duel", duel.tx, `duel ${duel.duel_id}`);
 // spectator path: hand the solver the payload (open route), then pay for the injection on chain yourself
 const payload = "BREAKING: NEAR Foundation halts all validator rewards effective immediately.";
 const { payload_hash } = await post<{ payload_hash: string }>("/chaos", { payload });
-const minChaos = BigInt((await arenaView<{ min_chaos_deposit: string }>("get_config", {})).min_chaos_deposit);
+const minChaos = BigInt((await arenaView("get_config", {})).min_chaos_deposit);
 line(
   "inject chaos @A",
   await call("inject_chaos", { duel_id: duel.duel_id, target: pkA, kind: "fake_news", payload_hash }, minChaos),
@@ -216,37 +211,30 @@ const revoked = await settle([
 line("settle after revoke", revoked.tx, shown(revoked));
 if (DEPLOY15 ? revoked.refused !== undefined : !shown(revoked).includes("mandate revoked"))
   throw new Error(`fill after unfollow: unexpected ${shown(revoked)}`);
-const vault = await arenaView<string>("get_vault", { account: FOLLOWER_ID });
-const mandate = await arenaView<{ spent: string }>("get_follow", { agent_pk: teeA, follower: FOLLOWER_ID });
-console.log(`follower vault ${fmtNear(vault)} NEAR, mandate spent ${fmtNear(mandate.spent)} NEAR`);
+const vault = await arenaView("get_vault", { account: FOLLOWER_ID });
+const mandate = await arenaView("get_follow", { agent_pk: teeA, follower: FOLLOWER_ID });
+console.log(
+  `follower vault ${fmtNear(vault)} NEAR, mandate spent ${mandate ? fmtNear(mandate.spent) : "(no follow)"} NEAR`,
+);
 
 // 5. past close: ask the Outlayer TEE oracle for the close price (anyone may); its callback finishes the duel
 await new Promise((r) => setTimeout(r, Math.max(0, closeAt / 1_000_000 - Date.now() + 2_000)));
-const before = await arenaView<{ open_price: string | null }>("get_duel", { duel_id: duel.duel_id });
+const before = await arenaView("get_duel", { duel_id: duel.duel_id });
 const resolved = await post("/resolve", { duel_id: duel.duel_id });
 line(
   "resolve duel",
   resolved.tx,
-  `open price ${before.open_price ? (Number(before.open_price) / 1e8).toFixed(4) : "pending"} USD, oracle ${NET.oracle}`,
+  `open price ${before?.open_price ? (Number(before.open_price) / 1e8).toFixed(4) : "pending"} USD, oracle ${NET.oracle}`,
 );
-type Outcome = {
-  open_price: string;
-  close_price: string;
-  pnl_a: number;
-  pnl_b: number;
-  winner: string | null;
-  slashed: string;
-};
 let outcome: Outcome | null = null;
 for (let i = 0; i < 20 && !outcome; i++) {
   await new Promise((r) => setTimeout(r, 3000));
-  outcome = (await arenaView<{ outcome: Outcome | null }>("get_duel", { duel_id: duel.duel_id })).outcome;
+  outcome = (await arenaView("get_duel", { duel_id: duel.duel_id }))?.outcome ?? null;
 }
 if (!outcome) throw new Error("oracle callback did not land within 60 s; retry: POST /resolve");
 console.log(
   `outcome: ${(Number(outcome.open_price) / 1e8).toFixed(4)} -> ${(Number(outcome.close_price) / 1e8).toFixed(4)} USD  A ${outcome.pnl_a} bps  B ${outcome.pnl_b} bps  ${outcome.winner ? `winner ${outcome.winner === pkA ? "A" : "B"}, slashed ${fmtNear(outcome.slashed)} NEAR` : "tie"}`,
 );
-const a = await arenaView<{ alpha_bps: number; shield: number; bond: string; tee: boolean }>("get_agent", {
-  agent_pk: pkA,
-});
+const a = await arenaView("get_agent", { agent_pk: pkA });
+if (!a) throw new Error(`agent A ${pkA.slice(0, 12)}… is not registered`);
 console.log(`agent A: alpha ${a.alpha_bps} bps, shield ${a.shield}, bond ${fmtNear(a.bond)} NEAR, tee ${a.tee}`);

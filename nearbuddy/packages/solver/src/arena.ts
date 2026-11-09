@@ -21,7 +21,15 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Account, teraToGas } from "near-api-js";
-import { ARENA, arenaView, NEAR } from "../../protocol/src/chain.ts";
+import type { AgentView, Config, Duel, Fill, Mandate } from "../../protocol/src/abi/arena.ts";
+import {
+  ARENA,
+  type ArenaConfigAnyDeploy,
+  arenaConfigAnyDeploy,
+  arenaView,
+  NEAR,
+  provider,
+} from "../../protocol/src/chain.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import {
   commitMessage,
@@ -49,23 +57,6 @@ import {
   variableLeg,
 } from "./rfq.ts";
 
-export interface Mandate {
-  allowance: string;
-  spent: string;
-  per_tx_cap: string;
-  allowed_tokens: string[];
-  expires_at: string;
-  revoked: boolean;
-  /** Deploy 15: output units per NEAR in the fill must reach; "0" or absent = no floor. */
-  min_out_per_near?: string;
-}
-export interface Fill {
-  intent_nonce: string;
-  token: string;
-  amount_in: string;
-  amount_out: string;
-  swap_tx: string;
-}
 export interface Injection {
   duel_id: string;
   target: string;
@@ -91,14 +82,6 @@ interface IntentRecord {
   tx: string;
   quotes: FollowerQuote[];
   at: number;
-}
-/** `AgentView` from the contract (`leaderboard`, `get_agent`): the fields the pairing loop reads. */
-export interface AgentView {
-  pk: string;
-  model_id: string;
-  bond: string;
-  tee: boolean;
-  in_duel: string | null;
 }
 interface PairedDuel {
   at: number;
@@ -147,24 +130,23 @@ const GAS = teraToGas("100");
 const OPEN_DUEL_GAS = teraToGas("250");
 /** Storage margin added on top of the on-chain `oracle_deposit` for open_duel (a duel record is ~1 KB = 0.01 NEAR). */
 const OPEN_DUEL_STORAGE = 15_000_000_000_000_000_000_000n;
-/** The `get_config` fields the solver reads. */
-export interface ArenaConfig {
-  oracle_deposit: string;
-  require_consent?: boolean;
-  /** Present from deploy 15 on (verified settlement): where fill outputs land and `settle_follow` reads balances. */
-  intents_account?: string;
-  fee_bps?: number;
-}
 /** Deploy 15 (verified settlement) or later: `get_config` names the intents account. */
-export const verifiedSettlement = (c: ArenaConfig | null): boolean => typeof c?.intents_account === "string";
-let configMemo: { at: number; v: ArenaConfig } | null = null;
+export const verifiedSettlement = (c: ArenaConfigAnyDeploy | null): boolean => typeof c?.intents_account === "string";
+let configMemo: { at: number; v: ArenaConfigAnyDeploy } | null = null;
 /** get_config memoised for a minute; the owner can change it (set_oracle, consent and commit-reveal switches). */
-async function arenaConfig(): Promise<ArenaConfig> {
+async function arenaConfig(): Promise<ArenaConfigAnyDeploy> {
   if (configMemo && Date.now() - configMemo.at < 60_000) return configMemo.v;
-  configMemo = { at: Date.now(), v: await arenaView<ArenaConfig>("get_config", {}) };
+  configMemo = { at: Date.now(), v: await arenaConfigAnyDeploy() };
   return configMemo.v;
 }
 const oracleDeposit = async () => BigInt((await arenaConfig()).oracle_deposit);
+/** `list_followers`, before deploy 15 only. abi/arena.json is the current contract, which no longer has the view, so
+ *  the cast states that older contract's answer: [follower, mandate] pairs. */
+const listFollowers = async (agent_pk: string) =>
+  (await provider.callFunction({ contractId: ARENA, method: "list_followers", args: { agent_pk } })) as [
+    string,
+    Mandate,
+  ][];
 
 /** Whose intents.near balance a fill's output lands in. `arena` (default from deploy 15): the arena contract's own
  *  balance, which `settle_follow` reads as the receipt; the follower withdraws through `withdraw_token`. Before
@@ -261,13 +243,10 @@ export class Arena {
       listFollowers?: (agent_pk: string) => Promise<[string, Mandate][]>;
       /** `get_follow` (deploy 15 reads followers one by one). */
       getFollow?: (agent_pk: string, follower: string) => Promise<Mandate | null>;
-      getDuel?: (duel_id: string) => Promise<{
-        injections: { kind: string; payload_hash: string; target: string; block: string }[];
-        resolved: boolean;
-      } | null>;
+      getDuel?: (duel_id: string) => Promise<Duel | null>;
       getAgent?: (agent_pk: string) => Promise<AgentView | null>;
       leaderboard?: () => Promise<AgentView[]>;
-      config?: () => Promise<ArenaConfig>;
+      config?: () => Promise<ArenaConfigAnyDeploy>;
       quote?: typeof quote;
       oracleMid?: (duel_id: string) => Promise<OracleMid | null>;
       now?: () => bigint;
@@ -290,9 +269,7 @@ export class Arena {
       return [];
     }
     // deploy 15 pages the leaderboard; the arg-less view before it ignores the args
-    const agents = await (
-      this.deps.leaderboard ?? (() => arenaView<AgentView[]>("leaderboard", { from: 0, limit: 100 }))
-    )();
+    const agents = await (this.deps.leaderboard ?? (() => arenaView("leaderboard", { from: 0, limit: 100 })))();
     const opened: string[] = [];
     for (const [a, b] of pairIdle(agents, PAIR_MIN_BOND, PAIR_EXCLUDE)) {
       const close_at = (BigInt(Date.now()) * 1_000_000n + BigInt(DUEL_SECONDS) * 1_000_000_000n).toString();
@@ -402,12 +379,10 @@ export class Arena {
   /** The newest unresolved duel pairing `a` and `b` at `close_at`, or null. Polls briefly: the tx may still be landing. */
   private async findDuel(a: string, b: string, close_at: string): Promise<string | null> {
     for (let attempt = 0; attempt < 6; attempt++) {
-      const cfg = await arenaView<{ next_duel: string }>("get_config", {});
+      const cfg = await arenaView("get_config", {});
       const n = Number(cfg.next_duel);
       for (let id = n - 1; id >= Math.max(0, n - 3); id--) {
-        const d = await arenaView<{ a: string; b: string; close_at: string; resolved: boolean } | null>("get_duel", {
-          duel_id: String(id),
-        });
+        const d = await arenaView("get_duel", { duel_id: String(id) });
         if (d && d.a === a && d.b === b && d.close_at === close_at && !d.resolved) return String(id);
       }
       await this.sleep(3000);
@@ -441,9 +416,7 @@ export class Arena {
     if (!verifyIntent(signed)) throw new Error("bad intent signature");
     if (tee) {
       // same check the contract runs, so a bad record fails here without spending gas
-      const agent = await arenaView<{ model_id: string; tee: boolean } | null>("get_agent", {
-        agent_pk: signed.intent.agent_pk,
-      });
+      const agent = await arenaView("get_agent", { agent_pk: signed.intent.agent_pk });
       if (!agent) throw new Error("agent missing");
       if (!verifyTeeProof(tee, agent.model_id, signed.intent.proof_hash, agent.tee)) throw new Error("bad tee proof");
     }
@@ -473,17 +446,16 @@ export class Arena {
    *  solver has settled for. */
   async followersOf(agent_pk: string): Promise<[string, Mandate][]> {
     if (this.deps.listFollowers) return this.deps.listFollowers(agent_pk);
-    if (!verifiedSettlement(await this.config())) return arenaView<[string, Mandate][]>("list_followers", { agent_pk });
+    if (!verifiedSettlement(await this.config())) return listFollowers(agent_pk);
     const known = [...new Set([...FOLLOWERS, ...this.fills.map((f) => f.follower)])];
     const get =
-      this.deps.getFollow ??
-      ((pk: string, follower: string) => arenaView<Mandate | null>("get_follow", { agent_pk: pk, follower }));
+      this.deps.getFollow ?? ((pk: string, follower: string) => arenaView("get_follow", { agent_pk: pk, follower }));
     const found = await Promise.all(known.map(async (f) => [f, await get(agent_pk, f)] as const));
     return found.filter((x): x is [string, Mandate] => x[1] !== null);
   }
 
   /** `get_config` (memoised); null when the RPC fails, which the callers read as "before deploy 15". */
-  private async config(): Promise<ArenaConfig | null> {
+  private async config(): Promise<ArenaConfigAnyDeploy | null> {
     try {
       return await (this.deps.config ?? arenaConfig)();
     } catch {
@@ -648,13 +620,10 @@ export class Arena {
       console.log(`[arena] history file ignored: ${String(e).slice(0, 80)}`);
     }
     try {
-      const cfg = await arenaView<{ next_duel: string }>("get_config", {});
+      const cfg = await arenaView("get_config", {});
       const n = Number(cfg.next_duel);
       for (let id = n - 1; id >= Math.max(0, n - 20); id--) {
-        const d = await (
-          this.deps.getDuel ??
-          ((x: string) => arenaView<{ resolved: boolean; injections: never[] }>("get_duel", { duel_id: x }))
-        )(String(id));
+        const d = await (this.deps.getDuel ?? ((x: string) => arenaView("get_duel", { duel_id: x })))(String(id));
         if (d && !d.resolved) this.openDuels.add(String(id));
       }
       console.log(`[arena] bootstrap: ${this.openDuels.size} open duels, ${this.payloads.size} payloads`);
@@ -695,6 +664,7 @@ export class Arena {
    *  credited to the arena first, and a fill with an empty `swap_tx` carries that credit's tx hash. */
   async settleFollow(agent_pk: string, follower: string, fills: Fill[]) {
     const intents = (await (this.deps.config ?? arenaConfig)()).intents_account;
+    // runtime check, not the type: a deploy-14 contract has no intents_account although abi/arena.json (current) does
     if (intents !== undefined) {
       if (fills.some((f) => f.swap_tx.startsWith("dry-quote:")))
         throw new Error("dry quote unsettleable: deploy 15 pays only for output delivered to the arena");
@@ -726,13 +696,7 @@ export class Arena {
    *  One view per open duel, in parallel, memoised for 3 s; an RPC error skips that duel for this call. */
   async pending(): Promise<Record<string, Injection[]>> {
     if (this.pendingMemo && Date.now() - this.pendingMemo.at < 3000) return this.pendingMemo.v;
-    const getDuel =
-      this.deps.getDuel ??
-      ((id: string) =>
-        arenaView<{
-          injections: { kind: string; payload_hash: string; target: string; block: string }[];
-          resolved: boolean;
-        }>("get_duel", { duel_id: id }));
+    const getDuel = this.deps.getDuel ?? ((id: string) => arenaView("get_duel", { duel_id: id }));
     const out: Record<string, Injection[]> = {};
     await Promise.all(
       [...this.openDuels].map(async (duel_id) => {
@@ -802,9 +766,7 @@ export class Arena {
       // base64 pks hold '+': a client that forgot to percent-encode it arrives as a space; base64 never has spaces
       const pk = new URLSearchParams(url.slice("/agent_duel?".length)).get("pk")?.replace(/ /g, "+");
       if (!pk) return { code: 400, body: { error: "pk required" } };
-      const agent = await (
-        this.deps.getAgent ?? ((p: string) => arenaView<AgentView | null>("get_agent", { agent_pk: p }))
-      )(pk);
+      const agent = await (this.deps.getAgent ?? ((p: string) => arenaView("get_agent", { agent_pk: p })))(pk);
       return { code: 200, body: { agent_pk: pk, registered: agent !== null, duel_id: agent?.in_duel ?? null } };
     }
     if (method === "POST" && url === "/chaos")

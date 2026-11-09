@@ -2,6 +2,8 @@
 import { readFileSync } from "node:fs";
 import { Account, FailoverRpcProvider, JsonRpcProvider, type KeyPairString, type Provider } from "near-api-js";
 import { RpcError } from "near-api-js/rpc-errors";
+import type { ArenaViews, Config } from "./abi/arena.ts";
+import type { VaultViews } from "./abi/vault.ts";
 import { NET, NETWORK_ID, type NetworkId } from "./network.ts";
 
 export const RPC = process.env.NEAR_RPC ?? NET.rpc; // per-network default in network.ts; see .env.example
@@ -76,39 +78,19 @@ export function loadAccount(accountId: string): Account {
   return new Account(accountId, sendProvider, loadKey(accountId));
 }
 
-export async function view<T>(method: string, args: Record<string, unknown>): Promise<T> {
-  return (await provider.callFunction({ contractId: CONTRACT, method, args })) as T;
+/** View on the vault contract; the method name picks args and result from the generated ABI types (abi/vault.json). */
+export async function view<M extends keyof VaultViews>(
+  method: M,
+  args: VaultViews[M]["args"],
+): Promise<VaultViews[M]["result"]> {
+  return (await provider.callFunction({ contractId: CONTRACT, method, args })) as VaultViews[M]["result"];
 }
 
-export interface Vault {
-  balance: string;
-  pending_withdraw: [string, string] | null;
-}
-export interface Mandate {
-  owner: string;
-  allowance: string;
-  spent: string;
-  per_tx_cap: string;
-  allowed_payees: string[];
-  expires_at: string;
-  revoked: boolean;
-}
-export interface Solver {
-  stake: string;
-  fees_earned: string;
-  ious_settled: number;
-}
-export interface SettlementReport {
-  settled: number;
-  total_paid: string;
-  solver_fee: string;
-  covered_by_solver: string;
-  rejected: { index: number; reason: string }[];
-}
+export type { Mandate, SettlementReport, Solver, Vault } from "./abi/vault.ts";
 
-export const getVault = (owner: string) => view<Vault | null>("get_vault", { owner });
-export const getMandate = (agent_pk: string) => view<Mandate | null>("get_mandate", { agent_pk });
-export const getSolver = (solver: string) => view<Solver | null>("get_solver", { solver });
+export const getVault = (owner: string) => view("get_vault", { owner });
+export const getMandate = (agent_pk: string) => view("get_mandate", { agent_pk });
+export const getSolver = (solver: string) => view("get_solver", { solver });
 
 export const NEAR = 10n ** 24n;
 export const fmtNear = (yocto: string | bigint, digits = 5) => {
@@ -121,8 +103,12 @@ export const explorerTx = (hash: string) => `${NET.explorer}/txns/${hash}`;
 
 // ---- arena -----------------------------------------------------------------------------------
 export const ARENA = process.env.ARENA_CONTRACT ?? NET.arena;
-export async function arenaView<T>(method: string, args: Record<string, unknown>): Promise<T> {
-  return (await provider.callFunction({ contractId: ARENA, method, args })) as T;
+/** View on the arena contract; the method name picks args and result from the generated ABI types (abi/arena.json). */
+export async function arenaView<M extends keyof ArenaViews>(
+  method: M,
+  args: ArenaViews[M]["args"],
+): Promise<ArenaViews[M]["result"]> {
+  return (await provider.callFunction({ contractId: ARENA, method, args })) as ArenaViews[M]["result"];
 }
 
 /** Mainnet startup check, read-only (one view_account, no tx). The mainnet ids in network.ts are defaults for
@@ -157,11 +143,30 @@ export async function warnIfArenaMissing(
   return true;
 }
 
-type ArenaView = <T>(method: string, args: Record<string, unknown>) => Promise<T>;
+/** Fields `get_config` gained over time. abi/arena.json describes the current source; an older arena omits them
+ *  (commit-reveal and consent arrived by deploy 14; vault caps, pause and `intents_account` with deploy 15). */
+type LateConfigField =
+  | "commit_reveal"
+  | "no_reveal_bps"
+  | "require_consent"
+  | "intents_account"
+  | "max_vault_per_account"
+  | "max_vault_total"
+  | "migrating"
+  | "paused"
+  | "vault_total"
+  | "withdraw_delay_s";
+/** `get_config` as any deployed arena answers it. Code that supports older deploys reads this type, so tsc makes it
+ *  handle every late field being absent. */
+export type ArenaConfigAnyDeploy = Omit<Config, LateConfigField> & Partial<Pick<Config, LateConfigField>>;
+export const arenaConfigAnyDeploy = (): Promise<ArenaConfigAnyDeploy> => arenaView("get_config", {});
+
+type ArenaView = typeof arenaView;
 
 /** Deploy 15 or later (verified settlement): `get_config` names the intents account. */
 export async function isDeploy15(view: ArenaView = arenaView): Promise<boolean> {
-  return typeof (await view<{ intents_account?: unknown }>("get_config", {})).intents_account === "string";
+  const cfg: ArenaConfigAnyDeploy = await view("get_config", {});
+  return typeof cfg.intents_account === "string";
 }
 
 /** The exact bytes `register_agent` by `owner` verifies, from the contract's `register_message` view (v1 up to
@@ -169,7 +174,7 @@ export async function isDeploy15(view: ArenaView = arenaView): Promise<boolean> 
  *  contract then refuses the registration, it never accepts a wrong one. */
 export async function registerMessage(owner: string, view: ArenaView = arenaView): Promise<Buffer> {
   try {
-    return Buffer.from(await view<string>("register_message", { owner }), "base64");
+    return Buffer.from(await view("register_message", { owner }), "base64");
   } catch {
     return Buffer.concat([Buffer.from("nearbuddy-register-v1"), Buffer.from(owner)]);
   }

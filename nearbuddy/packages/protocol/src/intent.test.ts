@@ -155,9 +155,9 @@ const asHex = (v: unknown): string =>
 const onChain = process.env.ARENA_DEPLOYED ? test : test.skip;
 onChain("intent bytes and tee text match the deployed arena contract", async () => {
   const { arenaView } = await import("./chain.ts");
-  const onChain = await arenaView<string>("intent_message_hex", { intent: fixture });
+  const onChain = await arenaView("intent_message_hex", { intent: fixture });
   assert.equal(onChain, hex(intentMessage(fixture)));
-  const onChainText = await arenaView<string>("tee_text_utf8", {
+  const onChainText = await arenaView("tee_text_utf8", {
     kind: 2,
     model_id: REAL.model,
     request_hash: realProof.request_hash,
@@ -172,9 +172,9 @@ onChain("intent bytes and tee text match the deployed arena contract", async () 
 onChain("commit and consent bytes match the deployed arena contract", async () => {
   const { ARENA, arenaView } = await import("./chain.ts");
   const c = commitment(fixture, SALT);
-  const onCommit = await arenaView<unknown>("commit_message", { duel_id: "7", commitment: b64.enc(c) });
+  const onCommit = await arenaView("commit_message", { duel_id: "7", commitment: b64.enc(c) });
   assert.equal(asHex(onCommit), hex(commitMessage(ARENA, "7", c)));
-  const onConsent = await arenaView<unknown>("consent_message", {
+  const onConsent = await arenaView("consent_message", {
     a: PK_A,
     b: PK_B,
     symbol: "wrap.near",
