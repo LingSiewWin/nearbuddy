@@ -206,6 +206,17 @@ Any change after this commit is listed here with its reason.
      v2. The stratum depends on the judge's output, which is stochastic, so it is exploratory.
    - **Also reported for D.** The size shift, both executed and stated, and the judge's verdicts per arm with the
      flip rate under each verdict (exploratory).
+6. **Operational: restart after a pause (02:51 +08).**
+   - **What happened.** During a usage-limit pause of about two hours, the harness process died. At that point 743
+     of the 1440 A/B trials were complete. The run resumed from its checkpoint: the 743 complete trials were kept,
+     and trials in flight at the crash were rerun from scratch. Their paid calls remain in `spend.jsonl`.
+   - **Workers.** For the rest of A/B, and for C and D, workers went from 4 to 8 trials in flight, so that C and D
+     fit before 07:15. Calls are stateless, so this does not touch the design.
+   - **Rebase.** The branch was rebased onto `overnight/fool-the-ai`. Naive and hardened request bytes did not
+     change: every stored A/B call re-verifies under the new code.
+   - **Versions.** Every trial in C and D runs cue_guard v2 (`CUE_GUARD_VERSION` 2). Every trial in D also runs
+     judge prompt version 2, which binds the judge call to duel_id = 900000 + trial and nonce = the arm's index.
+     Each trial records both versions, and no experiment mixes versions.
 
 ## The repo README's injection claims, recomputed
 
