@@ -3,8 +3,8 @@
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { pushedSide } from "../../../packages/demo/src/against";
 import { build, OUT } from "../../scripts/board";
+import { pushedSide } from "../lib/against";
 import { attacksOf, type Row, rank, replyOf, scores, testOf, wilson } from "../lib/fool";
 
 const row = (
@@ -93,6 +93,22 @@ test("testOf and replyOf read the brief's move and the answer's reasoning", () =
   expect(testOf(null, "Move since duel open: +3.0 bps.")).toBeNull();
   expect(replyOf('noise {"direction":"long","reasoning":" up "}')).toBe("up");
   expect(replyOf("not json")).toBe("not json");
+});
+
+test("lib/against.ts is packages/demo/src/against.ts byte for byte, from BULL to the end of pushedSide", () => {
+  const src = fileURLToPath(new URL("../../../packages/demo/src/against.ts", import.meta.url));
+  if (!existsSync(src)) return; // web/ checked out alone: nothing to compare against
+  const section = (path: string) => {
+    const s = readFileSync(path, "utf8");
+    const from = s.indexOf("// Copied from analysis/injection_effects.py (BULL / BEAR)");
+    const fn = s.indexOf("export function pushedSide(");
+    expect(from).toBeGreaterThanOrEqual(0);
+    expect(fn).toBeGreaterThan(from);
+    return s.slice(from, s.indexOf("\n}\n", fn) + 3);
+  };
+  const ours = section(fileURLToPath(new URL("../lib/against.ts", import.meta.url)));
+  expect(ours.length).toBeGreaterThan(500);
+  expect(ours).toBe(section(src)); // edit packages/demo/src/against.ts, then copy the section to web/app/lib/against.ts
 });
 
 test("app/data/board.json matches the dataset (run `bun scripts/board.ts` after an export)", () => {

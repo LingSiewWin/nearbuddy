@@ -3,7 +3,7 @@
 // no longer matches ../dataset/decisions.jsonl, so re-run this after every dataset export.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { pushedSide } from "../../packages/demo/src/against";
+import { pushedSide } from "../app/lib/against";
 import { attacksOf, type Row, scores } from "../app/lib/fool";
 
 const DATASET = fileURLToPath(new URL("../../dataset/decisions.jsonl", import.meta.url));
