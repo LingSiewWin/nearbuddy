@@ -8,7 +8,9 @@
 //! fill with no output; then 4 units go back out through `withdraw_token`; `withdraw` inside the
 //! delay is refused), the duel is resolved through the oracle callback with the oracle
 //! account playing Outlayer, and a second duel is opened by a bystander with both agents' consent
-//! signatures (one with a mismatched signature is refused).
+//! signatures (one with a mismatched signature is refused). A second run fills one duel with 32
+//! headlines of 280 bytes from one injector, which deletes its account right after its claim: the
+//! payout bounces and `on_claim_chaos` makes all 32 claimable again.
 //! Prints gas burnt per call so the README can quote it.
 //!   cargo test --test test_arena_sandbox -- --ignored --nocapture
 //! Ignored by default: it needs the cargo-near binary and downloads near-sandbox on first run.
@@ -883,5 +885,183 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         .await?
         .data;
     assert_eq!(a["in_duel"], d2.to_string());
+    Ok(())
+}
+
+/// `claim_chaos` at its worst: one injector owns all 32 records of a duel, each with a 280-byte
+/// headline, and deletes its account right after the claim lands, so the payout transfer bounces.
+/// `on_claim_chaos` must unmark all 32 within its gas. The claim attaches the 30 TGas the web
+/// attaches. Prints the gas of every receipt.
+#[tokio::test]
+#[ignore = "needs cargo-near and a near-sandbox download; run with -- --ignored"]
+async fn a_bounced_claim_of_32_full_records_is_restored_by_the_callback()
+-> testresult::TestResult<()> {
+    use near_api::types::TxExecutionStatus;
+    let wasm = std::fs::read(cargo_near_build::build_with_cli(Default::default())?)?;
+    let sandbox = near_sandbox::Sandbox::start_sandbox().await?;
+    let net = near_api::NetworkConfig::from_rpc_url("sandbox", sandbox.rpc_addr.parse()?);
+    let signer = near_api::Signer::from_secret_key(
+        near_sandbox::config::DEFAULT_GENESIS_ACCOUNT_PRIVATE_KEY
+            .parse()
+            .unwrap(),
+    )?;
+    let owner = create_subaccount(&sandbox, "solver.sandbox").await?;
+    let oracle = create_subaccount(&sandbox, "price-oracle.sandbox").await?;
+    let doomed = create_subaccount(&sandbox, "doomed.sandbox").await?;
+    let contract = create_subaccount(&sandbox, "arena.sandbox")
+        .await?
+        .as_contract();
+    near_api::Contract::deploy(contract.account_id().clone())
+        .use_code(wasm)
+        .with_init_call("init", json!({
+            "owner": owner.account_id(), "oracle_account": oracle.account_id(), "oracle_deposit": NearToken::from_millinear(20).as_yoctonear().to_string(),
+            "slash_bps": 1000, "fee_bps": 0, "min_chaos_deposit": "100000000000000000000000",
+            "intents_account": oracle.account_id(), "max_vault_total": NearToken::from_near(1000).as_yoctonear().to_string(),
+        }))?
+        .with_signer(signer.clone())
+        .send_to(&net)
+        .await?
+        .assert_success();
+    let call = |method: &'static str, args: Value, who: &near_api::Account, deposit: NearToken| {
+        contract
+            .call_function(method, args)
+            .transaction()
+            .gas(NearGas::from_tgas(300))
+            .deposit(deposit)
+            .with_signer(who.account_id().clone(), signer.clone())
+            .send_to(&net)
+    };
+    let one = NearToken::from_yoctonear(1);
+    call("set_oracle", json!({"oracle_account": oracle.account_id(), "oracle_deposit": NearToken::from_millinear(20).as_yoctonear().to_string(), "min_duel_s": 60, "intent_lock_s": 30}), &owner, one).await?.assert_success();
+    let (ska, skb) = (
+        SigningKey::from_bytes(&[1u8; 32]),
+        SigningKey::from_bytes(&[2u8; 32]),
+    );
+    let pks = [ska.verifying_key(), skb.verifying_key()].map(|k| k.to_bytes().to_vec());
+    for (sk, pk) in [(&ska, &pks[0]), (&skb, &pks[1])] {
+        let sig = sk.sign(&register_bytes(contract.account_id(), owner.account_id()));
+        call("register_agent", json!({"agent_pk": b64(pk), "model_id": MODEL_A, "tee": false, "register_sig": b64(&sig.to_bytes())}), &owner, NearToken::from_near(1)).await?.assert_success();
+    }
+    let now = near_api::Chain::block()
+        .at(near_api::types::Reference::Final)
+        .fetch_from(&net)
+        .await?
+        .header
+        .timestamp;
+    let close_at = now + 120_000_000_000;
+    let r = call("open_duel", json!({"a": b64(&pks[0]), "b": b64(&pks[1]), "symbol": "wrap.near", "close_at": close_at.to_string()}), &owner, NearToken::from_millinear(50)).await?.assert_success();
+    let duel_id = r.json::<U64>()?.0;
+    call("oracle_on_call", json!({"sender_id": contract.account_id(), "data": price_data(366_000_000, now), "msg": format!("open:{duel_id}")}), &oracle, NearToken::from_yoctonear(0)).await?.assert_success();
+    for k in 0..32 {
+        let mut headline =
+            format!("BREAKING ({k:02}): Reuters says NEAR Foundation halts withdrawals");
+        headline.extend(std::iter::repeat_n('.', 280 - headline.len()));
+        let r = call("inject_chaos", json!({"duel_id": duel_id.to_string(), "target": b64(&pks[0]), "kind": "Short", "headline": headline}), &doomed, NearToken::from_millinear(100)).await?.assert_success();
+        assert_eq!(r.json::<u32>()?, k);
+    }
+    // neither agent decides: a flat close is a tie, and every stake comes back whole (no fee)
+    let mut ts = now;
+    for _ in 0..40 {
+        ts = near_api::Chain::block()
+            .at(near_api::types::Reference::Final)
+            .fetch_from(&net)
+            .await?
+            .header
+            .timestamp;
+        if ts >= close_at {
+            break;
+        }
+        sandbox.fast_forward(200).await?;
+    }
+    call(
+        "resolve_duel",
+        json!({"duel_id": duel_id.to_string()}),
+        &owner,
+        NearToken::from_millinear(20),
+    )
+    .await?
+    .assert_success();
+    call("oracle_on_call", json!({"sender_id": contract.account_id(), "data": price_data(366_000_000, ts), "msg": format!("close:{duel_id}")}), &oracle, NearToken::from_yoctonear(0)).await?.assert_success();
+    let records = || async {
+        contract
+            .call_function("get_chaos", json!({"duel_id": duel_id.to_string()}))
+            .read_only::<Vec<Value>>()
+            .fetch_from(&net)
+            .await
+            .map(|r| r.data)
+    };
+    let chaos = records().await?;
+    assert_eq!(chaos.len(), 32);
+    assert!(
+        chaos
+            .iter()
+            .all(|c| c["headline"].as_str().unwrap().len() == 280
+                && c["outcome"] == "Expired"
+                && c["payout"].as_str().unwrap().parse::<u128>().unwrap() > 0)
+    );
+
+    // the claim lands, then the account deletes itself before the payout transfer arrives
+    let claim = contract
+        .call_function("claim_chaos", json!({"duel_id": duel_id.to_string()}))
+        .transaction()
+        .gas(NearGas::from_tgas(30))
+        .deposit(one)
+        .with_signer(doomed.account_id().clone(), signer.clone())
+        .presign_with(&net)
+        .await?;
+    let hash = match &claim.transaction {
+        near_api::advanced::TransactionableOrSigned::Signed((s, _)) => s.get_hash(),
+        _ => unreachable!("presigned"),
+    };
+    // returns once included: no outcome yet, the full one is fetched by hash below
+    let _ = claim
+        .wait_until(TxExecutionStatus::Included)
+        .send_to(&net)
+        .await?;
+    doomed
+        .delete_account_with_beneficiary(owner.account_id().clone())
+        .with_signer(signer.clone())
+        .send_to(&net)
+        .await?
+        .assert_success();
+    let r = near_api::Transaction::status_with_options(
+        doomed.account_id().clone(),
+        hash,
+        TxExecutionStatus::Final,
+    )
+    .fetch_from(&net)
+    .await?
+    .assert_success();
+    gas_lines(
+        "claim_chaos (32 x 280-byte records, transfer to a deleted account)",
+        &r,
+    );
+    let outs = r.outcomes();
+    let bounced = outs
+        .iter()
+        .position(|o| o.executor_id == *doomed.account_id() && o.is_failure())
+        .expect("the payout transfer bounced");
+    // after the bounce the arena runs the deposit refund (a system receipt) and the callback
+    let cb = outs[bounced + 1..]
+        .iter()
+        .filter(|o| o.executor_id == *contract.account_id())
+        .map(|o| o.gas_burnt.as_gas())
+        .max()
+        .expect("on_claim_chaos ran");
+    println!(
+        "GAS on_claim_chaos (restores 32 records) {:.2} TGas",
+        cb as f64 / 1e12
+    );
+    assert!(
+        cb < NearGas::from_tgas(10).as_gas(),
+        "under half the 20 TGas the callback is given"
+    );
+    assert!(!r.json::<bool>()?, "the callback saw the transfer fail");
+    let chaos = records().await?;
+    assert!(
+        chaos.iter().all(|c| c["claimed"] == false),
+        "every record is claimable again"
+    );
+    println!("claim_chaos to a deleted account: all 32 records unclaimed again");
     Ok(())
 }

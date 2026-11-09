@@ -18,8 +18,11 @@ use crate::{
 
 /// Longest headline, in UTF-8 bytes.
 pub const MAX_HEADLINE: usize = 280;
-/// Gas for `on_claim_chaos`: at worst it rewrites one duel's 32 records.
-const CLAIM_CALLBACK_GAS: Gas = Gas::from_tgas(10);
+/// Gas for `on_claim_chaos`: at worst it rewrites one duel's 32 records. Measured in the sandbox
+/// (`a_bounced_claim_of_32_full_records_is_restored_by_the_callback`): 3.28 TGas burnt restoring
+/// 32 records with 280-byte headlines, and a claim with this budget fits the 30 TGas the web
+/// attaches (the claim itself burns 4 TGas).
+const CLAIM_CALLBACK_GAS: Gas = Gas::from_tgas(20);
 /// Bit `HID_PREV + i` of `self_chaos[duel]`, above the 32 self-paid bits: injection `i`'s target
 /// replaced, unrevealed, the commitment it held at the injection (see `hide_prev_since`).
 const HID_PREV: u32 = 32;
