@@ -771,7 +771,10 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         .await?
         .data;
     assert_eq!(a["alpha_bps"], 25);
-    assert_eq!(a["shield"], 31, "the placebo buys no shield");
+    assert_eq!(
+        a["shield"], 0,
+        "shield counts only held headlines: 31 flipped A, the placebo was no trial"
+    );
     assert_eq!(a["tee"], true);
     let duel: Value = contract
         .call_function("get_duel", json!({"duel_id": duel_id.to_string()}))
