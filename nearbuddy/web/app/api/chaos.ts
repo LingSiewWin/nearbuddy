@@ -1,6 +1,7 @@
 // POST /api/chaos {payload}: relays one headline to the solver's open POST /chaos, which stores the text and answers
 // its sha256 (base64); the browser then signs inject_chaos with that hash. The solver usually runs next to the runner,
 // not next to this site, so "unreachable" is a normal state: 503 {error, offline: true}, never a framework 500.
+import { createHash } from "node:crypto";
 import { MAX_HEADLINE } from "../lib/inject";
 import { json } from "./near";
 
@@ -32,5 +33,9 @@ export async function relayChaos(req: Request, solverUrl: string): Promise<Respo
   const j = (await r.json().catch(() => null)) as { payload_hash?: unknown; error?: unknown } | null;
   if (!r.ok) return err(`solver refused: ${String(j?.error ?? r.status).slice(0, 120)}`, 502);
   if (typeof j?.payload_hash !== "string" || !HASH_RE.test(j.payload_hash)) return err("solver answered no hash", 502);
+  // the solver strips prompt delimiters (<< >> ^ and block tags) before hashing; when it did, the model would read a
+  // different text than the one typed and the share card could not match it, so nothing gets signed
+  if (createHash("sha256").update(payload).digest("base64") !== j.payload_hash)
+    return err("the solver rewrote this headline (it strips << >> ^ and tags): remove them and try again", 422);
   return json(JSON.stringify({ payload_hash: j.payload_hash }));
 }

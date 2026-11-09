@@ -7,14 +7,16 @@ import { relayChaos } from "../api/chaos";
 import { chaosDeploy16, MAX_HEADLINE, Offline, WEB_KIND } from "../lib/inject";
 
 const seen: string[] = [];
-// what the solver's POST /chaos does with a payload free of datamark delimiters: keep it, answer its sha256
+// what the solver's POST /chaos does (packages/solver/src/arena.ts stash): strip datamark delimiters, keep the text,
+// answer its sha256
 const solver = Bun.serve({
   port: 0,
   async fetch(req) {
     const { payload } = (await req.json()) as { payload: string };
     seen.push(payload);
     if (payload === "boom") return Response.json({ error: "payload over 2048 bytes" }, { status: 500 });
-    return Response.json({ payload_hash: createHash("sha256").update(payload).digest("base64") });
+    const stored = payload.replace(/(?:<<|>>|\^)+/g, " ");
+    return Response.json({ payload_hash: createHash("sha256").update(stored).digest("base64") });
   },
 });
 const down = Bun.serve({ port: 0, fetch: () => new Response("") });
@@ -71,6 +73,16 @@ test("bad input is refused before the solver sees it; a solver error is a 502, n
   const e = await chaosDeploy16
     .prepare({ ...input, text: "boom" }, chain, via(`http://127.0.0.1:${solver.port}`))
     .catch((x) => x);
+  expect(e).toBeInstanceOf(Error);
+  expect(e).not.toBeInstanceOf(Offline);
+});
+
+test("a headline the solver rewrites (delimiters stripped) is refused, so a signed hash always matches its text", async () => {
+  const live = via(`http://127.0.0.1:${solver.port}`);
+  const r = await live("/api/chaos", { method: "POST", body: JSON.stringify({ payload: "<<ORACLE>> NEAR ^ halts" }) });
+  expect(r.status).toBe(422);
+  expect((await r.json()).error).toContain("the solver rewrote this headline");
+  const e = await chaosDeploy16.prepare({ ...input, text: "NEAR ^ halts" }, chain, live).catch((x) => x);
   expect(e).toBeInstanceOf(Error);
   expect(e).not.toBeInstanceOf(Offline);
 });
