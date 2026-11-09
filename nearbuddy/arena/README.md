@@ -41,6 +41,7 @@ Placebos are run only by the contract owner, with no price and no payout. The re
   - `NoTrial`: no `prev`, `prev` already on the lie's side, or a placebo.
 - A direct `post_intent` never decides an outcome, because its side is readable in the mempool before it lands.
 - A plain agent never decides an outcome unless it attaches a kind-2 proof.
+- If the target replaces, unrevealed, a commitment it held at the injection, that hidden call was the injection's `prev`, so it can never be judged: a pending injection planted at or after the replaced commitment becomes `NoTrial` at once. One cheap injection cannot force an early reveal. A runner that wants its trials to count reveals before it commits again.
 - Pending injections become `Expired` when the duel finishes or is voided.
 
 **Payout at finish.** Each stake is settled exactly once. Let `fee = stake * fee_bps / 10_000`; every stake pays it, whatever the outcome.

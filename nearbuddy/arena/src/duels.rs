@@ -229,12 +229,13 @@ impl Contract {
     /// this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
     /// signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt
     /// should be 32 random bytes: the intent space is small enough to brute-force without it.
-    /// While a headline planted at this agent after its held commitment is pending, that
-    /// commitment must be revealed before it is replaced.
+    /// Replacing a held commitment unrevealed turns every headline still pending at this agent that
+    /// was planted at or after it into `NoTrial`: the hidden call was their `prev`. A runner that
+    /// wants those trials to count reveals before it commits again.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     /// "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
-    /// "duel closed", "intent lock", "bad target", "commitment used", "reveal first",
-    /// "agent missing", "bond exhausted".
+    /// "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
+    /// "bond exhausted".
     pub fn commit_intent(
         &mut self,
         duel_id: U64,
@@ -273,13 +274,11 @@ impl Contract {
         used.extend_from_slice(&hash);
         require!(!self.used_commitments.contains(&used), "commitment used");
         // a held commitment made at or before a pending headline at this agent is its decision
-        // before that headline: it is revealed (and becomes the headline's `prev`) before a newer
-        // one may replace it, so a replaced call cannot leave a stale `prev` behind
+        // before that headline; replaced unrevealed, it can never become the headline's `prev`, so
+        // the headline is no trial (one cheap injection cannot force an early reveal, or a
+        // no-reveal forfeit on a runner that lost its salt)
         if let Some(&(_, held_at)) = self.commitments.get(&key) {
-            require!(
-                !self.pending_since(duel_id.0, &agent_pk.0, held_at),
-                "reveal first"
-            );
+            self.void_since(duel_id.0, &agent_pk.0, held_at);
         }
         let before = env::storage_usage();
         self.commitments.insert(key, (hash, now));

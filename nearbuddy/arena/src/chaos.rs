@@ -185,12 +185,23 @@ impl Contract {
         })
     }
 
-    /// Whether a headline at `pk` in duel `id`, planted at or after `t`, is still pending.
-    pub(crate) fn pending_since(&self, id: u64, pk: &[u8], t: u64) -> bool {
-        self.chaos.get(&id).is_some_and(|v| {
-            v.iter()
-                .any(|c| c.target.0 == pk && c.outcome == ChaosOutcome::Pending && c.at.0 >= t)
-        })
+    /// Agent `pk` replaces, unrevealed, the commitment it made at `t` in duel `id`. That hidden
+    /// decision was the last one at or before every headline planted at `pk` from `t` on, so their
+    /// `prev` can never be known: each one still pending becomes `NoTrial` (settled as a refund less
+    /// the fee). Headlines planted before `t` stay pending: the replacement decides them as the
+    /// replaced call would have.
+    pub(crate) fn void_since(&mut self, id: u64, pk: &[u8], t: u64) {
+        let Some(list) = self.chaos.get_mut(&id) else {
+            return;
+        };
+        for (index, c) in list.iter_mut().enumerate() {
+            if c.target.0 == pk && c.outcome == ChaosOutcome::Pending && c.at.0 >= t {
+                c.outcome = ChaosOutcome::NoTrial;
+                env::log_str(&format!(
+                    r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"chaos_outcome","data":{{"duel_id":{id},"index":{index},"outcome":"NoTrial","prev":null,"next":null,"nonce":null}}}}"#
+                ));
+            }
+        }
     }
 
     /// An accepted decision of agent `pk` in duel `id`, made at `decided_at` (its commit time when

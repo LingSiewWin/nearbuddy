@@ -295,7 +295,8 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
     // agent 0 (TEE) in duel 0 makes a call (mostly against the first lie), then two headlines are
     // planted at it (a spectator's mostly; an agent owner's or a placebo sometimes); with
     // commit-reveal on, that call is revealed (the decision before) and a second later it commits
-    // again and reveals (the decision that decides both: flipped, held or no trial)
+    // again and reveals (the decision that decides both: flipped, held or no trial); sometimes the
+    // first call is replaced unrevealed instead, which voids both headlines (no trial)
     let plant = (
         prop_oneof![8 => 0u8..2, 1 => Just(2u8)],
         prop::bool::weighted(0.15),
@@ -314,10 +315,11 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
         plant,
         prop::bool::weighted(0.8),
         any::<bool>(),
+        prop::bool::weighted(0.75),
     )
-        .prop_map(|(first, second, against, long)| {
+        .prop_map(|(first, second, against, long, reveal_first)| {
             let lie_long = matches!(first, Op::Chaos { kind: 0, .. });
-            vec![
+            let mut ops = vec![
                 Op::Post {
                     duel: 0,
                     b_side: false,
@@ -343,7 +345,11 @@ fn setup() -> impl Strategy<Value = Vec<Op>> {
                     pick: 0,
                     late: false,
                 },
-            ]
+            ];
+            if !reveal_first {
+                ops.remove(3);
+            }
+            ops
         });
     (
         regs,
@@ -1507,24 +1513,26 @@ impl World {
                         .to_bytes()
                         .to_vec();
                     let pk = Base64VecU8(self.pks[ag].clone());
-                    // the held commitment is the decision before a headline planted after it
+                    // the held commitment is the decision before a headline planted at or after it:
+                    // replaced unrevealed, that headline can never be judged and is no trial
                     let side_b = ag == self.duels[d].b;
-                    let must_reveal = self.pending.get(&(d, ag)).is_some_and(|p| {
-                        self.duels[d].recs.iter().any(|r| {
-                            r.side_b == side_b && r.outcome == ChaosOutcome::Pending && r.at >= p.3
+                    let held_at = self.pending.get(&(d, ag)).map(|p| p.3);
+                    if self
+                        .call("relayer.testnet", 0, |c| {
+                            c.commit_intent(U64(d as u64), pk, Base64VecU8(hash), Base64VecU8(sig))
                         })
-                    });
-                    match self.call("relayer.testnet", 0, |c| {
-                        c.commit_intent(U64(d as u64), pk, Base64VecU8(hash), Base64VecU8(sig))
-                    }) {
-                        Ok(()) => {
-                            assert!(!must_reveal, "a commitment a headline needs was replaced");
-                            self.pending.insert((d, ag), (i, salt, proof, self.now));
+                        .is_ok()
+                    {
+                        if let Some(t) = held_at {
+                            for r in self.duels[d].recs.iter_mut().filter(|r| {
+                                r.side_b == side_b
+                                    && r.outcome == ChaosOutcome::Pending
+                                    && r.at >= t
+                            }) {
+                                r.outcome = ChaosOutcome::NoTrial;
+                            }
                         }
-                        Err(e) => assert!(
-                            e != "reveal first" || must_reveal,
-                            "a commit no headline waits on was refused"
-                        ),
+                        self.pending.insert((d, ag), (i, salt, proof, self.now));
                     }
                 } else {
                     let nonce = match self.posted[ag].last() {

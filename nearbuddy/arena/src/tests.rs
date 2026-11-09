@@ -4896,46 +4896,75 @@ fn settle_records_conserves_and_pays_once_over_small_ranges() {
     assert!(runs > 100_000, "{runs} settlements");
 }
 
-#[test]
-fn a_held_call_from_before_a_headline_is_revealed_before_it_is_replaced() {
-    // A holds a Short call committed before the lie "go Short" lands; replacing it unrevealed would
-    // leave `prev` at A's older revealed Long and turn a later Short into a fake flip
-    let (mut c, ska, _, tee, d) = fool_setup();
-    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+/// A decides Long, then holds a Short call committed before the lie "go Short" lands. Returns the
+/// headline's index, the held call and A's next Short call (neither revealed).
+fn held_then_next(
+    c: &mut Contract,
+    ska: &SigningKey,
+    tee: &SigningKey,
+    d: u64,
+) -> (u32, Intent, Intent) {
+    decide_a(c, ska, tee, d, Side::Long, 1, NOW, NOW);
     let req: [u8; 32] = key(1).1.try_into().unwrap();
     let mut held = intent(&key(1).1, d, Side::Short, 5_000, 2);
     held.proof_hash = Base64VecU8(proof_hash(&req, &[2; 32]));
-    commit_at(&mut c, &ska, &held, &[2; 32], NOW + 1);
-    let ix = plant(&mut c, d, 1, ChaosKind::Short, NOW + 2);
+    commit_at(c, ska, &held, &[2; 32], NOW + 1);
+    let ix = plant(c, d, 1, ChaosKind::Short, NOW + 2);
     let mut next = intent(&key(1).1, d, Side::Short, 5_000, 3);
     next.proof_hash = Base64VecU8(proof_hash(&req, &[3; 32]));
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        commit_at(&mut c, &ska, &next, &[3; 32], NOW + 3)
-    }));
-    assert_eq!(panic_msg(r.unwrap_err()), "reveal first");
-    // revealed, the held call becomes `prev`; the next Short is then no trial, not a flip
-    ctx_at(OPERATOR, 0, NOW + 3);
+    (ix, held, next)
+}
+
+/// Relays A's reveal of `i` (salt and response hash = its nonce byte) with its enclave proof.
+fn reveal_a(c: &mut Contract, ska: &SigningKey, tee: &SigningKey, i: &Intent, ts: u64) {
+    let req: [u8; 32] = key(1).1.try_into().unwrap();
+    let n = i.nonce.0 as u8;
+    ctx_at(OPERATOR, 0, ts);
     c.reveal_intent(
-        sign(&ska, &held),
-        Base64VecU8(vec![2; 32]),
-        Some(tee_proof(&tee, 2, MODEL_A, req, [2; 32])),
+        sign(ska, i),
+        Base64VecU8(vec![n; 32]),
+        Some(tee_proof(tee, 2, MODEL_A, req, [n; 32])),
     );
+}
+
+#[test]
+fn a_held_call_revealed_before_the_next_commit_is_the_headlines_prev() {
+    // the honest runner reveals its held call before committing again: that call becomes `prev`,
+    // so the next Short is no trial, not a flip
+    let (mut c, ska, _, tee, d) = fool_setup();
+    let (ix, held, next) = held_then_next(&mut c, &ska, &tee, d);
+    reveal_a(&mut c, &ska, &tee, &held, NOW + 3);
     commit_at(&mut c, &ska, &next, &[3; 32], NOW + 4);
-    ctx_at(OPERATOR, 0, NOW + 4);
-    c.reveal_intent(
-        sign(&ska, &next),
-        Base64VecU8(vec![3; 32]),
-        Some(tee_proof(&tee, 2, MODEL_A, req, [3; 32])),
-    );
+    reveal_a(&mut c, &ska, &tee, &next, NOW + 4);
     let s = chaos_at(&c, d, ix);
     assert_eq!(
         (s.prev, s.next, s.outcome),
         (Some(Side::Short), Some(Side::Short), ChaosOutcome::NoTrial)
     );
-    // once nothing is pending, a held call may be replaced as before
-    let long = |nonce| intent(&key(1).1, d, Side::Long, 5_000, nonce);
-    commit_at(&mut c, &ska, &long(4), &[4; 32], NOW + 5);
-    commit_at(&mut c, &ska, &long(5), &[5; 32], NOW + 6);
+}
+
+#[test]
+fn replacing_a_held_call_after_a_headline_voids_it_instead_of_faking_a_flip() {
+    // replaced unrevealed, the held Short can never be `prev`; the stale `prev` (Long) must not turn
+    // the next Short into a fake flip, so the headline is no trial from the replacement on
+    let (mut c, ska, _, tee, d) = fool_setup();
+    let (ix, _, next) = held_then_next(&mut c, &ska, &tee, d);
+    commit_at(&mut c, &ska, &next, &[3; 32], NOW + 3);
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(
+        (s.outcome, s.next, s.decided_by),
+        (ChaosOutcome::NoTrial, None, None)
+    );
+    reveal_a(&mut c, &ska, &tee, &next, NOW + 3);
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(
+        (s.outcome, s.next),
+        (ChaosOutcome::NoTrial, None),
+        "a voided headline is never decided"
+    );
+    resolve_at_close(&mut c, d, UP);
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(s.payout.0, s.stake.0 - s.stake.0 * 500 / 10_000);
 }
 
 // ---------------------------------------------------------------- audit fixes (deploy 17)
@@ -5087,4 +5116,52 @@ fn a_held_headline_at_the_winner_earns_shield() {
     resolve_at_close(&mut c, d, UP);
     assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Held);
     assert_eq!(c.get_agent(Base64VecU8(key(1).1)).unwrap().shield, 1);
+}
+
+/// M3: one cheap injection no longer forces a target holding a commitment to reveal it before it
+/// may change its call. A runner that lost the salt simply commits again: the headline becomes no
+/// trial and the new call, revealed, scores with no forfeit.
+#[test]
+fn one_injection_cannot_force_an_early_reveal() {
+    let (mut c, ska, _, tee, d) = fool_setup();
+    let c1 = intent(&key(1).1, d, Side::Long, 5_000, 1);
+    commit_at(&mut c, &ska, &c1, &SALT, NOW + SEC); // its salt is then lost
+    let (_, ix) = plant_as(&mut c, SPECTATOR, d, 1, ChaosKind::Short, NOW + 2 * SEC);
+    let req: [u8; 32] = key(1).1.try_into().unwrap();
+    let mut c2 = intent(&key(1).1, d, Side::Short, 5_000, 2);
+    c2.proof_hash = Base64VecU8(proof_hash(&req, &[2; 32]));
+    let h = commitment(&c2, &[2; 32]);
+    ctx_at(OPERATOR, 0, NOW + 3 * SEC);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.commit_intent(
+            U64(d),
+            Base64VecU8(key(1).1),
+            Base64VecU8(h.clone()),
+            commit_sig(&ska, d, &h),
+        )
+    }));
+    let msg = r.map(|_| "ok".to_string()).unwrap_or_else(panic_msg);
+    println!("replace commitment after injection: {msg}");
+    assert_eq!(msg, "ok");
+    assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::NoTrial);
+    reveal_a(&mut c, &ska, &tee, &c2, NOW + 4 * SEC);
+    resolve_at_close(&mut c, d, UP);
+    assert_eq!(c.get_no_reveal(U64(d)), (false, false), "no forfeit");
+}
+
+/// M3: a headline planted before the held commitment does not depend on it; the replacement is the
+/// call after the headline and decides it, exactly as the replaced one would have.
+#[test]
+fn a_replacement_still_decides_a_headline_planted_before_the_held_call() {
+    let (mut c, ska, _, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+    let ix = plant(&mut c, d, 1, ChaosKind::Short, NOW + 1);
+    let held = intent(&key(1).1, d, Side::Long, 5_000, 2);
+    commit_at(&mut c, &ska, &held, &[2; 32], NOW + 2);
+    decide_a(&mut c, &ska, &tee, d, Side::Short, 3, NOW + 3, NOW + 3); // replaces, then reveals
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(
+        (s.prev, s.next, s.outcome),
+        (Some(Side::Long), Some(Side::Short), ChaosOutcome::Flipped)
+    );
 }
