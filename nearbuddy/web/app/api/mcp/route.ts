@@ -36,8 +36,10 @@ const read: Reader = {
 
 const handler = createMcpHandler((server) => register(server, read), {
   serverInfo: { name: "nearbuddy", version: "1.0.0" },
+  maxSubscriptions: 0, // the tool list never changes; refuse subscriptions/listen instead of holding a stream open
   instructions:
     "NearBuddy 'Fool the AI' on NEAR: read the arena, then plant a fake headline in one AI trader with inject (an unsigned transaction you sign with your own account). Start with the arena tool.",
 });
 
+export const maxDuration = 30; // seconds: no unauthenticated call can keep a function alive longer
 export { handler as GET, handler as POST };
