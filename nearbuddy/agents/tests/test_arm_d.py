@@ -80,7 +80,7 @@ class Enclave:
             raise requests.ConnectionError("Remote end closed connection without response")
         return self.records.get(chat_id)
 
-    def attestation(self) -> dict:
+    def attestation(self, timeout=90) -> dict:
         """A report in NEAR AI Cloud's shape listing this enclave's key for its model (no quotes: none are checked)."""
         key = self.sk.verify_key.encode().hex()
         return {"report": {"model_attestations": [{"model_name": self.model_id, "signing_address": key}]}}

@@ -72,7 +72,7 @@ class StubClient:
     def signature(self, chat_id: str) -> dict[str, Any] | None:
         return None
 
-    def attestation(self) -> dict[str, Any] | None:
+    def attestation(self, timeout: float | tuple[float, float] = 90) -> dict[str, Any] | None:
         return None
 
 
@@ -137,18 +137,19 @@ class NearAiClient:
             time.sleep(1.5 * (i + 1))
         return None
 
-    def attestation(self) -> dict[str, Any] | None:
+    def attestation(self, timeout: float | tuple[float, float] = 90) -> dict[str, Any] | None:
         """Intel TDX quote + NVIDIA payload for the model's enclave, bound to a fresh nonce. Non-billable.
         External (non-TEE) providers answer 503; the gateway's own attestation is at the same path without `model`.
         One request: a non-200 answer, or none (`status` None: dropped connection, timeout), comes back as `status`
-        and `error` with no `report`; runner.save_attestation decides whether to retry."""
+        and `error` with no `report`; runner.save_attestation decides whether to retry. `timeout` goes to requests as
+        is: a float applies to connect and to each read separately, so one fetch can take twice it."""
         nonce = secrets.token_hex(32)
         try:
             r = requests.get(
                 f"{self._base}/attestation/report",
                 params={"model": self.model_id, "signing_algo": "ed25519", "nonce": nonce},
                 headers=self._headers,
-                timeout=90,
+                timeout=timeout,
             )
         except (requests.ConnectionError, requests.Timeout) as e:
             return {"model": self.model_id, "nonce": nonce, "status": None, "error": str(e)[:300]}

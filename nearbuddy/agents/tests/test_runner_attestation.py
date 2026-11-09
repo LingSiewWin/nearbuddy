@@ -27,9 +27,11 @@ class Answers(Enclave):
         super().__init__()
         self.answers = list(answers)
         self.fetches = 0
+        self.timeouts: list = []
 
-    def attestation(self) -> dict:
+    def attestation(self, timeout=90) -> dict:
         self.fetches += 1
+        self.timeouts.append(timeout)
         status = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
         if status == 200:
             return {"model": self.model_id, "nonce": "n", "status": 200, **super().attestation()}
@@ -107,9 +109,24 @@ def test_a_signer_missing_from_the_report_fetches_it_at_most_once_a_minute(attes
     attestations = {model.model_id: saved}
     stranger = {"signing_address": "ab" * 32}  # a node the report does not list (scaled out since)
     assert runner.attestation_file(model, stranger, attestations) != saved and model.fetches == 2
+    assert model.timeouts == [90, (5.0, 5.0)], "the refetch inside a decision waits about 10 s, not 90 s per phase"
     assert runner.attestation_file(model, stranger, attestations) == attestations[model.model_id]
     assert model.fetches == 2, "within ATTEST_RETRY_S: the saved report is cited, nothing fetched"
     clock = time.monotonic() + runner.ATTEST_RETRY_S
     monkeypatch.setattr(time, "monotonic", lambda: clock)
     runner.attestation_file(model, stranger, attestations)
     assert model.fetches == 3
+
+
+def test_near_ai_client_passes_the_timeout_to_the_fetch(monkeypatch):
+    seen = {}
+
+    def get(*_a, **k):
+        seen["timeout"] = k["timeout"]
+        raise requests.Timeout("read timed out")
+
+    monkeypatch.setattr(nearai.requests, "get", get)
+    client = nearai.NearAiClient("k", "deepseek-ai/DeepSeek-V4.1-Flash-1017")
+    assert client.attestation(timeout=(5.0, 5.0))["status"] is None and seen["timeout"] == (5.0, 5.0)
+    client.attestation()
+    assert seen["timeout"] == 90

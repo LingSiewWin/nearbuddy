@@ -171,15 +171,17 @@ def record(row: dict[str, Any]) -> None:
             f.write(line)
 
 
-def save_attestation(model_client: ModelClient, attempts: int = 4) -> str | None:
+def save_attestation(
+    model_client: ModelClient, attempts: int = 4, timeout: float | tuple[float, float] = 90
+) -> str | None:
     """Fetch and keep the enclave attestation (at the start of a run, and again by `attestation_file`); the file is
     the raw material a third party feeds to NVIDIA NRAS and dcap-qvl to check the signer we trust on chain. Only a
     report (status 200) is written: every row cites the file and check_row needs the row's signer listed in it. No
-    answer, a 429 or a 5xx is retried after 2, 4, 8 s, up to `attempts` fetches; another status is not. Returns the
-    file name, or None when no report came."""
+    answer, a 429 or a 5xx is retried after 2, 4, 8 s, up to `attempts` fetches; another status is not. `timeout` is
+    each fetch's (see NearAiClient.attestation). Returns the file name, or None when no report came."""
     att: dict[str, Any] | None = None
     for i in range(attempts):
-        att = model_client.attestation()
+        att = model_client.attestation(timeout=timeout)
         if not att:
             return None  # no enclave behind this client (stub)
         if att.get("report"):
@@ -207,6 +209,9 @@ def save_attestation(model_client: ModelClient, attempts: int = 4) -> str | None
 
 
 ATTEST_RETRY_S = 60  # `attestation_file` fetches a model's report again at most this often
+# that fetch runs inside a decision, before its commit: (connect, read) of 5 s each bounds it to about 10 s, where the
+# start-of-run fetch may take 90 s per phase
+ATTEST_REFETCH_TIMEOUT = (5.0, 5.0)
 _attest_refetched: dict[str, float] = {}  # model id -> time.monotonic() of its last fetch by attestation_file
 
 
@@ -215,7 +220,8 @@ def attestation_file(
 ) -> str | None:
     """The saved report a row cites for a call `sig_record` signed. When it does not list the signer for this model
     (the fetch at start failed, or the model gained an enclave node since), the report is fetched again, one attempt,
-    at most every ATTEST_RETRY_S per model, and kept in `attestations` for the rows after."""
+    at most every ATTEST_RETRY_S per model with ATTEST_REFETCH_TIMEOUT, and kept in `attestations` for the rows
+    after."""
     name = attestations.get(model.model_id)
     if not sig_record or _check_attested(sig_record, model.model_id, name, ATTEST_DIR) == "ok":
         return name
@@ -224,7 +230,7 @@ def attestation_file(
         return name
     _attest_refetched[model.model_id] = time.monotonic()
     print(f"attestation {model.model_id}: signer {str(sig_record.get('signing_address'))[:12]} not listed; fetching")
-    fresh = save_attestation(model, attempts=1)
+    fresh = save_attestation(model, attempts=1, timeout=ATTEST_REFETCH_TIMEOUT)
     if fresh:
         attestations[model.model_id] = fresh
     return attestations.get(model.model_id)
