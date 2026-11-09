@@ -219,26 +219,35 @@ export function pnlBps(i: Intent | null, closeAt: bigint, open: bigint, close: b
   return Number((sign * (close - open) * BigInt(i.size_bps)) / open);
 }
 
-/** Deploy 17's injections at finish, from their get_chaos records: the records, the duel's agents [A, B] and the
- *  terms finish() read. */
+/** Deploy 17's injections at finish, from their get_chaos records: the records, the duel's agents [A, B], the
+ *  terms finish() read, and whether the duel was voided (void_duel: the oracle never answered). */
 export type ChaosSettle = {
   records: Pick<Chaos, "target" | "stake" | "outcome">[];
   pks: [string, string];
   terms: Pick<ChaosConfig, "fee_bps" | "share_bps">;
+  voided?: boolean;
 };
 
 /** chaos.rs settle_records: every stake leaves the pool and pays `fee = stake * fee_bps / 10_000` to owner fees,
- *  whatever its outcome. A held stake less the fee goes to the target's bond (payout 0). Every other one is owed
- *  back less the fee (a pending one settles as expired), plus, for a flip at `loser`, its share of `pot` by stake
- *  (weights in bps, rounded down; only the shares paid leave the loser's bond). */
-export function settleRecords(list: ChaosSettle["records"], loser: string | null, pot: bigint, feeBps: number) {
+ *  whatever its outcome, except an expired one in a `voided` duel (the oracle never answered, not the injector's
+ *  doing: no fee). A held stake less the fee goes to the target's bond (payout 0). Every other one is owed back less
+ *  the fee (a pending one settles as expired), plus, for a flip at `loser`, its share of `pot` by stake (weights in
+ *  bps, rounded down; only the shares paid leave the loser's bond). */
+export function settleRecords(
+  list: ChaosSettle["records"],
+  loser: string | null,
+  pot: bigint,
+  feeBps: number,
+  voided = false,
+) {
   const fooled = (c: ChaosSettle["records"][number]) => c.outcome === "Flipped" && c.target === loser;
   const weight = list.filter(fooled).reduce((s, c) => s + BigInt(c.stake), 0n);
   let [taken, fees, shares] = [0n, 0n, 0n];
   const credits: [string, bigint][] = [];
   const payouts = list.map((c) => {
     const stake = BigInt(c.stake);
-    const fee = (stake * BigInt(feeBps)) / 10_000n;
+    const expired = c.outcome === "Expired" || c.outcome === "Pending";
+    const fee = voided && expired ? 0n : (stake * BigInt(feeBps)) / 10_000n;
     taken += stake;
     fees += fee;
     if (c.outcome === "Held") {
@@ -279,7 +288,7 @@ export function finishMath(
   let slashed = 0n;
   let settled: ReturnType<typeof settleRecords> | null = null;
   if (aWins === null) {
-    if (chaos) settled = settleRecords(chaos.records, null, 0n, chaos.terms.fee_bps);
+    if (chaos) settled = settleRecords(chaos.records, null, 0n, chaos.terms.fee_bps, chaos.voided);
     const left = pool - (settled?.taken ?? 0n);
     after[0] += left / 2n + (left % 2n);
     after[1] += left / 2n;
@@ -580,7 +589,7 @@ export function checkDuel(e: Evidence): Line[] {
     const bondsLine = (m: { after: [bigint, bigint]; fees: bigint }) =>
       `A ${near(bonds[0])} -> ${near(got[0])} (expected ${near(m.after[0])}), B ${near(bonds[1])} -> ${near(got[1])} (expected ${near(m.after[1])}), owner fees +${near(m.fees)} NEAR`;
     if (voided) {
-      const m = finishMath(bonds, pool, [0, 0], [false, false], 0, 0, settle ?? undefined);
+      const m = finishMath(bonds, pool, [0, 0], [false, false], 0, 0, settle ? { ...settle, voided: true } : undefined);
       add(
         got[0] === m.after[0] && got[1] === m.after[1] && feesOk(m.fees) ? "PASS" : "FAIL",
         "payout",
@@ -588,7 +597,7 @@ export function checkDuel(e: Evidence): Line[] {
           ? `void: the injections settle as on a tie, then the pool ${near(pool)} NEAR less their stakes is split; ${bondsLine(m)}`
           : `void: pool ${near(pool)} NEAR split, A ${near(bonds[0])} -> ${near(got[0])}, B ${near(bonds[1])} -> ${near(got[1])}`,
       );
-      if (settle) settlement(m.settled!, settle, add);
+      if (settle) settlement(m.settled!, { ...settle, voided: true }, add);
     } else {
       const m = finishMath(
         bonds,
@@ -676,10 +685,11 @@ export function shieldGain(
  *  own kind, prev and next. */
 function settlement(
   s: ReturnType<typeof settleRecords>,
-  settle: { records: Chaos[]; terms: ChaosConfig },
+  settle: { records: Chaos[]; terms: ChaosConfig; voided?: boolean },
   add: (r: Line["result"], c: string, x: string) => void,
 ) {
   const list = settle.records;
+  const each = settle.voided ? "of each but the expired ones (void: no fee)" : "of each";
   const bad = list.flatMap((c, i) => {
     const why =
       c.outcome === "Pending"
@@ -697,7 +707,7 @@ function settlement(
     bad.length ? "FAIL" : "PASS",
     "chaos settlement",
     `${list.length} headlines: ${n("Flipped")} flipped, ${n("Held")} held, ${n("NoTrial")} no trial, ${n("Expired")} expired; ` +
-      `stakes ${near(s.taken)} NEAR, fee ${settle.terms.fee_bps} bps of each = ${near(s.fees)} to owner fees, ` +
+      `stakes ${near(s.taken)} NEAR, fee ${settle.terms.fee_bps} bps ${each} = ${near(s.fees)} to owner fees, ` +
       `held stakes less the fee ${near(sum(s.credits.map(([, x]) => x)))} to the targets' bonds, ` +
       `flip shares ${near(s.shares)} from the loser's bond, payouts ${near(sum(s.payouts))} NEAR` +
       (bad.length ? `: ${bad.join("; ")}` : ", as get_chaos records them"),

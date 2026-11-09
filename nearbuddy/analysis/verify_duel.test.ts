@@ -496,16 +496,28 @@ test("deploy 17: the deploy-16 pool rule fails, and so does each forged record",
 });
 
 test("deploy 17: a void settles the headlines as on a tie, then splits what is left", () => {
-  // #401 recast, voided instead of scored: no slash, no share; the flip at B is owed s - fee only
+  // #401 recast, voided instead of scored: no slash, no share; the flip at B is owed s - fee only, and the headline
+  // that expired comes back whole (the oracle never answered: no fee), so owner fees gain one fee less
   const e = asDeploy17(load("401"));
   Object.assign(e.now.duel!.outcome!, { open_price: "0", close_price: "0", winner: null, slashed: "0" });
   e.chaos![3]!.payout = String(S - FEE);
+  assert.equal(e.chaos![4]!.outcome, "Expired");
+  e.chaos![4]!.payout = String(S);
+  e.after!.config.owner_fees = String(BigInt(e.after!.config.owner_fees) - FEE);
   e.after!.a!.bond = String(BigInt(e.before!.a!.bond) + S - FEE); // the held stake less the fee; the pool is all stakes
   e.after!.b!.bond = e.before!.b!.bond;
   const lines = checkDuel(e);
   assert.deepEqual(fails(lines), []);
   assert.deepEqual(result(lines, "payout"), ["PASS"]);
   assert.deepEqual(result(lines, "chaos settlement"), ["PASS"]);
+  assert.ok(lines.find((l) => l.check === "chaos settlement")!.detail.includes("but the expired ones (void: no fee)"));
+  // the fee taken on the expired stake anyway (the rule before) fails the record and the owner fees
+  const old = structuredClone(e);
+  old.chaos![4]!.payout = String(S - FEE);
+  assert.deepEqual(fails(checkDuel(old)), ["chaos settlement"]);
+  old.chaos![4]!.payout = String(S);
+  old.after!.config.owner_fees = String(BigInt(old.after!.config.owner_fees) + FEE);
+  assert.deepEqual(fails(checkDuel(old)), ["payout"]);
   e.chaos![3]!.payout = String(S - FEE + 1n);
   assert.deepEqual(fails(checkDuel(e)), ["chaos settlement"]);
 });
@@ -619,19 +631,13 @@ test("deploy 17 arithmetic: the contract's own settlement tests, restated", () =
   m = run([-5, 5], [one("A", "Flipped")], 9_000);
   const big = (bonds[0] * 9_000n) / 10_000n;
   assert.deepEqual([m.after, m.settled!.payouts], [[0n, bonds[1] + big], [S - FEE + (bonds[0] - big)]]);
-  // void_settles_the_headlines_as_a_tie: a held stake to its target less the fee, an expired one owed back
-  m = finishMath(bonds, 2n * S, [0, 0], [false, false], 0, 0, {
-    records: [one("A", "Held"), one("A", "Pending")],
-    pks,
-    terms,
-  });
-  assert.deepEqual(
-    [m.after, m.settled!.payouts],
-    [
-      [bonds[0] + S - FEE, bonds[1]],
-      [0n, S - FEE],
-    ],
-  );
+  // void_settles_the_headlines_as_a_tie: a held stake to its target less the fee, an expired one owed back whole
+  // (the oracle never answered: no fee); on a scored tie the expired one pays the fee
+  const records = [one("A", "Held"), one("A", "Pending")];
+  m = finishMath(bonds, 2n * S, [0, 0], [false, false], 0, 0, { records, pks, terms, voided: true });
+  assert.deepEqual([m.after, m.settled!.payouts, m.fees], [[bonds[0] + S - FEE, bonds[1]], [0n, S], FEE]);
+  m = finishMath(bonds, 2n * S, [0, 0], [false, false], 0, 0, { records, pks, terms });
+  assert.deepEqual([m.settled!.payouts, m.fees], [[0n, S - FEE], 2n * FEE]);
   // shares pro rata by stake in bps, rounded down: the dust stays in the loser's bond
   const x = 10n ** 23n;
   m = finishMath(bonds, 3n * x, [-5, 5], [false, false], 1_000, 0, {
