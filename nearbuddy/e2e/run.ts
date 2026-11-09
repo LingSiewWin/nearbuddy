@@ -57,7 +57,7 @@ import {
   KeyPairEd25519,
   type KeyPairString,
 } from "near-api-js";
-import { b64 } from "../packages/protocol/src/index.ts";
+import { b64, parseEventJson } from "../packages/protocol/src/index.ts";
 import {
   commitMessage,
   commitment,
@@ -284,8 +284,7 @@ async function arenaReceiptTime(hash: string, sender: string): Promise<bigint | 
   );
   return o ? BigInt((await rpc<J>("block", { block_id: o.block_hash })).header.timestamp_nanosec) : null;
 }
-const events = (logs: string[]) =>
-  logs.filter((l) => l.startsWith("EVENT_JSON:")).map((l) => JSON.parse(l.slice("EVENT_JSON:".length)));
+const events = (logs: string[]) => logs.filter((l) => l.startsWith("EVENT_JSON:")).map((l) => parseEventJson(l) as J);
 
 // ---- the oracle stand-in ------------------------------------------------------------------------
 /** Plays Outlayer: scans every new block's chunks for an `oracle_call` receipt to the oracle account and answers
