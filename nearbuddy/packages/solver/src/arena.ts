@@ -21,7 +21,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Account, teraToGas } from "near-api-js";
-import type { AgentView, Config, Duel, Fill, Mandate } from "../../protocol/src/abi/arena.ts";
+import type { AgentView, Duel, Fill, Mandate } from "../../protocol/src/abi/arena.ts";
 import {
   ARENA,
   type ArenaConfigAnyDeploy,
