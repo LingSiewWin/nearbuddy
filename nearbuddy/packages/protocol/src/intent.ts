@@ -8,6 +8,8 @@ import { b64, hex } from "./index.ts";
 
 export const INTENT_DOMAIN = new TextEncoder().encode("nearbuddy-intent-v1");
 export const COMMIT_DOMAIN = new TextEncoder().encode("nearbuddy-commit-v1");
+/** Commit message v2 (deploy 17.1) also signs `seen`; see `commitMessageV2`. */
+export const COMMIT_DOMAIN_V2 = new TextEncoder().encode("nearbuddy-commit-v2");
 export const CONSENT_DOMAIN = new TextEncoder().encode("nearbuddy-duel-v1");
 /** proof_hash when the agent is not TEE-backed (stub model, demo keys). */
 export const ZERO_PROOF = b64.enc(new Uint8Array(32));
@@ -100,6 +102,16 @@ export function commitment(i: Intent, salt: Uint8Array): Uint8Array {
 /** Bytes the agent signs for `commit_intent`: domain || contract id || duel_id u64 LE || commitment. */
 export function commitMessage(contractId: string, duelId: string, c: Uint8Array): Uint8Array {
   return concat(COMMIT_DOMAIN, utf8(contractId), u64le(duelId), c);
+}
+
+/** Bytes the agent signs for `commit_intent(.., seen)` (message v2, `commit_message_version` 2): domain v2 ||
+ *  contract id || duel_id u64 LE || seen u32 LE || commitment. `seen` is how many `get_chaos(duel)` records the
+ *  agent had read; a replacement that would hide a newer headline at it is refused ("unseen headline"). */
+export function commitMessageV2(contractId: string, duelId: string, seen: number, c: Uint8Array): Uint8Array {
+  if (!Number.isInteger(seen) || seen < 0 || seen > 0xffffffff) throw new RangeError(`bad u32: ${seen}`);
+  const s = new Uint8Array(4);
+  new DataView(s.buffer).setUint32(0, seen, true);
+  return concat(COMMIT_DOMAIN_V2, utf8(contractId), u64le(duelId), s, c);
 }
 
 /** Bytes each agent signs for `open_duel_consented`: domain || contract id || a || b || symbol || close_at u64 LE. */

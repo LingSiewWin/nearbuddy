@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { b64, hex, parseEventJson, unhex } from "./index.ts";
 import {
   commitMessage,
+  commitMessageV2,
   commitment,
   consentMessage,
   type Intent,
@@ -34,6 +35,8 @@ test("commitment and commit message match the shared vector", () => {
     createHash("sha256").update(fromHex(W.intent_hex)).update(fromHex(W.commit.salt_hex)).digest("hex"),
   );
   assert.equal(hex(commitMessage(W.contract, W.commit.duel_id, c)), W.commit.message_hex);
+  assert.equal(hex(commitMessageV2(W.contract, W.commit.duel_id, W.commit.seen, c)), W.commit.message_v2_hex);
+  assert.throws(() => commitMessageV2(W.contract, W.commit.duel_id, 2 ** 32, c), RangeError);
 });
 
 test("consent message matches the shared vector", () => {
