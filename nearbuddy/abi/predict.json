@@ -8,7 +8,7 @@
     "functions": [
       {
         "name": "claim",
-        "doc": " Pay the caller the deposits of every prediction it holds that has been scored, and forget\n those predictions (their record stays in the market counts, the board and the logs).\n Returns the amount sent. Caller: a predictor. Deposit: none. Panics: \"nothing to claim\".",
+        "doc": " Pay the caller the deposits of every prediction it holds that has been scored, less its\n board row's storage the first time (`Stats.storage_owed`), and forget those predictions\n (their record stays in the market counts, the board and the logs). Returns the amount sent.\n Caller: a predictor. Deposit: none. Panics: \"nothing to claim\".",
         "kind": "call",
         "result": {
           "serialization_type": "json",
@@ -23,7 +23,7 @@
       },
       {
         "name": "get_board",
-        "doc": " Predictors ranked by right minus wrong, then best streak, then account; `limit` (at most\n 100) from rank `from`. ponytail: sorts every row per call, like the arena's leaderboard; a\n sorted index once predictors number in the thousands. View: anyone, no deposit, no panics.",
+        "doc": " The board: up to `TOP_N` accounts with at least `MIN_RANKED` scored calls, ranked by right\n minus wrong, then account; `limit` (at most 100) from rank `from`. Reads at most `TOP_N`\n rows whatever the number of predictors. View: anyone, no deposit, no panics.",
         "kind": "view",
         "params": {
           "serialization_type": "json",
@@ -259,7 +259,7 @@
       },
       {
         "name": "on_settle",
-        "doc": " `settle`'s callback. Fixes, once, the outcome of each market of the duel the arena has\n decided: a chaos market when its injection left `Pending` (`Flipped`, `Held`; void on\n `NoTrial` or `Expired`), the duel market when the duel resolved (`A`, `B`, `Tie`; void when\n voided). Then scores up to `SCORE_PAGE` predictions of settled markets, in order, and returns\n how many are still unscored. Caller: this contract (private).",
+        "doc": " `settle`'s callback. Fixes, once, the outcome of each market of the duel the arena has\n decided: a chaos market when its injection left `Pending` (`Flipped`, `Held`; void on\n `NoTrial` or `Expired`; an outcome this contract does not know is left open), the duel\n market when the duel resolved (`A`, `B`, `Tie`; void when voided). The two answers are read\n apart: a failed or unreadable one (or a duel record for another id) settles nothing that\n depends on it, and the call panics, changing nothing, only when neither is usable. Then\n scores up to `SCORE_PAGE` predictions of settled markets, in order, and returns how many are\n still unscored. Caller: this contract (private).",
         "kind": "call",
         "modifiers": [
           "private"
@@ -286,7 +286,7 @@
       },
       {
         "name": "predict",
-        "doc": " Call `pick` on a market: a chaos injection (`index` = its index in `get_chaos(duel_id)`,\n pick `Flipped` or `Held`) or the duel (`index` = `None`, pick `A`, `B` or `Tie`). One call\n per account per market. Accepted in `on_predict` only if the arena's views show the market\n open (see the crate doc); otherwise the deposit goes back. Returns that promise.\n Caller: anyone. Deposit: exactly `DEPOSIT`. Panics: \"attach exactly the deposit\", \"pick does\n not fit the market\", \"index out of range\", \"predictions closed\", \"already predicted\", \"too\n many open predictions: claim first\".",
+        "doc": " Call `pick` on a market: a chaos injection (`index` = its index in `get_chaos(duel_id)`,\n pick `Flipped` or `Held`; views `chaos_open` and `get_chaos`) or the duel (`index` =\n `None`, pick `A`, `B` or `Tie`; views `get_duel` and `duel_lock`). One call per account per\n market. Accepted in `on_predict` only if the arena's views show the market open (see the\n crate doc); otherwise the deposit goes back. Returns that promise.\n Caller: anyone. Deposit: exactly `DEPOSIT`. Panics: \"attach exactly the deposit\", \"pick does\n not fit the market\", \"index out of range\", \"predictions closed\", \"already predicted\", \"too\n many open predictions: claim first\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -347,6 +347,30 @@
             "$ref": "#/definitions/Promise"
           }
         }
+      },
+      {
+        "name": "void_stale",
+        "doc": " Escape hatch for a market the arena never settles (nobody voids the duel, or its answers\n stop parsing): every market of `duel_id` still unsettled `STALE_NS` after its first\n prediction becomes void (refunded, not counted). Then scores like `settle` and returns how\n many predictions are still unscored. Caller: anyone. Deposit: none. No panics.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        }
       }
     ],
     "root_schema": {
@@ -397,7 +421,9 @@
             "deposit",
             "max_held",
             "max_injections",
-            "score_page"
+            "min_ranked",
+            "score_page",
+            "top_n"
           ],
           "properties": {
             "arena": {
@@ -417,7 +443,17 @@
               "format": "uint32",
               "minimum": 0.0
             },
+            "min_ranked": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
             "score_page": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "top_n": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0.0
@@ -429,6 +465,7 @@
           "type": "object",
           "required": [
             "duel_id",
+            "open_until_reveal",
             "picks",
             "scored",
             "settled",
@@ -446,6 +483,10 @@
               ],
               "format": "uint32",
               "minimum": 0.0
+            },
+            "open_until_reveal": {
+              "description": "Chaos market opened against an arena without `chaos_open`: it closes at the target's reveal, not at its commit, so whoever runs the target knows the outcome before it closes.",
+              "type": "boolean"
             },
             "outcome": {
               "description": "The winning pick; `None` while open, or when settled void.",
@@ -473,6 +514,13 @@
             },
             "settled": {
               "type": "boolean"
+            },
+            "steered_by": {
+              "description": "Chaos market: the target's owner when the target is a keyed agent. That owner chooses which completion its agent signs, so it can steer the outcome. `None` for a keyless target, a duel market, or when the arena had no `chaos_open` view.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "total": {
               "type": "integer",
@@ -557,6 +605,7 @@
             "best",
             "count",
             "right",
+            "storage_owed",
             "streak"
           ],
           "properties": {
@@ -575,8 +624,12 @@
               "format": "uint32",
               "minimum": 0.0
             },
+            "storage_owed": {
+              "description": "The storage of this row, kept back from the account's next `claim` (then 0). The row outlives every prediction, so its owner pays it once instead of the contract.",
+              "type": "string"
+            },
             "streak": {
-              "description": "Right calls in a row, in the order they were scored.",
+              "description": "Right calls in a row, in the order they were scored (shown, not ranked on).",
               "type": "integer",
               "format": "uint32",
               "minimum": 0.0

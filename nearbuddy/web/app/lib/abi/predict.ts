@@ -47,7 +47,9 @@ export interface Config {
   deposit: string;
   max_held: number;
   max_injections: number;
+  min_ranked: number;
   score_page: number;
+  top_n: number;
 }
 
 /** The crowd's split on one market and, once settled, its outcome. */
@@ -55,6 +57,8 @@ export interface MarketView {
   duel_id: string;
   /** The chaos injection's index in `get_chaos(duel_id)`; `None` for the duel market. */
   index: number | null;
+  /** Chaos market opened against an arena without `chaos_open`: it closes at the target's reveal, not at its commit, so whoever runs the target knows the outcome before it closes. */
+  open_until_reveal: boolean;
   /** The winning pick; `None` while open, or when settled void. */
   outcome: Pick | null;
   /** `Flipped`, `Held` for a chaos market; `A`, `B`, `Tie` for a duel market. */
@@ -62,6 +66,8 @@ export interface MarketView {
   /** Predictions scored so far. */
   scored: number;
   settled: boolean;
+  /** Chaos market: the target's owner when the target is a keyed agent. That owner chooses which completion its agent signs, so it can steer the outcome. `None` for a keyless target, a duel market, or when the arena had no `chaos_open` view. */
+  steered_by: string | null;
   total: number;
 }
 
@@ -89,7 +95,9 @@ export interface Stats {
   best: number;
   count: number;
   right: number;
-  /** Right calls in a row, in the order they were scored. */
+  /** The storage of this row, kept back from the account's next `claim` (then 0). The row outlives every prediction, so its owner pays it once instead of the contract. */
+  storage_owed: string;
+  /** Right calls in a row, in the order they were scored (shown, not ranked on). */
   streak: number;
 }
 
@@ -99,9 +107,9 @@ export type Verdict = "Right" | "Wrong" | "Void";
 export interface PredictViews {
   contract_source_metadata: { args: Record<string, never>; result: unknown };
   /**
-   * Predictors ranked by right minus wrong, then best streak, then account; `limit` (at most
-   *  100) from rank `from`. ponytail: sorts every row per call, like the arena's leaderboard; a
-   *  sorted index once predictors number in the thousands. View: anyone, no deposit, no panics.
+   * The board: up to `TOP_N` accounts with at least `MIN_RANKED` scored calls, ranked by right
+   *  minus wrong, then account; `limit` (at most 100) from rank `from`. Reads at most `TOP_N`
+   *  rows whatever the number of predictors. View: anyone, no deposit, no panics.
    */
   get_board: { args: { from: number; limit: number }; result: BoardRow[] };
   /** The arena account, the deposit and the bounds. View: anyone, no deposit, no panics. */
@@ -131,9 +139,10 @@ export interface PredictViews {
 
 export interface PredictCalls {
   /**
-   * Pay the caller the deposits of every prediction it holds that has been scored, and forget
-   *  those predictions (their record stays in the market counts, the board and the logs).
-   *  Returns the amount sent. Caller: a predictor. Deposit: none. Panics: "nothing to claim".
+   * Pay the caller the deposits of every prediction it holds that has been scored, less its
+   *  board row's storage the first time (`Stats.storage_owed`), and forget those predictions
+   *  (their record stays in the market counts, the board and the logs). Returns the amount sent.
+   *  Caller: a predictor. Deposit: none. Panics: "nothing to claim".
    */
   claim: { args: Record<string, never>; result: string };
   /**
@@ -143,9 +152,10 @@ export interface PredictCalls {
   new: { args: { arena: string }; result: undefined };
   /**
    * Call `pick` on a market: a chaos injection (`index` = its index in `get_chaos(duel_id)`,
-   *  pick `Flipped` or `Held`) or the duel (`index` = `None`, pick `A`, `B` or `Tie`). One call
-   *  per account per market. Accepted in `on_predict` only if the arena's views show the market
-   *  open (see the crate doc); otherwise the deposit goes back. Returns that promise.
+   *  pick `Flipped` or `Held`; views `chaos_open` and `get_chaos`) or the duel (`index` =
+   *  `None`, pick `A`, `B` or `Tie`; views `get_duel` and `duel_lock`). One call per account per
+   *  market. Accepted in `on_predict` only if the arena's views show the market open (see the
+   *  crate doc); otherwise the deposit goes back. Returns that promise.
    *  Caller: anyone. Deposit: exactly `DEPOSIT`. Panics: "attach exactly the deposit", "pick does
    *  not fit the market", "index out of range", "predictions closed", "already predicted", "too
    *  many open predictions: claim first".
@@ -158,4 +168,11 @@ export interface PredictCalls {
    *  failed", "arena answer unreadable", "duel missing".
    */
   settle: { args: { duel_id: string }; result: unknown };
+  /**
+   * Escape hatch for a market the arena never settles (nobody voids the duel, or its answers
+   *  stop parsing): every market of `duel_id` still unsettled `STALE_NS` after its first
+   *  prediction becomes void (refunded, not counted). Then scores like `settle` and returns how
+   *  many predictions are still unscored. Caller: anyone. Deposit: none. No panics.
+   */
+  void_stale: { args: { duel_id: string }; result: number };
 }
