@@ -10,7 +10,7 @@ let connector: Promise<NearConnector> | null = null;
 const listeners = new Set<(account: string | null) => void>();
 const get = () => {
   connector ??= import("@hot-labs/near-connect").then(({ NearConnector }) => {
-    const c = new NearConnector({ network: NETWORK_ID });
+    const c = new NearConnector({ network: NETWORK_ID, cspNonce: cspNonce() });
     c.on("wallet:signIn", (e) => {
       for (const cb of listeners) cb(e.accounts[0]?.accountId ?? null);
     });
@@ -21,6 +21,11 @@ const get = () => {
   });
   return connector;
 };
+
+/** The page's CSP nonce (web/proxy.ts), off a script Next stamped with it. NEAR Connect puts it on the inline scripts
+ *  of the sandboxed iframe it runs a wallet in: a srcdoc iframe inherits the page's policy, so without it the wallet
+ *  never starts. */
+const cspNonce = () => document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce ?? "";
 
 /** NEAR Connect's own record of the wallet a previous visit connected (its LocalStorage key "selected-wallet"). */
 const remembered = () => {
