@@ -56,6 +56,8 @@ Second pair (`--pair-tag p2`, scripts/second-loop.sh): the same seeds derive a d
 
 Health (`--health`, scripts/night-loop.sh runs it before each batch): GET /v1/models must answer 200 and list every
 model this run calls (free); `--chat` adds a 1-output-token chat call per model. Exit 0, or 1 with one line on stderr.
+During a run, `--max-model-failures N` (default 3): after N calls of one model in a row got a 5xx or no answer, the
+duel makes no more model calls, closes and is resolved, and the runner exits 75 instead of opening another duel.
 
 Agents are ed25519 keys derived from AGENT_SEED_A / AGENT_SEED_B (hex, 32 bytes) in the env file,
 or fresh random keys when unset (then they are registered on every run). With NEAR_AI_API_KEY set the
@@ -310,7 +312,9 @@ def prepare_decision(
     try:
         # hardened-v3: the judge's signed request names this duel and intent nonce, so it cannot serve another decision
         decision = d.decide(symbol, brief(symbol, px, open_px), injection_text, bind=(duel_id, str(nonce)))
+        MODEL_OUTAGE.answered(model.model_id)
     except DuelistError as e:
+        MODEL_OUTAGE.answered(model.model_id)  # the model answered; its text did not parse
         failed = comp.last
         record(
             {
@@ -337,6 +341,8 @@ def prepare_decision(
     except requests.RequestException as e:
         if not _model_transient(e):
             raise
+        if _model_down(e):
+            MODEL_OUTAGE.failed(model.model_id, e)
         record(
             {
                 "duel_id": duel_id,
@@ -520,6 +526,61 @@ def _model_transient(e: requests.RequestException) -> bool:
         return True
     status = e.response.status_code if e.response is not None else None
     return status is not None and (status == 429 or status >= 500)
+
+
+def _model_down(e: requests.RequestException) -> bool:
+    """A 5xx or no answer at all (connection error, timeout): the model API is failing, not throttling us."""
+    if isinstance(e, (requests.ConnectionError, requests.Timeout)):
+        return True
+    status = e.response.status_code if e.response is not None else None
+    return status is not None and status >= 500
+
+
+MODEL_DOWN_EXIT = 75  # EX_TEMPFAIL: night-loop.sh's health gate (runner.py --health) decides when to go on
+
+
+class ModelDown(Exception):
+    """The model API failed `ModelOutage.limit` calls in a row: the run opens no new duel. Not a RuntimeError, so the
+    handlers for solver errors never swallow it."""
+
+
+class ModelOutage:
+    """Consecutive model calls, per model, that got a 5xx or no answer. Any answer (even an unparseable one) resets
+    that model's count; a 429 leaves it as it is. At `limit` the current duel makes no more model calls and the run
+    opens no new duel: during the NEAR AI outage of 2026-11-10 (06:20 +08 on) every duel cost an oracle deposit and the
+    attacker's chaos stakes while each of its model calls was skipped. Per model, so one model of the pair failing
+    (Qwen3.8-27B's 502s, 05:09-05:22 +08) trips it while the other still answers. `limit` 0 turns it off."""
+
+    def __init__(self, limit: int = 3) -> None:
+        self.limit = limit
+        self.streak: dict[str, int] = {}
+        self.last: dict[str, str] = {}
+        self._lock = threading.Lock()  # prepare_decision may run on a `_prepare_by` thread
+
+    def answered(self, model_id: str) -> None:
+        with self._lock:
+            self.streak[model_id] = 0
+
+    def failed(self, model_id: str, e: requests.RequestException) -> None:
+        with self._lock:
+            self.streak[model_id] = self.streak.get(model_id, 0) + 1
+            self.last[model_id] = " ".join(str(e).split())[:100]
+            tripped = self.limit > 0 and self.streak[model_id] == self.limit
+        if tripped:
+            print(f"  {self.down()}; no more model calls this duel and no new duel this run")
+
+    def down(self) -> str | None:
+        """One line naming the first model at its limit, or None while every model is under it."""
+        if self.limit <= 0:
+            return None
+        with self._lock:
+            hit = next((m for m, n in self.streak.items() if n >= self.limit), None)
+            if hit is None:
+                return None
+            return f"model {hit}: {self.streak[hit]} calls in a row failed (5xx or no answer; last: {self.last[hit]})"
+
+
+MODEL_OUTAGE = ModelOutage()
 
 
 def model_health(
@@ -1180,12 +1241,15 @@ def play_duel(
     held: dict[str, list[Commitment]] = {}
     closed = False
     try:
-        while not closed and time.time_ns() < stop_ns:
+        # MODEL_OUTAGE tripped: the model API keeps failing, so no more calls this duel; it closes and resolves as is
+        while not closed and time.time_ns() < stop_ns and MODEL_OUTAGE.down() is None:
             px = price(symbol, ENV.get("PYTH_API_KEY"))
             pending = solver.get("/arena")["pending"]
             for label, d, sk, comp, model in players:
                 if time.time_ns() >= stop_ns:  # a slow call before this one ate the margin: no call past stop_ns
                     print(f"  {label} skipped: commits stopped (intent lock + margin) during this cycle")
+                    break
+                if MODEL_OUTAGE.down() is not None:
                     break
                 args = (duel_id, symbol, px, open_px, close_at_ns, pending, nonce, label, d, sk, comp, model)
                 if not commit_reveal:
@@ -1200,7 +1264,7 @@ def play_duel(
                 if status == "closed":
                     closed = True
                     break
-            if not closed:
+            if not closed and MODEL_OUTAGE.down() is None:
                 # never sleep past stop_ns: a cycle that started just before it would otherwise sleep into the
                 # lock and past the reveal deadline (duel 464: both agents forfeited)
                 time.sleep(max(0.0, min(cycle_seconds, (stop_ns - time.time_ns()) / S_NS)))
@@ -1388,6 +1452,8 @@ def run_single(
         else:
             print(f"[duel {duel_id}] oracle callback not yet landed; the next pairing waits for it")
         last = duel_id
+        if (why := MODEL_OUTAGE.down()) is not None:  # stop taking duels the model cannot play
+            raise ModelDown(f"{why}; duel {duel_id} resolved, waiting for no new duel")
 
 
 def free_agents(solver: Solver, pks: list[str]) -> None:
@@ -1527,6 +1593,9 @@ def run(
                 f"rerun: python runner.py --resolve {duel_id}"
             )
         results.append({"duel_id": duel_id, "open_tx": opened["tx"], "resolve_tx": resolved["tx"], "outcome": o})
+        if (why := MODEL_OUTAGE.down()) is not None:  # each new duel costs an oracle deposit and chaos stakes
+            print(json.dumps(results, indent=2))
+            raise ModelDown(f"{why}; duel {duel_id} resolved, no new duel opened")
     return results
 
 
@@ -1611,6 +1680,13 @@ if __name__ == "__main__":
         action="store_true",
         help="with --health: also a 1-output-token chat call per model (billed), since a listed model can still 5xx",
     )
+    p.add_argument(
+        "--max-model-failures",
+        type=int,
+        default=3,
+        metavar="N",
+        help="after N model calls in a row get a 5xx or no answer, finish the duel and exit 75 (0: never)",
+    )
     args = p.parse_args()
     if args.chat and not args.health:
         p.error("--chat goes with --health")
@@ -1667,32 +1743,38 @@ if __name__ == "__main__":
             p.error("--only needs --wait-pairing: the solver opens the duel, this process only plays one side")
         if args.consent:
             p.error("--consent needs both agents' signatures; with --only this process holds one key")
-        run_single(
-            args.only,
-            args.hardened,
+    MODEL_OUTAGE.limit = args.max_model_failures
+    try:
+        if args.only:
+            run_single(
+                args.only,
+                args.hardened,
+                args.cycle_seconds,
+                args.poll_seconds,
+                args.symbol,
+                ENV.get("SOLVER_URL", "http://127.0.0.1:4020"),
+                args.bond,
+                args.commit_reveal,
+                args.profile,
+                args.judgments,
+            )
+            raise SystemExit(0)
+        out = run(
+            args.rounds,
+            args.duel_seconds,
             args.cycle_seconds,
-            args.poll_seconds,
             args.symbol,
             ENV.get("SOLVER_URL", "http://127.0.0.1:4020"),
             args.bond,
+            args.swap_prompts,
+            arms,
             args.commit_reveal,
-            args.profile,
+            args.consent,
+            PAIR_TAG,
+            args.profile or "hardened",
             args.judgments,
         )
-        raise SystemExit(0)
-    out = run(
-        args.rounds,
-        args.duel_seconds,
-        args.cycle_seconds,
-        args.symbol,
-        ENV.get("SOLVER_URL", "http://127.0.0.1:4020"),
-        args.bond,
-        args.swap_prompts,
-        arms,
-        args.commit_reveal,
-        args.consent,
-        PAIR_TAG,
-        args.profile or "hardened",
-        args.judgments,
-    )
-    print(json.dumps(out, indent=2))
+        print(json.dumps(out, indent=2))
+    except ModelDown as e:  # night-loop.sh logs this last line, then its --health gate decides when to go on
+        print(f"stopping: {e}", file=sys.stderr)
+        raise SystemExit(MODEL_DOWN_EXIT) from None
