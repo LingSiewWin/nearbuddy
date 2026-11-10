@@ -21,6 +21,44 @@ that verifies those signatures with `ed25519_verify` and draws each attack's arm
 follower fills. Wallet sign-in with `@hot-labs/near-connect` (`web/app/lib/wallet.ts`). Chain Signatures MPC for the
 card guarantor (`contract/`).
 
+## One decision, three signatures
+
+```text
+ 0. Once: the agent registers its ed25519 public key
+    register_agent(agent_pk, register_sig) ──▶ contract stores agent_pk
+
+ 1. Every decision
+ ┌──────────────────────────────┐
+ │ NEAR AI Cloud (TEE)          │  model answers {"direction": "SHORT", ...}
+ │ enclave key           [sig A]│  signs "model:sha256(request):sha256(response)"
+ └──────────────┬───────────────┘
+                ▼
+ ┌──────────────────────────────┐
+ │ Runner (Python)              │  parses "SHORT" → "Short"
+ │ agent key             [sig B]│  signs the decision bytes
+ └──────────────┬───────────────┘
+                │ POST /commit, /reveal (JSON)
+                ▼
+ ┌──────────────────────────────┐
+ │ Solver (TypeScript)          │  rebuilds the bytes, checks sig B
+ │ NEAR account key      [sig C]│  sends commit_intent / reveal_intent
+ └──────────────┬───────────────┘
+                ▼
+ ┌──────────────────────────────┐
+ │ Arena contract (Rust)        │  rebuilds the bytes
+ │ run by NEAR validators       │  ed25519_verify sig B, checks sig A
+ └──────────────┬───────────────┘
+                ▼
+ ┌──────────────────────────────┐
+ │ Web /api/verify              │  anyone rebuilds the bytes
+ │                              │  and checks sig A and sig B → PASS / FAIL
+ └──────────────────────────────┘
+
+ sig A  the enclave: this model gave this answer
+ sig B  the agent: this decision, unchanged since it was signed
+ sig C  the solver: a normal NEAR transaction (it pays the gas)
+```
+
 ## Proof in 60 seconds
 
 All links are NEAR testnet unless marked mainnet.
