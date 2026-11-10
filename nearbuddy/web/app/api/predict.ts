@@ -5,7 +5,7 @@
 // - a chaos market takes calls while the arena's `chaos_open` says so. An arena without that view (deploy 17) makes
 //   the contract fall back to the record: open while it is `Pending`, closing at the reveal (`open_until_reveal`).
 // A market nobody has called yet has no record in the predict contract. It is served with zero calls and the label the
-// contract would store at its first call, so the page never shows a market as blind before someone calls it.
+// contract would store at its first call, so the page says who can steer a market before anyone calls it.
 import type { Chaos, ChaosOpen, Duel } from "../lib/abi/arena";
 import type { MarketView } from "../lib/abi/predict";
 import { picksOf } from "../lib/predict";
@@ -52,11 +52,12 @@ export function marketsOf(
   const close = BigInt(duel.close_at);
   const half = at + (close - at) / 2n;
   const duelOpen = !duel.resolved && lock !== null && nowNs < half && nowNs + BigInt(lock) < close;
-  const blind: Label = { steered_by: null, open_until_reveal: false };
+  // the duel market's label, and a closed market's (never shown)
+  const plain: Label = { steered_by: null, open_until_reveal: false };
   return [
-    market(null, duelOpen, blind),
+    market(null, duelOpen, plain),
     ...chaos.slice(0, MAX_INJECTIONS).map((c, i) => {
-      if (c.outcome !== "Pending") return market(i, false, blind);
+      if (c.outcome !== "Pending") return market(i, false, plain);
       if (opens === null) return market(i, true, { steered_by: null, open_until_reveal: true });
       const o = opens.get(i) ?? null;
       return market(i, !!o?.open, { steered_by: o && !o.keyless ? o.owner : null, open_until_reveal: false });

@@ -99,7 +99,7 @@ describe("marketsOf", () => {
     expect(ms.map((m) => [m.open, m.steered_by, m.open_until_reveal])).toEqual([
       [true, "op.testnet", false],
       [false, "op.testnet", false],
-      [true, null, false], // keyless: nobody picks which reply it signs
+      [true, null, false], // keyless: no owner (steerLine says any keeper can resample it)
       [false, null, false], // the arena answered none: the contract refuses
     ]);
   });

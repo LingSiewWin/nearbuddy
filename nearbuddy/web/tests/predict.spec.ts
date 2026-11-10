@@ -194,7 +194,7 @@ test.describe("desktop 1280", () => {
     await expect.poll(p2).toContain("71% say A wins");
     await expect.poll(p2).toContain("a click connects a NEAR wallet to sign a 0.0041 NEAR deposit you claim back once scored");
     // a duel market is never blind, and the deployed arena's chaos markets close at the reveal: both say so
-    await expect.poll(p2).toContain("either agent's owner can steer this: it picks the replies its agent signs");
+    await expect.poll(p2).toContain("whoever drives either agent can steer this: it picks which replies get signed");
     await expect.poll(p2).toContain("closes at the reveal: whoever runs the agent knows the answer first");
     // the pending attack, in pane 2 and in the tail; the decided one has no buttons
     for (const n of [2, 3])

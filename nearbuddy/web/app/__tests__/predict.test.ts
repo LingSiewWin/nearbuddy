@@ -37,12 +37,13 @@ describe("predict", () => {
   });
 
   test("a market says who can steer it or when it is not blind", () => {
-    expect(steerLine(market([1, 1]))).toBeNull();
+    // neither an owner nor the reveal fallback: a keyless target, which any keeper can resample
+    expect(steerLine(market([1, 1]))).toContain("any keeper can resample");
     expect(steerLine({ ...market([1, 1]), steered_by: "op.testnet" })).toContain("op.testnet");
     expect(steerLine({ ...market([1, 1]), open_until_reveal: true })).toContain("closes at the reveal");
     expect(steerLine(null)).toBeNull();
     // a duel market is never blind: either agent's owner picks which replies its key signs
-    expect(steerLine({ ...market([1, 1]), index: null })).toContain("either agent's owner can steer this");
+    expect(steerLine({ ...market([1, 1]), index: null })).toContain("whoever drives either agent can steer this");
   });
 
   test("the viewer's call and its verdict", () => {

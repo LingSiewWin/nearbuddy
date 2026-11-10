@@ -71,14 +71,17 @@ export function crowdLine(m: MarketView | null): string | null {
 export const mine = (held: PredictionView[] | null, duel_id: string, index: number | null) =>
   held?.find((p) => p.duel_id === duel_id && p.index === index) ?? null;
 
-/** Why a market's answer may not be blind, for the page to say next to the buttons; null when it is. A duel market
- *  is never blind: each keyed agent's owner picks which replies its key signs (predict/README.md). */
+/** Who can steer a market's answer, for the page to say next to the buttons; null only without a market. None is
+ *  blind (predict/README.md): a duel's agents and a keyed target sign the replies their runner picks, a keyless
+ *  target's request is public so any keeper can resample it, and without `chaos_open` the market stays open until the
+ *  reveal. A chaos market's view tells these apart: `steered_by` names a keyed owner, `open_until_reveal` the
+ *  fallback, and neither is a keyless target. */
 export function steerLine(m: MarketView | null): string | null {
   if (!m) return null;
-  if (m.index === null) return "either agent's owner can steer this: it picks the replies its agent signs";
+  if (m.index === null) return "whoever drives either agent can steer this: it picks which replies get signed";
   if (m.steered_by) return `the agent's owner ${m.steered_by} picks which reply it signs, so it can steer this`;
   if (m.open_until_reveal) return "closes at the reveal: whoever runs the agent knows the answer first";
-  return null;
+  return "a keyless agent: any keeper can resample its public request and submit the reply it likes";
 }
 
 /** What the predictor sees about their call. */
