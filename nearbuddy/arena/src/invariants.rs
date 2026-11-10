@@ -655,7 +655,7 @@ fn op() -> impl Strategy<Value = Op> {
 
 /// One `make()` per thread and type: `test_vm_config` builds the config of every protocol version,
 /// which dominated the run time when called per transaction.
-fn cached<T: Clone + 'static>(make: fn() -> T) -> T {
+pub(crate) fn cached<T: Clone + 'static>(make: fn() -> T) -> T {
     thread_local!(static CACHE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new()));
     CACHE.with(|c| {
         c.borrow_mut()
@@ -670,7 +670,7 @@ fn cached<T: Clone + 'static>(make: fn() -> T) -> T {
 thread_local!(static QUIET: Cell<bool> = const { Cell::new(false) });
 
 /// Runs `f` with the panic message of expected contract reverts suppressed on this thread only.
-fn quiet<R>(f: impl FnOnce() -> R) -> R {
+pub(crate) fn quiet<R>(f: impl FnOnce() -> R) -> R {
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {
         let prev = std::panic::take_hook();
@@ -687,7 +687,7 @@ fn quiet<R>(f: impl FnOnce() -> R) -> R {
 }
 
 /// Arithmetic and unwrap panics are contract bugs, not reverts.
-fn is_bug(msg: &str) -> bool {
+pub(crate) fn is_bug(msg: &str) -> bool {
     msg.starts_with("attempt to") || msg.contains("called `Option::unwrap()`")
 }
 

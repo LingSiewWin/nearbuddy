@@ -47,6 +47,8 @@ pub use state::{Contract, ContractExt};
 pub use types::*;
 
 #[cfg(test)]
+mod keyless_tests;
+#[cfg(test)]
 mod tests;
 
 use near_sdk::{AccountId, env};

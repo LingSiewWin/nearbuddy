@@ -137,7 +137,7 @@ fn price_data(asset: &str, price8: u64, ts: u64) -> PriceData {
 }
 
 /// Outlayer answers `oracle_call`: the oracle account calls back with our contract as sender.
-fn oracle_answers(c: &mut Contract, d: u64, phase: &str, price8: u64, ts: u64) {
+pub fn oracle_answers(c: &mut Contract, d: u64, phase: &str, price8: u64, ts: u64) {
     ctx_at(ORACLE, 0, ts);
     c.oracle_on_call(
         CONTRACT.parse().unwrap(),
