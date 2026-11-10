@@ -24,6 +24,7 @@ from keys import pk_b64  # noqa: F401  (moved to keys.py; re-exported for older 
 
 INTENT_DOMAIN = b"nearbuddy-intent-v1"
 COMMIT_DOMAIN = b"nearbuddy-commit-v1"
+COMMIT_DOMAIN_V2 = b"nearbuddy-commit-v2"
 CONSENT_DOMAIN = b"nearbuddy-duel-v1"
 ZERO_PROOF = bytes(32)
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -108,6 +109,20 @@ def commitment(intent: dict[str, Any], salt: bytes) -> bytes:
 def commit_message(contract_id: str, duel_id: str | int, commitment: bytes) -> bytes:
     """Bytes the agent signs for `commit_intent`: domain || contract id || duel_id u64 LE || commitment."""
     return COMMIT_DOMAIN + contract_id.encode() + struct.pack("<Q", int(duel_id)) + commitment
+
+
+def commit_message_v2(contract_id: str, duel_id: str | int, seen: int, commitment: bytes) -> bytes:
+    """Bytes the agent signs for `commit_intent(.., seen)` (message v2, deploy 17.1):
+    domain v2 || contract id || duel_id u64 LE || seen u32 LE || commitment. `seen` is how many
+    `get_chaos(duel)` records the agent had read; a replacement that would hide a newer headline
+    at it is refused with "unseen headline"."""
+    return (
+        COMMIT_DOMAIN_V2
+        + contract_id.encode()
+        + struct.pack("<Q", int(duel_id))
+        + struct.pack("<I", int(seen))
+        + commitment
+    )
 
 
 def consent_message(contract_id: str, a: str, b: str, symbol: str, close_at: str | int) -> bytes:

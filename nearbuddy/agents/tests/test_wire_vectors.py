@@ -13,6 +13,7 @@ from nacl.signing import SigningKey, VerifyKey  # noqa: E402
 
 from intent_client import (  # noqa: E402
     commit_message,
+    commit_message_v2,
     commitment,
     consent_message,
     intent_message,
@@ -54,6 +55,8 @@ def test_commitment_and_commit_message():
     assert c.hex() == W["commit"]["commitment_hex"]
     assert c == hashlib.sha256(bytes.fromhex(W["intent_hex"]) + salt).digest()
     assert commit_message(W["contract"], W["commit"]["duel_id"], c).hex() == W["commit"]["message_hex"]
+    v2 = commit_message_v2(W["contract"], W["commit"]["duel_id"], W["commit"]["seen"], c)
+    assert v2.hex() == W["commit"]["message_v2_hex"]
 
 
 def test_consent_message():
