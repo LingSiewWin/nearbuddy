@@ -6,7 +6,7 @@
 //   bun run keeper --health                                 GET /v1/models for the agents' models (free); exit 0 or 1
 //
 // Env: NEAR_AI_API_KEY (required), NEAR_AI_BASE, ARENA_CONTRACT, NEAR_NETWORK, KEEPER_ID (= --account), KEEPER_RPC
-// (default https://rpc.testnet.fastnear.com on testnet; NEAR_RPC when set wins), KEEPER_BUDGET_USD (default 1.5).
+// (comma-separated; else NEAR_RPC, else https://rpc.testnet.fastnear.com on testnet), KEEPER_BUDGET_USD (default 1.5).
 // The account key comes from NEAR_KEY_<ACCOUNT> or ~/.near-credentials (chain.ts loadKey) and is never printed.
 // Exit: 0 done, 1 budget cap or a fatal error, 75 NEAR AI Cloud down (as runner.py --max-model-failures).
 import "../../protocol/src/env.ts";
@@ -33,16 +33,13 @@ const { values: o } = parseArgs({
   },
 });
 
-const ENV_RPC = process.env.NEAR_RPC;
-const RPCS = ENV_RPC
-  ? [ENV_RPC, process.env.NEAR_RPC_FALLBACK].filter((u): u is string => !!u)
-  : [
-      ...new Set([
-        process.env.KEEPER_RPC ?? (NETWORK_ID === "testnet" ? "https://rpc.testnet.fastnear.com" : NET.rpc),
-        NET.fallback,
-        NET.rpc,
-      ]),
-    ];
+// KEEPER_RPC (comma-separated) first, then NEAR_RPC and its fallback, else FastNEAR: the public drpc endpoint
+// rate-limits ("Public endpoint rate limit") during a duel's bursts of views
+const RPCS = process.env.KEEPER_RPC
+  ? process.env.KEEPER_RPC.split(",").filter(Boolean)
+  : process.env.NEAR_RPC
+    ? [process.env.NEAR_RPC, process.env.NEAR_RPC_FALLBACK].filter((u): u is string => !!u)
+    : [...new Set([NETWORK_ID === "testnet" ? "https://rpc.testnet.fastnear.com" : NET.rpc, NET.fallback, NET.rpc])];
 const providers = RPCS.map((url) => new JsonRpcProvider({ url }));
 const views = providers.length > 1 ? new FailoverRpcProvider(providers) : providers[0]!;
 
