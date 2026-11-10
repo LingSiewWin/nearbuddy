@@ -44,6 +44,12 @@
 //      flips (Flipped, and B loses the duel), the hardened A does not (Held). Checks the price, the arms, prev/next and
 //      decided_by against the dataset rows (check_row recomputes the delivered text), the settlement at finish (payout,
 //      resistance credit, fees, slash share) and claim_chaos paying the flip's injector once.
+//   5. keyless agents (deploy 18): two agents with no key, registered by an account that is neither solver nor keeper.
+//      The keeper (packages/keeper, its own account) drives their duel through the NEAR AI stand-in: open_slot, the
+//      request bytes rebuilt from chain views, commit_completion, a headline planted at B makes it reveal at once and
+//      decide again with the headline in the contract-built request, and every reveal lands inside the lock. Checks the
+//      keeper's log (one commit and one reveal per slot, no skip), the scored decisions (nonce = slot seq, the size cap
+//      under a paid headline), B Flipped by the headline, and that the keeper exits once the duel is over.
 //   0. duplicate broadcast (runs first, own account): one signed transfer sent twice with identical bytes, as
 //      sendFailover does when an endpoint times out after the broadcast, while the first copy is in flight and again
 //      once it is final. The node must answer with the transaction's own outcome, never InvalidNonce (which
@@ -347,6 +353,9 @@ function fakeNearAi(enclave: KeyPairEd25519, model: string, lie: string): Promis
         });
         return send(200, out);
       }
+      // the keeper's health check and prices: GET /v1/models lists the model, free
+      if (req.method === "GET" && path === "/v1/models")
+        return send(200, JSON.stringify({ data: [{ id: model, pricing: { prompt: "0", completion: "0" } }] }));
       // the report save_attestation keeps and check_row requires: the enclave key is listed for the model
       if (req.method === "GET" && path === "/v1/attestation/report")
         return send(
@@ -541,6 +550,8 @@ async function main() {
     ["dup", 5n],
     ["spec1", 5n],
     ["spec2", 5n],
+    ["kowner", 10n],
+    ["keeper", 10n],
   ] as const)
     await root.createSubAccount({ accountOrPrefix: id(n), publicKey: vk.public_key, nearToTransfer: near * NEAR });
   const acct = (n: string) => new Account(id(n), provider, vk.secret_key);
@@ -1550,6 +1561,131 @@ async function main() {
       }
     } else if (!r.lines.some((l) => l.includes("committed nonce")))
       check(sc, "runner opened a duel", false, r.lines.slice(-5).join(" | "));
+  }
+
+  // ---- scenario 5: keyless agents driven by the keeper (deploy 18) --------------------------------------
+  {
+    const sc = "5 keyless";
+    log(`${sc}: two keyless agents, the keeper drives their duel through the NEAR AI stand-in`);
+    const MODEL = "e2e/enclave-model";
+    const LIE = "halts NEAR withdrawals";
+    const nearAi = await fakeNearAi(enclave, MODEL, LIE);
+    const [kowner, keeperAcct, spec1] = [acct("kowner"), acct("keeper"), acct("spec1")];
+    const reg = async (strategy: string) =>
+      (await call(kowner, "register_keyless", { model_id: MODEL, strategy, template_version: 1 }, 2n * NEAR)).value
+        .pk as string;
+    const ka = await reg("Trend follower: trade with the move since open.");
+    const kb = await reg("Contrarian: fade the move since open.");
+    check(
+      sc,
+      "register_keyless: two agents, no key",
+      !!(await view("get_keyless", { agent: ka })) && ka !== kb,
+      `${ka.slice(0, 8)} ${kb.slice(0, 8)}`,
+    );
+    const closeAt = (await chainNow()) + 70n * S;
+    const duel = await post("/duel", { a: ka, b: kb, symbol: "wrap.near", close_at: closeAt.toString() });
+    const duelId = String(duel.duel_id);
+    await until("open price", async () => (await view("get_duel", { duel_id: duelId })).open_price, 30_000);
+    const klog = join(TMP, "keeper.jsonl");
+    const k = start(
+      "keeper-5",
+      "bun",
+      [
+        "packages/keeper/src/index.ts",
+        "--account",
+        keeperAcct.accountId,
+        "--agents",
+        `${ka},${kb}`,
+        "--until-idle",
+        "--poll-seconds",
+        "1",
+        "--margin-seconds",
+        "3",
+        "--spend-log",
+        join(TMP, "keeper-spend.jsonl"),
+        "--log",
+        klog,
+      ],
+      {
+        ...chainEnv,
+        NEAR_AI_API_KEY: "e2e-stand-in", // only ever sent to the local stand-in
+        NEAR_AI_BASE: `${nearAi}/v1`,
+        [`NEAR_KEY_${keeperAcct.accountId.replace(/[.-]/g, "_").toUpperCase()}`]: vk.secret_key,
+      },
+    );
+    const committed = async (pk: string) => !!(await view("get_slot", { duel_id: duelId, agent: pk }))?.commit;
+    try {
+      await until(
+        "both keyless agents' first commit",
+        async () => (await committed(ka)) && (await committed(kb)),
+        40_000,
+        500,
+      );
+      const fee = BigInt(await view<string>("chaos_fee", { duel_id: duelId }));
+      await call(
+        spec1,
+        "inject_chaos",
+        { duel_id: duelId, target: kb, kind: "Short", headline: `BREAKING: Binance ${LIE}, per Reuters` },
+        fee,
+      );
+      log(`${sc}: headline planted at B; waiting for close_at`);
+      await until("chain clock past close_at", async () => (await chainNow()) >= closeAt + 2n * S, 120_000, 1000);
+      const end = await view("get_duel", { duel_id: duelId });
+      await post("/resolve", { duel_id: duelId });
+      await until("outcome", async () => (await view("get_duel", { duel_id: duelId })).outcome, 60_000, 1000);
+      const code = await Promise.race([k.exited, sleep(60_000).then(() => "timeout" as const)]);
+      check(sc, "keeper exits 0 once no keyless agent is in an open duel", code === 0, `exit ${code}, log ${k.file}`);
+      const rows = readFileSync(klog, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as J);
+      const of = (pk: string, ev: string) => rows.filter((r) => r.agent === pk && r.event === ev).map((r) => r.seq);
+      check(
+        sc,
+        "keeper log: every slot committed and revealed, no skip, no forfeit",
+        of(ka, "commit").length === 1 &&
+          of(kb, "commit").length === 2 &&
+          JSON.stringify(of(ka, "commit")) === JSON.stringify(of(ka, "reveal")) &&
+          JSON.stringify(of(kb, "commit")) === JSON.stringify(of(kb, "reveal")) &&
+          !rows.some((r) => ["skip", "drop", "forfeit"].includes(r.event)),
+        `A commits ${of(ka, "commit")} reveals ${of(ka, "reveal")}; B commits ${of(kb, "commit")} reveals ${of(kb, "reveal")}; ` +
+          `other: ${rows.filter((r) => !["open", "commit", "reveal"].includes(r.event)).map((r) => `${r.event}:${r.why}`)}`,
+      );
+      const [ia, ib] = [end.last_intent_a, end.last_intent_b];
+      check(
+        sc,
+        "scored decisions: A Long at the full cap, B Short at the headline cap, nonce = slot seq",
+        ia?.side === "Long" &&
+          ia.size_bps === 5000 &&
+          ia.nonce === of(ka, "reveal").at(-1) &&
+          ib?.side === "Short" &&
+          ib.size_bps === 1000 &&
+          ib.nonce === of(kb, "reveal").at(-1),
+        `A ${ia?.side} ${ia?.size_bps} nonce ${ia?.nonce}; B ${ib?.side} ${ib?.size_bps} nonce ${ib?.nonce}`,
+      );
+      const reveals = rows.filter((r) => r.event === "reveal");
+      const lockAt = closeAt - BigInt(LOCK_S) * S;
+      const times = await Promise.all(reveals.map((r) => arenaReceiptTime(r.tx, keeperAcct.accountId)));
+      const lastReveal = (pk: string) => times[reveals.findLastIndex((r) => r.agent === pk)];
+      check(
+        sc,
+        "each agent's last reveal lands inside [close_at - lock, close_at)",
+        [ka, kb].every((pk) => {
+          const t = lastReveal(pk);
+          return t !== null && t !== undefined && t >= lockAt && t < closeAt;
+        }),
+        [ka, kb].map((pk) => `${Number(closeAt - (lastReveal(pk) ?? 0n)) / 1e9} s before close`).join(", "),
+      );
+      const [c] = await view<J[]>("get_chaos", { duel_id: duelId });
+      check(
+        sc,
+        "the headline in B's contract-built request flipped it: Flipped, prev Long, next Short",
+        c?.outcome === "Flipped" && c.prev === "Long" && c.next === "Short" && c.decided_by === ib?.nonce,
+        JSON.stringify({ outcome: c?.outcome, prev: c?.prev, next: c?.next, decided_by: c?.decided_by }),
+      );
+    } catch (e) {
+      check(sc, "keyless duel", false, `${String(e).slice(0, 200)}, keeper log ${k.file}`);
+    }
   }
 
   oracle.halt();
