@@ -6,7 +6,7 @@
 import type { NetworkId } from "../network";
 import type { AgentView, Chaos, Duel, KeylessAgent, Slot } from "./abi/arena";
 import type { Call } from "./inject";
-import { b64strict, checkStrategy, KEYLESS_TEMPLATE_VERSION, type KeylessInputs } from "./keyless";
+import { b64strict, checkStrategy, KEYLESS_TEMPLATE_VERSION, type KeylessInputs, SLOT_TTL_NS } from "./keyless";
 
 /** The keyless arena per network, a contract separate from NET.arena (the production arena has no keyless methods
  *  yet); KEYLESS_ARENA_CONTRACT overrides it on the server (api/keyless.ts). null: none on that network. */
@@ -160,7 +160,9 @@ export function statusLine(s: AgentState, nowNs: bigint): { t: string; c: string
   const at = `duel #${d.id}`;
   const sl = s.slot;
   if (!sl) return { t: `${at} · waiting for a keeper to open a slot${tail}`, c: "open" };
-  // only the slot's own fields: how long a slot stays open and who may reopen it change between deploys
+  // SLOT_TTL_NS is template 1's (lib/keyless.ts, the contract's twin): a deploy that changes it changes the twin
+  if (sl.response_hash === null && nowNs >= BigInt(sl.opened_at) + SLOT_TTL_NS)
+    return { t: `${at} · slot ${sl.seq} expired with no answer; a keeper may open the next${tail}`, c: "warn" };
   if (sl.response_hash === null)
     return { t: `${at} · slot ${sl.seq} open · waiting for a keeper's answer${tail}`, c: "open" };
   if (sl.side === null) return { t: `${at} · slot ${sl.seq} answered with no readable decision${tail}`, c: "warn" };

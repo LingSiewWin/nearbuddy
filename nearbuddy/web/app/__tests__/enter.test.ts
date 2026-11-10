@@ -17,7 +17,7 @@ import {
   wrapUnits,
   yocto,
 } from "../lib/enter";
-import { type KeylessInputs, keylessRequest, toHex } from "../lib/keyless";
+import { type KeylessInputs, keylessRequest, SLOT_TTL_NS, toHex } from "../lib/keyless";
 
 const V = JSON.parse(readFileSync(`${import.meta.dir}/../../../fixtures/keyless-vectors.json`, "utf8"));
 const C = "v2.nb-keyless-arena-1111.testnet";
@@ -86,6 +86,11 @@ test("statusLine: waiting for a duel, slot open, decided", () => {
   expect(statusLine(st({ agent: { ...agent, in_duel: null } }), 0n).t).toBe("waiting for a duel");
   expect(statusLine(st({ slot: null }), 0n).t).toBe("duel #4 · waiting for a keeper to open a slot");
   expect(statusLine(st({}), 1500n).t).toBe("duel #4 · slot 3 open · waiting for a keeper's answer");
+  // 120 s after the open (SLOT_TTL_NS) an unanswered slot takes no submission
+  expect(statusLine(st({}), 1000n + SLOT_TTL_NS - 1n).c).toBe("open");
+  expect(statusLine(st({ duel: { ...duel, close_at: String(10n ** 12n) } }), 1000n + SLOT_TTL_NS).t).toBe(
+    "duel #4 · slot 3 expired with no answer; a keeper may open the next",
+  );
   expect(statusLine(st({ slot: { ...slot, response_hash: "x", side: "Long", size_bps: 500 } }), 1500n).t).toBe(
     "duel #4 · slot 3 decided Long 500 bps",
   );
