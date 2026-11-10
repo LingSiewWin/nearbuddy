@@ -123,7 +123,8 @@ export type Evidence = {
    *  null when it was not read: a contract before deploy 17, or a failed read. */
   chaos?: Chaos[] | null;
   // Deploy 18 (absent in evidence saved before it):
-  /** get_keyless for each side, read now: a keyless agent's strategy and template, null for a keyed agent. */
+  /** get_keyless for each side, read now: a keyless agent's strategy and template, null for a keyed agent (or a
+   *  contract without the view). A side whose read failed is left out: see `keylessUnread`. */
   keyless?: Record<string, { strategy: string; template: number } | null>;
   /** get_model_signer for every enclave key a submit_completion carries, read now: the model it is pinned to. */
   model_signers?: Record<string, string | null>;
@@ -471,6 +472,10 @@ export function checkDuel(e: Evidence): Line[] {
     if (stored.agent_pk !== pk)
       add("FAIL", `intent ${s}`, `stored intent is by ${short(stored.agent_pk, 12)}, not side ${s}`);
     const kl = e.keyless?.[pk];
+    if (keylessUnread(e, calls, pk)) {
+      add("SKIP", `keyless ${s}`, "get_keyless was not read (an RPC error): this side's keyless checks did not run");
+      continue;
+    }
     if (kl && ag) {
       keyless(e, s, d, ag, kl, stored, calls, lockNs, add);
       continue;
@@ -1001,10 +1006,19 @@ export function incomplete(e: Evidence): boolean {
   if (!d?.resolved || !d.outcome) return false;
   const c = duelCalls(arenaCalls(e.txs, e.arena), e.duel_id);
   if (!c.closing || !e.before || !e.after) return true;
+  if ([d.a, d.b].some((pk) => keylessUnread(e, c, pk))) return true;
   if (e.chaos_pools && c.chaos.some((x) => !e.chaos_pools?.[x.block_hash])) return true;
   if (c.open && e.open_block === null) return true;
   if (e.now.config.chaos && e.chaos === null) return true; // deploy 17 has get_chaos: null = a failed read
   return !!e.now.config.intents_account && e.lock_ns === null;
+}
+
+/** Whether side `pk`'s get_keyless read failed in a duel where `pk` has keyless calls (a slot, a submission or a
+ *  commit): its decision would otherwise be checked as a keyed agent's and its keyless checks would vanish without a
+ *  FAIL. A side read as null (keyed, or a contract without the view) has no keyless calls to lose. */
+export function keylessUnread(e: Evidence, c: ReturnType<typeof duelCalls>, pk: string): boolean {
+  if (!e.keyless || pk in e.keyless) return false;
+  return [...c.slots, ...c.submissions, ...c.completions].some((x) => x.args.agent === pk);
 }
 
 /** Injections: payer, kind and target of every successful inject_chaos, the count the contract kept, and where each
@@ -1153,7 +1167,7 @@ async function viewAt<T>(arena: string, method: string, args: object, block?: st
   for (const url of block ? [RPC, ARCHIVAL] : [RPC]) {
     const r = await post<RpcRes>(url, { jsonrpc: "2.0", id: 1, method: "query", params });
     if (r.result?.result) return JSON.parse(Buffer.from(r.result.result).toString()) as T;
-    if (!block) throw new Error(`${method}: ${JSON.stringify(r.error).slice(0, 160)}`);
+    if (!block) throw new Error(`${method}: ${JSON.stringify(r.error ?? r.result).slice(0, 600)}`); // a missing method answers in either
   }
   throw new Error(`${method} at ${block}: not served`);
 }
@@ -1279,11 +1293,14 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
     (signer) => viewAt<string | null>(arena, "get_model_signer", { signer }),
   );
   // deploy 18: which side is keyless (a contract without the view has none)
+  // a failed read leaves the side out (keylessUnread), never null: null would check a keyless side as keyed
   const keyless: Evidence["keyless"] = {};
-  for (const pk of [d.a, d.b])
-    keyless[pk] = await viewAt<{ strategy: string; template: number } | null>(arena, "get_keyless", {
-      agent: pk,
-    }).catch(() => null);
+  for (const pk of [d.a, d.b]) {
+    const kl = await viewAt<{ strategy: string; template: number } | null>(arena, "get_keyless", { agent: pk }).catch(
+      (x) => (/MethodNotFound|MethodResolveError/.test(String(x)) ? null : undefined),
+    );
+    if (kl !== undefined) keyless[pk] = kl;
+  }
   const stored = [d.last_intent_a, d.last_intent_b].flatMap((i) => (i ? [i.proof_hash] : []));
   // deploy 15: the duel's own lock, where each injection's deposit went, and the opener's refund
   const lock = await viewAt<string | null>(arena, "duel_lock", { duel_id: id }).catch(() => null);

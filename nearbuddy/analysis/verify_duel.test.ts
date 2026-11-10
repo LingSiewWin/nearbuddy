@@ -749,6 +749,22 @@ test("keyless duel: every line passes, and a forged strategy, reveal or pin fail
   );
 });
 
+// An RPC error on get_keyless (a 429) read as null checked a keyless side as keyed: its 7 keyless checks vanished
+// with no FAIL and incomplete() said false, so /api/keyless/verify cached a clean result. Now the side is SKIP and
+// the evidence is incomplete.
+test("keyless: an unread get_keyless is SKIP and incomplete, never a clean keyed check", () => {
+  const e = load("keyless_v2_0");
+  assert.equal(incomplete(e), false);
+  const x = structuredClone(e);
+  delete x.keyless![x.now.duel!.a];
+  const lines = checkDuel(x);
+  assert.deepEqual(fails(lines), []);
+  assert.deepEqual(result(lines, "keyless A"), ["SKIP"]);
+  assert.deepEqual(result(lines, "keyless A request"), [], "its keyless checks did not run");
+  assert.deepEqual(result(lines, "keyless B request"), ["PASS"]);
+  assert.equal(incomplete(x), true, "a route keeps an incomplete result only briefly");
+});
+
 // An RPC error on get_model_signer (a 429) said "TEE signer FAIL" and /api/verify cached it: an unread pin is SKIP,
 // only an answer can FAIL.
 test("keyless TEE signer: an unread get_model_signer is SKIP, never FAIL", async () => {
