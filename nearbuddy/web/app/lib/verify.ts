@@ -323,6 +323,20 @@ export function finishMath(
   return { after, slashed, aWins, fees, taken, settled };
 }
 
+/** get_model_signer for each enclave key, read now. A read that errors (an RPC 429, a timeout) leaves its key out, so
+ *  the TEE signer line is SKIP: only an answer may FAIL (null: not pinned; another model id: pinned elsewhere). */
+export async function readModelSigners(
+  signers: string[],
+  read: (signer: string) => Promise<string | null>,
+): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {};
+  for (const s of new Set(signers))
+    try {
+      out[s] = await read(s);
+    } catch {} // unread: SKIP
+  return out;
+}
+
 /** chaos.rs judge, read back: whether a settled record's outcome is the one its own kind, prev and next give.
  *  Expired had no counting decision before the end; every other outcome had one (`next`), except a keyless reply
  *  with no readable decision (unread_decision): it decides the headlines its request carried as NoTrial, with
@@ -896,12 +910,13 @@ function keyless(
       `revealed ${response.length} bytes (tx ${body.tx}), sha256 ${short(hex(resHash), 10)} = committed response_hash (tx ${filled.tx}, by ${filled.signer})`,
     );
   const signer = String(filled.args.signer);
+  // undefined: the read errored (see readModelSigners), which says nothing about the pin: SKIP, never FAIL
   const model = e.model_signers?.[signer];
   add(
-    (sub ? model === ag.model_id : e.pinned[signer]) ? "PASS" : "FAIL",
+    sub ? (model === undefined ? "SKIP" : model === ag.model_id ? "PASS" : "FAIL") : e.pinned[signer] ? "PASS" : "FAIL",
     `keyless ${s} TEE signer`,
     sub
-      ? `${short(signer, 12)} get_model_signer = ${model === undefined ? "unknown" : model} (read now), agent model ${ag.model_id}`
+      ? `${short(signer, 12)} get_model_signer = ${model === undefined ? "unread (the RPC read failed; re-run)" : model} (read now), agent model ${ag.model_id}`
       : `${short(signer, 12)} is_tee_signer = ${e.pinned[signer] ?? "unknown"} (read now)`,
   );
   add(
@@ -1232,11 +1247,10 @@ export async function collect(arena: string, id: string, now: State): Promise<Ev
   for (const p of proofs) pinned[p.signer] ??= await viewAt<boolean>(arena, "is_tee_signer", { signer: p.signer });
   for (const c of calls.completions)
     pinned[String(c.args.signer)] ??= await viewAt<boolean>(arena, "is_tee_signer", { signer: c.args.signer });
-  const model_signers: Evidence["model_signers"] = {};
-  for (const c of calls.submissions)
-    model_signers[String(c.args.signer)] ??= await viewAt<string | null>(arena, "get_model_signer", {
-      signer: c.args.signer,
-    }).catch(() => null);
+  const model_signers: Evidence["model_signers"] = await readModelSigners(
+    calls.submissions.map((c) => String(c.args.signer)),
+    (signer) => viewAt<string | null>(arena, "get_model_signer", { signer }),
+  );
   // deploy 18: which side is keyless (a contract without the view has none)
   const keyless: Evidence["keyless"] = {};
   for (const pk of [d.a, d.b])

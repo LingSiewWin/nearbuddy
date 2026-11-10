@@ -20,6 +20,7 @@ import {
   type Line,
   pnlBps,
   price8,
+  readModelSigners,
   shieldGain,
 } from "./verify_duel.ts";
 
@@ -746,6 +747,28 @@ test("keyless duel: every line passes, and a forged strategy, reveal or pin fail
     }),
     ["keyless A TEE signer", "keyless B TEE signer"],
   );
+});
+
+// An RPC error on get_model_signer (a 429) said "TEE signer FAIL" and /api/verify cached it: an unread pin is SKIP,
+// only an answer can FAIL.
+test("keyless TEE signer: an unread get_model_signer is SKIP, never FAIL", async () => {
+  const e = load("keyless_v2_0");
+  const signers = Object.keys(e.model_signers!);
+  const read = await readModelSigners([...signers, ...signers], async (s) => {
+    if (s === signers[0]) throw new Error('get_model_signer: {"message":"You reached Public endpoint rate limit"}');
+    return e.model_signers![s]!;
+  });
+  assert.equal(signers[0]! in read, false, "an errored read leaves the key out");
+  const x = structuredClone(e);
+  x.model_signers = read;
+  const lines = checkDuel(x);
+  assert.deepEqual(fails(lines), []);
+  const rows = ["A", "B"].map((s) => result(lines, `keyless ${s} TEE signer`)[0]);
+  assert.deepEqual(rows.sort(), signers.length === 1 ? ["SKIP", "SKIP"] : ["PASS", "SKIP"]);
+  // an answer still fails: not pinned (null)
+  const y = structuredClone(e);
+  for (const k of Object.keys(y.model_signers!)) y.model_signers![k] = null;
+  assert.deepEqual(fails(checkDuel(y)), ["keyless A TEE signer", "keyless B TEE signer"]);
 });
 
 // The one-step flow (submit_completion): testnet v2.nb-keyless-arena-1111.testnet #0, two keyless agents on
