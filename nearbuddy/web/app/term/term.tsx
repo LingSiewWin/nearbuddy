@@ -12,7 +12,16 @@ import { type Flip, replay, type Saboteur } from "../api/flips";
 import { isVoid } from "../eras";
 import type { Arm } from "../lib/abi/arena";
 import { COMMANDS, complete, injectLine, parse, type Target } from "../lib/cmd";
-import { adapterFor, claimable, claimCall, type Direction, MAX_HEADLINE, Offline, utf8Bytes } from "../lib/inject";
+import {
+  adapterFor,
+  chaosFee,
+  claimable,
+  claimCall,
+  type Direction,
+  MAX_HEADLINE,
+  Offline,
+  utf8Bytes,
+} from "../lib/inject";
 import * as wallet from "../lib/wallet";
 import { agentHref, countdown, duelHref, getJson, NETWORK_ID, near, short, txHref, ZERO } from "../tui";
 import { Box, type Cell, col, FlashCtx, Line, Note, Slot, wrap } from "./box";
@@ -253,8 +262,8 @@ export default function Term() {
   });
   const chain = snap ? chainOf(snap, duel) : null;
   const price = chain ? adapter.price(chain) : null;
-  // what the first attack in the next duel costs: chaos_fee of a duel with no attacks yet is the base (deploy 17)
-  const nextPrice = snap ? (snap.config.chaos?.base ?? snap.config.min_chaos_deposit) : null;
+  // what the first attack in the next duel costs: the contract's chaos_fee of a duel with no paid attack yet
+  const nextPrice = snap ? chaosFee(snap.config.chaos, 0, snap.config.min_chaos_deposit) : null;
   const shownPrice = open ? price : nextPrice;
   const lastSide = (t: Target) => (t === "A" ? duel?.last_intent_a : duel?.last_intent_b)?.side;
   const push = kind ?? opposite(lastSide(target)); // a lie on the side it already sits on cannot flip it

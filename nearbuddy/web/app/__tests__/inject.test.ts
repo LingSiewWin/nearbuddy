@@ -8,6 +8,7 @@ import {
   adapterFor,
   chaosDeploy16,
   chaosDeploy17,
+  chaosFee,
   checkHeadline,
   claimable,
   claimCall,
@@ -214,4 +215,22 @@ test("claim_chaos: 1 yocto, and only this account's unclaimed payouts count", ()
   expect(claimable(recs, "me.testnet")).toBe(95000000000000000000000n);
   expect(claimable(recs, null)).toBe(0n);
   expect(claimable(null, "me.testnet")).toBe(0n);
+});
+
+test("chaosFee prices the n-th paid attack exactly as chaos.rs does: min(cap, max(min, base * r^n))", () => {
+  const N = 10n ** 21n; // 0.001 NEAR
+  const terms = { base: String(100n * N), cap: String(1000n * N), fee_bps: 500, r_bps: 12_500, share_bps: 5000 };
+  // the e2e's run: 0.1, 0.125, 0.15625 NEAR
+  expect([0, 1, 2].map((n) => chaosFee(terms, n, "0"))).toEqual([
+    "100000000000000000000000",
+    "125000000000000000000000",
+    "156250000000000000000000",
+  ]);
+  // the minimum deposit lifts a base under it, the cap bounds everything (the first attack included)
+  expect(chaosFee(terms, 0, String(150n * N))).toBe(String(150n * N));
+  expect(chaosFee({ ...terms, cap: String(50n * N) }, 0, "0")).toBe(String(50n * N));
+  expect(chaosFee({ ...terms, cap: String(50n * N) }, 0, String(80n * N))).toBe(String(50n * N));
+  expect(chaosFee(terms, 40, "0")).toBe(String(1000n * N)); // stops growing at the cap
+  // deploy 16 has no chaos terms: a flat minimum
+  expect(chaosFee(undefined, 3, String(100n * N))).toBe(String(100n * N));
 });

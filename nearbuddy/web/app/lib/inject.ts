@@ -7,7 +7,7 @@
 // (arena/src/chaos.rs). No solver is involved. `adapterFor` picks one from `get_config`: only deploy 17 has `chaos`.
 // The terminal and the MCP server call check(), price() and prepare(); the wallet (or the agent) signs.
 
-import type { ChaosKind } from "./abi/arena";
+import type { ChaosConfig, ChaosKind } from "./abi/arena";
 
 /** The side a lie pushes toward. */
 export type Direction = Exclude<ChaosKind, "Placebo">;
@@ -116,6 +116,21 @@ export const chaosDeploy17: InjectAdapter = {
     };
   },
 };
+
+/** The deposit the `n`-th paid attack of a duel needs, as the contract computes it (arena/src/chaos.rs
+ *  `ChaosConfig::fee`): `min(cap, max(min_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step. Deploy 16
+ *  (no `chaos` terms) charges `min_deposit` flat. */
+export function chaosFee(chaos: ChaosConfig | null | undefined, n: number, minDeposit: string): string {
+  if (!chaos) return minDeposit;
+  const cap = BigInt(chaos.cap);
+  let v = BigInt(chaos.base);
+  for (let i = 0; i < n && v < cap; i++) v = (v * BigInt(chaos.r_bps)) / 10_000n;
+  const min = BigInt(minDeposit);
+  // biome-ignore lint/complexity/useMathMinMax: bigint, which Math.max throws on
+  const m = v > min ? v : min;
+  // biome-ignore lint/complexity/useMathMinMax: bigint, which Math.min throws on
+  return (m < cap ? m : cap).toString();
+}
 
 /** Deploy 17 by feature: its `get_config` carries the `chaos` terms, which 16.1's lacks. */
 export const isChaosV2 = (config: { chaos?: unknown } | null | undefined) => config?.chaos != null;
