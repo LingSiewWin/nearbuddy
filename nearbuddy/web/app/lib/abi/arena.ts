@@ -387,7 +387,8 @@ export interface ArenaViews {
    *  is `Pending`, its target holds no commitment made after the headline landed (the deciding
    *  call is fixed at its commit and known to whoever runs the agent), and no keyless slot of the
    *  target has carried the headline (its request bytes are public from `open_slot`, and the
-   *  model is close to deterministic). `owner` is the target's owner and `keyless` whether the
+   *  model is close to deterministic), and no call of the target was accepted after the headline
+   *  (it is public in `get_duel`, even a reveal that did not count). `owner` is the target's owner and `keyless` whether the
    *  target is a keyless agent: a keyed agent's owner chooses which completion it signs, so it
    *  can steer the outcome. `None` for an unknown record. View: anyone, no deposit, no panics.
    */
