@@ -719,9 +719,9 @@ export interface ArenaCalls {
    *
    *  A slot opens only on new information, so nobody can redraw a prompt until it gets the side it
    *  wants: the agent's first slot in the duel, a headline planted at the agent since the previous
-   *  slot opened (it replaces that slot, filled or not), or, for liveness, a previous slot nobody
-   *  filled within `SLOT_TTL_NS`. A filled slot with no new headline since is final: a fresh tick
-   *  alone does not reopen it.
+   *  slot opened (once that slot is filled), or, for liveness, a previous slot nobody filled within
+   *  `SLOT_TTL_NS`. A filled slot with no new headline since is final: a fresh tick alone does not
+   *  reopen it. An unfilled slot stands until its TTL whatever lands meanwhile.
    *  Caller: anyone (keeper). Deposit: the slot record's storage (`KEEPER_DEPOSIT` covers it),
    *  excess refunded. Panics: "paused", "not keyless", "duel missing", "duel closed", "intent
    *  lock", "bad target", "no open price", "slot busy", "no new headline", "attach storage", then
@@ -746,9 +746,11 @@ export interface ArenaCalls {
    *  agents of `model_id` only, replacing any model it was pinned to. The owner takes the pair
    *  from `GET /v1/attestation/report?model=..` (the signer listed under that model) after
    *  verifying the quotes off chain. Keyed agents keep using `add_tee_signer`. Only while no duel
-   *  is open, so the owner cannot pin a key it holds and author a running duel's decisions (pause
-   *  is the lever for a compromised key mid-duel: it stops every submission).
-   *  Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "duels open", "signer length",
+   *  with a keyless side is open (`keyless_open`), so the owner cannot pin a key it holds and
+   *  author a running duel's decisions; pause is the lever for a compromised key mid-duel, since
+   *  it stops every submission. Keyed duels do not count: a stranger's consented duel cannot
+   *  freeze the pins.
+   *  Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "keyless duels open", "signer length",
    *  "model_id too long", "control character".
    * modifiers: payable
    */
@@ -951,7 +953,8 @@ export interface ArenaCalls {
    *  ed25519 signature of `signer`, the enclave key pinned to the agent's model (see
    *  `pin_model_signer`), over `"{model_id}:{hex(request_hash)}:{hex(sha256(response))}"` (kind
    *  2), where `request_hash` is the slot's own. The first valid submission wins. The decision
-   *  `parse_decision` reads is recorded as a revealed, enclave-proved intent with `nonce = seq`
+   *  `parse_decision` reads (a hold under a headline keeping at least the size already in force)
+   *  is recorded as a revealed, enclave-proved intent with `nonce = seq`
    *  and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
    *  the request carried. A response with no readable decision is accepted too (the completion
    *  is the agent's): its proof is burned, the agent's previous call stays, and every headline
@@ -1003,8 +1006,8 @@ export interface ArenaCalls {
   unfollow: { args: { agent_pk: Base64VecU8 }; result: undefined };
   /**
    * Stop accepting `signer` for keyless agents; decisions already recorded stand. Only while no
-   *  duel is open (see `pin_model_signer`).
-   *  Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "duels open".
+   *  duel with a keyless side is open (see `pin_model_signer`).
+   *  Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "keyless duels open".
    * modifiers: payable
    */
   unpin_model_signer: { args: { signer: Base64VecU8 }; result: undefined };
