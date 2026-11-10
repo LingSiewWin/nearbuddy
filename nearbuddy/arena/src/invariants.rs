@@ -1536,22 +1536,46 @@ impl World {
                     let mut pre_image = intent_message(&i);
                     pre_image.extend_from_slice(&salt);
                     let hash = env::sha256(&pre_image);
-                    let sig = self.sks[ag]
-                        .sign(&commit_bytes(&CONTRACT.parse().unwrap(), d as u64, &hash))
-                        .to_bytes()
-                        .to_vec();
+                    // `reuse_nonce` means nothing to a commit: it picks message v2, signing a
+                    // `seen` drawn from `size_bps` (at most every record so far), else v1
+                    let contract: AccountId = CONTRACT.parse().unwrap();
+                    let seen = reuse_nonce
+                        .then(|| (size_bps as usize % (self.duels[d].recs.len() + 1)) as u32);
+                    let msg = match seen {
+                        Some(n) => commit_bytes_v2(&contract, d as u64, n, &hash),
+                        None => commit_bytes(&contract, d as u64, &hash),
+                    };
+                    let sig = self.sks[ag].sign(&msg).to_bytes().to_vec();
                     let pk = Base64VecU8(self.pks[ag].clone());
                     // the held commitment is the decision before a headline planted at or after it:
                     // replaced unrevealed, that headline's prev is hidden and counts against the
                     // target
                     let side_b = ag == self.duels[d].b;
                     let held_at = self.pending.get(&(d, ag)).map(|p| p.3);
-                    if self
-                        .call("relayer.testnet", 0, |c| {
-                            c.commit_intent(U64(d as u64), pk, Base64VecU8(hash), Base64VecU8(sig))
-                        })
-                        .is_ok()
-                    {
+                    // a v2 replacement that would hide a headline the agent had not seen (index at
+                    // or above `seen`) is refused instead
+                    let unseen = match (seen, held_at) {
+                        (Some(n), Some(t)) => self.duels[d].recs.iter().skip(n as usize).any(|r| {
+                            r.side_b == side_b && r.outcome == ChaosOutcome::Pending && r.at >= t
+                        }),
+                        _ => false,
+                    };
+                    let r = self.call("relayer.testnet", 0, |c| {
+                        c.commit_intent(
+                            U64(d as u64),
+                            pk,
+                            Base64VecU8(hash),
+                            Base64VecU8(sig),
+                            seen,
+                        )
+                    });
+                    if unseen {
+                        assert!(
+                            matches!(&r, Err(e) if e.contains("unseen headline")),
+                            "a replacement hiding an unseen headline is refused: {r:?}"
+                        );
+                    }
+                    if r.is_ok() {
                         if let Some(t) = held_at {
                             for r in self.duels[d].recs.iter_mut().filter(|r| {
                                 r.side_b == side_b

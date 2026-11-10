@@ -50,6 +50,11 @@ pub const INTENT_DOMAIN: &[u8] = b"nearbuddy-intent-v1";
 pub const REGISTER_DOMAIN: &[u8] = b"nearbuddy-register-v2";
 /// Prefix of the bytes an agent key signs to commit to a hidden intent (see `commit_bytes`).
 pub const COMMIT_DOMAIN: &[u8] = b"nearbuddy-commit-v1";
+/// Prefix of the v2 commit bytes, which also sign how many headlines the agent had seen (see
+/// `commit_bytes_v2`, deploy 17.1). A distinct domain keeps a v1 signature from passing as v2.
+pub const COMMIT_DOMAIN_V2: &[u8] = b"nearbuddy-commit-v2";
+/// The newest commit message format `commit_intent` accepts (`commit_message_version` view).
+pub const COMMIT_MESSAGE_VERSION: u32 = 2;
 /// Prefix of the bytes an agent key signs to consent to one pairing (see `consent_bytes`).
 pub const DUEL_DOMAIN: &[u8] = b"nearbuddy-duel-v1";
 /// Cap on `Duel.injections` so a duel record cannot grow without bound.
@@ -83,6 +88,23 @@ pub fn commit_bytes(contract: &AccountId, duel_id: u64, commitment: &[u8]) -> Ve
     let mut out = COMMIT_DOMAIN.to_vec();
     out.extend_from_slice(contract.as_bytes());
     out.extend_from_slice(&duel_id.to_le_bytes());
+    out.extend_from_slice(commitment);
+    out
+}
+
+/// The exact bytes `agent_pk` signs to commit in duel `duel_id` having seen the first `seen`
+/// records of `get_chaos(duel_id)`:
+/// `COMMIT_DOMAIN_V2 || contract || duel_id_le || seen_le (u32) || commitment`.
+pub fn commit_bytes_v2(
+    contract: &AccountId,
+    duel_id: u64,
+    seen: u32,
+    commitment: &[u8],
+) -> Vec<u8> {
+    let mut out = COMMIT_DOMAIN_V2.to_vec();
+    out.extend_from_slice(contract.as_bytes());
+    out.extend_from_slice(&duel_id.to_le_bytes());
+    out.extend_from_slice(&seen.to_le_bytes());
     out.extend_from_slice(commitment);
     out
 }

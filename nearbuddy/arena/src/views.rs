@@ -3,8 +3,8 @@ use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::{AccountId, env, near};
 
 use crate::{
-    Agent, AgentView, Config, Contract, ContractExt, Duel, Intent, Mandate, PrevTerms,
-    commit_bytes, consent_bytes,
+    Agent, AgentView, COMMIT_MESSAGE_VERSION, Config, Contract, ContractExt, Duel, Intent, Mandate,
+    PrevTerms, commit_bytes, commit_bytes_v2, consent_bytes,
     follow::{follow_key, holding_key},
     hex, intent_message, register_bytes, tee_text,
 };
@@ -198,14 +198,26 @@ impl Contract {
             .unwrap_or((false, false))
     }
 
-    /// The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig)`.
-    /// View: anyone, no deposit, no panics.
-    pub fn commit_message(&self, duel_id: U64, commitment: Base64VecU8) -> Base64VecU8 {
-        Base64VecU8(commit_bytes(
-            &env::current_account_id(),
-            duel_id.0,
-            &commitment.0,
-        ))
+    /// The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig, seen)`:
+    /// message v2 with `seen`, v1 without. View: anyone, no deposit, no panics.
+    pub fn commit_message(
+        &self,
+        duel_id: U64,
+        commitment: Base64VecU8,
+        seen: Option<u32>,
+    ) -> Base64VecU8 {
+        let contract = env::current_account_id();
+        Base64VecU8(match seen {
+            Some(n) => commit_bytes_v2(&contract, duel_id.0, n, &commitment.0),
+            None => commit_bytes(&contract, duel_id.0, &commitment.0),
+        })
+    }
+
+    /// The newest commit message format `commit_intent` accepts: 2 means it takes `seen` (deploy
+    /// 17.1 on). A deployment without this view (deploy 17 and older) accepts only v1. View:
+    /// anyone, no deposit, no panics.
+    pub fn commit_message_version(&self) -> u32 {
+        COMMIT_MESSAGE_VERSION
     }
 
     /// The exact bytes each agent key signs for `open_duel_consented(a, b, symbol, close_at, ..)`.

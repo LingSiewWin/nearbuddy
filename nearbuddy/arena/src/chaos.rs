@@ -235,6 +235,17 @@ impl Contract {
         }
     }
 
+    /// Whether a headline still pending at `pk` in duel `id`, planted at or after `t` (one that
+    /// replacing the commitment held since `t` would hide), sits at an index at or above `seen`:
+    /// the agent signed its replacement before it could have read that headline.
+    pub(crate) fn unseen_since(&self, id: u64, pk: &[u8], t: u64, seen: u32) -> bool {
+        self.chaos.get(&id).is_some_and(|list| {
+            list.iter()
+                .skip(seen as usize)
+                .any(|c| c.target.0 == pk && c.outcome == ChaosOutcome::Pending && c.at.0 >= t)
+        })
+    }
+
     /// An accepted decision of agent `pk` in duel `id`, made at `decided_at` (its commit time when
     /// revealed, else now). Pending injections at `pk` made at or after it take its side as `prev`
     /// (unless their `prev` was hidden); a later decision decides them only when `counts` (revealed

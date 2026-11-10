@@ -774,6 +774,11 @@ fn wire_vectors_match_shared_file() {
         hex(&commit_bytes(&contract, duel, &c)),
         s("/commit/message_hex")
     );
+    let seen = v.pointer("/commit/seen").and_then(Value::as_u64).unwrap() as u32;
+    assert_eq!(
+        hex(&commit_bytes_v2(&contract, duel, seen, &c)),
+        s("/commit/message_v2_hex")
+    );
 
     let a: Base64VecU8 = from_value(v["consent"]["a"].clone()).unwrap();
     let b: Base64VecU8 = from_value(v["consent"]["b"].clone()).unwrap();
@@ -3473,7 +3478,34 @@ fn commit_at(c: &mut Contract, sk: &SigningKey, i: &Intent, salt: &[u8], ts: u64
         i.agent_pk.clone(),
         Base64VecU8(h.clone()),
         commit_sig(sk, i.duel_id.0, &h),
+        None,
     );
+}
+
+/// A relayer commits `sk`'s hidden intent `i` at `ts` with message v2, signed having seen the
+/// first `seen` chaos records. "ok" or the panic message.
+fn commit_v2_at(
+    c: &mut Contract,
+    sk: &SigningKey,
+    i: &Intent,
+    salt: &[u8],
+    seen: u32,
+    ts: u64,
+) -> String {
+    let h = commitment(i, salt);
+    let msg = commit_bytes_v2(&CONTRACT.parse().unwrap(), i.duel_id.0, seen, &h);
+    let sig = Base64VecU8(sk.sign(&msg).to_bytes().to_vec());
+    ctx_at(OPERATOR, 0, ts);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.commit_intent(
+            i.duel_id,
+            i.agent_pk.clone(),
+            Base64VecU8(h.clone()),
+            sig,
+            Some(seen),
+        )
+    }));
+    r.map(|_| "ok".to_string()).unwrap_or_else(panic_msg)
 }
 
 fn reveal_at(c: &mut Contract, sk: &SigningKey, i: &Intent, salt: &[u8], ts: u64) {
@@ -3586,6 +3618,7 @@ fn commit_signed_by_another_key_panics() {
         Base64VecU8(key(2).1),
         Base64VecU8(h.clone()),
         commit_sig(&ska, d, &h),
+        None,
     );
 }
 
@@ -3810,10 +3843,16 @@ fn commit_and_consent_views_return_the_signed_bytes() {
     let (c, ..) = setup();
     let contract: AccountId = CONTRACT.parse().unwrap();
     let h = vec![5u8; 32];
-    let m = c.commit_message(U64(3), Base64VecU8(h.clone())).0;
+    let m = c.commit_message(U64(3), Base64VecU8(h.clone()), None).0;
     assert_eq!(m, commit_bytes(&contract, 3, &h));
     assert!(m.starts_with(b"nearbuddy-commit-v1arena.testnet"));
     assert_eq!(m.len(), 19 + 13 + 8 + 32);
+    let m = c.commit_message(U64(3), Base64VecU8(h.clone()), Some(5)).0;
+    assert_eq!(m, commit_bytes_v2(&contract, 3, 5, &h));
+    assert!(m.starts_with(b"nearbuddy-commit-v2arena.testnet"));
+    assert_eq!(m.len(), 19 + 13 + 8 + 4 + 32);
+    assert_eq!(&m[19 + 13 + 8..19 + 13 + 8 + 4], &5u32.to_le_bytes());
+    assert_eq!(c.commit_message_version(), 2);
     let (a, b) = (key(1).1, key(2).1);
     let m = c
         .consent_message(
@@ -5209,6 +5248,7 @@ fn one_injection_cannot_force_an_early_reveal() {
             Base64VecU8(key(1).1),
             Base64VecU8(h.clone()),
             commit_sig(&ska, d, &h),
+            None,
         )
     }));
     let msg = r.map(|_| "ok".to_string()).unwrap_or_else(panic_msg);
@@ -5464,4 +5504,166 @@ fn a_failed_claim_transfer_unmarks_the_records_for_a_later_claim() {
     ctx_at(SPECTATOR, 1, CLOSE);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(c.claim_chaos(U64(d)))));
     assert_eq!(panic_msg(r.unwrap_err()), "nothing to claim");
+}
+
+// ---------------------------------------------------------------- replacement race (deploy 17.1)
+
+/// The race: A holds Short, a headline lands after the runner's last read (it saw `ix` records),
+/// and the runner's replacement arrives. Signed v2 with the stale `seen`, the replacement is
+/// refused, nothing changes; the runner reveals the held call and commits again, and the held
+/// Short becomes the headline's `prev` exactly as for a runner that saw it in time.
+#[test]
+fn a_replacement_hiding_an_unseen_headline_is_refused_and_the_runner_reveals_first() {
+    let (mut c, ska, _, tee, d) = fool_setup();
+    let (ix, held, next) = held_then_next(&mut c, &ska, &tee, d);
+    assert_eq!(
+        commit_v2_at(&mut c, &ska, &next, &[3; 32], ix, NOW + 3),
+        "unseen headline"
+    );
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(
+        (s.outcome, s.prev),
+        (ChaosOutcome::Pending, Some(Side::Long)),
+        "a refused replacement hides nothing"
+    );
+    let bits = c.self_chaos.get(&d).copied().unwrap_or(0);
+    assert_eq!(bits >> 32, 0, "no hidden-prev bit is set");
+    // the held commitment is still there: the runner reveals it, then commits having seen it
+    reveal_a(&mut c, &ska, &tee, &held, NOW + 3);
+    assert_eq!(
+        commit_v2_at(&mut c, &ska, &next, &[3; 32], ix + 1, NOW + 4),
+        "ok"
+    );
+    reveal_a(&mut c, &ska, &tee, &next, NOW + 4);
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(
+        (s.prev, s.next, s.outcome),
+        (Some(Side::Short), Some(Side::Short), ChaosOutcome::NoTrial),
+        "judged as the honest reveal-first runner"
+    );
+}
+
+/// A target that had seen the headline (its index is below `seen`) and replaces its held call
+/// anyway is charged as before deploy 17.1: the prev is hidden and the next lie-side call flips.
+#[test]
+fn a_replacement_hiding_a_seen_headline_is_still_charged() {
+    let (mut c, ska, _, tee, d) = fool_setup();
+    let (ix, _, next) = held_then_next(&mut c, &ska, &tee, d);
+    assert_eq!(
+        commit_v2_at(&mut c, &ska, &next, &[3; 32], ix + 1, NOW + 3),
+        "ok"
+    );
+    let s = chaos_at(&c, d, ix);
+    assert_eq!((s.outcome, s.prev), (ChaosOutcome::Pending, None));
+    reveal_a(&mut c, &ska, &tee, &next, NOW + 3);
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(
+        (s.outcome, s.prev, s.next),
+        (ChaosOutcome::Flipped, None, Some(Side::Short)),
+        "the hidden call counts against the target"
+    );
+}
+
+/// The intent `n` of A in duel `d`, backed by an enclave proof whose response hash is `[n; 32]`.
+fn call_a(d: u64, side: Side, n: u64) -> Intent {
+    let req: [u8; 32] = key(1).1.try_into().unwrap();
+    let mut i = intent(&key(1).1, d, side, 5_000, n);
+    i.proof_hash = Base64VecU8(proof_hash(&req, &[n as u8; 32]));
+    i
+}
+
+/// `seen` only guards replacements that would hide a pending headline at this agent planted at or
+/// after the held call: a first commit holds nothing to hide.
+#[test]
+fn a_first_commit_with_a_stale_seen_is_not_refused() {
+    let (mut c, ska, _, _, d) = fool_setup();
+    plant(&mut c, d, 1, ChaosKind::Short, NOW);
+    assert_eq!(
+        commit_v2_at(
+            &mut c,
+            &ska,
+            &call_a(d, Side::Long, 1),
+            &[1; 32],
+            0,
+            NOW + 1
+        ),
+        "ok"
+    );
+}
+
+/// A headline at the opponent is not this agent's to see: it does not refuse the replacement.
+#[test]
+fn an_unseen_headline_at_the_opponent_does_not_refuse_a_replacement() {
+    let (mut c, ska, _, _, d) = fool_setup();
+    commit_v2_at(&mut c, &ska, &call_a(d, Side::Long, 1), &[1; 32], 0, NOW);
+    plant(&mut c, d, 2, ChaosKind::Short, NOW + 1);
+    assert_eq!(
+        commit_v2_at(
+            &mut c,
+            &ska,
+            &call_a(d, Side::Short, 2),
+            &[2; 32],
+            0,
+            NOW + 2
+        ),
+        "ok"
+    );
+}
+
+/// A headline planted before the held call is decided by the replacement, not hidden by it.
+#[test]
+fn a_headline_planted_before_the_held_call_does_not_refuse_a_replacement() {
+    let (mut c, ska, _, _, d) = fool_setup();
+    plant(&mut c, d, 1, ChaosKind::Short, NOW);
+    commit_v2_at(
+        &mut c,
+        &ska,
+        &call_a(d, Side::Long, 1),
+        &[1; 32],
+        1,
+        NOW + 1,
+    );
+    assert_eq!(
+        commit_v2_at(
+            &mut c,
+            &ska,
+            &call_a(d, Side::Short, 2),
+            &[2; 32],
+            0,
+            NOW + 2
+        ),
+        "ok"
+    );
+}
+
+/// v1 and v2 commit messages sign different bytes: a v1 signature with `seen` attached, or a v2
+/// signature over another `seen`, is a bad signature, so a relayer can neither strip nor change it.
+#[test]
+fn a_commit_signature_binds_its_message_version_and_seen() {
+    let (mut c, ska, _, _, d) = fool_setup();
+    let i = intent(&key(1).1, d, Side::Long, 5_000, 1);
+    let h = commitment(&i, &SALT);
+    let v1 = commit_sig(&ska, d, &h);
+    let v2 = Base64VecU8(
+        ska.sign(&commit_bytes_v2(&CONTRACT.parse().unwrap(), d, 3, &h))
+            .to_bytes()
+            .to_vec(),
+    );
+    let mut try_commit = |sig: &Base64VecU8, seen: Option<u32>| {
+        ctx(OPERATOR, 0);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.commit_intent(
+                U64(d),
+                Base64VecU8(key(1).1),
+                Base64VecU8(h.clone()),
+                sig.clone(),
+                seen,
+            )
+        }));
+        r.map(|_| "ok".to_string()).unwrap_or_else(panic_msg)
+    };
+    assert_eq!(try_commit(&v1, Some(0)), "bad commit signature");
+    assert_eq!(try_commit(&v2, None), "bad commit signature");
+    assert_eq!(try_commit(&v2, Some(4)), "bad commit signature");
+    assert_eq!(try_commit(&v2, Some(3)), "ok");
 }

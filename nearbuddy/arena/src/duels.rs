@@ -5,8 +5,9 @@ use near_sdk::{AccountId, Gas, NearToken, Promise, env, ext_contract, near, requ
 
 use crate::{
     Contract, ContractExt, Duel, Intent, MAX_DUEL_NS, OraclePrice, Outcome, PriceData, Side,
-    SignedIntent, TeeProof, VOID_AFTER_NS, commit_bytes, commit_key, consent_bytes, intent_message,
-    nonce_key, proof_hash, set_entry_cost, storage_cost_since, tee_text, verify,
+    SignedIntent, TeeProof, VOID_AFTER_NS, commit_bytes, commit_bytes_v2, commit_key,
+    consent_bytes, intent_message, nonce_key, proof_hash, set_entry_cost, storage_cost_since,
+    tee_text, verify,
 };
 
 const ORACLE_GAS: Gas = Gas::from_tgas(150);
@@ -233,16 +234,24 @@ impl Contract {
     /// this agent that was planted at or after it: they stay pending, and the hidden call counts
     /// against the agent (its next counting decision flips them when it takes the lie's side, else
     /// they are no trial, never held). A runner reveals the held call before it commits again.
+    /// `seen` (message v2, deploy 17.1): how many records of `get_chaos(duel_id)` the agent had
+    /// read when it signed; `sig` is then over `commit_message(duel_id, commitment, seen)`. A
+    /// replacement is refused with "unseen headline" while a headline still pending at this agent,
+    /// planted at or after the held commitment, has an index at or above `seen`: it landed after
+    /// the runner's last read, so the runner reveals the held call first instead of being charged
+    /// for a dodge it could not see. A headline it had seen (index below `seen`) is charged as
+    /// above. Without `seen` (message v1) every replacement is charged as above.
     /// Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
     /// "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
-    /// "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
-    /// "bond exhausted".
+    /// "duel closed", "intent lock", "bad target", "commitment used", "unseen headline",
+    /// "agent missing", "bond exhausted".
     pub fn commit_intent(
         &mut self,
         duel_id: U64,
         agent_pk: Base64VecU8,
         commitment: Base64VecU8,
         sig: Base64VecU8,
+        seen: Option<u32>,
     ) {
         self.not_paused();
         require!(agent_pk.0.len() == 32, "agent_pk length");
@@ -251,14 +260,11 @@ impl Contract {
             .as_slice()
             .try_into()
             .unwrap_or_else(|_| env::panic_str("commitment length"));
-        require!(
-            verify(
-                &agent_pk.0,
-                &commit_bytes(&env::current_account_id(), duel_id.0, &hash),
-                &sig.0
-            ),
-            "bad commit signature"
-        );
+        let msg = match seen {
+            Some(n) => commit_bytes_v2(&env::current_account_id(), duel_id.0, n, &hash),
+            None => commit_bytes(&env::current_account_id(), duel_id.0, &hash),
+        };
+        require!(verify(&agent_pk.0, &msg, &sig.0), "bad commit signature");
         let duel = self.duels.get(&duel_id.0).expect("duel missing");
         let now = env::block_timestamp();
         require!(!duel.resolved && now < duel.close_at.0, "duel closed");
@@ -280,6 +286,12 @@ impl Contract {
         // no-reveal forfeit on a runner that lost its salt) and never pays better than revealing.
         let before = env::storage_usage();
         if let Some(&(_, held_at)) = self.commitments.get(&key) {
+            if let Some(n) = seen {
+                require!(
+                    !self.unseen_since(duel_id.0, &agent_pk.0, held_at, n),
+                    "unseen headline"
+                );
+            }
             self.hide_prev_since(duel_id.0, &agent_pk.0, held_at);
         }
         self.commitments.insert(key, (hash, now));
