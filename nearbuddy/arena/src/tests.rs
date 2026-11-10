@@ -5667,3 +5667,41 @@ fn a_commit_signature_binds_its_message_version_and_seen() {
     assert_eq!(try_commit(&v2, Some(4)), "bad commit signature");
     assert_eq!(try_commit(&v2, Some(3)), "ok");
 }
+
+#[test]
+fn chaos_open_closes_at_the_targets_first_commit_after_the_headline() {
+    let (mut c, _, skb) = setup();
+    commit_reveal_on(&mut c);
+    let d = open(&mut c);
+    let pk_b = key(2).1;
+    // a call committed before the headline only sets its `prev`: a blind call is still possible
+    commit_at(
+        &mut c,
+        &skb,
+        &intent(&pk_b, d, Side::Long, 5_000, 1),
+        &SALT,
+        NOW,
+    );
+    inject(&mut c, d, &pk_b, MIN_CHAOS);
+    let v = c.chaos_open(U64(d), 0).expect("record");
+    assert_eq!(
+        v,
+        ChaosOpen {
+            open: true,
+            owner: OPERATOR.parse().unwrap(),
+            keyless: false
+        }
+    );
+    // the target's next commit fixes the deciding call (its runner knows it): closed, still Pending
+    commit_at(
+        &mut c,
+        &skb,
+        &intent(&pk_b, d, Side::Short, 5_000, 2),
+        &SALT,
+        NOW + 1,
+    );
+    assert!(!c.chaos_open(U64(d), 0).unwrap().open);
+    assert_eq!(c.get_chaos(U64(d))[0].outcome, ChaosOutcome::Pending);
+    assert_eq!(c.chaos_open(U64(d), 1), None);
+    assert_eq!(c.chaos_open(U64(d + 1), 0), None);
+}

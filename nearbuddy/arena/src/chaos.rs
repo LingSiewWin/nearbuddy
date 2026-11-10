@@ -115,6 +115,16 @@ fn draw_arm(duel_id: u64, index: usize) -> Arm {
     }
 }
 
+/// `chaos_open`'s answer: whether a blind call on one headline is still possible, and who can
+/// steer its target.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChaosOpen {
+    pub open: bool,
+    pub owner: AccountId,
+    pub keyless: bool,
+}
+
 /// What finishing a duel moves for its injections.
 #[derive(Default, Debug)]
 pub(crate) struct Settlement {
@@ -520,6 +530,30 @@ impl Contract {
     /// payout; empty for an unknown duel or one with none. View: anyone, no deposit, no panics.
     pub fn get_chaos(&self, duel_id: U64) -> Vec<Chaos> {
         self.chaos.get(&duel_id.0).cloned().unwrap_or_default()
+    }
+
+    /// Whether a call on headline `index` of duel `duel_id` can still be made blind: the record
+    /// is `Pending`, its target holds no commitment made after the headline landed (the deciding
+    /// call is fixed at its commit and known to whoever runs the agent), and no keyless slot of the
+    /// target has carried the headline (its request bytes are public from `open_slot`, and the
+    /// model is close to deterministic). `owner` is the target's owner and `keyless` whether the
+    /// target is a keyless agent: a keyed agent's owner chooses which completion it signs, so it
+    /// can steer the outcome. `None` for an unknown record. View: anyone, no deposit, no panics.
+    pub fn chaos_open(&self, duel_id: U64, index: u32) -> Option<ChaosOpen> {
+        let c = self.chaos.get(&duel_id.0)?.get(index as usize)?;
+        let key = crate::commit_key(duel_id.0, &c.target.0);
+        let committed = self
+            .commitments
+            .get(&key)
+            .is_some_and(|&(_, at)| at > c.at.0);
+        let carried = crate::keyless::slots_map()
+            .get(&key)
+            .is_some_and(|s| s.heads & (1u32 << index) != 0);
+        Some(ChaosOpen {
+            open: c.outcome == ChaosOutcome::Pending && !committed && !carried,
+            owner: self.agents.get(&c.target.0)?.owner.clone(),
+            keyless: crate::keyless::agents_map().contains_key(&c.target.0),
+        })
     }
 
     /// The deposit the next paid `inject_chaos` in this duel needs (the price before storage).

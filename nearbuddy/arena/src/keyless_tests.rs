@@ -1475,3 +1475,34 @@ mod props {
         }
     }
 }
+
+#[test]
+fn chaos_open_closes_when_a_keyless_slot_carries_the_headline() {
+    let (mut c, d, a, _, tee) = kl_setup();
+    ctx_at(SPECTATOR, MIN_CHAOS, NOW + 1);
+    c.inject_chaos(
+        U64(d),
+        b(&a),
+        ChaosKind::Short,
+        "NEAR halts withdrawals".into(),
+    );
+    let v = c.chaos_open(U64(d), 0).expect("record");
+    assert!(v.open && v.keyless);
+    assert_eq!(v.owner, OPERATOR.parse::<AccountId>().unwrap());
+    // the slot's request bytes are public from here: anyone can run the model on them
+    ctx_at(KEEPER, 0, NOW + 2);
+    let s = c.open_slot(U64(d), b(&a));
+    assert_eq!(s.heads, 1);
+    assert!(!c.chaos_open(U64(d), 0).unwrap().open);
+    assert_eq!(c.get_chaos(U64(d))[0].outcome, ChaosOutcome::Pending);
+    submit(
+        &mut c,
+        &tee,
+        d,
+        &a,
+        &s,
+        r#"{"side":"long","size_bps":1000}"#,
+        NOW + 3,
+    );
+    assert!(!c.chaos_open(U64(d), 0).unwrap().open);
+}

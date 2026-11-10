@@ -318,10 +318,10 @@ pub fn parse_decision(response: &[u8], headlines: bool) -> Option<(Side, u16)> {
     Some((side, size))
 }
 
-fn agents_map() -> LookupMap<Vec<u8>, KeylessAgent> {
+pub(crate) fn agents_map() -> LookupMap<Vec<u8>, KeylessAgent> {
     LookupMap::new(StorageKey::KeylessAgents)
 }
-fn slots_map() -> LookupMap<Vec<u8>, Slot> {
+pub(crate) fn slots_map() -> LookupMap<Vec<u8>, Slot> {
     LookupMap::new(StorageKey::KeylessSlots)
 }
 /// Enclave signer to the one model id keyless agents accept it for (see `pin_model_signer`).

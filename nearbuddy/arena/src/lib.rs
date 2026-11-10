@@ -41,6 +41,7 @@ mod state;
 mod types;
 mod views;
 
+pub use chaos::ChaosOpen;
 pub use duels::Oracle;
 pub use keyless::*;
 pub use state::{Contract, ContractExt};
