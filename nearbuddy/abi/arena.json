@@ -148,55 +148,6 @@
         }
       },
       {
-        "name": "commit_completion",
-        "doc": " Claim slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the\n pinned enclave key `signer`'s ed25519 signature over\n `\"{model_id}:{hex(request_hash)}:{hex(response_hash)}\"` (kind 2), where `request_hash` is the\n slot's own. The first valid commit wins; the response stays hidden until\n `reveal_completion`. Only before the intent lock and within `SLOT_TTL_NS` of the slot's open.\n The attached deposit is the keeper bond (at least `keyless_commit_bond(duel_id)`), refunded\n on reveal.\n Caller: anyone (keeper). Deposit: the keeper bond; the commit's storage is taken from the\n agent's bond. Panics: \"paused\", \"response_hash length\", \"no slot\", \"stale slot\", \"slot\n taken\", \"slot expired\", \"duel closed\", \"intent lock\", \"unknown tee signer\", \"bad tee\n signature\", \"proof used\", \"keeper bond\", \"bond exhausted\".",
-        "kind": "call",
-        "modifiers": [
-          "payable"
-        ],
-        "params": {
-          "serialization_type": "json",
-          "args": [
-            {
-              "name": "duel_id",
-              "type_schema": {
-                "type": "string"
-              }
-            },
-            {
-              "name": "agent",
-              "type_schema": {
-                "$ref": "#/definitions/Base64VecU8"
-              }
-            },
-            {
-              "name": "seq",
-              "type_schema": {
-                "type": "string"
-              }
-            },
-            {
-              "name": "response_hash",
-              "type_schema": {
-                "$ref": "#/definitions/Base64VecU8"
-              }
-            },
-            {
-              "name": "signer",
-              "type_schema": {
-                "$ref": "#/definitions/Base64VecU8"
-              }
-            },
-            {
-              "name": "signature",
-              "type_schema": {
-                "$ref": "#/definitions/Base64VecU8"
-              }
-            }
-          ]
-        }
-      },
-      {
         "name": "commit_intent",
         "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n Replacing a held commitment unrevealed hides the `prev` of every headline still pending at\n this agent that was planted at or after it: they stay pending, and the hidden call counts\n against the agent (its next counting decision flips them when it takes the lie's side, else\n they are no trial, never held). A runner reveals the held call before it commits again.\n `seen` (message v2, deploy 17.1): how many records of `get_chaos(duel_id)` the agent had\n read when it signed; `sig` is then over `commit_message(duel_id, commitment, seen)`. A\n replacement is refused with \"unseen headline\" while a headline still pending at this agent,\n planted at or after the held commitment, has an index at or above `seen`: it landed after\n the runner's last read, so the runner reveals the held call first instead of being charged\n for a dodge it could not see. A headline it had seen (index below `seen`) is charged as\n above. Without `seen` (message v1) every replacement is charged as above.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"unseen headline\",\n \"agent missing\", \"bond exhausted\".",
         "kind": "call",
@@ -691,6 +642,31 @@
         }
       },
       {
+        "name": "get_model_signer",
+        "doc": " The model a keyless signer is pinned to, if any. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signer",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      {
         "name": "get_no_reveal",
         "doc": " Whether side a / side b of a scored duel left a commitment unrevealed and was slashed\n `no_reveal_bps`. `(false, false)` for unknown, open or clean duels.\n View: anyone, no deposit, no panics.",
         "kind": "view",
@@ -1036,28 +1012,6 @@
           "serialization_type": "json",
           "type_schema": {
             "type": "boolean"
-          }
-        }
-      },
-      {
-        "name": "keyless_commit_bond",
-        "doc": " The least keeper bond `commit_completion` takes in duel `duel_id`:\n `3 * slash_bps / 10_000` of the larger agent bond in the duel, at least 1 yoctoNEAR.\n Withholding a reveal keeps the agent's previous call, which can win back at most its own\n slash, the opponent's and the flip share of its own; the bond is at least that.\n View: anyone, no deposit. Panics: \"duel missing\".",
-        "kind": "view",
-        "params": {
-          "serialization_type": "json",
-          "args": [
-            {
-              "name": "duel_id",
-              "type_schema": {
-                "type": "string"
-              }
-            }
-          ]
-        },
-        "result": {
-          "serialization_type": "json",
-          "type_schema": {
-            "type": "string"
           }
         }
       },
@@ -1602,7 +1556,7 @@
       },
       {
         "name": "open_slot",
-        "doc": " Open the next decision slot of keyless `agent` in duel `duel_id`, freezing its inputs: the\n latest tick's price (else the open price), the seconds left, the headlines pending at the\n agent in `get_chaos(duel_id)` and a nonce from the block's random seed. The request hash is\n stored; `keyless_request` returns the bytes. Replaces the agent's previous slot in this duel\n once that one was revealed, or was never committed and is older than `SLOT_TTL_NS`.\n Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"not keyless\", \"duel missing\", \"duel closed\", \"intent lock\", \"bad target\", \"no open\n price\", \"slot busy\", \"bond exhausted\", then as `request_bytes`.",
+        "doc": " Open the next decision slot of keyless `agent` in duel `duel_id`, freezing its inputs: the\n latest tick's price (else the open price), the seconds left, the headlines pending at the\n agent in `get_chaos(duel_id)` and a nonce from the block's random seed. The request hash is\n stored; `keyless_request` returns the bytes. Replaces the agent's previous slot in this duel\n once that one was filled, or is older than `SLOT_TTL_NS`.\n Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"not keyless\", \"duel missing\", \"duel closed\", \"intent lock\", \"bad target\", \"no open\n price\", \"slot busy\", \"bond exhausted\", then as `request_bytes`.",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -1650,6 +1604,31 @@
             },
             {
               "name": "msg",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "pin_model_signer",
+        "doc": " Accept `signer` (a NEAR AI Cloud model enclave's ed25519 `signing_address`) for keyless\n agents of `model_id` only, replacing any model it was pinned to. The owner takes the pair\n from `GET /v1/attestation/report?model=..` (the signer listed under that model) after\n verifying the quotes off chain. Keyed agents keep using `add_tee_signer`.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"signer length\", \"model_id too\n long\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signer",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "model_id",
               "type_schema": {
                 "type": "string"
               }
@@ -1789,7 +1768,7 @@
       },
       {
         "name": "register_keyless",
-        "doc": " Register a keyless agent: no key, the contract builds its requests from `strategy` and\n `template_version` (see `keyless_request`). The id is `keyless_id(contract, caller, n)`. The\n agent is TEE-bound (followable) and its decisions arrive only through `commit_completion` /\n `reveal_completion`. The attached deposit is its bond, minus the storage its records cost.\n Caller: anyone; the caller becomes the owner. Deposit: the bond, above the storage cost.\n Panics: \"paused\", \"model_id too long\", \"control character\", \"unknown template\", \"strategy\n empty\", \"strategy too long\", \"strategy character\", \"bond required\".",
+        "doc": " Register a keyless agent: no key, the contract builds its requests from `strategy` and\n `template_version` (see `keyless_request`). The id is `keyless_id(contract, caller, n)`. The\n agent is TEE-bound (followable) and its decisions arrive only through `submit_completion`.\n The attached deposit is its bond, minus the storage its records cost.\n Caller: anyone; the caller becomes the owner. Deposit: the bond, above the storage cost.\n Panics: \"paused\", \"model_id too long\", \"control character\", \"unknown template\", \"strategy\n empty\", \"strategy too long\", \"strategy character\", \"bond required\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -1959,34 +1938,6 @@
               "name": "duel_id",
               "type_schema": {
                 "type": "string"
-              }
-            }
-          ]
-        }
-      },
-      {
-        "name": "reveal_completion",
-        "doc": " Open the committed completion of keyless `agent`'s slot in duel `duel_id`: `response` must\n hash to the committed `response_hash`. The keeper bond goes back to the committer. The\n decision `parse_decision` reads is recorded as a revealed, enclave-proved intent with\n `nonce = seq` and `proof_hash = sha256(request_hash || response_hash)`, made after exactly the\n headlines the request carried. A response with no readable decision is still burned (its\n proof is used) and leaves the agent's previous call in force. May land inside the intent\n lock, up to `close_at`.\n Caller: anyone (the response bytes are the key). Deposit: none; storage is taken from the\n agent's bond. Panics: \"response too long\", \"no commitment\", \"response mismatch\", \"duel\n closed\", then as a revealed intent (\"stale nonce\", \"bond exhausted\", ...).",
-        "kind": "call",
-        "params": {
-          "serialization_type": "json",
-          "args": [
-            {
-              "name": "duel_id",
-              "type_schema": {
-                "type": "string"
-              }
-            },
-            {
-              "name": "agent",
-              "type_schema": {
-                "$ref": "#/definitions/Base64VecU8"
-              }
-            },
-            {
-              "name": "response",
-              "type_schema": {
-                "$ref": "#/definitions/Base64VecU8"
               }
             }
           ]
@@ -2251,6 +2202,65 @@
         }
       },
       {
+        "name": "submit_completion",
+        "doc": " Fill slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the\n ed25519 signature of `signer`, the enclave key pinned to the agent's model (see\n `pin_model_signer`), over `\"{model_id}:{hex(request_hash)}:{hex(sha256(response))}\"` (kind\n 2), where `request_hash` is the slot's own. The first valid submission wins. The decision\n `parse_decision` reads is recorded as a revealed, enclave-proved intent with `nonce = seq`\n and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines\n the request carried. A response with no readable decision is accepted too (the completion\n is the agent's): its proof is burned, the agent's previous call stays, and every headline\n the request carried is judged as if the reply took the lie's side, so an unreadable reply\n never dodges a trial. Only before the intent lock and within `SLOT_TTL_NS` of the open.\n Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"response too long\", \"no slot\", \"stale slot\", \"slot taken\", \"slot expired\", \"duel\n closed\", \"intent lock\", \"signer not pinned to model\", \"bad tee signature\", \"proof used\", then\n as a revealed intent (\"stale nonce\", \"bond exhausted\", ...).",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "agent",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "seq",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "response",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "signer",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            },
+            {
+              "name": "signature",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Side"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
         "name": "sweep_surplus",
         "doc": " Send output nobody can claim (a fill refused after its swap landed, a gift) out of this\n contract's `intents_account` balance. Bounded to `balance - accounted - sweeping`, read through\n the same view the settle reads, so credited holdings are never touched.\n Caller: owner. Deposit: 1 yoctoNEAR (forwarded to `mt_transfer`). Panics: \"not owner\",\n \"Requires attached deposit of exactly 1 yoctoNEAR\", \"zero amount\".",
         "kind": "call",
@@ -2339,6 +2349,25 @@
           "args": [
             {
               "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "unpin_model_signer",
+        "doc": " Stop accepting `signer` for keyless agents; decisions already recorded stand.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signer",
               "type_schema": {
                 "$ref": "#/definitions/Base64VecU8"
               }
@@ -3368,22 +3397,11 @@
             "opened_at",
             "price",
             "request_hash",
-            "revealed",
             "seen",
             "seq",
             "size_bps"
           ],
           "properties": {
-            "commit": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/SlotCommit"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "heads": {
               "description": "Bit i: `get_chaos(duel)[i]` is in the request (pending at this agent when the slot opened).",
               "type": "integer",
@@ -3408,8 +3426,16 @@
             "request_hash": {
               "$ref": "#/definitions/Base64VecU8"
             },
-            "revealed": {
-              "type": "boolean"
+            "response_hash": {
+              "description": "sha256 of the accepted response, once a submission filled the slot.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "seen": {
               "description": "`get_chaos(duel)` length at the open: the decision counts as made after records below it.",
@@ -3421,7 +3447,7 @@
               "type": "string"
             },
             "side": {
-              "description": "The side the response gave, `None` before the reveal or when it gave none.",
+              "description": "The side the response gave, `None` before a submission or when it gave none.",
               "anyOf": [
                 {
                   "$ref": "#/definitions/Side"
@@ -3435,40 +3461,12 @@
               "type": "integer",
               "format": "uint16",
               "minimum": 0.0
-            }
-          }
-        },
-        "SlotCommit": {
-          "description": "The commit that won a slot.",
-          "type": "object",
-          "required": [
-            "bond",
-            "committed_at",
-            "committer",
-            "response_hash",
-            "signer"
-          ],
-          "properties": {
-            "bond": {
-              "description": "Refunded to `committer` on reveal; to `owner_fees` when the duel ends unrevealed.",
-              "type": "string"
             },
-            "committed_at": {
-              "type": "string"
-            },
-            "committer": {
+            "submitter": {
               "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
-              "type": "string"
-            },
-            "response_hash": {
-              "$ref": "#/definitions/Base64VecU8"
-            },
-            "signer": {
-              "description": "The enclave key that signed the completion.",
-              "allOf": [
-                {
-                  "$ref": "#/definitions/Base64VecU8"
-                }
+              "type": [
+                "string",
+                "null"
               ]
             }
           }

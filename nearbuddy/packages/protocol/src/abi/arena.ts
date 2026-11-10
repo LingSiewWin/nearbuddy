@@ -314,7 +314,6 @@ export interface SignedIntent {
 
 /** One decision of a keyless agent in one duel; the newest per (duel, agent) is kept. */
 export interface Slot {
-  commit: SlotCommit | null;
   /** Bit i: `get_chaos(duel)[i]` is in the request (pending at this agent when the slot opened). */
   heads: number;
   /** 32 bytes from the block's random seed. */
@@ -323,20 +322,14 @@ export interface Slot {
   /** The oracle price the request shows (the latest tick, else the open price), 8 decimals. */
   price: string;
   request_hash: Base64VecU8;
-  revealed: boolean;
+  /** sha256 of the accepted response, once a submission filled the slot. */
+  response_hash: Base64VecU8 | null;
   /** `get_chaos(duel)` length at the open: the decision counts as made after records below it. */
   seen: number;
   seq: string;
-  /** The side the response gave, `None` before the reveal or when it gave none. */
+  /** The side the response gave, `None` before a submission or when it gave none. */
   side: Side | null;
   size_bps: number;
-}
-
-/** The commit that won a slot. */
-export interface SlotCommit {
-  /** Refunded to `committer` on reveal; to `owner_fees` when the duel ends unrevealed. */
-  bond: string;
-  committed_at: string;
   /**
    * NEAR Account Identifier.
    *
@@ -354,10 +347,7 @@ export interface SlotCommit {
    *
    * assert!("ƒelicia.near".parse::<AccountId>().is_err()); // (ƒ is not f) ```
    */
-  committer: string;
-  response_hash: Base64VecU8;
-  /** The enclave key that signed the completion. */
-  signer: Base64VecU8;
+  submitter: string | null;
 }
 
 /** The NEAR AI Cloud signature record for one completion, as returned by `GET /v1/signature/{chat_id}?signing_algo=ed25519`. The TEE signs the raw text `"{model_id}:{request_hash_hex}:{response_hash_hex}"` (kind 2, `provider_tee`, the model's own enclave) or `"{request_hash_hex}:{response_hash_hex}"` (kind 1, `gateway`, the cloud-api enclave). The contract rebuilds that text from the agent's `model_id` and the two hashes and verifies the ed25519 signature against a signer the owner registered from an attestation report. */
@@ -464,6 +454,8 @@ export interface ArenaViews {
    *  View: anyone, no deposit, no panics.
    */
   get_keyless: { args: { agent: Base64VecU8 }; result: KeylessAgent | null };
+  /** The model a keyless signer is pinned to, if any. View: anyone, no deposit, no panics. */
+  get_model_signer: { args: { signer: Base64VecU8 }; result: string | null };
   /**
    * Whether side a / side b of a scored duel left a commitment unrevealed and was slashed
    *  `no_reveal_bps`. `(false, false)` for unknown, open or clean duels.
@@ -503,14 +495,6 @@ export interface ArenaViews {
    *  panics.
    */
   is_tee_signer: { args: { signer: Base64VecU8 }; result: boolean };
-  /**
-   * The least keeper bond `commit_completion` takes in duel `duel_id`:
-   *  `3 * slash_bps / 10_000` of the larger agent bond in the duel, at least 1 yoctoNEAR.
-   *  Withholding a reveal keeps the agent's previous call, which can win back at most its own
-   *  slash, the opponent's and the flip share of its own; the bond is at least that.
-   *  View: anyone, no deposit. Panics: "duel missing".
-   */
-  keyless_commit_bond: { args: { duel_id: string }; result: string };
   /**
    * The decision `parse_decision` reads from `response` (`headlines`: a paid headline was in the
    *  request), for parity checks. View: anyone, no deposit, no panics.
@@ -579,31 +563,6 @@ export interface ArenaCalls {
    * modifiers: payable
    */
   claim_chaos: { args: { duel_id: string }; result: unknown };
-  /**
-   * Claim slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the
-   *  pinned enclave key `signer`'s ed25519 signature over
-   *  `"{model_id}:{hex(request_hash)}:{hex(response_hash)}"` (kind 2), where `request_hash` is the
-   *  slot's own. The first valid commit wins; the response stays hidden until
-   *  `reveal_completion`. Only before the intent lock and within `SLOT_TTL_NS` of the slot's open.
-   *  The attached deposit is the keeper bond (at least `keyless_commit_bond(duel_id)`), refunded
-   *  on reveal.
-   *  Caller: anyone (keeper). Deposit: the keeper bond; the commit's storage is taken from the
-   *  agent's bond. Panics: "paused", "response_hash length", "no slot", "stale slot", "slot
-   *  taken", "slot expired", "duel closed", "intent lock", "unknown tee signer", "bad tee
-   *  signature", "proof used", "keeper bond", "bond exhausted".
-   * modifiers: payable
-   */
-  commit_completion: {
-    args: {
-      duel_id: string;
-      agent: Base64VecU8;
-      seq: string;
-      response_hash: Base64VecU8;
-      signer: Base64VecU8;
-      signature: Base64VecU8;
-    };
-    result: undefined;
-  };
   /**
    * Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for
    *  this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
@@ -739,7 +698,7 @@ export interface ArenaCalls {
    *  latest tick's price (else the open price), the seconds left, the headlines pending at the
    *  agent in `get_chaos(duel_id)` and a nonce from the block's random seed. The request hash is
    *  stored; `keyless_request` returns the bytes. Replaces the agent's previous slot in this duel
-   *  once that one was revealed, or was never committed and is older than `SLOT_TTL_NS`.
+   *  once that one was filled, or is older than `SLOT_TTL_NS`.
    *  Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:
    *  "paused", "not keyless", "duel missing", "duel closed", "intent lock", "bad target", "no open
    *  price", "slot busy", "bond exhausted", then as `request_bytes`.
@@ -757,6 +716,16 @@ export interface ArenaCalls {
    *  "open price stale", "duel open", "price before close", "no open price", "tick after close".
    */
   oracle_on_call: { args: { sender_id: string; data: PriceData; msg: string }; result: undefined };
+  /**
+   * Accept `signer` (a NEAR AI Cloud model enclave's ed25519 `signing_address`) for keyless
+   *  agents of `model_id` only, replacing any model it was pinned to. The owner takes the pair
+   *  from `GET /v1/attestation/report?model=..` (the signer listed under that model) after
+   *  verifying the quotes off chain. Keyed agents keep using `add_tee_signer`.
+   *  Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "signer length", "model_id too
+   *  long".
+   * modifiers: payable
+   */
+  pin_model_signer: { args: { signer: Base64VecU8; model_id: string }; result: undefined };
   /**
    * Record an agent-signed intent for an open duel. Anyone may relay it: the signature is what
    *  binds the decision to the agent and the agent's bond pays its storage. Refused inside the
@@ -808,8 +777,8 @@ export interface ArenaCalls {
   /**
    * Register a keyless agent: no key, the contract builds its requests from `strategy` and
    *  `template_version` (see `keyless_request`). The id is `keyless_id(contract, caller, n)`. The
-   *  agent is TEE-bound (followable) and its decisions arrive only through `commit_completion` /
-   *  `reveal_completion`. The attached deposit is its bond, minus the storage its records cost.
+   *  agent is TEE-bound (followable) and its decisions arrive only through `submit_completion`.
+   *  The attached deposit is its bond, minus the storage its records cost.
    *  Caller: anyone; the caller becomes the owner. Deposit: the bond, above the storage cost.
    *  Panics: "paused", "model_id too long", "control character", "unknown template", "strategy
    *  empty", "strategy too long", "strategy character", "bond required".
@@ -865,19 +834,6 @@ export interface ArenaCalls {
    * modifiers: payable
    */
   resolve_duel: { args: { duel_id: string }; result: undefined };
-  /**
-   * Open the committed completion of keyless `agent`'s slot in duel `duel_id`: `response` must
-   *  hash to the committed `response_hash`. The keeper bond goes back to the committer. The
-   *  decision `parse_decision` reads is recorded as a revealed, enclave-proved intent with
-   *  `nonce = seq` and `proof_hash = sha256(request_hash || response_hash)`, made after exactly the
-   *  headlines the request carried. A response with no readable decision is still burned (its
-   *  proof is used) and leaves the agent's previous call in force. May land inside the intent
-   *  lock, up to `close_at`.
-   *  Caller: anyone (the response bytes are the key). Deposit: none; storage is taken from the
-   *  agent's bond. Panics: "response too long", "no commitment", "response mismatch", "duel
-   *  closed", then as a revealed intent ("stale nonce", "bond exhausted", ...).
-   */
-  reveal_completion: { args: { duel_id: string; agent: Base64VecU8; response: Base64VecU8 }; result: undefined };
   /**
    * Open a commitment: the intent and salt must hash to the stored commitment for
    *  `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,
@@ -964,6 +920,33 @@ export interface ArenaCalls {
    */
   settle_follow: { args: { agent_pk: Base64VecU8; follower: string; fills: Fill[] }; result: unknown };
   /**
+   * Fill slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the
+   *  ed25519 signature of `signer`, the enclave key pinned to the agent's model (see
+   *  `pin_model_signer`), over `"{model_id}:{hex(request_hash)}:{hex(sha256(response))}"` (kind
+   *  2), where `request_hash` is the slot's own. The first valid submission wins. The decision
+   *  `parse_decision` reads is recorded as a revealed, enclave-proved intent with `nonce = seq`
+   *  and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
+   *  the request carried. A response with no readable decision is accepted too (the completion
+   *  is the agent's): its proof is burned, the agent's previous call stays, and every headline
+   *  the request carried is judged as if the reply took the lie's side, so an unreadable reply
+   *  never dodges a trial. Only before the intent lock and within `SLOT_TTL_NS` of the open.
+   *  Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:
+   *  "paused", "response too long", "no slot", "stale slot", "slot taken", "slot expired", "duel
+   *  closed", "intent lock", "signer not pinned to model", "bad tee signature", "proof used", then
+   *  as a revealed intent ("stale nonce", "bond exhausted", ...).
+   */
+  submit_completion: {
+    args: {
+      duel_id: string;
+      agent: Base64VecU8;
+      seq: string;
+      response: Base64VecU8;
+      signer: Base64VecU8;
+      signature: Base64VecU8;
+    };
+    result: Side | null;
+  };
+  /**
    * Send output nobody can claim (a fill refused after its swap landed, a gift) out of this
    *  contract's `intents_account` balance. Bounded to `balance - accounted - sweeping`, read through
    *  the same view the settle reads, so credited holdings are never touched.
@@ -979,6 +962,12 @@ export interface ArenaCalls {
    *  Caller: the follower. Deposit: none. Panics: "migrating".
    */
   unfollow: { args: { agent_pk: Base64VecU8 }; result: undefined };
+  /**
+   * Stop accepting `signer` for keyless agents; decisions already recorded stand.
+   *  Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner".
+   * modifiers: payable
+   */
+  unpin_model_signer: { args: { signer: Base64VecU8 }; result: undefined };
   /**
    * Escape hatch when the oracle never answers: a day after `close_at`, anyone may free both
    *  agents, no slashing, no score. Recorded as a tie with no prices: the injections settle as on a
