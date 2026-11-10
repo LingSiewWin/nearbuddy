@@ -7,13 +7,22 @@
 //! calls climb a public board (`get_board`).
 //!
 //! The arena is only read, through its views, never written:
-//! - a chaos market `(duel_id, Some(index))` takes predictions while
-//!   `get_chaos(duel_id)[index].outcome` is `Pending`. The arena leaves `Pending` in the receipt
-//!   that reveals the target's deciding decision (committed hidden, after the injection) or
-//!   finishes the duel, so no public fact decides the market while it is open;
-//! - a duel market `(duel_id, None)` takes predictions while
-//!   `now + duel_lock(duel_id) < get_duel(duel_id).close_at`, the arena's own test for taking a new
-//!   commitment. After that moment no decision can change and the last ones are still hidden.
+//! - a chaos market `(duel_id, Some(index))` takes predictions while the arena's
+//!   `chaos_open(duel_id, index).open`: the headline is `Pending`, its target holds no commitment
+//!   made after it (the deciding call is fixed at that commit, and whoever runs the agent knows
+//!   it), and no keyless slot of the target has carried it (its request bytes are public from
+//!   `open_slot` and the model is close to deterministic). An arena without that view (deploy 17
+//!   and older) makes the view call fail; the market then takes predictions while
+//!   `get_chaos(duel_id)[index].outcome` is `Pending`, closing at the reveal, and its view says
+//!   `open_until_reveal`. Any other unreadable answer refuses;
+//! - a duel market `(duel_id, None)` takes predictions until the duel's midpoint, and never once
+//!   `now + duel_lock(duel_id) >= close_at` (the arena's own test for refusing a new commitment).
+//!
+//! Who can steer an outcome: a keyed agent's owner chooses which completion its key signs, so it
+//! can make its own agent hold, flip, win or lose. `chaos_open` names that owner and a chaos
+//! market's view shows it as `steered_by` (`None` for a keyless target, whose request the contract
+//! builds and anyone may submit). Both duel agents' owners can steer a duel market the same way.
+//! The board counts these markets like any other: the label is how a page warns the reader.
 //!
 //! `predict` asks those views and accepts in its callback, so the test runs against the arena's
 //! state when the view ran, never against what a client says. A refused prediction's deposit goes
@@ -99,6 +108,10 @@ pub enum Verdict {
 #[near(serializers = [borsh])]
 #[derive(Default)]
 pub(crate) struct Market {
+    /// Owner of a keyed chaos target, from `chaos_open` at the first prediction.
+    steered_by: Option<AccountId>,
+    /// The arena had no `chaos_open` at the first prediction: the market closes at the reveal.
+    open_until_reveal: bool,
     /// Predictions per pick (`Pick::slot`).
     counts: [u32; 3],
     /// Predictions made; entry `seq` of this market is `(duel, slot, seq)` for `seq < n`.
@@ -158,6 +171,13 @@ pub struct MarketView {
     pub outcome: Option<Pick>,
     /// Predictions scored so far.
     pub scored: u32,
+    /// Chaos market: the target's owner when the target is a keyed agent. That owner chooses
+    /// which completion its agent signs, so it can steer the outcome. `None` for a keyless target,
+    /// a duel market, or when the arena had no `chaos_open` view.
+    pub steered_by: Option<AccountId>,
+    /// Chaos market opened against an arena without `chaos_open`: it closes at the target's
+    /// reveal, not at its commit, so whoever runs the target knows the outcome before it closes.
+    pub open_until_reveal: bool,
 }
 
 /// One prediction an account still holds: open, or scored and not yet claimed.
@@ -186,6 +206,7 @@ pub struct Config {
 #[serde(crate = "near_sdk::serde")]
 struct ArenaDuel {
     id: U64,
+    open_at: U64,
     a: Base64VecU8,
     b: Base64VecU8,
     close_at: U64,
@@ -215,6 +236,21 @@ enum ChaosOutcome {
 #[serde(crate = "near_sdk::serde")]
 struct ArenaChaos {
     outcome: ChaosOutcome,
+}
+
+#[derive(Deserialize)]
+#[serde(crate = "near_sdk::serde")]
+struct ChaosOpen {
+    open: bool,
+    owner: AccountId,
+    keyless: bool,
+}
+
+/// What an accepted chaos market records about its target.
+#[derive(Default)]
+struct Label {
+    steered_by: Option<AccountId>,
+    open_until_reveal: bool,
 }
 
 #[derive(BorshStorageKey)]
@@ -251,8 +287,9 @@ fn answer<T: DeserializeOwned>(i: u64) -> Result<T, &'static str> {
     serde_json::from_slice(&bytes).map_err(|_| "arena answer unreadable")
 }
 
-/// Whether the market is still open, by the arena's answers to `predict`'s views.
-fn still_open(id: u64, index: Option<u32>) -> Result<(), &'static str> {
+/// Whether the market is still open, by the arena's answers to `predict`'s views, and what its
+/// record says about the target.
+fn still_open(id: u64, index: Option<u32>) -> Result<Label, &'static str> {
     match index {
         None => {
             let duel: Option<ArenaDuel> = answer(0)?;
@@ -263,19 +300,34 @@ fn still_open(id: u64, index: Option<u32>) -> Result<(), &'static str> {
             if d.id.0 != id {
                 return Err("arena answer unreadable");
             }
-            if d.resolved || env::block_timestamp().saturating_add(lock.0) >= d.close_at.0 {
+            let now = env::block_timestamp();
+            let half = d.open_at.0 + d.close_at.0.saturating_sub(d.open_at.0) / 2;
+            if d.resolved || now >= half || now.saturating_add(lock.0) >= d.close_at.0 {
                 return Err("predictions closed");
             }
-            Ok(())
+            Ok(Label::default())
         }
-        Some(i) => {
-            let list: Vec<ArenaChaos> = answer(0)?;
-            match list.get(i as usize) {
-                None => Err("injection missing"),
-                Some(c) if c.outcome == ChaosOutcome::Pending => Ok(()),
-                Some(_) => Err("predictions closed"),
+        Some(i) => match answer::<Option<ChaosOpen>>(0) {
+            Ok(None) => Err("injection missing"),
+            Ok(Some(o)) if o.open => Ok(Label {
+                steered_by: (!o.keyless).then_some(o.owner),
+                open_until_reveal: false,
+            }),
+            Ok(Some(_)) => Err("predictions closed"),
+            // a failed view call: an arena without `chaos_open`; read the record itself
+            Err("arena failed") => {
+                let list: Vec<ArenaChaos> = answer(1)?;
+                match list.get(i as usize) {
+                    None => Err("injection missing"),
+                    Some(c) if c.outcome == ChaosOutcome::Pending => Ok(Label {
+                        steered_by: None,
+                        open_until_reveal: true,
+                    }),
+                    Some(_) => Err("predictions closed"),
+                }
             }
-        }
+            Err(e) => Err(e),
+        },
     }
 }
 
@@ -328,9 +380,10 @@ impl Contract {
     }
 
     /// Call `pick` on a market: a chaos injection (`index` = its index in `get_chaos(duel_id)`,
-    /// pick `Flipped` or `Held`) or the duel (`index` = `None`, pick `A`, `B` or `Tie`). One call
-    /// per account per market. Accepted in `on_predict` only if the arena's views show the market
-    /// open (see the crate doc); otherwise the deposit goes back. Returns that promise.
+    /// pick `Flipped` or `Held`; views `chaos_open` and `get_chaos`) or the duel (`index` =
+    /// `None`, pick `A`, `B` or `Tie`; views `get_duel` and `duel_lock`). One call per account per
+    /// market. Accepted in `on_predict` only if the arena's views show the market open (see the
+    /// crate doc); otherwise the deposit goes back. Returns that promise.
     /// Caller: anyone. Deposit: exactly `DEPOSIT`. Panics: "attach exactly the deposit", "pick does
     /// not fit the market", "index out of range", "predictions closed", "already predicted", "too
     /// many open predictions: claim first".
@@ -344,11 +397,12 @@ impl Contract {
         if let Some(why) = self.refusal(&who, duel_id.0, index, pick) {
             env::panic_str(why);
         }
+        let d = json!({ "duel_id": duel_id });
         let ask = match index {
-            None => self
-                .view("get_duel", duel_id)
-                .and(self.view("duel_lock", duel_id)),
-            Some(_) => self.view("get_chaos", duel_id),
+            None => self.view("get_duel", &d).and(self.view("duel_lock", &d)),
+            Some(i) => self
+                .view("chaos_open", &json!({ "duel_id": duel_id, "index": i }))
+                .and(self.view("get_chaos", &d)),
         };
         ask.then(
             Self::ext(env::current_account_id())
@@ -369,20 +423,27 @@ impl Contract {
         pick: Pick,
     ) -> bool {
         let id = duel_id.0;
-        let why = match self.refusal(&account, id, index, pick) {
-            Some(why) => Some(why),
-            None => still_open(id, index).err(),
+        let open = match self.refusal(&account, id, index, pick) {
+            Some(why) => Err(why),
+            None => still_open(id, index),
         };
-        if let Some(why) = why {
-            event(
-                "refuse",
-                json!({"account": account, "duel_id": duel_id, "index": index, "reason": why}),
-            );
-            let _ = Promise::new(account).transfer(NearToken::from_yoctonear(DEPOSIT));
-            return false;
-        }
+        let label = match open {
+            Ok(label) => label,
+            Err(why) => {
+                event(
+                    "refuse",
+                    json!({"account": account, "duel_id": duel_id, "index": index, "reason": why}),
+                );
+                let _ = Promise::new(account).transfer(NearToken::from_yoctonear(DEPOSIT));
+                return false;
+            }
+        };
         let slot = index.unwrap_or(DUEL_SLOT);
-        let m = self.markets.entry((id, slot)).or_default();
+        let m = self.markets.entry((id, slot)).or_insert_with(|| Market {
+            steered_by: label.steered_by,
+            open_until_reveal: label.open_until_reveal,
+            ..Market::default()
+        });
         let seq = m.n;
         m.n += 1;
         m.counts[pick.slot()] += 1;
@@ -410,8 +471,9 @@ impl Contract {
     /// `on_settle`. Caller: anyone. Deposit: none. Panics in the callback (changing nothing): "arena
     /// failed", "arena answer unreadable", "duel missing".
     pub fn settle(&mut self, duel_id: U64) -> Promise {
-        self.view("get_duel", duel_id)
-            .and(self.view("get_chaos", duel_id))
+        let d = json!({ "duel_id": duel_id });
+        self.view("get_duel", &d)
+            .and(self.view("get_chaos", &d))
             .then(
                 Self::ext(env::current_account_id())
                     .with_static_gas(SETTLE_CALLBACK_GAS)
@@ -595,10 +657,10 @@ impl Contract {
         None
     }
 
-    fn view(&self, method: &str, duel_id: U64) -> Promise {
+    fn view(&self, method: &str, args: &serde_json::Value) -> Promise {
         Promise::new(self.arena.clone()).function_call_weight(
             method.to_string(),
-            json!({ "duel_id": duel_id }).to_string().into_bytes(),
+            args.to_string().into_bytes(),
             NearToken::from_yoctonear(0),
             VIEW_GAS,
             GasWeight(0),
@@ -674,6 +736,8 @@ impl Contract {
             settled: m.outcome.is_some(),
             outcome: m.outcome.flatten(),
             scored: m.scored,
+            steered_by: m.steered_by.clone(),
+            open_until_reveal: m.open_until_reveal,
         })
     }
 }

@@ -239,6 +239,11 @@ struct ArenaSim {
     /// 0: a wins, 1: b wins, 2: tie, 3: voided.
     result: u8,
     chaos: Vec<&'static str>,
+    open_at: u64,
+    /// Bit i: injection i's target committed (or a keyless slot carried it) after it landed.
+    fixed: u32,
+    /// An arena without `chaos_open` (deploy 17): the view call fails.
+    legacy: bool,
 }
 
 impl ArenaSim {
@@ -248,6 +253,9 @@ impl ArenaSim {
             resolved: false,
             result: 0,
             chaos: vec![],
+            open_at: now,
+            fixed: 0,
+            legacy: false,
         }
     }
 
@@ -266,9 +274,10 @@ impl ArenaSim {
             )
         };
         format!(
-            r#"{{"id":"{id}","a":"{}","b":"{}","symbol":"wrap.near","open_at":"0","close_at":"{}","pool":"0","injections":[],"resolved":{},"last_intent_a":null,"last_intent_b":null,"outcome":{outcome},"open_price":"366"}}"#,
+            r#"{{"id":"{id}","a":"{}","b":"{}","symbol":"wrap.near","open_at":"{}","close_at":"{}","pool":"0","injections":[],"resolved":{},"last_intent_a":null,"last_intent_b":null,"outcome":{outcome},"open_price":"366"}}"#,
             pk(1),
             pk(2),
+            self.open_at,
             self.close_at,
             self.resolved
         )
@@ -291,8 +300,22 @@ impl ArenaSim {
     fn predict_answers(&self, id: u64, index: Option<u32>) -> Vec<Answer> {
         match index {
             None => vec![Some(self.duel_json(id)), Some(format!("\"{LOCK}\""))],
-            Some(_) => vec![Some(self.chaos_json())],
+            Some(i) => vec![self.chaos_open_json(i), Some(self.chaos_json())],
         }
+    }
+
+    /// The arena's `chaos_open(id, i)`; a failed call on a legacy arena.
+    fn chaos_open_json(&self, i: u32) -> Answer {
+        if self.legacy {
+            return None;
+        }
+        Some(match self.chaos.get(i as usize) {
+            None => "null".into(),
+            Some(o) => format!(
+                r#"{{"open":{},"owner":"op.testnet","keyless":false}}"#,
+                *o == "Pending" && self.fixed & (1 << i) == 0
+            ),
+        })
     }
 
     fn settle_answers(&self, id: u64) -> Vec<Answer> {
@@ -302,8 +325,15 @@ impl ArenaSim {
     /// The arena's own rule: is this market still undecided and hidden at `now`?
     fn open_at(&self, index: Option<u32>, now: u64) -> bool {
         match index {
-            None => !self.resolved && now + LOCK < self.close_at,
-            Some(i) => self.chaos.get(i as usize) == Some(&"Pending"),
+            None => {
+                !self.resolved
+                    && now < self.open_at + (self.close_at - self.open_at) / 2
+                    && now + LOCK < self.close_at
+            }
+            Some(i) => {
+                self.chaos.get(i as usize) == Some(&"Pending")
+                    && (self.legacy || self.fixed & (1 << i) == 0)
+            }
         }
     }
 
@@ -352,14 +382,25 @@ fn market(w: &World, duel: u64, index: Option<u32>) -> MarketView {
 // ---------------------------------------------------------------- unit tests
 
 #[test]
-fn duel_predictions_close_at_the_arena_intent_lock() {
+fn duel_predictions_close_at_the_midpoint_or_the_intent_lock() {
     let mut w = World::new();
     let mut a = ArenaSim::open(T0);
-    w.now = a.close_at - LOCK - 1;
+    let half = T0 + 155 * SEC; // 310 s duel
+    w.now = half - 1;
     let ans = a.predict_answers(7, None);
     assert_eq!(w.predict(PEOPLE[0], 7, None, Pick::A, &ans), Ok(true));
-    w.now += 1; // now + lock == close_at: the arena takes no new commitment
+    w.now = half; // half the price path is public: closed, though the arena takes commits for 95 s
     assert_eq!(w.predict(PEOPLE[1], 7, None, Pick::B, &ans), Ok(false));
+    // a duel shorter than twice the lock closes at the lock instead
+    let short = ArenaSim {
+        close_at: T0 + 100 * SEC,
+        ..ArenaSim::open(T0)
+    };
+    let ans = short.predict_answers(8, None);
+    w.now = T0 + 40 * SEC - 1;
+    assert_eq!(w.predict(PEOPLE[1], 8, None, Pick::A, &ans), Ok(true));
+    w.now = T0 + 40 * SEC; // now + lock == close_at: the arena takes no new commitment
+    assert_eq!(w.predict(PEOPLE[2], 8, None, Pick::A, &ans), Ok(false));
     a.resolve(0);
     w.now = a.close_at + SEC;
     let ans = a.predict_answers(7, None);
@@ -368,10 +409,69 @@ fn duel_predictions_close_at_the_arena_intent_lock() {
     assert_eq!((m.total, m.picks[0].n, m.picks[1].n), (1, 1, 0));
     // an unknown duel, and the arena answering for another duel, are refused too
     let missing = vec![Some("null".into()), Some("null".into())];
-    assert_eq!(w.predict(PEOPLE[1], 8, None, Pick::A, &missing), Ok(false));
+    assert_eq!(w.predict(PEOPLE[1], 9, None, Pick::A, &missing), Ok(false));
     w.now = T0;
-    let other = ArenaSim::open(T0).predict_answers(9, None);
-    assert_eq!(w.predict(PEOPLE[1], 8, None, Pick::A, &other), Ok(false));
+    let other = ArenaSim::open(T0).predict_answers(10, None);
+    assert_eq!(w.predict(PEOPLE[1], 9, None, Pick::A, &other), Ok(false));
+}
+
+#[test]
+fn chaos_predictions_close_at_the_targets_deciding_commit() {
+    let mut w = World::new();
+    let mut a = ArenaSim::open(T0);
+    a.chaos = vec!["Pending", "Pending"];
+    assert_eq!(
+        w.predict(
+            PEOPLE[0],
+            3,
+            Some(0),
+            Pick::Held,
+            &a.predict_answers(3, Some(0))
+        ),
+        Ok(true)
+    );
+    let m = market(&w, 3, Some(0));
+    assert_eq!(
+        (m.steered_by.map(|o| o.to_string()), m.open_until_reveal),
+        (Some("op.testnet".into()), false)
+    );
+    // the target committed its next call: still Pending on chain, but no longer blind
+    a.fixed = 1;
+    assert_eq!(
+        w.predict(
+            PEOPLE[1],
+            3,
+            Some(0),
+            Pick::Flipped,
+            &a.predict_answers(3, Some(0))
+        ),
+        Ok(false)
+    );
+    // an arena without `chaos_open` (the view call fails): open until the reveal, and labelled so
+    let legacy = ArenaSim {
+        legacy: true,
+        ..a.clone()
+    };
+    let ans = legacy.predict_answers(3, Some(1));
+    assert_eq!(ans[0], None);
+    assert_eq!(w.predict(PEOPLE[1], 3, Some(1), Pick::Held, &ans), Ok(true));
+    assert!(market(&w, 3, Some(1)).open_until_reveal);
+    // an unreadable `chaos_open` answer refuses rather than falling back
+    let bad = vec![Some("{\"open\":".into()), Some(a.chaos_json())];
+    assert_eq!(
+        w.predict(PEOPLE[2], 3, Some(1), Pick::Held, &bad),
+        Ok(false)
+    );
+    assert_eq!(
+        w.predict(
+            PEOPLE[2],
+            3,
+            Some(7),
+            Pick::Held,
+            &a.predict_answers(3, Some(7))
+        ),
+        Ok(false)
+    );
 }
 
 #[test]
@@ -382,11 +482,23 @@ fn chaos_predictions_close_when_the_outcome_leaves_pending() {
     let ans = a.predict_answers(3, Some(0));
     assert_eq!(w.predict(PEOPLE[0], 3, Some(0), Pick::Held, &ans), Ok(true));
     assert_eq!(
-        w.predict(PEOPLE[1], 3, Some(1), Pick::Held, &ans),
+        w.predict(
+            PEOPLE[1],
+            3,
+            Some(1),
+            Pick::Held,
+            &a.predict_answers(3, Some(1))
+        ),
         Ok(false)
     );
     assert_eq!(
-        w.predict(PEOPLE[1], 3, Some(5), Pick::Held, &ans),
+        w.predict(
+            PEOPLE[1],
+            3,
+            Some(5),
+            Pick::Held,
+            &a.predict_answers(3, Some(5))
+        ),
         Ok(false)
     );
     for o in ["Flipped", "NoTrial", "Expired"] {
@@ -718,6 +830,8 @@ enum Op {
     Predict(usize, u64, Option<u32>, Pick, Fate),
     /// Plant a pending injection.
     Inject(u64),
+    /// The target of injection `i` commits its next call (or a keyless slot carries it).
+    Fix(u64, u32),
     /// Decide an injection: Flipped, Held, NoTrial.
     Decide(u64, u32, u8),
     /// Time passes by this many seconds.
@@ -757,6 +871,7 @@ fn op() -> impl Strategy<Value = Op> {
         8 => (0..3usize, 0..2u64, prop::option::of(0..3u32), pick, fate())
             .prop_map(|(w, d, i, p, f)| Op::Predict(w, d, i, p, f)),
         3 => (0..2u64).prop_map(Op::Inject),
+        2 => (0..2u64, 0..3u32).prop_map(|(d, i)| Op::Fix(d, i)),
         4 => (0..2u64, 0..3u32, 0..3u8).prop_map(|(d, i, o)| Op::Decide(d, i, o)),
         2 => (0..120u64).prop_map(Op::Wait),
         2 => (0..2u64, 0..4u8).prop_map(|(d, r)| Op::Resolve(d, r)),
@@ -797,9 +912,15 @@ proptest! {
     })]
 
     #[test]
-    fn deposits_conserved_scored_once_never_after_close(ops in vec(op(), 1..80)) {
+    fn deposits_conserved_scored_once_never_after_close(
+        ops in vec(op(), 1..80),
+        legacy in any::<bool>(),
+    ) {
         let mut w = World::new();
         let mut arena = [ArenaSim::open(T0), ArenaSim::open(T0 + 100 * SEC)];
+        for a in arena.iter_mut() {
+            a.legacy = legacy;
+        }
         let mut made: Vec<Made> = vec![];
         for op in ops {
             match op {
@@ -816,6 +937,7 @@ proptest! {
                         made.push(Made { who, duel: d, index, pick, verdict: None, claimed: false });
                     }
                 }
+                Op::Fix(d, i) => arena[d as usize].fixed |= 1 << i,
                 Op::Inject(d) => {
                     let a = &mut arena[d as usize];
                     if !a.resolved && a.chaos.len() < 4 {
