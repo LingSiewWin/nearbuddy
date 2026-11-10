@@ -71,18 +71,32 @@ const nsToMs = (ns: string) => Number(BigInt(ns) / 1_000_000n);
 /** "z-ai/glm-5.3-flash" -> "glm-5.3-flash". */
 export const shortModel = (id: string | null | undefined) => (id ? (id.split("/").pop() ?? id) : "?");
 
+/** How long after its close a duel still counts as "closing": the oracle answers within seconds to minutes, so an
+ *  unresolved duel older than this is stuck, not news, and pane 2 replays answered attacks instead. */
+export const CLOSING_MS = 10 * 60_000;
+/** The duel pane 2 follows: one taking calls now, else one closed in the last CLOSING_MS and awaiting its oracle,
+ *  else null (pane 2 replays the last answered attacks). */
+export function pickLive(duels: (Duel | null)[] | undefined, nowMs: number): Duel | null {
+  const list = (duels ?? []).filter((d): d is Duel => !!d);
+  return (
+    list.find((d) => !d.resolved && nsToMs(d.close_at) > nowMs) ??
+    list.find((d) => !d.resolved && nsToMs(d.close_at) > nowMs - CLOSING_MS) ??
+    null
+  );
+}
+
 /** Attacks on a duel. Deploy 17 lists each one (`get_chaos`); a duel attacked before deploy 17 has no records there,
  *  but the contract counted its attacks at resolve (`outcome.injections`), and an open deploy-16 duel lists them in
  *  `injections`: the largest is the count every pane shows. */
 export const attacksOf = (d: Duel): number =>
   Math.max(d.chaos?.length ?? 0, d.outcome?.injections ?? 0, d.injections.length);
 
-/** The duel pane 2 follows: one taking calls now, else one closed and awaiting its oracle, else the newest. */
-export function pickLive(duels: (Duel | null)[] | undefined, nowMs: number): Duel | null {
-  const list = (duels ?? []).filter((d): d is Duel => !!d);
-  return (
-    list.find((d) => !d.resolved && nsToMs(d.close_at) > nowMs) ?? list.find((d) => !d.resolved) ?? list[0] ?? null
-  );
+/** A revealed call's profit at price `now`, in bps, by the contract's rule (arena/src/duels.rs pnl_bps:
+ *  side × (now - open) × size_bps / open), unrounded; null without a call or prices. Display only: the duel settles on
+ *  the oracle's close. */
+export function livePnl(it: Intent | null | undefined, open: number | null, now: number | null): number | null {
+  if (!it || !open || !now) return null;
+  return ((it.side === "Long" ? 1 : -1) * (now - open) * it.size_bps) / open;
 }
 
 export type FeedItem = {

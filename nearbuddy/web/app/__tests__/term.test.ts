@@ -4,10 +4,12 @@ import { expect, test } from "bun:test";
 import type { Chaos } from "../lib/abi/arena";
 import {
   attacksOf,
+  CLOSING_MS,
   changed,
   type Duel,
   feed,
   fields,
+  livePnl,
   pickLive,
   type Snap,
   shortModel,
@@ -31,13 +33,15 @@ const duel = (id: string, closeMs: number, resolved: boolean, extra: Partial<Due
   ...extra,
 });
 
-test("pane 2 follows a duel taking calls, then one awaiting its oracle, then the newest", () => {
+test("pane 2 follows a duel taking calls, then one closed lately awaiting its oracle, else none (the replay)", () => {
   const live = duel("12", now + 60_000, false);
   const closing = duel("11", now - 5_000, false);
   const old = duel("10", now - 600_000, true);
+  const stuck = duel("9", now - CLOSING_MS - 1, false); // closed 10 min ago, oracle never answered: not news
   expect(pickLive([closing, live, old], now)?.id).toBe("12");
   expect(pickLive([closing, null, old], now)?.id).toBe("11");
-  expect(pickLive([old], now)?.id).toBe("10");
+  expect(pickLive([old], now)).toBeNull();
+  expect(pickLive([stuck, old], now)).toBeNull();
   expect(pickLive([], now)).toBeNull();
   expect(pickLive(undefined, now)).toBeNull();
 });
@@ -54,6 +58,23 @@ test("one attack count per duel: chain records, else the count kept at resolve, 
   expect(attacksOf(duel("13", now + 1, false, { injections: [inj, inj] }))).toBe(2);
   expect(attacksOf(duel("14", now + 1, false, { chaos: null, injections: [inj] }))).toBe(1);
   expect(attacksOf(duel("15", now + 1, false))).toBe(0);
+});
+
+test("live P&L follows the contract's pnl_bps: side × move × size, null without a call or prices", () => {
+  const it = (side: "Long" | "Short", size_bps: number) => ({
+    agent_pk: "A=",
+    side,
+    size_bps,
+    nonce: "1",
+    proof_hash: "p",
+  });
+  // +1 % move at 50 % size: +50 bps long, -50 bps short
+  expect(livePnl(it("Long", 5000), 3.6, 3.636)).toBeCloseTo(50, 6);
+  expect(livePnl(it("Short", 5000), 3.6, 3.636)).toBeCloseTo(-50, 6);
+  expect(livePnl(it("Long", 10_000), 3.6, 3.6)).toBe(0);
+  expect(livePnl(null, 3.6, 3.7)).toBeNull();
+  expect(livePnl(it("Long", 5000), null, 3.7)).toBeNull();
+  expect(livePnl(it("Long", 5000), 3.6, null)).toBeNull();
 });
 
 test("the feed puts this browser's attacks first, then attacks on open duels, then the dataset's", () => {

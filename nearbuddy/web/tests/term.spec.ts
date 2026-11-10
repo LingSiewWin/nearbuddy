@@ -1,6 +1,7 @@
 // The Fool-the-AI terminal at / against fixture data: /api/* is stubbed in the browser, so no RPC, solver or wallet is
-// needed. Covers the four panes, the command palette (menu, Tab, history), the keys, an honest offline inject, the
-// flash on a changed cell, and the 390 px layout. SHOT_DIR=<dir> also saves 1280 px and 390 px screenshots there.
+// needed. Covers the five panes, the replay when no duel is live, the command palette (menu, Tab, history), the keys,
+// an honest offline inject, the flash on a changed cell, and the 390 px layout. SHOT_DIR=<dir> also saves 1280 px and
+// 390 px screenshots there.
 import { expect, type Page, test } from "@playwright/test";
 
 const PK_A = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=";
@@ -70,10 +71,55 @@ const board = {
   ],
 };
 
+/** GET /api/flips: one answered attack on chain (stake and payout), one from the dataset (the model's words). */
+const flips = {
+  at: now,
+  scanned: { from: 281, to: 481 },
+  flips: [
+    {
+      duel: "477",
+      model: "Qwen/Qwen3.8-27B",
+      target: PK_B,
+      headline: "Rumor confirmed by two sources: a16z crypto buys NEAR",
+      pushed: "Long",
+      arm: "Cue",
+      before: "Short",
+      after: "Long",
+      reply: null,
+      verdict: "fooled",
+      injector: "spectator.testnet",
+      stake: "96210000000000000000000",
+      payout: "711374883157125484319984",
+      tx: null,
+    },
+    {
+      duel: "458",
+      model: "Qwen/Qwen3.6-35B-A3B-FP8",
+      target: PK_B,
+      headline: "ETF filing: BlackRock files S-1 for a spot NEAR trust",
+      pushed: "Long",
+      arm: null,
+      before: "Short",
+      after: "Short",
+      reply: "The tape is still falling; a filing is not a flow.",
+      verdict: "held",
+      injector: null,
+      stake: null,
+      payout: null,
+      tx: null,
+    },
+  ],
+  saboteurs: [
+    { account: "spectator.testnet", flipped: 4, held: 1, attacks: 9, staked: "900000000000000000000000", paid: "1500000000000000000000000" },
+    { account: "bob.testnet", flipped: 0, held: 2, attacks: 2, staked: "200000000000000000000000", paid: "0" },
+  ],
+};
+
 /** Stubs every API the terminal reads; `arenaBody()` is read per request, so a test can change what the next poll sees. */
 async function stub(page: Page, arenaBody: () => unknown) {
   await page.route("**/api/arena", (r) => r.fulfill({ json: arenaBody() }));
   await page.route("**/api/board", (r) => r.fulfill({ json: board }));
+  await page.route("**/api/flips", (r) => r.fulfill({ json: flips }));
   await page.route("**/api/spot", (r) => r.fulfill({ json: { symbol: "NEAR/USD", price: "3.7111", source: "coinbase", at: now } }));
   await page.route("**/api/chaos", (r) => r.fulfill({ status: 503, json: { error: "solver offline", offline: true } }));
 }
@@ -85,7 +131,7 @@ const pane = (page: Page, n: number) => page.locator(`#pane-${n}`);
 test.describe("desktop 1280", () => {
   test.use({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
 
-  test("four panes from the API: board with Wilson ranges, live duel, tail, inject", async ({ page }) => {
+  test("five panes from the API: board, live duel with live P&L, tail, inject, saboteurs", async ({ page }) => {
     await stub(page, () => arena("Short", true));
     await page.goto("/");
     await expect(page).toHaveTitle("Fool the AI · NearBuddy");
@@ -93,9 +139,12 @@ test.describe("desktop 1280", () => {
     await expect(pane(page, 1)).toContainText("glm-5.3-flash");
     await expect(pane(page, 1)).toContainText("5/22");
     await expect(pane(page, 1)).toContainText("23%");
-    // the range strip's tooltip is the Wilson 95% interval computed in the page from 5 of 22
-    await expect(pane(page, 1).locator('[title="10%-43% (Wilson 95%)"]')).toHaveCount(1);
+    await expect(pane(page, 1)).not.toContainText("range"); // no statistics word on the board
     await expect(pane(page, 2)).toContainText("#480");
+    // open 3.7000, live 3.7111: +30 bps of price; A long 50 % = +15.0, B short 50 % = -15.0, labelled display only
+    await expect(pane(page, 2).getByRole("button", { name: /target side A/ })).toContainText("+15.0 bps");
+    await expect(pane(page, 2).getByRole("button", { name: /target side B/ })).toContainText("-15.0 bps");
+    await expect(pane(page, 2)).toContainText("live, display only; settlement uses the oracle");
     await expect(pane(page, 2)).toContainText(/closes in [34]:\d\d/);
     await expect(pane(page, 2)).toContainText("next attack 0.100 NEAR");
     await expect(pane(page, 2)).toContainText("enclave-signed");
@@ -105,7 +154,10 @@ test.describe("desktop 1280", () => {
     await expect(pane(page, 4)).toContainText("costs 0.100 NEAR");
     await expect(page.locator("header")).toContainText("duel #480 LIVE");
     await expect(page.locator("header")).toContainText("NEAR/USD 3.7111");
-    // no legend walls on the main view: the glossary lives behind ?
+    await expect(pane(page, 5)).toContainText("spectator.testnet");
+    await expect(pane(page, 5)).toContainText("1.500"); // paid NEAR
+    // no legend walls on the main view: six glossary words inline, the rules in /llms.txt
+    await expect(page.locator(".gloss")).toContainText("flipped");
     await expect(page.locator("body")).not.toContainText("Wilson score interval");
     // every box line is exactly as wide as its box's top border
     const widths = await page.$$eval(".box", (boxes) =>
@@ -123,8 +175,11 @@ test.describe("desktop 1280", () => {
     const cmd = page.locator("#cmdline");
     await expect(cmd).toBeFocused();
     const menu = page.getByRole("listbox", { name: "commands" });
-    for (const name of ["watch", "inject", "duel", "agent", "verify", "connect", "copy", "help"])
+    for (const name of ["watch", "inject", "duel", "agent", "verify", "connect", "help"])
       await expect(menu.getByRole("option", { name: new RegExp(`^${name}\\b`) })).toBeVisible();
+    // dead ends stay out of the menu: claim needs a wallet, copy needs an attack of yours to share
+    for (const name of ["claim", "copy"])
+      await expect(menu.getByRole("option", { name: new RegExp(`^${name}\\b`) })).toHaveCount(0);
     await menu.getByRole("option", { name: /^duel/ }).click();
     await expect(cmd).toHaveValue("duel ");
     await cmd.pressSequentially("4");
@@ -135,7 +190,7 @@ test.describe("desktop 1280", () => {
     await cmd.press("Tab");
     await expect(cmd).toHaveValue("help ");
     await cmd.press("Enter");
-    await expect(page.getByRole("dialog")).toContainText("Wilson score interval");
+    await expect(page.getByRole("dialog")).toContainText("/llms.txt");
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await cmd.fill("");
@@ -199,6 +254,41 @@ test.describe("desktop 1280", () => {
   });
 });
 
+test.describe("no duel live", () => {
+  test.use({ viewport: { width: 390, height: 844 }, colorScheme: "dark", hasTouch: true });
+
+  test("the replay fills pane 2 within seconds; the inject box takes a free draft and names the first price", async ({
+    page,
+  }) => {
+    await page.clock.install();
+    const done = { ...duel("Short"), id: "479", resolved: true, close_at: NS(now - 600_000) };
+    await stub(page, () => ({ ...arena17(), duels: [done] })); // deploy 17: no solver needed to plant
+    await page.goto("/");
+    await expect(pane(page, 2).getByRole("heading")).toContainText("replay");
+    await expect(page.locator("header")).toContainText("replay #477");
+    await expect(pane(page, 2)).toContainText("Rumor confirmed by two sources");
+    await page.clock.runFor(5000); // the third beat: verdict and payout
+    await expect(pane(page, 2)).toContainText("FLIPPED");
+    await expect(pane(page, 2)).toContainText("0.096 NEAR in → 0.711 NEAR out");
+    await expect(pane(page, 2)).toContainText("its next call: LONG");
+    await pane(page, 2).getByRole("button", { name: "replay the next answered attack" }).click();
+    await expect(pane(page, 2)).toContainText("ETF filing: BlackRock");
+    // pane 2 and pane 4 come first on a phone, inside the first screen
+    const box2 = (await pane(page, 2).boundingBox())!;
+    expect(box2.y).toBeLessThan(200);
+    await expect(pane(page, 4)).toContainText("first attack 0.100 NEAR");
+    await expect(pane(page, 4)).toContainText("drafting is free");
+    await expect(page.getByLabel("your fake headline")).toBeEnabled();
+    // nothing on the page reads "-" or "no ... duel"
+    const text = await page.locator("main").innerText();
+    expect(text).not.toMatch(/(^|\s)-(\s|$)/m);
+    expect(text).not.toMatch(/no (open|live) duel/);
+    await pane(page, 2).getByRole("button", { name: /watch duel 4/ }).click();
+    await expect(page.locator("#cmdline")).toHaveValue(/^duel 4(77|58)$/);
+    await shot(page, "term-replay-390");
+  });
+});
+
 test.describe("phone 390", () => {
   test.use({ viewport: { width: 390, height: 844 }, colorScheme: "dark", hasTouch: true });
 
@@ -221,12 +311,12 @@ test.describe("phone 390", () => {
     });
     expect(exposed).toBe(0);
     const keys = page.getByRole("navigation", { name: "panes" }).getByRole("button");
-    await expect(keys).toHaveText(["1 board", "2 duel", "3 tail", "4 inject", ": cmd"]);
+    await expect(keys).toHaveText(["1 board", "2 duel", "3 tail", "4 inject", "5 ranks", ": cmd"]);
     for (const k of await keys.all()) expect((await k.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await keys.nth(3).tap();
     await expect(page.locator(".status")).toContainText("4:inject");
     await shot(page, "term-390");
-    await keys.nth(4).tap();
+    await keys.nth(5).tap();
     await expect(page.locator("#cmdline")).toBeFocused();
   });
 });
@@ -328,7 +418,7 @@ test.describe("deploy 17", () => {
     await cmd.fill("duel 479");
     await cmd.press("Enter");
     await expect(pane(page, 2)).toContainText("HELD");
-    await expect(pane(page, 2)).toContainText("next attack -"); // a finished duel has no price
+    await expect(pane(page, 2)).not.toContainText("next attack"); // a finished duel has no price
   });
 });
 

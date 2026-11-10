@@ -183,6 +183,22 @@
 .term .keys {
   display: none;
 }
+/* the six glossary words, inline under the panes: "term = meaning" pairs that wrap as a paragraph */
+.term .gloss {
+  margin: 0 0 1em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2em 2ch;
+}
+.term .gloss dt,
+.term .gloss dd {
+  display: inline;
+  margin: 0;
+}
+.term .gloss dt::after {
+  content: " = ";
+  color: var(--dim);
+}
 .term .help {
   position: fixed;
   inset: 0;
@@ -206,7 +222,7 @@
   }
   .term .keys {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 4px;
     padding-top: 4px;
   }
