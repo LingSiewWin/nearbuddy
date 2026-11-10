@@ -390,7 +390,8 @@ impl Contract {
     /// The duel-side checks and effects of every accepted decision, keyed or keyless. `before` is
     /// the storage usage the decision's storage is measured from. `sig` is the agent key's
     /// signature over the intent, checked after the nonce checks; `None` only for a keyless
-    /// decision, whose enclave signature `submit_completion` checked. `committed_at` is set for a
+    /// decision, whose enclave signature `submit_completion` checked and whose submitter pays the
+    /// storage (the agent's bond pays it otherwise). `committed_at` is set for a
     /// reveal (see `accept_intent`). `seen` (keyless): the decision was made after exactly the
     /// first `seen` records of `get_chaos(duel)` (see `observe_decision`).
     pub(crate) fn record_intent(
@@ -455,11 +456,13 @@ impl Contract {
         self.nonce_times.flush();
         self.chaos.flush();
         // includes the nonce_times entry (flushed), the used_proofs one (LookupSet writes at insert)
-        // and the outcome fields a decided injection fills in
-        let cost = storage_cost_since(before);
-        let agent = self.agents.get_mut(&i.agent_pk.0).expect("agent missing");
-        require!(agent.bond.0 > cost, "bond exhausted");
-        agent.bond = U128(agent.bond.0 - cost);
+        // and the outcome fields a decided injection fills in; a keyless submitter pays it instead
+        if sig.is_some() {
+            let cost = storage_cost_since(before);
+            let agent = self.agents.get_mut(&i.agent_pk.0).expect("agent missing");
+            require!(agent.bond.0 > cost, "bond exhausted");
+            agent.bond = U128(agent.bond.0 - cost);
+        }
         env::log_str(&format!(
             r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"intent","data":{{"duel_id":{},"agent_pk":"{}","side":"{:?}","size_bps":{},"nonce":{},"tee":{tee_kind}}}}}"#,
             i.duel_id.0,
@@ -570,7 +573,7 @@ impl Contract {
                     .0;
                 self.finish(id, open, price);
             }
-            "tick" => self.on_tick(id, price, data.timestamp.0, close_at),
+            "tick" => self.on_tick(id, price, data.timestamp.0, open_at, close_at),
             _ => env::panic_str("bad msg"),
         }
     }

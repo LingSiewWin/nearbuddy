@@ -1,5 +1,5 @@
 {
-  "_": "Keyless request template vectors for arena (Rust, the source: arena/src/keyless.rs), packages/protocol (TS) and agents (Python). Each `cases[i].inputs` (the contract's KeylessInputs JSON: u64 as decimal strings, nonce base64) builds exactly `request_hex` (the chat-completion body a keeper posts and the enclave hashes). `reject[i].patch` applied to cases[0].inputs must be refused with `error`, the contract's panic message; every builder refuses the same input. `parse[i].response` is a chat-completion response body; `decision` is what submit_completion records from it (null: no call; every headline the request carried is then judged as if the reply took the lie's side). Template 1 delivers every arm as written. A template change bumps template_version and adds cases; it never edits a published case.",
+  "_": "Keyless request template vectors for arena (Rust, the source: arena/src/keyless.rs), packages/protocol (TS) and agents (Python). Each `cases[i].inputs` (the contract's KeylessInputs JSON: u64 as decimal strings, nonce base64) builds exactly `request_hex` (the chat-completion body a keeper posts and the enclave hashes). `reject[i].patch` applied to cases[0].inputs must be refused with `error`, the contract's panic message; every builder refuses the same input. `parse[i].response` is a chat-completion response body; `decision` is what submit_completion records from it (null: no call; every headline the request carried is then decided NoTrial). Template 1 delivers every arm as written. A template change bumps template_version and adds cases; it never edits a published case.",
   "format": 1,
   "template_version": 1,
   "constants": {
@@ -646,6 +646,30 @@
       "name": "not an object",
       "response": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[1]{\",\"reasoning_content\":\"think {\\\"direction\\\":\\\"long\\\"}\"},\"finish_reason\":\"stop\"}],\"model\":\"deepseek-ai/DeepSeek-V4.1-Flash-1017\",\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
       "headlines": false,
+      "decision": null
+    },
+    {
+      "name": "NaN size literal",
+      "response": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"direction\\\":\\\"long\\\",\\\"size_bps\\\":NaN}\",\"reasoning_content\":\"think {\\\"direction\\\":\\\"long\\\"}\"},\"finish_reason\":\"stop\"}],\"model\":\"deepseek-ai/DeepSeek-V4.1-Flash-1017\",\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
+      "headlines": true,
+      "decision": null
+    },
+    {
+      "name": "size 1e400 out of f64 range",
+      "response": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"direction\\\":\\\"long\\\",\\\"size_bps\\\":1e400}\",\"reasoning_content\":\"think {\\\"direction\\\":\\\"long\\\"}\"},\"finish_reason\":\"stop\"}],\"model\":\"deepseek-ai/DeepSeek-V4.1-Flash-1017\",\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
+      "headlines": true,
+      "decision": null
+    },
+    {
+      "name": "lone surrogate escape in reasoning",
+      "response": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"direction\\\":\\\"long\\\",\\\"reasoning\\\":\\\"\\\\ud800\\\"}\",\"reasoning_content\":\"think {\\\"direction\\\":\\\"long\\\"}\"},\"finish_reason\":\"stop\"}],\"model\":\"deepseek-ai/DeepSeek-V4.1-Flash-1017\",\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
+      "headlines": true,
+      "decision": null
+    },
+    {
+      "name": "unit separator is not trimmed",
+      "response": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"direction\\\":\\\"long\\\\u001f\\\"}\",\"reasoning_content\":\"think {\\\"direction\\\":\\\"long\\\"}\"},\"finish_reason\":\"stop\"}],\"model\":\"deepseek-ai/DeepSeek-V4.1-Flash-1017\",\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
+      "headlines": true,
       "decision": null
     }
   ]

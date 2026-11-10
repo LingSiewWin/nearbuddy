@@ -1,8 +1,9 @@
 //! Sandbox run of the real wasm for keyless agents: two are registered, a duel opens, an oracle tick
-//! lands, 31 headlines of 280 bytes (each escaped to its longest) are planted at A, and A's slots run
-//! open -> submit with responses from 1 KB to the 24 KB cap, signed by a stand-in enclave key pinned
-//! to the agents' model. A submission signed over another request and a second submission to a
-//! filled slot are refused; the duel then resolves through the oracle callback and the slots go.
+//! lands, and A's slots run open -> submit with responses from 1 KB to the 24 KB cap, each later slot
+//! opened by a new headline, the last by 28 headlines of 280 bytes (each escaped to its longest),
+//! signed by a stand-in enclave key pinned to the agents' model. Callers attach the storage deposit.
+//! A submission signed over another request, a second submission to a filled slot and a redraw of
+//! it are refused; the duel then resolves through the oracle callback and the slots go.
 //! Prints gas per call for the README.
 //!   NEAR_SANDBOX_BIN_PATH=... cargo test --test test_keyless_sandbox -- --ignored --nocapture
 use ed25519_dalek::{Signer, SigningKey};
@@ -163,21 +164,46 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
         "GAS request_tick (incl. oracle_call to a missing contract) {:.2} TGas",
         gas_of(&r)
     );
-    let r = call("oracle_on_call", json!({"sender_id": contract.account_id(), "data": price_data(367_830_000, now + 1), "msg": format!("tick:{duel}")}), &oracle, zero).await?.assert_success();
+    // the tick is stamped now: a tick stamped before the duel opened is refused
+    let tick_ts = near_api::Chain::block()
+        .at(near_api::types::Reference::Final)
+        .fetch_from(&net)
+        .await?
+        .header
+        .timestamp;
+    let r = call("oracle_on_call", json!({"sender_id": contract.account_id(), "data": price_data(367_830_000, tick_ts), "msg": format!("tick:{duel}")}), &oracle, zero).await?.assert_success();
     println!("GAS oracle_on_call (tick) {:.2} TGas", gas_of(&r));
 
     let tee = &tee;
+    // open_slot and submit_completion take their storage from the caller's deposit
+    let kd = NearToken::from_millinear(10);
     let slot = |agent: String| async move {
         let r = call(
             "open_slot",
             json!({"duel_id": duel.to_string(), "agent": agent}),
             keeper,
-            zero,
+            kd,
         )
         .await?
         .assert_success();
         let s = r.json::<Value>()?;
         testresult::TestResult::Ok((s, gas_of(&r)))
+    };
+    let submit = |agent: String, s: Value, res: Vec<u8>, sig: Vec<u8>| {
+        call(
+            "submit_completion",
+            json!({"duel_id": duel.to_string(), "agent": agent, "seq": s["seq"], "response": b64(&res), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&sig)}),
+            keeper,
+            kd,
+        )
+    };
+    let sign = |s: &Value, res: &[u8]| {
+        let req_hash = BASE64_STANDARD
+            .decode(s["request_hash"].as_str().unwrap())
+            .unwrap();
+        tee.sign(&tee_text(2, MODEL, &req_hash, &Sha256::digest(res)))
+            .to_bytes()
+            .to_vec()
     };
     let cycle = |agent: String, res: Vec<u8>, label: String| async move {
         let (s, g_open) = slot(agent.clone()).await?;
@@ -191,13 +217,12 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
             .as_str()
             .unwrap(),
         )?;
-        let req_hash = Sha256::digest(&req).to_vec();
-        assert_eq!(b64(&req_hash), s["request_hash"].as_str().unwrap());
-        let res_hash = Sha256::digest(&res).to_vec();
-        let sig = tee
-            .sign(&tee_text(2, MODEL, &req_hash, &res_hash))
-            .to_bytes();
-        let r = call("submit_completion", json!({"duel_id": duel.to_string(), "agent": agent, "seq": s["seq"], "response": b64(&res), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&sig)}), keeper, zero).await?.assert_success();
+        assert_eq!(
+            b64(&Sha256::digest(&req)),
+            s["request_hash"].as_str().unwrap()
+        );
+        let sig = sign(&s, &res);
+        let r = submit(agent, s, res, sig).await?.assert_success();
         println!(
             "GAS {label}: request {} B, open_slot {g_open:.2}, submit_completion {:.2} TGas",
             req.len(),
@@ -205,27 +230,8 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
         );
         testresult::TestResult::Ok(())
     };
-    // B decides first with no headlines; then A with every response size
-    cycle(
-        b.clone(),
-        response(1_066, r#"{"direction": "short", "reasoning": "fade it"}"#),
-        "B, 0 headlines, 1 KB response".into(),
-    )
-    .await?;
-    let content =
-        r#"{"direction": "long", "size_bps": 2500, "reasoning": "the oracle is up 50 bps"}"#;
-    for size in [1_066usize, 2_903, 7_702, 16_384, 24_576] {
-        cycle(
-            a.clone(),
-            response(size, content),
-            format!("A, 0 headlines, {size} B response"),
-        )
-        .await?;
-    }
-
-    // 31 headlines of 280 bytes, all '&', '<' and '>': the request carries each one 4-5x escaped
-    let head = "&".repeat(140) + &"<>".repeat(70);
-    for i in 0..31 {
+    let (target, spectator) = (&a, &spectator);
+    let plant = |kind: &'static str, headline: String| async move {
         let fee: String = view("chaos_fee", json!({"duel_id": duel.to_string()}))
             .await?
             .data
@@ -233,12 +239,77 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
             .unwrap()
             .into();
         let fee: u128 = fee.parse()?;
-        call("inject_chaos", json!({"duel_id": duel.to_string(), "target": a, "kind": if i % 2 == 0 { "Short" } else { "Long" }, "headline": head}), &spectator, NearToken::from_yoctonear(fee + NearToken::from_millinear(50).as_yoctonear())).await?.assert_success();
+        call(
+            "inject_chaos",
+            json!({"duel_id": duel.to_string(), "target": target, "kind": kind, "headline": headline}),
+            spectator,
+            NearToken::from_yoctonear(fee + NearToken::from_millinear(50).as_yoctonear()),
+        )
+        .await?
+        .assert_success();
+        testresult::TestResult::Ok(())
+    };
+    // B decides first with no headlines
+    cycle(
+        b.clone(),
+        response(1_066, r#"{"direction": "short", "reasoning": "fade it"}"#),
+        "B, 0 headlines, 1 KB response".into(),
+    )
+    .await?;
+    // A's first slot: a submission signed over another request is refused, the real one lands,
+    // a second one to the filled slot is refused, and the filled slot does not reopen
+    let content =
+        r#"{"direction": "long", "size_bps": 2500, "reasoning": "the oracle is up 50 bps"}"#;
+    let (s, g_open) = slot(a.clone()).await?;
+    let res = response(1_066, content);
+    let forged = tee
+        .sign(&tee_text(2, MODEL, &[9u8; 32], &Sha256::digest(&res)))
+        .to_bytes()
+        .to_vec();
+    submit(a.clone(), s.clone(), res.clone(), forged)
+        .await?
+        .assert_failure();
+    let sig = sign(&s, &res);
+    let r = submit(a.clone(), s.clone(), res.clone(), sig.clone())
+        .await?
+        .assert_success();
+    println!(
+        "GAS A, 0 headlines, 1066 B response: open_slot {g_open:.2}, submit_completion {:.2} TGas",
+        gas_of(&r)
+    );
+    submit(a.clone(), s, res, sig).await?.assert_failure();
+    call(
+        "open_slot",
+        json!({"duel_id": duel.to_string(), "agent": a}),
+        keeper,
+        kd,
+    )
+    .await?
+    .assert_failure();
+    println!("forged submission, a second submission and a redraw of the filled slot: refused");
+    // each larger response answers one new headline (a filled slot reopens only on one)
+    for (i, size) in [2_903usize, 7_702, 16_384, 24_576].into_iter().enumerate() {
+        plant(
+            if i % 2 == 0 { "Short" } else { "Long" },
+            format!("Headline {i}: NEAR validators vote on a fee change"),
+        )
+        .await?;
+        cycle(
+            a.clone(),
+            response(size, content),
+            format!("A, 1 headline, {size} B response"),
+        )
+        .await?;
+    }
+    // 28 more headlines of 280 bytes, all '&', '<' and '>' (each escaped 4-5x), fill the duel's 32
+    let head = "&".repeat(140) + &"<>".repeat(70);
+    for i in 0..28 {
+        plant(if i % 2 == 0 { "Short" } else { "Long" }, head.clone()).await?;
     }
     cycle(
         a.clone(),
         response(7_702, content),
-        "A, 31 x 280 B headlines, 7.7 KB response".into(),
+        "A, 28 x 280 B headlines, 7.7 KB response".into(),
     )
     .await?;
     let chaos = view("get_chaos", json!({"duel_id": duel.to_string()}))
@@ -251,33 +322,9 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
         .filter(|c| c["outcome"] != "Pending")
         .count();
     assert_eq!(
-        decided, 31,
-        "the decision after all 31 headlines judged every one"
+        decided, 32,
+        "every headline was decided by the slot after it"
     );
-
-    // refusals: a submission signed over another request; a second one to the filled slot
-    let (s, _) = slot(a.clone()).await?;
-    let res = response(1_066, content);
-    let res_hash = Sha256::digest(&res).to_vec();
-    let forged = tee
-        .sign(&tee_text(2, MODEL, &[9u8; 32], &res_hash))
-        .to_bytes();
-    let submit = |sig: Vec<u8>, res: Vec<u8>| {
-        call(
-            "submit_completion",
-            json!({"duel_id": duel.to_string(), "agent": a, "seq": s["seq"], "response": b64(&res), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&sig)}),
-            keeper,
-            zero,
-        )
-    };
-    submit(forged.to_vec(), res.clone()).await?.assert_failure();
-    let req_hash = BASE64_STANDARD.decode(s["request_hash"].as_str().unwrap())?;
-    let sig = tee
-        .sign(&tee_text(2, MODEL, &req_hash, &res_hash))
-        .to_bytes();
-    submit(sig.to_vec(), res.clone()).await?.assert_success();
-    submit(sig.to_vec(), res.clone()).await?.assert_failure();
-    println!("forged submission and a second submission to a filled slot: refused");
 
     // resolve: A long 2500 bps on a +0.5 % close wins
     loop {
@@ -298,7 +345,7 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
         .timestamp;
     let r = call("oracle_on_call", json!({"sender_id": contract.account_id(), "data": price_data(367_830_000, ts), "msg": format!("close:{duel}")}), &oracle, zero).await?.assert_success();
     println!(
-        "GAS oracle_on_call (close, keyless duel, 31 injections) {:.2} TGas",
+        "GAS oracle_on_call (close, keyless duel, 32 injections) {:.2} TGas",
         gas_of(&r)
     );
     let d = view("get_duel", json!({"duel_id": duel.to_string()}))

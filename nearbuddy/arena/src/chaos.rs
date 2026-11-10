@@ -47,6 +47,74 @@ pub(crate) fn check_headline(h: &str) {
     );
 }
 
+/// Code points a paid headline may not carry, on top of `check_headline`'s (checked at
+/// `inject_chaos` only, so a stored headline always rebuilds its keyless request): every format
+/// character (Cf, e.g. soft hyphen, Arabic number signs, the tag block a hidden message is spelled
+/// in), line and paragraph separators (Zl, Zp), private use (Co), noncharacters, the unassigned
+/// planes 4-13 and the rest of plane 14, variation selectors that can carry hidden bytes (U+FE0E
+/// and U+FE0F stay: emoji need them) and the invisible fillers (combining grapheme joiner, Hangul
+/// fillers). ponytail: a range table, not a Unicode database; unassigned code points inside
+/// assigned planes pass, add a range when a corpus finds one used.
+const INVISIBLE: [(u32, u32); 31] = [
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x115F, 0x1160),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x2028, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xE000, 0xF8FF),
+    (0xFDD0, 0xFDEF),
+    (0xFE00, 0xFE0D),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0x40000, 0xDFFFF),
+    (0xE0000, 0xE00FF),
+    (0xE0100, 0xE01EF),
+    (0xE01F0, 0xEFFFF),
+    (0xF0000, 0xFFFFF),
+    (0x100000, 0x10FFFF),
+];
+
+/// Look-alikes of `<` and `>`: the request escapes only the ASCII pair, so these could draw a block
+/// tag a model reads as real (fullwidth, small, modifier, Canadian syllabics, angle quotes and
+/// brackets).
+const LOOKALIKE: [char; 26] = [
+    '\u{02C2}', '\u{02C3}', '\u{1433}', '\u{1438}', '\u{2039}', '\u{203A}', '\u{2329}', '\u{232A}',
+    '\u{276C}', '\u{276D}', '\u{276E}', '\u{276F}', '\u{2770}', '\u{2771}', '\u{27E8}', '\u{27E9}',
+    '\u{27EA}', '\u{27EB}', '\u{29FC}', '\u{29FD}', '\u{3008}', '\u{3009}', '\u{FE64}', '\u{FE65}',
+    '\u{FF1C}', '\u{FF1E}',
+];
+
+/// `check_headline` plus the `INVISIBLE` and `LOOKALIKE` tables: what `inject_chaos` stores.
+pub(crate) fn check_new_headline(h: &str) {
+    check_headline(h);
+    require!(
+        !h.chars().any(|c| {
+            let u = c as u32;
+            u & 0xFFFE == 0xFFFE || INVISIBLE.iter().any(|(a, b)| (*a..=*b).contains(&u))
+        }),
+        "headline hidden character"
+    );
+    require!(
+        !h.chars().any(|c| LOOKALIKE.contains(&c)),
+        "headline lookalike bracket"
+    );
+}
+
 impl ChaosConfig {
     /// Deposit the `n`-th paid injection of a duel needs:
     /// `min(cap, max(min_deposit, base * (r_bps / 10_000)^n))`, rounded down at each step.
@@ -305,21 +373,21 @@ impl Contract {
 
     /// A keyless reply with no readable decision, filling slot `nonce` of `pk` in duel `id` whose
     /// request carried the injections below index `seen` still pending at `pk`. Each of them is
-    /// judged as if the reply took the lie's side: `Flipped` when the call before was off it, else
-    /// `NoTrial` (a placebo is always `NoTrial`). So an unreadable reply never dodges a trial.
-    /// `next` stays `None`: the agent made no call, and its previous one stays in force.
+    /// decided `NoTrial`: the agent made no call (`next` stays `None`, its previous call stays in
+    /// force), so there is nothing to judge. Judging it as the lie's side would pay an injector
+    /// whose headline merely broke the reply's format (a stray brace, a NaN size, a refusal) for a
+    /// flip that never happened; as `NoTrial` the injector gets its stake back less the fee and the
+    /// target earns no resistance credit or shield.
     pub(crate) fn unread_decision(&mut self, id: u64, pk: &[u8], seen: u32, nonce: u64) {
         let Some(list) = self.chaos.get_mut(&id) else {
             return;
         };
-        let hidden = self.self_chaos.get(&id).map_or(0, |b| b >> HID_PREV);
         for (index, c) in list.iter_mut().enumerate().take(seen as usize) {
             if c.target.0 != pk || c.outcome != ChaosOutcome::Pending {
                 continue;
             }
-            let lie = c.kind.direction().unwrap_or(Side::Long);
             c.decided_by = Some(U64(nonce));
-            c.outcome = c.judge(lie, hidden & (1 << index) != 0);
+            c.outcome = ChaosOutcome::NoTrial;
             let prev = c.prev.map_or("null".into(), |p| format!(r#""{p:?}""#));
             env::log_str(&format!(
                 r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"chaos_outcome","data":{{"duel_id":{id},"index":{index},"outcome":"{:?}","prev":{prev},"next":null,"nonce":{nonce}}}}}"#,
@@ -372,7 +440,8 @@ impl Contract {
     /// injection's index in `get_chaos(duel_id)`.
     /// Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the
     /// record's storage. Panics: "paused", "headline empty", "headline too long", "headline control
-    /// character", "placebo is system-run", "duel missing", "chaos deposit too small", "duel
+    /// character", "headline hidden character", "headline lookalike bracket",
+    /// "placebo is system-run", "duel missing", "chaos deposit too small", "duel
     /// closed", "bad target", "chaos full".
     #[payable]
     pub fn inject_chaos(
@@ -383,7 +452,7 @@ impl Contract {
         headline: String,
     ) -> u32 {
         self.not_paused();
-        check_headline(&headline);
+        check_new_headline(&headline);
         let payer = env::predecessor_account_id();
         let placebo = kind == ChaosKind::Placebo;
         require!(!placebo || payer == self.owner, "placebo is system-run");
