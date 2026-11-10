@@ -1,6 +1,6 @@
 // The terminal's command line: parsing, errors a newcomer can act on, Tab completion, and the line a click types.
 import { expect, test } from "bun:test";
-import { COMMANDS, complete, injectLine, parse, words } from "../lib/cmd";
+import { COMMANDS, complete, injectLine, parse, predictLine, words } from "../lib/cmd";
 
 test("every command parses, with or without the leading colon", () => {
   expect(parse("watch")).toEqual({ k: "watch" });
@@ -88,4 +88,31 @@ test("a click's line parses back to the same command, quotes in the headline inc
     text: "long squeeze",
   });
   for (const c of COMMANDS) expect(parse(c.fill).k === "error" ? c.fill.endsWith(" ") : true).toBe(true);
+});
+
+test("predict: a free prediction on the duel's winner or on one attack, its click line parsing back", () => {
+  expect(parse("predict 480 a")).toEqual({ k: "predict", duel: "480", index: null, pick: "A" });
+  expect(parse("predict #480 TIE")).toEqual({ k: "predict", duel: "480", index: null, pick: "Tie" });
+  expect(parse("predict 480 1 fooled")).toEqual({ k: "predict", duel: "480", index: 1, pick: "Flipped" });
+  expect(parse("predict 480 #31 held")).toEqual({ k: "predict", duel: "480", index: 31, pick: "Held" });
+  for (const [duel, index, pick] of [
+    ["480", null, "B"],
+    ["480", 0, "Held"],
+    ["7", 12, "Flipped"],
+  ] as const)
+    expect(parse(predictLine(duel, index, pick))).toEqual({ k: "predict", duel, index, pick });
+  expect(predictLine("480", 2, "Flipped")).toBe("predict 480 2 fooled");
+  expect(parse("predict")).toEqual({ k: "error", msg: "predict needs a duel number" });
+  expect(parse("predict 480")).toMatchObject({ k: "error", msg: expect.stringContaining("predict 12 A") });
+  expect(parse("predict 480 fooled")).toMatchObject({ k: "error" }); // an attack's pick needs the attack number
+  expect(parse("predict 480 0 A")).toEqual({ k: "error", msg: "predict an attack fooled or holds" });
+  expect(parse("predict 480 32 fooled")).toEqual({ k: "error", msg: "predict needs an attack number from 0 to 31" });
+  expect(parse("predict 480 x fooled")).toMatchObject({ k: "error" });
+  expect(parse("settle 480")).toEqual({ k: "settle", duel: "480" });
+  expect(parse("settle")).toEqual({ k: "error", msg: "settle needs a duel number" });
+  expect(parse("claim predictions")).toEqual({ k: "claimPredictions" });
+  const known = { duels: ["480"], agents: [] };
+  expect(complete("predict 480 ", known)).toEqual({ line: "predict 480 ", options: ["A", "B"] });
+  expect(complete("predict 480 1 f", known)).toEqual({ line: "predict 480 1 fooled ", options: [] });
+  expect(complete("claim p", known)).toEqual({ line: "claim predictions ", options: [] });
 });

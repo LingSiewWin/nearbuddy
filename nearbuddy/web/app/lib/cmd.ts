@@ -1,5 +1,6 @@
 // The terminal's command language: parse one line, complete the word under the cursor, and the list the empty
 // palette and `help` show. Pure, so bun test covers it; the page maps a parsed command to what it does.
+import type { Pick } from "./abi/predict";
 import type { Direction } from "./inject";
 
 export type Target = "A" | "B";
@@ -9,6 +10,9 @@ export type Cmd =
   | { k: "agent"; who: string }
   | { k: "inject"; duel: string; side: Target; kind: Direction | null; text: string }
   | { k: "claim"; duel: string }
+  | { k: "claimPredictions" }
+  | { k: "predict"; duel: string; index: number | null; pick: Pick }
+  | { k: "settle"; duel: string }
   | { k: "verify"; duel: string }
   | { k: "connect" }
   | { k: "disconnect" }
@@ -20,6 +24,12 @@ export type Parsed = Cmd | { k: "error"; msg: string };
 export const COMMANDS = [
   { name: "watch", args: "", fill: "watch", what: "follow the live duel" },
   {
+    name: "predict",
+    args: "<duel> [attack] <A|B|fooled|holds>",
+    fill: "predict ",
+    what: "free: say who wins a duel, or whether an attack fools its model; the deposit comes back",
+  },
+  {
     name: "inject",
     args: '<duel> <A|B> [long|short] "<headline>"',
     fill: "inject ",
@@ -28,7 +38,13 @@ export const COMMANDS = [
   { name: "duel", args: "<id>", fill: "duel ", what: "show one duel in pane 2" },
   { name: "agent", args: "<model|pk>", fill: "agent ", what: "open a model's full record" },
   { name: "verify", args: "<duel>", fill: "verify ", what: "check a duel's proofs yourself" },
-  { name: "claim", args: "<duel>", fill: "claim ", what: "collect what your headlines earned in a finished duel" },
+  {
+    name: "claim",
+    args: "<duel|predictions>",
+    fill: "claim ",
+    what: "collect what your headlines earned in a finished duel, or your prediction deposits",
+  },
+  { name: "settle", args: "<duel>", fill: "settle ", what: "score the predictions on a duel whose answers are in" },
   { name: "connect", args: "", fill: "connect", what: "connect a NEAR testnet wallet" },
   { name: "copy", args: "", fill: "copy", what: "copy the link to what you are looking at" },
   { name: "help", args: "", fill: "help", what: "keys, commands and what every word means" },
@@ -36,6 +52,17 @@ export const COMMANDS = [
 const NAMES: readonly string[] = [...COMMANDS.map((c) => c.name), "disconnect"];
 
 const ID_RE = /^\d{1,12}$/;
+/** The predict contract's bound: 32 attacks per duel, numbered from 0 as pane 2 and `get_chaos` list them. */
+const MAX_ATTACK = 31;
+const PICKS = new Map<string, Pick>([
+  ["a", "A"],
+  ["b", "B"],
+  ["tie", "Tie"],
+  ["fooled", "Flipped"],
+  ["flipped", "Flipped"],
+  ["holds", "Held"],
+  ["held", "Held"],
+]);
 const DIRS = new Map<string, Direction>([
   ["long", "Long"],
   ["short", "Short"],
@@ -65,11 +92,31 @@ export function parse(line: string): Parsed {
       return { k: "help" };
     case "duel":
     case "verify":
+    case "settle":
     case "claim": {
-      const n = name.toLowerCase() as "duel" | "verify" | "claim";
+      const n = name.toLowerCase() as "duel" | "verify" | "settle" | "claim";
+      if (n === "claim" && a?.toLowerCase() === "predictions") return { k: "claimPredictions" };
       const d = id(a, n);
       if (typeof d !== "string") return d;
       return n === "duel" ? { k: "duel", id: d } : { k: n, duel: d };
+    }
+    case "predict": {
+      const d = id(a, "predict");
+      if (typeof d !== "string") return d;
+      const attack = w.length > 3 ? (b ?? "").replace(/^#/, "") : null;
+      const pick = PICKS.get((w[attack === null ? 2 : 3] ?? "").toLowerCase());
+      if (attack !== null && !(/^\d{1,2}$/.test(attack) && Number(attack) <= MAX_ATTACK))
+        return { k: "error", msg: `predict needs an attack number from 0 to ${MAX_ATTACK}` };
+      const index = attack === null ? null : Number(attack);
+      if (!pick || (index === null) !== (pick === "A" || pick === "B" || pick === "Tie"))
+        return {
+          k: "error",
+          msg:
+            index === null
+              ? "predict needs a winner: predict 12 A, or an attack: predict 12 0 fooled"
+              : "predict an attack fooled or holds",
+        };
+      return { k: "predict", duel: d, index, pick };
     }
     case "agent":
       return a ? { k: "agent", who: a } : { k: "error", msg: "agent needs a model name or key" };
@@ -105,15 +152,19 @@ export function complete(line: string, known: Known): { line: string; options: s
   const pool =
     i === 0
       ? NAMES
-      : i === 1 && (cmd === "duel" || cmd === "verify" || cmd === "inject" || cmd === "claim")
+      : i === 1 && (cmd === "duel" || cmd === "verify" || cmd === "inject" || cmd === "predict" || cmd === "settle")
         ? known.duels
-        : i === 1 && cmd === "agent"
-          ? known.agents
-          : i === 2 && cmd === "inject"
-            ? ["A", "B"]
-            : i === 3 && cmd === "inject"
-              ? ["long", "short"]
-              : [];
+        : i === 1 && cmd === "claim"
+          ? [...known.duels, "predictions"]
+          : i === 1 && cmd === "agent"
+            ? known.agents
+            : i === 2 && (cmd === "inject" || cmd === "predict")
+              ? ["A", "B"]
+              : i === 3 && cmd === "inject"
+                ? ["long", "short"]
+                : i === 3 && cmd === "predict"
+                  ? ["fooled", "holds"]
+                  : [];
   const options = [...new Set(pool)].filter((o) => o.toLowerCase().startsWith(word.toLowerCase()));
   if (!options.length) return { line, options };
   let pre = options[0]!;
@@ -123,6 +174,10 @@ export function complete(line: string, known: Known): { line: string; options: s
   const filled = pre.length >= word.length ? pre : word;
   return { line: `${head}${filled}${done ? " " : ""}`, options: done ? [] : options };
 }
+
+/** The command line a prediction button stands for: `predict 480 A`, or `predict 480 1 fooled` for attack 1. */
+export const predictLine = (duel: string, index: number | null, pick: Pick) =>
+  `predict ${duel}${index === null ? "" : ` ${index}`} ${pick === "Flipped" ? "fooled" : pick === "Held" ? "holds" : pick === "Tie" ? "tie" : pick}`;
 
 /** The command line a click stands for, so every click teaches its typed form. */
 export const injectLine = (duel: string, side: Target, text: string, kind: Direction | null = null) =>
