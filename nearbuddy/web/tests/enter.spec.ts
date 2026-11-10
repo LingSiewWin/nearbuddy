@@ -10,31 +10,38 @@ import { expect, type Page, test } from "@playwright/test";
 import { exampleInputs } from "../app/lib/enter";
 
 const V = JSON.parse(readFileSync(join(__dirname, "../../fixtures/keyless-vectors.json"), "utf8"));
-const RPC = process.env.NEAR_RPC ?? "https://rpc.testnet.fastnear.com";
+// public RPCs rate-limit one machine during a test run: each view tries them in turn
+const RPCS = [process.env.NEAR_RPC, "https://test.rpc.fastnear.com", "https://near-testnet.drpc.org"].filter(
+  (u): u is string => !!u,
+);
 const SHOTS = process.env.SHOT_DIR;
 const sha256hex = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
 /** A contract view over JSON-RPC, its raw result bytes parsed as JSON. */
 async function view(contract: string, method: string, args: object): Promise<unknown> {
-  const r = await fetch(RPC, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "query",
-      params: {
-        request_type: "call_function",
-        finality: "final",
-        account_id: contract,
-        method_name: method,
-        args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
-      },
-    }),
-  });
-  const j = (await r.json()) as { result?: { result: number[] }; error?: unknown };
-  if (!j.result) throw new Error(`${method}: ${JSON.stringify(j.error).slice(0, 300)}`);
-  return JSON.parse(Buffer.from(j.result.result).toString());
+  let why: unknown = "no RPC";
+  for (const rpc of RPCS) {
+    const r = await fetch(rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "query",
+        params: {
+          request_type: "call_function",
+          finality: "final",
+          account_id: contract,
+          method_name: method,
+          args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
+        },
+      }),
+    }).catch((e) => e as Error);
+    const j = r instanceof Error ? { error: r.message } : ((await r.json()) as { result?: { result: number[] }; error?: unknown });
+    if ("result" in j && j.result?.result) return JSON.parse(Buffer.from(j.result.result).toString());
+    why = j.error;
+  }
+  throw new Error(`${method}: ${JSON.stringify(why).slice(0, 300)}`);
 }
 const shown = async (page: Page, box: string) => (await page.locator(box).innerText()).replace(/\s+/g, " ");
 const hashIn = (text: string) => /sha256 ([0-9a-f]{64})/.exec(text)?.[1];
