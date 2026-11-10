@@ -54,6 +54,9 @@ Second pair (`--pair-tag p2`, scripts/second-loop.sh): the same seeds derive a d
 (keys.key_tag), so two loops with other NEAR_AI_MODEL_A/B never share an agent; every row carries `pair_tag`
 (null for the main pair) and `--resolve-stuck` / `--check-agents` act on that pair only.
 
+Health (`--health`, scripts/night-loop.sh runs it before each batch): GET /v1/models must answer 200 and list every
+model this run calls (free); `--chat` adds a 1-output-token chat call per model. Exit 0, or 1 with one line on stderr.
+
 Agents are ed25519 keys derived from AGENT_SEED_A / AGENT_SEED_B (hex, 32 bytes) in the env file,
 or fresh random keys when unset (then they are registered on every run). With NEAR_AI_API_KEY set the
 agents are registered as TEE-backed and the contract refuses any intent without a verified proof.
@@ -111,7 +114,7 @@ from intent_client import (
     tee_proof,
 )
 from keys import agent_key, key_tag, pk_b64, register_sig
-from nearai import Completion, ModelClient, client_from_env
+from nearai import NEAR_AI_BASE, Completion, ModelClient, client_from_env, request_body
 from prices import brief, price
 from prompts import HARDENED_V3, JUDGE_MODEL, JUDGE_PROMPT_VERSION, PROFILES, VARIANTS, deliver, pick_variant
 
@@ -517,6 +520,59 @@ def _model_transient(e: requests.RequestException) -> bool:
         return True
     status = e.response.status_code if e.response is not None else None
     return status is not None and (status == 429 or status >= 500)
+
+
+def model_health(
+    env: dict[str, str], models: list[str], chat: bool = False, timeout: float = 10.0
+) -> tuple[str | None, str]:
+    """NEAR AI Cloud health for these models: (None, what was checked) when healthy, else (one-line reason, ""). Free by
+    default: GET /v1/models answers 200 and lists every model (the 06:16 +08 outage of 2026-11-10 returned 500 even
+    there). A listed model can still fail its chat calls (Qwen3.8-27B answered 502 from 05:09 to 05:22 +08 while the
+    list and the other models were fine), so `chat` also sends each model a chat completion capped at 1 output token:
+    billed, a few dozen input tokens. No API key means stub models: nothing remote to check. The key never appears in
+    the output, not even when the server echoes it back."""
+    key = env.get("NEAR_AI_API_KEY", "").strip()
+    if not key:
+        return None, "no NEAR_AI_API_KEY: stub models, nothing to check"
+    base = env.get("NEAR_AI_BASE", NEAR_AI_BASE).rstrip("/")
+    headers = {"Authorization": f"Bearer {key}", "accept": "application/json"}
+
+    def brief_text(text: str) -> str:
+        return " ".join(text.replace(key, "***").split())[:120]
+
+    try:
+        r = requests.get(f"{base}/models", headers=headers, timeout=timeout)
+    except requests.RequestException as e:
+        return f"GET /v1/models: no answer ({type(e).__name__})", ""
+    if r.status_code != 200:
+        return f"GET /v1/models: HTTP {r.status_code} {brief_text(r.text)}".rstrip(), ""
+    try:
+        listed = {m["id"] for m in r.json()["data"]}
+    except (ValueError, KeyError, TypeError):
+        return f"GET /v1/models: 200 without a data[].id list: {brief_text(r.text)}", ""
+    missing = [m for m in models if m not in listed]
+    if missing:
+        return f"GET /v1/models: not listed: {', '.join(missing)}", ""
+    done = f"GET /v1/models 200, lists {', '.join(models)}"
+    for m in models if chat else []:
+        body = request_body(m, "Health check.", "Reply with OK.", max_tokens=1)
+        try:
+            r = requests.post(
+                f"{base}/chat/completions",
+                headers={**headers, "Content-Type": "application/json"},
+                data=body,
+                timeout=max(timeout, 30.0),  # a model's first token, not a list read
+            )
+        except requests.RequestException as e:
+            return f"POST /v1/chat/completions {m}: no answer ({type(e).__name__})", ""
+        if r.status_code != 200:
+            return f"POST /v1/chat/completions {m}: HTTP {r.status_code} {brief_text(r.text)}".rstrip(), ""
+        try:
+            usage = r.json().get("usage") or {}
+        except ValueError:
+            usage = {}
+        done += f"; chat {m} 200 ({usage.get('prompt_tokens', '?')} in / {usage.get('completion_tokens', '?')} out)"
+    return None, done
 
 
 def _transient(e: Exception) -> bool:
@@ -1545,7 +1601,31 @@ if __name__ == "__main__":
         action="store_true",
         help="both agents sign the duel terms; the solver opens it with open_duel_consented (not with --only)",
     )
+    p.add_argument(
+        "--health",
+        action="store_true",
+        help="check NEAR AI Cloud for this run's models (GET /v1/models, free), print one line, exit 0 or 1",
+    )
+    p.add_argument(
+        "--chat",
+        action="store_true",
+        help="with --health: also a 1-output-token chat call per model (billed), since a listed model can still 5xx",
+    )
     args = p.parse_args()
+    if args.chat and not args.health:
+        p.error("--chat goes with --health")
+    if args.health:
+        # the models this run would call: A and B (or the --only agent's), plus the fact-check judge under hardened-v3
+        names = [args.only] if args.only else ["A", "B"]
+        models = list(dict.fromkeys(client_from_env(ENV, n).model_id for n in names))
+        if args.profile == HARDENED_V3:
+            models = list(dict.fromkeys([*models, JUDGE_MODEL]))
+        why, done = model_health(ENV, models, chat=args.chat)
+        if why is not None:
+            print(f"unhealthy: {why}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"healthy: {done}")
+        raise SystemExit(0)
     arms = "".join(args.variants.upper().split(","))
     if arms and (len(set(arms)) != len(arms) or not set(arms) <= set(VARIANTS)):
         p.error(f"--variants takes distinct arms from {','.join(VARIANTS)}; got {args.variants!r}")
