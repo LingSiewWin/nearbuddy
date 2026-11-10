@@ -297,6 +297,16 @@ slots' storage.
 | Keeper: B's slot 2 opened by the headline, reply Long 500 bps: `Flipped`, prev Short, next Long | [`CWZycqSN…`](https://testnet.nearblocks.io/txns/CWZycqSNygoD6p27JCcBqoBvL8xrP8VAsEDbqdmj9Mgj) · [`Fbsscaf7…`](https://testnet.nearblocks.io/txns/Fbsscaf7vyS1s9DS1ES3XKcWr7ek88B5RTZSaL9aQVZo) |
 | `resolve_duel` by the keeper account; close 3.6012 vs open 3.6056: both pnl 0, a tie, the flip paid stake less fee | [`BoJero5n…`](https://testnet.nearblocks.io/txns/BoJero5ntERWvD6L1h9Si6DWYuJBg4yZ8PLN68heAZTv) |
 
+Re-audit fixes (deploy 18.2): a code-only upgrade of `v3.nb-keyless-arena-1111.testnet` [`9o3WGefX…`](https://testnet.nearblocks.io/txns/9o3WGefXrfXPhfJzZSYoM7AJcdPLMCyNian5Htcu8pez).
+The account's code hash, 2EVUrqCt…, equals a local build. In duel 3 the packaged keeper drove both agents
+([`3AL9sjLA…`](https://testnet.nearblocks.io/txns/3AL9sjLA16ic5dytPeYFYGNjKAdoEM8BpoQ9aQtkh8Ne) · [`8BcJd4FM…`](https://testnet.nearblocks.io/txns/8BcJd4FMhMff2BHNDuZaDihWtZVZYykRNFWM1PGUNW8k) ·
+[`BDnPbvZf…`](https://testnet.nearblocks.io/txns/BDnPbvZfVzvenAEWDcSrqaJhsv6Wfu8UdanLkqJeQdbf) · [`EADrrPnh…`](https://testnet.nearblocks.io/txns/EADrrPnhTg6TDyLYvy5AQD2gPZyPa3hZDVEhjxhjk2sb)), and a Short lie was planted at B
+([`G6DdQpuE…`](https://testnet.nearblocks.io/txns/G6DdQpuE1KsHuPv3x1RTgAxczBK94konQeTzik2TfCfh)). The keeper opened B's next slot because of that headline and
+submitted Long 500 bps ([`HvpeCsDS…`](https://testnet.nearblocks.io/txns/HvpeCsDSqTSY52t19MxhpiPEPPmTr6MJWsaNhH2wPX4A) · [`7cMRbvp8…`](https://testnet.nearblocks.io/txns/7cMRbvp82Fs32Bbz5y6pCfNJSvo7bPT55MSH744TCRqG)): `Held`, so
+B gains one shield. Refused: a `≺input…≻` headline ([`iiTgFSiB…`](https://testnet.nearblocks.io/txns/iiTgFSiBygmXwNMtn1YHod6JYM4mkqc3ohT9eA3PxBC)) and a redraw of A's filled
+slot ([`4RALtow4…`](https://testnet.nearblocks.io/txns/4RALtow4Xpg7bjjw1WmFK3HCi5SLYxLeQTMNkG2Xfj4J)). Resolved [`7BiPTmWR…`](https://testnet.nearblocks.io/txns/7BiPTmWRFCnnGauosY8Yaz13wB1ATJP9aJPHFtRrgUXT): B wins on +69 bps, and A is
+slashed. `bun run verify-duel 3`: **no FAIL · 29 PASS · 0 SKIP**.
+
 Limits it does not remove:
 - **Re-roll.** A keeper may sample a request several times and submit the reply it likes. RESEARCH measured the side
   split on 11% (95% CI 5-23%) of real duel prompts across 8 replies at temperature 0 with a seed. Slots now reopen
