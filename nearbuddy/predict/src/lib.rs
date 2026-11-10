@@ -50,10 +50,12 @@ use near_sdk::{
 #[cfg(test)]
 mod tests;
 
-/// Attached to every `predict` (0.003 NEAR) and refunded by `claim` after scoring. It pays
-/// the prediction's record and its entry in the account's held list: at most 264 bytes, a
-/// 64-character implicit account's first prediction (`tests::deposit_covers_the_largest_prediction`).
-pub const DEPOSIT: u128 = 3_000_000_000_000_000_000_000;
+/// Attached to every `predict` (0.0041 NEAR, 410 bytes of storage) and refunded by `claim` after
+/// scoring, less the board row once. It covers everything one call can leave on the contract even
+/// if its account never claims: a 64-character implicit account's first prediction (264 bytes of
+/// entry and held list), its verdict and its new board row (141 bytes) come to 409 bytes
+/// (`tests::deposit_covers_the_largest_prediction`, `tests::a_never_claiming_account_costs_the_contract_nothing`).
+pub const DEPOSIT: u128 = 4_100_000_000_000_000_000_000;
 /// Most injections one arena duel takes (the arena's `MAX_INJECTIONS`): chaos markets per duel.
 /// With the duel market, an account holds at most 33 predictions per duel (one per market).
 pub const MAX_INJECTIONS: u32 = 32;
@@ -530,14 +532,11 @@ impl Contract {
     /// `on_settle`. Caller: anyone. Deposit: none. Panics in the callback (changing nothing): "arena
     /// failed", "arena answer unreadable", "duel missing".
     pub fn settle(&mut self, duel_id: U64) -> Promise {
-        let d = json!({ "duel_id": duel_id });
-        self.view("get_duel", &d)
-            .and(self.view("get_chaos", &d))
-            .then(
-                Self::ext(env::current_account_id())
-                    .with_static_gas(SETTLE_CALLBACK_GAS)
-                    .on_settle(duel_id),
-            )
+        self.ask_settle(duel_id).then(
+            Self::ext(env::current_account_id())
+                .with_static_gas(SETTLE_CALLBACK_GAS)
+                .on_settle(duel_id),
+        )
     }
 
     /// `settle`'s callback. Fixes, once, the outcome of each market of the duel the arena has
@@ -550,45 +549,33 @@ impl Contract {
     /// still unscored. Caller: this contract (private).
     #[private]
     pub fn on_settle(&mut self, duel_id: U64) -> u32 {
-        let id = duel_id.0;
-        let duel = match answer::<Option<ArenaDuel>>(0) {
-            Ok(Some(d)) if d.id.0 == id => Ok(d),
-            Ok(Some(_)) => Err("arena answer unreadable"),
-            Ok(None) => Err("duel missing"),
-            Err(e) => Err(e),
-        };
-        let chaos = chaos_outcomes(1);
-        if let (Err(e), Err(_)) = (&duel, &chaos) {
+        if let Err(e) = self.apply_answers(duel_id.0) {
             env::panic_str(e);
         }
-        for (i, c) in chaos
-            .unwrap_or_default()
-            .iter()
-            .take(MAX_INJECTIONS as usize)
-            .enumerate()
-        {
-            let won = match c {
-                ChaosOutcome::Pending | ChaosOutcome::Other => continue,
-                ChaosOutcome::Flipped => Some(Pick::Flipped),
-                ChaosOutcome::Held => Some(Pick::Held),
-                ChaosOutcome::NoTrial | ChaosOutcome::Expired => None,
-            };
-            self.decide(id, i as u32, won);
-        }
-        if let Ok(d) = &duel
-            && d.resolved
-        {
-            self.decide(id, DUEL_SLOT, duel_outcome(d));
-        }
-        self.score_duel(id)
+        self.score_duel(duel_id.0)
     }
 
     /// Escape hatch for a market the arena never settles (nobody voids the duel, or its answers
-    /// stop parsing): every market of `duel_id` still unsettled `STALE_NS` after its first
-    /// prediction becomes void (refunded, not counted). Then scores like `settle` and returns how
-    /// many predictions are still unscored. Caller: anyone. Deposit: none. No panics.
-    pub fn void_stale(&mut self, duel_id: U64) -> u32 {
+    /// stop parsing). Reads the arena like `settle` first, so a market the arena did decide gets
+    /// its real outcome rather than a void. In `on_void_stale`, every market of `duel_id` still
+    /// unsettled `STALE_NS` after its first prediction then becomes void (refunded, not counted),
+    /// whatever the arena answered or failed to. Then scores like `settle`. Caller: anyone.
+    /// Deposit: none.
+    pub fn void_stale(&mut self, duel_id: U64) -> Promise {
+        self.ask_settle(duel_id).then(
+            Self::ext(env::current_account_id())
+                .with_static_gas(SETTLE_CALLBACK_GAS)
+                .on_void_stale(duel_id),
+        )
+    }
+
+    /// `void_stale`'s callback: settles what the arena decided, voids what is stale, scores a
+    /// page and returns how many predictions are still unscored. Never panics on an arena answer.
+    /// Caller: this contract (private).
+    #[private]
+    pub fn on_void_stale(&mut self, duel_id: U64) -> u32 {
         let id = duel_id.0;
+        let _ = self.apply_answers(id);
         let now = env::block_timestamp();
         for slot in (0..MAX_INJECTIONS).chain([DUEL_SLOT]) {
             let stale = self
@@ -716,6 +703,47 @@ impl Contract {
 }
 
 impl Contract {
+    /// The arena's `get_duel` and `get_chaos` for one duel, joined.
+    fn ask_settle(&self, duel_id: U64) -> Promise {
+        let d = json!({ "duel_id": duel_id });
+        self.view("get_duel", &d).and(self.view("get_chaos", &d))
+    }
+
+    /// Fixes the markets the arena's answers (promise results 0 and 1) decided; `Err` and no
+    /// change when neither answer is usable.
+    fn apply_answers(&mut self, id: u64) -> Result<(), &'static str> {
+        let duel = match answer::<Option<ArenaDuel>>(0) {
+            Ok(Some(d)) if d.id.0 == id => Ok(d),
+            Ok(Some(_)) => Err("arena answer unreadable"),
+            Ok(None) => Err("duel missing"),
+            Err(e) => Err(e),
+        };
+        let chaos = chaos_outcomes(1);
+        if let (Err(e), Err(_)) = (&duel, &chaos) {
+            return Err(e);
+        }
+        for (i, c) in chaos
+            .unwrap_or_default()
+            .iter()
+            .take(MAX_INJECTIONS as usize)
+            .enumerate()
+        {
+            let won = match c {
+                ChaosOutcome::Pending | ChaosOutcome::Other => continue,
+                ChaosOutcome::Flipped => Some(Pick::Flipped),
+                ChaosOutcome::Held => Some(Pick::Held),
+                ChaosOutcome::NoTrial | ChaosOutcome::Expired => None,
+            };
+            self.decide(id, i as u32, won);
+        }
+        if let Ok(d) = &duel
+            && d.resolved
+        {
+            self.decide(id, DUEL_SLOT, duel_outcome(d));
+        }
+        Ok(())
+    }
+
     /// Why `account` cannot call `pick` on this market, from this contract's own state.
     fn refusal(
         &self,

@@ -813,22 +813,31 @@ fn an_unknown_chaos_record_leaves_only_its_own_market_open() {
     );
 }
 
+impl World {
+    /// `void_stale` by anyone, then its callback with `answers` (the arena's `get_duel`,
+    /// `get_chaos`; `None` = failed).
+    fn void_stale(&mut self, duel: u64, answers: &[Answer]) -> Result<u32, String> {
+        self.call(PEOPLE[1], 0, &[], |c| {
+            let _ = c.void_stale(U64(duel));
+        })?;
+        self.call(CONTRACT, 0, answers, |c| c.on_void_stale(U64(duel)))
+            .map(|r| r.0)
+    }
+}
+
 #[test]
 fn void_stale_frees_a_market_the_arena_never_settles() {
     let mut w = World::new();
     let a = ArenaSim::open(T0);
     w.predict(PEOPLE[0], 1, None, Pick::A, &a.predict_answers(1, None))
         .unwrap();
-    let stale = |w: &mut World| {
-        w.call(PEOPLE[1], 0, &[], |c| c.void_stale(U64(1)))
-            .map(|r| r.0)
-    };
+    let gone = [None, None]; // the arena no longer answers
     w.now = T0 + STALE_NS - 1;
-    assert_eq!(stale(&mut w), Ok(0));
+    assert_eq!(w.void_stale(1, &gone), Ok(0));
     assert!(!market(&w, 1, None).settled);
     assert_eq!(w.claim(PEOPLE[0]), Err("nothing to claim".into()));
     w.now = T0 + STALE_NS;
-    assert_eq!(stale(&mut w), Ok(0));
+    assert_eq!(w.void_stale(1, &gone), Ok(0));
     assert_eq!(
         (market(&w, 1, None).settled, market(&w, 1, None).outcome),
         (true, None)
@@ -841,6 +850,47 @@ fn void_stale_frees_a_market_the_arena_never_settles() {
     let trie = w.trie.clone();
     assert_eq!(w.settle(1, &a.settle_answers(1)), Ok(0));
     assert_eq!(w.trie, trie);
+}
+
+/// Re-audit N3: a market the arena decided but nobody settled within `STALE_NS` used to be voided
+/// by `void_stale`, so a wrong caller escaped a Wrong and a right one lost a Right. `void_stale`
+/// now settles from the arena's answers first.
+#[test]
+fn void_stale_settles_what_the_arena_decided_before_voiding() {
+    let mut w = World::new();
+    let mut a = ArenaSim::open(T0);
+    a.chaos = vec!["Pending", "Pending"];
+    w.predict(PEOPLE[0], 1, None, Pick::A, &a.predict_answers(1, None))
+        .unwrap();
+    w.predict(PEOPLE[1], 1, None, Pick::B, &a.predict_answers(1, None))
+        .unwrap();
+    for i in [0, 1] {
+        w.predict(
+            PEOPLE[0],
+            1,
+            Some(i),
+            Pick::Held,
+            &a.predict_answers(1, Some(i)),
+        )
+        .unwrap();
+    }
+    a.chaos[1] = "Held";
+    a.resolve(0);
+    a.chaos[0] = "Disputed"; // a record this contract cannot read: never decided here
+    w.now = T0 + STALE_NS;
+    assert_eq!(w.void_stale(1, &a.settle_answers(1)), Ok(0));
+    assert_eq!(market(&w, 1, None).outcome, Some(Pick::A));
+    assert_eq!(market(&w, 1, Some(1)).outcome, Some(Pick::Held));
+    let m0 = market(&w, 1, Some(0));
+    assert_eq!(
+        (m0.settled, m0.outcome),
+        (true, None),
+        "only the undecided one is voided"
+    );
+    assert_eq!(
+        (stats(&w, PEOPLE[0]).right, stats(&w, PEOPLE[1]).count),
+        (2, 1)
+    );
 }
 
 #[test]
@@ -1241,5 +1291,38 @@ fn the_board_view_costs_the_same_for_200_or_2000_predictors() {
         top.windows(2)
             .all(|p| 2 * p[0].right as i64 - p[0].count as i64
                 >= 2 * p[1].right as i64 - p[1].count as i64)
+    );
+}
+
+/// Ported from the re-audit: with a 0.003 NEAR deposit, a 64-character account that never claims
+/// left 109 bytes (entry, verdict, its board row) on the contract per account. The free balance
+/// (balance less the storage it stakes) no longer drops when such an account comes and goes.
+#[test]
+fn a_never_claiming_account_costs_the_contract_nothing() {
+    let byte = env::storage_byte_cost().as_yoctonear() as i128;
+    let free = |w: &World| w.balance as i128 - w.usage as i128 * byte;
+    let mut w = World::new();
+    let mut drains = vec![];
+    for i in 0..6u64 {
+        let who = format!("{:064x}", i + 1);
+        let d = 100 + i;
+        let mut b = ArenaSim::open(T0);
+        // the market and PEOPLE[1]'s verdicts are the contract's and exist before or apart from
+        // the account: PEOPLE[1] predicts first, so only its verdict byte and the outcome remain
+        w.predict(PEOPLE[1], d, None, Pick::B, &b.predict_answers(d, None))
+            .unwrap();
+        let f0 = free(&w);
+        w.predict(&who, d, None, Pick::A, &b.predict_answers(d, None))
+            .unwrap();
+        b.resolve(0);
+        w.settle(d, &b.settle_answers(d)).unwrap();
+        drains.push(f0 - free(&w));
+    }
+    // after the first duel (which also creates PEOPLE[1]'s row): entry 264 + verdict 1 + row 141
+    // + PEOPLE[1]'s verdict 1 + the market outcome 2 = 409 bytes against a 410-byte deposit. In
+    // the fifth duel PEOPLE[1] reaches MIN_RANKED and joins the top list, which is bounded.
+    assert!(
+        drains[1..4].iter().all(|&d| d == -byte),
+        "free balance drops per account: {drains:?}"
     );
 }
