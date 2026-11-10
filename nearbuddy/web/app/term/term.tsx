@@ -453,6 +453,14 @@ export default function Term() {
     }
   }
   const marketOf = (id: string, index: number | null) => markets[id]?.find((m) => m.index === index);
+  /** Whether a prediction's answer is in, so `settle` would score it: its duel resolved, or its attack decided. A duel
+   *  the snapshot no longer lists finished long ago. */
+  const decided = (p: PredictionView) => {
+    if (!snap) return false;
+    const d = snap.duels.find((x) => x?.id === p.duel_id) ?? (rec?.duel?.id === p.duel_id ? rec.duel : null);
+    if (!d || d.resolved) return true;
+    return p.index !== null && !!d.chaos?.[p.index] && d.chaos[p.index]?.outcome !== "Pending";
+  };
   async function predictOnce(id: string, index: number | null, p: Pick) {
     if (!predict.PREDICT) return say(`predictions are not deployed on ${NETWORK_ID}`, "warn");
     const where = index === null ? `duel #${id}` : `attack ${index} in duel #${id}`;
@@ -1049,7 +1057,7 @@ export default function Term() {
           <Held
             w={P}
             held={held}
-            open={(p) => !!marketOf(p.duel_id, p.index)?.open}
+            decided={decided}
             onSettle={(d) => run(`settle ${d}`)}
             onClaim={() => run("claim predictions")}
           />

@@ -74,24 +74,24 @@ export function Calls({
   );
 }
 
-/** The predictions the viewer holds, newest first: each one's result, a settle per duel whose answers may be in (its
- *  market is not still open), and one claim for every scored deposit. */
+/** The predictions the viewer holds, newest first: each one's result, a settle per duel holding an unscored one whose
+ *  answer is in, and one claim for every scored deposit. */
 export function Held({
   w,
   held,
-  open,
+  decided,
   onSettle,
   onClaim,
 }: {
   w: number;
   held: PredictionView[];
-  /** Whether the page knows this market is still taking predictions (settling it would score nothing). */
-  open: (p: PredictionView) => boolean;
+  /** Whether its answer is in (the duel resolved, or the attack decided), so `settle` would score it. */
+  decided: (p: PredictionView) => boolean;
   onSettle: (duel: string) => void;
   onClaim: () => void;
 }) {
   const shown = [...held].reverse().slice(0, 4);
-  const settle = [...new Set(held.filter((p) => !p.verdict && !open(p)).map((p) => p.duel_id))].slice(0, 3);
+  const settle = [...new Set(held.filter((p) => !p.verdict && decided(p)).map((p) => p.duel_id))].slice(0, 3);
   const scored = held.filter((p) => p.verdict).length;
   return (
     <>
