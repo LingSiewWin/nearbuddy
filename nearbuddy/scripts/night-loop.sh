@@ -3,10 +3,15 @@
 # wall-clock time. Per batch: fresh solver (merged solver code goes live between duels, never during one),
 # runner and spectator in parallel. A failed batch logs its last traceback line, resolves any duel the runner's
 # agents are stuck in (`runner.py --resolve-stuck`), backs off and goes on with the next batch.
+# Health gate: before each batch `runner.py --health` asks NEAR AI Cloud (GET /v1/models, free; `--health-chat` adds a
+# 1-token chat call per model). While it fails no batch opens (each duel costs an oracle deposit and chaos stakes): one
+# log line per check, re-checked after 2, 4, 8 min, capped at 15 (HEALTH_BACKOFF_S, HEALTH_BACKOFF_MAX_S). The runner
+# itself exits 75 when a model keeps failing mid-run, so the gate takes over after that batch.
 # One driver at a time: a pidfile lock, and no batch starts while another runner or night driver is alive.
 #
 #   scripts/night-loop.sh --until 0530 --rounds 10 --duel-seconds 330 --variants A,B,C --target a
 #   scripts/night-loop.sh --until 0530 --payload-set holdout --start-batch 20
+#   scripts/night-loop.sh --until 0530 --health-chat   # the gate also sends each model a 1-token chat call
 #   scripts/night-loop.sh --dry-run ...     # print the commands of one batch and its failure path, run nothing
 #
 # Logs: /tmp/nearbuddy-night.log (one line per batch), /tmp/nearbuddy-tee-batch<N>.log (runner),
@@ -31,13 +36,15 @@ SPECTATOR_ID=${SPECTATOR_ID:-nearbuddy-solver.testnet}
 SPECTATOR_DELAY_S=100 # the runner registers and opens round 0 first
 IDLE_MINUTES=12
 BACKOFF_S=60
+HEALTH_BACKOFF_S=${HEALTH_BACKOFF_S:-120} # first wait after a failed health check; doubles up to the cap
+HEALTH_BACKOFF_MAX_S=${HEALTH_BACKOFF_MAX_S:-900}
 PY=agents/.venv/bin/python
 
-until_hhmm=0530 rounds=10 duel_s=330 cycle_s=45 variants="" profile="" target=a payload_set=train start_batch="" dry=0
+until_hhmm=0530 rounds=10 duel_s=330 cycle_s=45 variants="" profile="" target=a payload_set=train start_batch="" dry=0 health_chat=0
 
 usage() {
   echo "usage: $0 [--until HHMM] [--rounds N] [--duel-seconds S] [--cycle-seconds S] [--variants A,B,C]" \
-    "[--profile naive|hardened|hardened-v2|hardened-v3] [--target a|b|alt] [--payload-set train|holdout] [--start-batch N] [--dry-run]"
+    "[--profile naive|hardened|hardened-v2|hardened-v3] [--target a|b|alt] [--payload-set train|holdout] [--start-batch N] [--health-chat] [--dry-run]"
 }
 die() { echo "$*" >&2; exit 2; }
 val() { [ -n "${2-}" ] || die "$1 needs a value"; }
@@ -54,6 +61,7 @@ while [ $# -gt 0 ]; do
     --target) val "$1" "${2-}"; target=$2; shift 2 ;;
     --payload-set) val "$1" "${2-}"; payload_set=$2; shift 2 ;;
     --start-batch) val "$1" "${2-}"; start_batch=$2; shift 2 ;;
+    --health-chat) health_chat=1; shift ;;
     --dry-run) dry=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
@@ -83,6 +91,9 @@ runner_cmd=("$PY" -u agents/runner.py --rounds "$rounds" --duel-seconds "$duel_s
 [ -n "$variants" ] && runner_cmd+=(--variants "$variants")
 [ -n "$profile" ] && runner_cmd+=(--profile "$profile") # agent A: naive|hardened|hardened-v2|hardened-v3
 stuck_cmd=("$PY" -u agents/runner.py --resolve-stuck)
+health_cmd=("$PY" -u agents/runner.py --health) # the models this batch would call, judge included under hardened-v3
+[ -n "$profile" ] && health_cmd+=(--profile "$profile")
+[ "$health_chat" = 1 ] && health_cmd+=(--chat)
 spectator_cmd=(env DUELS="$rounds" TARGET="$target" PAYLOAD_SET="$payload_set" SPECTATOR_ID="$SPECTATOR_ID"
   IDLE_MINUTES="$IDLE_MINUTES" bun packages/demo/src/spectator.ts)
 solver_cmd=(bun packages/solver/src/index.ts)
@@ -93,6 +104,8 @@ show() { printf '+'; printf ' %q' "$@"; printf '\n'; }
 if [ "$dry" = 1 ]; then
   echo "# until $until_hhmm ($(date -r "$deadline" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$deadline" '+%Y-%m-%d %H:%M')), batches from $start_batch, lock $PIDFILE, log $LOG"
   echo "# batch $start_batch"
+  echo "+ until it exits 0 (no batch meanwhile; waits ${HEALTH_BACKOFF_S}s, doubling up to ${HEALTH_BACKOFF_MAX_S}s):"
+  show "${health_cmd[@]}"
   echo "+ kill the listener on tcp:$SOLVER_PORT; wait for http://127.0.0.1:$SOLVER_PORT/arena after:"
   show nohup "${solver_cmd[@]}"; echo "  > $SOLVER_LOG"
   echo "+ after ${SPECTATOR_DELAY_S}s, in the background:"
@@ -144,10 +157,17 @@ restart_solver() {
   done
   return 1
 }
+nap() { # sleep up to $1 seconds, waking early for the stop file or the deadline
+  local end=$(($(date +%s) + $1)) now
+  while now=$(date +%s) && [ "$now" -lt "$end" ] && [ "$now" -lt "$deadline" ] && [ ! -e "$STOP_FILE" ]; do
+    sleep $((end - now < 5 ? end - now : 5))
+  done
+}
 stop_spectator() { [ -n "$spec" ] && kill "$spec" 2>/dev/null; [ -n "$spec" ] && wait "$spec" 2>/dev/null; spec=""; }
 
 log "night loop pid $$ until $until_hhmm, first #$start_batch: rounds $rounds duel ${duel_s}s variants ${variants:-none} target $target payload $payload_set"
 i=$start_batch
+health_wait=$HEALTH_BACKOFF_S
 while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ -e "$STOP_FILE" ]; then # checked before every batch (and every wait): deploy-contract.sh --at-boundary
     log "stopping at boundary ($STOP_FILE present), next would be #$i"
@@ -159,6 +179,14 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep "$BACKOFF_S"
     continue
   fi
+  if ! health=$("${health_cmd[@]}" 2>&1); then # NEAR AI down: a batch would pay for duels with no decisions
+    log "model API unhealthy, no batch #$i: $(printf '%s' "$health" | awk 'NF { l = $0 } END { print l }'); re-check in ${health_wait}s"
+    nap "$health_wait"
+    health_wait=$((health_wait * 2 > HEALTH_BACKOFF_MAX_S ? HEALTH_BACKOFF_MAX_S : health_wait * 2))
+    continue
+  fi
+  [ "$health_wait" != "$HEALTH_BACKOFF_S" ] && log "model API healthy again: $health"
+  health_wait=$HEALTH_BACKOFF_S
   log "batch $i variants ${variants:-none} target $target payload $payload_set"
   if ! restart_solver; then
     log "batch $i solver did not answer on :$SOLVER_PORT (see $SOLVER_LOG); backing off ${BACKOFF_S}s"

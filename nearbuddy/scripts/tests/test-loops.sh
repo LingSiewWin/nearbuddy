@@ -26,11 +26,20 @@ setup() {
   : > "$T/arena/src/lib.rs"
   echo wasm > "$T/arena/target/near/nearbuddy_arena.wasm"
   # the runner: records its arguments; a batch takes FAKE_BATCH_S; resolve-stuck marks the arena idle (and, with
-  # FLIP_PAIRING set, turns the solver's pairing loop on behind the deploy's back)
+  # FLIP_PAIRING set, turns the solver's pairing loop on behind the deploy's back); --health fails while
+  # $RUN/unhealthy holds a count above 0, one less per check
   cat > "$T/agents/.venv/bin/python" << 'SH'
 #!/usr/bin/env bash
 echo "$*" >> "$NEARBUDDY_RUN_DIR/python-calls"
 case "$*" in
+  *--health*)
+    n=$(cat "$NEARBUDDY_RUN_DIR/unhealthy" 2>/dev/null || echo 0)
+    if [ "$n" -gt 0 ]; then
+      echo $((n - 1)) > "$NEARBUDDY_RUN_DIR/unhealthy"
+      echo "unhealthy: GET /v1/models: HTTP 500 fake outage" >&2
+      exit 1
+    fi
+    echo "healthy: GET /v1/models 200, lists fake/model" ;;
   *--check-agents*) echo "pkA,pkB" ;;
   *--resolve-stuck*)
     echo 0 > "$NEARBUDDY_RUN_DIR/open_duels"
@@ -93,6 +102,48 @@ for spec in "night-loop.sh|nearbuddy-night-loop.stop|nearbuddy-night.log|nearbud
   expect "$script with the stop file present says so on stderr and in its log" 'grep -qx "stop file $T/run/$stop present; remove it to start" "$T/run/driver.err" && grep -q "stop file $T/run/$stop present; remove it to start" "$T/run/$log"'
   teardown
 done
+
+# night-loop.sh health gate: while `runner.py --health` fails no batch opens; one log line per check, the wait doubles
+# up to its cap; the first healthy check opens the batch
+setup
+echo 3 > "$T/run/unhealthy"
+HEALTH_BACKOFF_S=1 HEALTH_BACKOFF_MAX_S=2 bash "$T/scripts/night-loop.sh" --until "$(far_until)" --profile hardened-v3 \
+  > "$T/run/driver.log" 2>&1 &
+loop=$!
+if wait_for 30 'grep -q -- "--rounds" "$T/run/python-calls" 2>/dev/null'; then
+  touch "$T/run/nearbuddy-night-loop.stop"
+  wait_for 20 '! kill -0 $loop 2>/dev/null'
+  hlog="$T/run/nearbuddy-night.log"
+  expect "night-loop.sh checks health before the batch, opens it only after a pass" '[ "$(cut -d" " -f1-3 "$T/run/python-calls" | head -5 | tr "\n" "|")" = "-u agents/runner.py --health|-u agents/runner.py --health|-u agents/runner.py --health|-u agents/runner.py --health|-u agents/runner.py --rounds|" ]'
+  expect "night-loop.sh passes the profile to the health check (hardened-v3 adds the judge model)" 'grep -qx -- "-u agents/runner.py --health --profile hardened-v3" "$T/run/python-calls"'
+  expect "night-loop.sh logs one line per failed check, with the reason" '[ "$(grep -c "model API unhealthy, no batch #1: unhealthy: GET /v1/models: HTTP 500 fake outage" "$hlog")" = 3 ]'
+  expect "night-loop.sh doubles the wait up to its cap" '[ "$(grep -oE "re-check in [0-9]+s" "$hlog" | tr "\n" "|")" = "re-check in 1s|re-check in 2s|re-check in 2s|" ]'
+  expect "night-loop.sh logs the recovery, then the batch it opens" 'grep -A1 "model API healthy again" "$hlog" | grep -q "batch 1 variants"'
+else
+  fail "night-loop.sh never opened a batch after the API recovered: $(tail -3 "$T/run/nearbuddy-night.log" 2>/dev/null)"
+  kill "$loop" 2>/dev/null
+fi
+teardown
+
+# an API that stays down: no batch at all, and the stop file still ends the loop during a long wait
+setup
+echo 999 > "$T/run/unhealthy"
+HEALTH_BACKOFF_S=600 bash "$T/scripts/night-loop.sh" --until "$(far_until)" > "$T/run/driver.log" 2>&1 &
+loop=$!
+if wait_for 20 'grep -q "model API unhealthy" "$T/run/nearbuddy-night.log" 2>/dev/null'; then
+  touch "$T/run/nearbuddy-night-loop.stop"
+  rc=still-running
+  if wait_for 15 '! kill -0 $loop 2>/dev/null'; then
+    wait "$loop"
+    rc=$?
+  fi
+  expect "night-loop.sh with the API down wakes from its wait for the stop file and exits 0" '[ "$rc" = 0 ] && grep -q "stopping at boundary" "$T/run/nearbuddy-night.log"'
+  expect "night-loop.sh with the API down opened no batch" '! grep -q -- "--rounds" "$T/run/python-calls"'
+else
+  fail "night-loop.sh never logged the failed health check: $(tail -3 "$T/run/driver.log")"
+fi
+kill "$loop" 2>/dev/null
+teardown
 
 # second-loop.sh with the solver down: the stop file is seen anyway (it is checked first on every pass, not only after
 # the solver answers). sleep is cut to 0.05 s so the two-minute solver wait and the backoff take seconds.
