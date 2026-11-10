@@ -121,6 +121,19 @@ export function slotInputs(agent: AgentView, k: KeylessAgent, d: Duel, s: Slot, 
   };
 }
 
+/** The agent a `register_keyless` transaction returned, from its final outcome (RPC `tx`): the call answers the new
+ *  AgentView, whose pk is the agent's id. null when the call failed or the outcome holds anything else. */
+export function enteredAgent(outcome: unknown): AgentView | null {
+  const v = (outcome as { status?: { SuccessValue?: unknown } } | null)?.status?.SuccessValue;
+  if (typeof v !== "string") return null;
+  try {
+    const a = JSON.parse(new TextDecoder().decode(b64strict(v))) as Partial<AgentView> | null;
+    return a && typeof a.owner === "string" && typeof a.pk === "string" && canonicalPk(a.pk) ? (a as AgentView) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** How many of an agent's duels /enter lists (agent_duels, newest first). */
 export const RECENT_DUELS = 6;
 

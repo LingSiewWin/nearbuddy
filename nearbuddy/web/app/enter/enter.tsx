@@ -9,6 +9,7 @@ import {
   type AgentState,
   DEFAULT_BOND_NEAR,
   enterCall,
+  enteredAgent,
   exampleInputs,
   MIN_BOND_NEAR,
   shownUnits,
@@ -130,40 +131,42 @@ function RequestView({ bytes, w }: { bytes: Uint8Array; w: number }): ReactNode 
   );
 }
 
-/** One view of `contract` read by this browser from the public RPC (connect-src allows it), not through this site's
- *  /api, so the page's own server cannot vouch for itself. Tries the network's RPC, then its fallback. */
-async function chainView<T>(contract: string, method: string, args: object): Promise<{ value: T; host: string }> {
+/** One JSON-RPC call made by this browser to the public RPC (connect-src allows it), not through this site's /api, so
+ *  the page's own server cannot vouch for itself. Tries the network's RPC, then its fallback; `ok` picks the answer
+ *  worth returning (a contract view's bytes, a final transaction). */
+async function rpc<T>(method: string, params: object, ok: (r: T) => boolean): Promise<{ result: T; host: string }> {
   let why = "no RPC";
   for (const url of [NET.rpc, NET.fallback]) {
     try {
       const r = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: "enter",
-          method: "query",
-          params: {
-            request_type: "call_function",
-            finality: "final",
-            account_id: contract,
-            method_name: method,
-            args_base64: btoa(JSON.stringify(args)),
-          },
-        }),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "enter", method, params }),
       });
-      const j = (await r.json()) as { result?: { result?: number[]; error?: string }; error?: unknown };
-      if (j.result?.result)
-        return {
-          value: JSON.parse(new TextDecoder().decode(Uint8Array.from(j.result.result))) as T,
-          host: new URL(url).host,
-        };
-      why = JSON.stringify(j.error ?? j.result?.error ?? r.status).slice(0, 120);
+      const j = (await r.json()) as { result?: T; error?: unknown };
+      if (j.result !== undefined && ok(j.result)) return { result: j.result, host: new URL(url).host };
+      why = JSON.stringify(j.error ?? j.result ?? r.status).slice(0, 120);
     } catch (e) {
       why = String(e).slice(0, 120);
     }
   }
   throw new Error(why);
+}
+
+/** A view of `contract`, read by this browser (rpc). */
+async function chainView<T>(contract: string, method: string, args: object): Promise<{ value: T; host: string }> {
+  const { result, host } = await rpc<{ result?: number[] }>(
+    "query",
+    {
+      request_type: "call_function",
+      finality: "final",
+      account_id: contract,
+      method_name: method,
+      args_base64: btoa(JSON.stringify(args)),
+    },
+    (r) => Array.isArray(r.result),
+  );
+  return { value: JSON.parse(new TextDecoder().decode(Uint8Array.from(result.result ?? []))) as T, host };
 }
 
 export default function Enter({ contract }: { contract: string | null }) {
@@ -340,24 +343,32 @@ export default function Enter({ contract }: { contract: string | null }) {
       setAccount(me);
       if (!me) return say("no account selected: nothing was signed", "warn");
     }
-    const owned = () => getJson<Info>(`/api/keyless?owner=${encodeURIComponent(me)}`).catch(() => null);
     setBusy(`sign in your wallet: register_keyless with ${near(call.deposit)} NEAR to ${call.receiverId}`);
     try {
-      const before = new Set((await owned())?.agents ?? []); // the new agent is the one this list lacks
       const hash = await wallet.send(call); // throws when the wallet declines or the contract refuses
       setTx(hash);
-      setBusy(`registered (tx ${short(hash, 10)}); reading your agent's id`);
-      for (let i = 0; i < 20; i++) {
-        const j = await owned();
-        const fresh = j?.agents?.find((p) => !before.has(p));
-        if (j && fresh) {
-          setInfo(j);
-          select(fresh);
-          return say(`your agent ${short(fresh, 12)} is entered: tx ${short(hash, 10)}`, "ok");
-        }
-        await sleep(2000);
+      setBusy(`registered (tx ${short(hash, 10)}); reading your agent's id from its result`);
+      // the id is what this transaction returned (register_keyless answers the new AgentView), never a guess from a
+      // list, which another tab or a slow index could make name an older agent
+      let entered: ReturnType<typeof enteredAgent> = null;
+      for (let i = 0; i < 10 && !entered; i++) {
+        if (i) await sleep(2000);
+        entered = enteredAgent(
+          await rpc("tx", { tx_hash: hash, sender_account_id: me, wait_until: "EXECUTED" }, (r) => !!enteredAgent(r))
+            .then((x) => x.result)
+            .catch(() => null),
+        );
       }
-      say(`tx ${short(hash, 10)} landed; your agent shows in box 4 shortly`, "ok");
+      getJson<Info>(`/api/keyless?owner=${encodeURIComponent(me)}`)
+        .then(setInfo)
+        .catch(() => {});
+      if (!entered)
+        return say(
+          `tx ${short(hash, 10)} landed, but its result could not be read: your agents are listed in box 4`,
+          "warn",
+        );
+      select(entered.pk);
+      say(`your agent ${short(entered.pk, 12)} is entered: tx ${short(hash, 10)}`, "ok");
     } catch (e) {
       say(e instanceof Error ? e.message : String(e), "bad");
     } finally {

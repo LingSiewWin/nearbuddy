@@ -8,6 +8,7 @@ import {
   canonicalDuelId,
   canonicalPk,
   enterCall,
+  enteredAgent,
   KEYLESS_ARENAS,
   keylessArena,
   shownUnits,
@@ -147,4 +148,33 @@ test("wrapUnits: lines of at most the width, no unit split, nothing lost", () =>
   for (const l of wrapUnits(shownUnits("ab\u{e0041}cd"), 3))
     expect(l.join("").length <= 3 || l.length === 1).toBe(true);
   expect(wrapUnits([], 10)).toEqual([[]]);
+});
+
+test("enteredAgent: the new agent's id comes from the register_keyless result, nothing else", () => {
+  // the shape of RPC `tx` for C6KyV6Hv… on testnet (register_keyless from nb-kk-spec-1111.testnet)
+  const view = {
+    owner: "nb-kk-spec-1111.testnet",
+    pk: "s7wwBC1d/grtRwfGbcZ0gmFmkV7l4NN1FLRwcDHVI58=",
+    model_id: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    bond: "494490000000000000000000",
+    alpha_bps: 0,
+    shield: 0,
+    in_duel: null,
+    tee: true,
+  };
+  const ok = { status: { SuccessValue: btoa(JSON.stringify(view)) }, transaction: { hash: "C6KyV6Hv" } };
+  expect(enteredAgent(ok)?.pk).toBe(view.pk);
+  const failed = {
+    status: { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "bond required" } } } } },
+  };
+  for (const bad of [
+    failed,
+    { status: { SuccessValue: "" } },
+    { status: { SuccessValue: btoa(JSON.stringify({ ...view, pk: "YLqgTOliaG+cZcWWOmxBwbrryeCafXlq4N5P+ChomTp=" })) } },
+    { status: { SuccessValue: btoa("null") } },
+    { status: { SuccessValue: "not base64!" } },
+    null,
+    "x",
+  ])
+    expect(enteredAgent(bad)).toBeNull();
 });
