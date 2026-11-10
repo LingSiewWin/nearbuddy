@@ -11,7 +11,7 @@
 // Exit: 0 done, 1 budget cap or a fatal error, 75 NEAR AI Cloud down (as runner.py --max-model-failures).
 import "../../protocol/src/env.ts";
 import { parseArgs } from "node:util";
-import { Account, FailoverRpcProvider, JsonRpcProvider } from "near-api-js";
+import { Account, JsonRpcProvider } from "near-api-js";
 import { ARENA, loadKey, sendFailover } from "../../protocol/src/chain.ts";
 import { NET, NETWORK_ID, networkFile } from "../../protocol/src/network.ts";
 import { type Chain, Keeper, Stop } from "./keeper.ts";
@@ -41,7 +41,9 @@ const RPCS = process.env.KEEPER_RPC
     ? [process.env.NEAR_RPC, process.env.NEAR_RPC_FALLBACK].filter((u): u is string => !!u)
     : [...new Set([NETWORK_ID === "testnet" ? "https://rpc.testnet.fastnear.com" : NET.rpc, NET.fallback, NET.rpc])];
 const providers = RPCS.map((url) => new JsonRpcProvider({ url }));
-const views = providers.length > 1 ? new FailoverRpcProvider(providers) : providers[0]!;
+// chain.ts sendFailover for reads too: it moves on only after a transport error (a 429 included) and logs nothing,
+// where near-api-js's FailoverRpcProvider prints every failed attempt's stack
+const views = sendFailover(providers);
 
 /** Reads go through `views`; calls are signed by the keeper account with arena.ts's retry rule: back off on a 429,
  *  never resend after a timeout (the transaction may have landed). */
@@ -87,7 +89,7 @@ if (!key) {
 const ai = new NearAi(key, process.env.NEAR_AI_BASE ?? NEAR_AI_BASE);
 const outage = new Outage(Number(o["max-model-failures"]));
 const budget = new Budget(Number(o["budget-usd"]), o["spend-log"]!);
-const account = o.account ? new Account(o.account, sendFailover(providers), loadKey(o.account)) : null;
+const account = o.account ? new Account(o.account, views, loadKey(o.account)) : null;
 const keeper = new Keeper(nearChain(account), ai, budget, outage, {
   marginS: Number(o["margin-seconds"]),
   logFile: o.log!,
