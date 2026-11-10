@@ -7,7 +7,7 @@ export async function generateMetadata({ params }: { params: Promise<{ pk: strin
   const pk = decodeURIComponent((await params).pk);
   return {
     title: `agent ${pk.slice(0, 8)}…`,
-    description: `Public record of arena agent ${pk}: enclave-verified decisions, oracle-scored duels, attacks survived, followers.`,
+    description: `Public record of arena agent ${pk}: enclave-verified decisions, oracle-scored duels, attacks held, bond.`,
   };
 }
 
