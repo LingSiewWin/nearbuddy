@@ -661,34 +661,26 @@ fn settle_scores_each_market_once_and_ranks_the_board() {
     assert_eq!(w.settle(5, &a.settle_answers(5)), Ok(0));
     assert_eq!(market(&w, 5, Some(1)).outcome, None);
     assert!(market(&w, 5, Some(1)).settled);
-    assert_eq!(
-        stats(&w, PEOPLE[0]),
-        Stats {
-            count: 2,
-            right: 2,
-            streak: 2,
-            best: 2
-        }
-    );
-    assert_eq!(
-        stats(&w, PEOPLE[1]),
-        Stats {
-            count: 2,
-            right: 0,
-            streak: 0,
-            best: 0
-        }
-    );
-    let board = w.view(|c| c.get_board(0, 10));
-    let names: Vec<String> = board.iter().map(|r| r.account.to_string()).collect();
-    assert_eq!(names, vec![PEOPLE[0], PEOPLE[2], PEOPLE[1]]);
+    let score = |s: Stats| (s.count, s.right, s.streak, s.best);
+    assert_eq!(score(stats(&w, PEOPLE[0])), (2, 2, 2, 2));
+    assert_eq!(score(stats(&w, PEOPLE[1])), (2, 0, 0, 0));
+    // nobody has the MIN_RANKED scored calls the board needs yet
+    assert!(w.view(|c| c.get_board(0, 10)).is_empty());
 
-    // claims pay every scored deposit, void ones included, once
-    assert_eq!(w.claim(PEOPLE[0]), Ok(3 * DEPOSIT));
+    // claims pay every scored deposit, void ones included, once; the first keeps the board row
+    let owed = |w: &World, p: &str| stats(w, p).storage_owed.0;
+    let rows: Vec<u128> = PEOPLE.iter().map(|p| owed(&w, p)).collect();
+    assert!(rows.iter().all(|&r| r > 0 && r < DEPOSIT));
+    assert_eq!(w.claim(PEOPLE[0]), Ok(3 * DEPOSIT - rows[0]));
+    assert_eq!(owed(&w, PEOPLE[0]), 0);
     assert_eq!(w.claim(PEOPLE[0]), Err("nothing to claim".into()));
-    assert_eq!(w.claim(PEOPLE[1]), Ok(2 * DEPOSIT));
-    assert_eq!(w.claim(PEOPLE[2]), Ok(DEPOSIT));
-    assert_eq!(w.balance, START, "every deposit went back");
+    assert_eq!(w.claim(PEOPLE[1]), Ok(2 * DEPOSIT - rows[1]));
+    assert_eq!(w.claim(PEOPLE[2]), Ok(DEPOSIT - rows[2]));
+    assert_eq!(
+        w.balance,
+        START + rows.iter().sum::<u128>(),
+        "the rows' storage stays"
+    );
     assert!(held(&w, PEOPLE[0]).is_empty());
 }
 
@@ -802,7 +794,8 @@ fn an_unknown_chaos_record_leaves_only_its_own_market_open() {
         .replacen(r#""outcome":"Disputed""#, r#""outcome":7"#, 1);
     assert_eq!(w.settle(1, &[Some(a.duel_json(1)), Some(broken)]), Ok(0));
     assert!(!market(&w, 1, Some(0)).settled);
-    assert_eq!(w.claim(PEOPLE[0]), Ok(2 * DEPOSIT));
+    let row = stats(&w, PEOPLE[0]).storage_owed.0;
+    assert_eq!(w.claim(PEOPLE[0]), Ok(2 * DEPOSIT - row));
     // nor is an unknown record open to predictions on an arena without `chaos_open`
     let legacy = ArenaSim {
         legacy: true,
@@ -899,7 +892,8 @@ fn deposit_covers_the_largest_prediction() {
     w.settle(1, &a.settle_answers(1)).unwrap();
     w.settle(2, &a.settle_answers(2)).unwrap();
     let before = w.usage;
-    assert_eq!(w.claim(&implicit), Ok(2 * DEPOSIT));
+    let row = stats(&w, &implicit).storage_owed.0;
+    assert_eq!(w.claim(&implicit), Ok(2 * DEPOSIT - row));
     assert!(
         before - w.usage >= 264 + 151 - 2 * 8,
         "claim frees the entries and the list"
@@ -1006,6 +1000,7 @@ proptest! {
             a.legacy = legacy;
         }
         let mut made: Vec<Made> = vec![];
+        let mut kept = 0u128; // board-row storage claims kept back
         for op in ops {
             match op {
                 Op::Predict(who, d, index, pick, f) => {
@@ -1070,11 +1065,14 @@ proptest! {
                 }
                 Op::Claim(who) => {
                     let due = made.iter().filter(|m| m.who == who && !m.claimed && m.verdict.is_some()).count();
+                    let owed = stats(&w, PEOPLE[who]).storage_owed.0;
                     let r = w.claim(PEOPLE[who]);
                     if due == 0 {
                         prop_assert_eq!(r, Err("nothing to claim".to_string()));
                     } else {
-                        prop_assert_eq!(r, Ok(due as u128 * DEPOSIT));
+                        prop_assert_eq!(r, Ok(due as u128 * DEPOSIT - owed));
+                        prop_assert_eq!(stats(&w, PEOPLE[who]).storage_owed.0, 0);
+                        kept += owed;
                         for m in made.iter_mut().filter(|m| m.who == who && m.verdict.is_some()) {
                             m.claimed = true;
                         }
@@ -1083,7 +1081,12 @@ proptest! {
             }
             // deposits conserved: the contract holds exactly one deposit per unclaimed prediction
             let unclaimed = made.iter().filter(|m| !m.claimed).count() as u128;
-            prop_assert_eq!(w.balance, START + unclaimed * DEPOSIT);
+            prop_assert_eq!(w.balance, START + unclaimed * DEPOSIT + kept);
+            // the board ranks only accounts with MIN_RANKED scored calls, by net descending
+            let board = w.view(|c| c.get_board(0, 100));
+            prop_assert!(board.iter().all(|r| r.count >= MIN_RANKED));
+            let nets: Vec<i64> = board.iter().map(|r| 2 * r.right as i64 - r.count as i64).collect();
+            prop_assert!(nets.windows(2).all(|p| p[0] >= p[1]));
             for (who, p) in PEOPLE.iter().enumerate() {
                 // each held prediction carries the verdict the model gave it, set once
                 let mine: Vec<&Made> = made.iter().filter(|m| m.who == who && !m.claimed).collect();
@@ -1111,4 +1114,132 @@ proptest! {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------- board and storage (audit fixes)
+
+/// `who` calls `pick` on a new duel market `d`, which then resolves with `result`, and is settled.
+fn scored_duel(w: &mut World, who: &str, d: u64, pick: Pick, result: u8) {
+    let mut a = ArenaSim::open(w.now);
+    w.predict(who, d, None, pick, &a.predict_answers(d, None))
+        .unwrap();
+    a.resolve(result);
+    w.settle(d, &a.settle_answers(d)).unwrap();
+}
+
+#[test]
+fn a_board_row_is_paid_once_by_its_owner() {
+    // ported from the audit: every new predictor used to leave its board row on the contract
+    let mut w = World::new();
+    let names: Vec<String> = (0..20).map(|i| format!("{:064x}", i + 1)).collect();
+    let (u0, b0) = (w.usage, w.balance);
+    for (i, n) in names.iter().enumerate() {
+        scored_duel(&mut w, n, i as u64, Pick::A, 0);
+        w.claim(n).unwrap();
+    }
+    // every byte the contract still holds for them (rows and markets) is paid by what it kept
+    let held = (w.usage - u0) as u128 * env::storage_byte_cost().as_yoctonear();
+    let markets = 20 * 100 * env::storage_byte_cost().as_yoctonear(); // one market each, contract's
+    assert!(
+        w.balance - b0 + markets >= held,
+        "{} kept < {held} held",
+        w.balance - b0
+    );
+    // the second claim refunds whole: the row was paid once
+    scored_duel(&mut w, &names[0], 99, Pick::A, 0);
+    assert_eq!(w.claim(&names[0]), Ok(DEPOSIT));
+}
+
+#[test]
+fn on_predict_refunds_when_the_contract_cannot_store_the_call() {
+    let mut w = World::new();
+    let a = ArenaSim::open(T0);
+    let byte = env::storage_byte_cost().as_yoctonear();
+    // the call's own deposit arrives with it; past that the balance only just covers what is stored
+    w.balance = w.usage as u128 * byte + 100 * byte;
+    assert_eq!(
+        w.predict(PEOPLE[0], 1, None, Pick::A, &a.predict_answers(1, None)),
+        Ok(false)
+    );
+    assert!(w.view(|c| c.get_market(U64(1), None)).is_none());
+}
+
+#[test]
+fn the_board_ranks_by_net_after_min_ranked_calls_whatever_the_settle_order() {
+    // ported from the audit: `best` used to rank, and it depends on the order of settles
+    let run = |order: &[u64]| {
+        let mut w = World::new();
+        let mut arenas = vec![];
+        for d in 0..6u64 {
+            let a = ArenaSim::open(T0);
+            for p in [PEOPLE[0], PEOPLE[1]] {
+                w.predict(p, d, None, Pick::A, &a.predict_answers(d, None))
+                    .unwrap();
+            }
+            w.predict(PEOPLE[2], d, None, Pick::B, &a.predict_answers(d, None))
+                .unwrap();
+            arenas.push(a);
+        }
+        for (d, a) in arenas.iter_mut().enumerate() {
+            a.resolve(if d < 3 { 0 } else { 1 }); // A wins 0..3, B wins 3..6
+        }
+        for &d in order {
+            w.settle(d, &arenas[d as usize].settle_answers(d)).unwrap();
+        }
+        let rows = w.view(|c| c.get_board(0, 10));
+        rows.iter()
+            .map(|r| (r.account.to_string(), r.count, r.right))
+            .collect::<Vec<_>>()
+    };
+    let mixed = run(&[0, 3, 1, 4, 2, 5]);
+    assert_eq!(mixed, run(&[3, 4, 5, 0, 1, 2]));
+    // all three are net 0 after 6 calls: ranked by account
+    let names: Vec<&str> = mixed.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(names, vec![PEOPLE[0], PEOPLE[1], PEOPLE[2]]);
+    // four calls are not enough to be ranked
+    let mut w = World::new();
+    for d in 0..4 {
+        scored_duel(&mut w, PEOPLE[0], d, Pick::A, 0);
+    }
+    assert!(w.view(|c| c.get_board(0, 10)).is_empty());
+    scored_duel(&mut w, PEOPLE[0], 4, Pick::A, 0);
+    assert_eq!(w.view(|c| c.get_board(0, 10)).len(), 1);
+}
+
+#[test]
+fn the_board_view_costs_the_same_for_200_or_2000_predictors() {
+    // ported from the audit: `get_board` sorted every row and ran out of gas near 1,900 rows
+    let mut w = World::new();
+    let mut gas = vec![];
+    let mut total = 0u32;
+    for step in [200u32, 1800] {
+        // 50 new predictors per receipt keeps each inside the mocked prepaid gas
+        for from in (total..total + step).step_by(50) {
+            w.call(CONTRACT, 0, &[], |c| {
+                for i in from..from + 50 {
+                    let who: AccountId = format!("{:064x}", i + 1).parse().unwrap();
+                    for k in 0..MIN_RANKED {
+                        c.tally(who.clone(), (i + k) % 3 != 0);
+                    }
+                }
+            })
+            .unwrap();
+        }
+        total += step;
+        w.env(CONTRACT, 0, &[]);
+        let c: Contract = env::state_read().expect("state");
+        let before = env::used_gas().as_gas();
+        assert_eq!(c.get_board(0, 100).len(), TOP_N);
+        gas.push(env::used_gas().as_gas() - before);
+    }
+    assert!(
+        gas[1] < gas[0] * 3 / 2,
+        "board view gas grew with the rows: {gas:?}"
+    );
+    let top = w.view(|c| c.get_board(0, 100));
+    assert!(
+        top.windows(2)
+            .all(|p| 2 * p[0].right as i64 - p[0].count as i64
+                >= 2 * p[1].right as i64 - p[1].count as i64)
+    );
 }

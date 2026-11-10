@@ -39,7 +39,7 @@ use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::serde::Deserialize;
 use near_sdk::serde::de::DeserializeOwned;
 use near_sdk::serde_json::{self, json};
-use near_sdk::store::{IterableMap, LookupMap};
+use near_sdk::store::{Lazy, LookupMap};
 use near_sdk::{
     AccountId, BorshStorageKey, Gas, GasWeight, NearToken, PanicOnDefault, Promise, env, near,
     require,
@@ -59,6 +59,15 @@ pub const MAX_INJECTIONS: u32 = 32;
 pub const MAX_HELD: u32 = 64;
 /// Most predictions one `settle` scores.
 pub const SCORE_PAGE: u32 = 50;
+/// Rows the board keeps, ranked; `get_board` serves only these.
+pub const TOP_N: usize = 100;
+/// Scored (non-void) calls an account needs before it is ranked: a pair of accounts calling both
+/// sides of a few markets cannot put one of them on the board.
+pub const MIN_RANKED: u32 = 5;
+/// Bytes one accepted `predict` can add at most (entry, first held list, a new market naming a
+/// 64-character owner), with room to spare: `on_predict` refuses when the contract's free balance
+/// would not cover them, instead of keeping a deposit with no record.
+const MAX_PREDICT_BYTES: u128 = 512;
 /// Market slot of a duel's winner market; a chaos market's slot is the injection index.
 const DUEL_SLOT: u32 = u32::MAX;
 /// Each arena view: `get_chaos` serializes up to 32 records with 280-byte headlines.
@@ -142,9 +151,12 @@ pub(crate) struct Entry {
 pub struct Stats {
     pub count: u32,
     pub right: u32,
-    /// Right calls in a row, in the order they were scored.
+    /// Right calls in a row, in the order they were scored (shown, not ranked on).
     pub streak: u32,
     pub best: u32,
+    /// The storage of this row, kept back from the account's next `claim` (then 0). The row
+    /// outlives every prediction, so its owner pays it once instead of the contract.
+    pub storage_owed: U128,
 }
 
 #[near(serializers = [json])]
@@ -204,6 +216,8 @@ pub struct Config {
     pub max_held: u32,
     pub max_injections: u32,
     pub score_page: u32,
+    pub top_n: u32,
+    pub min_ranked: u32,
 }
 
 // The arena's view JSON, only the fields read here. An unknown chaos outcome fails the parse.
@@ -268,6 +282,7 @@ enum StorageKey {
     Entries,
     Held,
     Board,
+    Top,
 }
 
 #[near(contract_state)]
@@ -280,10 +295,27 @@ pub struct Contract {
     entries: LookupMap<(u64, u32, u32), Entry>,
     /// Keys of the entries an account holds, at most `MAX_HELD`; removed when empty.
     held: LookupMap<AccountId, Vec<(u64, u32, u32)>>,
-    /// Every account with a scored prediction.
-    /// ponytail: kept for good at the contract's cost (about 0.0015 NEAR per account); a pruned
-    /// top-N board if strangers number in the thousands.
-    board: IterableMap<AccountId, Stats>,
+    /// Every account with a non-void scored prediction; each pays its own row once (`Stats`).
+    board: LookupMap<AccountId, Stats>,
+    /// `(right - wrong, account)` of the best `TOP_N` accounts with at least `MIN_RANKED` scored
+    /// calls, by net descending then account. Updated as each call is scored.
+    /// ponytail: an account that falls out comes back only when it next scores above the last
+    /// row; exact for the top while rows move up, approximate below a drop.
+    top: Lazy<Vec<(i64, AccountId)>>,
+}
+
+fn storage_cost_since(before: u64) -> u128 {
+    (env::storage_usage().saturating_sub(before)) as u128 * env::storage_byte_cost().as_yoctonear()
+}
+
+/// Moves `who` (net `net`) to its rank in `top`, or out of it past `TOP_N`.
+fn rank(top: &mut Vec<(i64, AccountId)>, who: &AccountId, net: i64) {
+    top.retain(|(_, a)| a != who);
+    let at = top.partition_point(|(n, a)| *n > net || (*n == net && a < who));
+    if at < TOP_N {
+        top.insert(at, (net, who.clone()));
+        top.truncate(TOP_N);
+    }
 }
 
 /// Promise result `i` of this callback as JSON.
@@ -393,7 +425,8 @@ impl Contract {
             markets: LookupMap::new(StorageKey::Markets),
             entries: LookupMap::new(StorageKey::Entries),
             held: LookupMap::new(StorageKey::Held),
-            board: IterableMap::new(StorageKey::Board),
+            board: LookupMap::new(StorageKey::Board),
+            top: Lazy::new(StorageKey::Top, vec![]),
         }
     }
 
@@ -441,8 +474,13 @@ impl Contract {
         pick: Pick,
     ) -> bool {
         let id = duel_id.0;
+        let byte = env::storage_byte_cost().as_yoctonear();
+        let free = env::account_balance()
+            .as_yoctonear()
+            .saturating_sub(env::storage_usage() as u128 * byte);
         let open = match self.refusal(&account, id, index, pick) {
             Some(why) => Err(why),
+            None if free < MAX_PREDICT_BYTES * byte => Err("contract storage short"),
             None => still_open(id, index),
         };
         let label = match open {
@@ -562,9 +600,10 @@ impl Contract {
         self.score_duel(id)
     }
 
-    /// Pay the caller the deposits of every prediction it holds that has been scored, and forget
-    /// those predictions (their record stays in the market counts, the board and the logs).
-    /// Returns the amount sent. Caller: a predictor. Deposit: none. Panics: "nothing to claim".
+    /// Pay the caller the deposits of every prediction it holds that has been scored, less its
+    /// board row's storage the first time (`Stats.storage_owed`), and forget those predictions
+    /// (their record stays in the market counts, the board and the logs). Returns the amount sent.
+    /// Caller: a predictor. Deposit: none. Panics: "nothing to claim".
     pub fn claim(&mut self) -> U128 {
         let who = env::predecessor_account_id();
         let mut list = self.held.remove(&who).unwrap_or_default();
@@ -582,10 +621,14 @@ impl Contract {
         if !list.is_empty() {
             self.held.insert(who.clone(), list);
         }
-        let amount = n * DEPOSIT;
+        let owed = self
+            .board
+            .get_mut(&who)
+            .map_or(0, |s| std::mem::take(&mut s.storage_owed.0));
+        let amount = n * DEPOSIT - owed;
         event(
             "claim",
-            json!({"account": who, "n": n as u32, "amount": U128(amount)}),
+            json!({"account": who, "n": n as u32, "amount": U128(amount), "storage": U128(owed)}),
         );
         let _ = Promise::new(who).transfer(NearToken::from_yoctonear(amount));
         U128(amount)
@@ -599,6 +642,8 @@ impl Contract {
             max_held: MAX_HELD,
             max_injections: MAX_INJECTIONS,
             score_page: SCORE_PAGE,
+            top_n: TOP_N as u32,
+            min_ranked: MIN_RANKED,
         }
     }
 
@@ -646,27 +691,23 @@ impl Contract {
         self.board.get(&account).copied()
     }
 
-    /// Predictors ranked by right minus wrong, then best streak, then account; `limit` (at most
-    /// 100) from rank `from`. ponytail: sorts every row per call, like the arena's leaderboard; a
-    /// sorted index once predictors number in the thousands. View: anyone, no deposit, no panics.
+    /// The board: up to `TOP_N` accounts with at least `MIN_RANKED` scored calls, ranked by right
+    /// minus wrong, then account; `limit` (at most 100) from rank `from`. Reads at most `TOP_N`
+    /// rows whatever the number of predictors. View: anyone, no deposit, no panics.
     pub fn get_board(&self, from: u32, limit: u32) -> Vec<BoardRow> {
-        let net = |s: &Stats| 2 * s.right as i64 - s.count as i64;
-        let mut rows: Vec<(&AccountId, &Stats)> = self.board.iter().collect();
-        rows.sort_by(|(xa, x), (ya, y)| {
-            net(y)
-                .cmp(&net(x))
-                .then(y.best.cmp(&x.best))
-                .then(xa.cmp(ya))
-        });
-        rows.into_iter()
+        self.top
+            .iter()
             .skip(from as usize)
             .take(limit.min(100) as usize)
-            .map(|(a, s)| BoardRow {
-                account: a.clone(),
-                count: s.count,
-                right: s.right,
-                streak: s.streak,
-                best: s.best,
+            .filter_map(|(_, a)| {
+                let s = self.board.get(a)?;
+                Some(BoardRow {
+                    account: a.clone(),
+                    count: s.count,
+                    right: s.right,
+                    streak: s.streak,
+                    best: s.best,
+                })
             })
             .collect()
     }
@@ -749,6 +790,7 @@ impl Contract {
         let Some(won) = m.outcome else {
             return 0;
         };
+        let mut done = vec![];
         while m.scored < m.n && *budget > 0 {
             // entries at or above `scored` have no verdict, so `claim` has not removed them
             let e = self
@@ -762,20 +804,41 @@ impl Contract {
             };
             e.verdict = Some(v);
             if v != Verdict::Void {
-                let s = self.board.entry(e.account.clone()).or_default();
-                s.count += 1;
-                if v == Verdict::Right {
-                    s.right += 1;
-                    s.streak += 1;
-                    s.best = s.best.max(s.streak);
-                } else {
-                    s.streak = 0;
-                }
+                done.push((e.account.clone(), v == Verdict::Right));
             }
             m.scored += 1;
             *budget -= 1;
         }
-        m.n - m.scored
+        let left = m.n - m.scored;
+        for (who, right) in done {
+            self.tally(who, right);
+        }
+        left
+    }
+
+    /// Counts one non-void verdict for `who`, creating its board row (and noting its storage as
+    /// owed) on the first, and moves it on the ranked board.
+    fn tally(&mut self, who: AccountId, right: bool) {
+        if !self.board.contains_key(&who) {
+            let before = env::storage_usage();
+            self.board.insert(who.clone(), Stats::default());
+            self.board.flush();
+            let owed = storage_cost_since(before);
+            self.board.get_mut(&who).expect("row").storage_owed = U128(owed);
+        }
+        let s = self.board.get_mut(&who).expect("row");
+        s.count += 1;
+        if right {
+            s.right += 1;
+            s.streak += 1;
+            s.best = s.best.max(s.streak);
+        } else {
+            s.streak = 0;
+        }
+        if s.count >= MIN_RANKED {
+            let net = 2 * s.right as i64 - s.count as i64;
+            rank(self.top.get_mut(), &who, net);
+        }
     }
 
     fn market_view(&self, id: u64, slot: u32) -> Option<MarketView> {
