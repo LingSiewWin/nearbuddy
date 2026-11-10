@@ -125,6 +125,7 @@ async function stub(page: Page, arenaBody: () => unknown) {
     r.fulfill({ json: { symbol: "NEAR/USD", price: "3.7111", source: "coinbase", at: Date.now() } }),
   );
   await page.route("**/api/chaos", (r) => r.fulfill({ status: 503, json: { error: "solver offline", offline: true } }));
+  await page.route("**/api/predict?**", (r) => r.fulfill({ json: { at: now, markets: [], held: [] } })); // predict.spec.ts
 }
 const shot = async (page: Page, name: string) => {
   if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/${name}.png`, fullPage: true });
