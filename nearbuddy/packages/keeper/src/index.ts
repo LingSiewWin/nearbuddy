@@ -7,7 +7,9 @@
 //
 // Env: NEAR_AI_API_KEY (required), NEAR_AI_BASE, ARENA_CONTRACT, NEAR_NETWORK, KEEPER_ID (= --account), KEEPER_RPC
 // (comma-separated; else NEAR_RPC, else https://rpc.testnet.fastnear.com on testnet), KEEPER_BUDGET_USD (default 1.5).
-// The account key comes from NEAR_KEY_<ACCOUNT> or ~/.near-credentials (chain.ts loadKey) and is never printed.
+// The account key comes from NEAR_KEY_<ACCOUNT> or ~/.near-credentials (chain.ts loadKey) and is never printed. It must
+// be a full-access key: open_slot and submit_completion take a storage deposit (KEEPER_DEPOSIT, the excess comes back),
+// and NEAR refuses any deposit from a function-call key. Run the keeper from a dedicated, low-balance account.
 // Exit: 0 done, 1 budget cap or a fatal error, 75 NEAR AI Cloud down (as runner.py --max-model-failures).
 import "../../protocol/src/env.ts";
 import { parseArgs } from "node:util";
