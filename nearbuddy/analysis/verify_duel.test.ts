@@ -697,3 +697,44 @@ test("shieldGain from deploy 17: only the Held records count", () => {
   assert.equal(shieldGain([...t, { target: "A", self: true, outcome: "Held" }], "A", false, true), 1);
   assert.equal(shieldGain(t, "A", true, true), 0); // a forfeit win
 });
+
+// Deploy 18: the first keyless duel, testnet nb-keyless-arena-1111.testnet #0 (two keyless agents on
+// z-ai/glm-5.3-flash driven by packages/keeper, a headline planted at B), saved with --save.
+test("keyless duel: every line passes, and a forged strategy, reveal or pin fails its line", () => {
+  const e = load("keyless_0");
+  const lines = checkDuel(e);
+  assert.deepEqual(fails(lines), []);
+  for (const s of ["A", "B"])
+    for (const c of ["price", "request", "response", "TEE signer", "TEE signature", "proof_hash", "decision", "timing"])
+      assert.deepEqual(result(lines, `keyless ${s} ${c}`), ["PASS"], `keyless ${s} ${c}`);
+  const forged = (f: (x: Evidence) => void) => {
+    const x = structuredClone(e);
+    f(x);
+    return fails(checkDuel(x));
+  };
+  const b = e.now.duel!.b;
+  // the request is rebuilt from the strategy on chain: another strategy is another request, which the enclave
+  // never signed and the intent's proof_hash does not commit to
+  assert.deepEqual(
+    forged((x) => {
+      x.keyless![b]!.strategy = "Always long.";
+    }),
+    ["keyless B request", "keyless B TEE signature", "keyless B proof_hash"],
+  );
+  // a reveal of other bytes: they do not hash to the commit, and they read another decision
+  assert.deepEqual(
+    forged((x) => {
+      const r = receipts(x, "reveal_completion").find((y) => args(y).agent === b)!;
+      const content = JSON.stringify({ direction: "short", size_bps: 900 });
+      const response = JSON.stringify({ choices: [{ message: { role: "assistant", content } }] });
+      setArgs(r, { ...args(r), response: b64.enc(new TextEncoder().encode(response)) });
+    }),
+    ["keyless B response", "keyless B TEE signature", "keyless B proof_hash", "keyless B decision"],
+  );
+  assert.deepEqual(
+    forged((x) => {
+      for (const k of Object.keys(x.pinned)) x.pinned[k] = false;
+    }),
+    ["keyless A TEE signer", "keyless B TEE signer"],
+  );
+});
