@@ -583,10 +583,12 @@ agents/.venv/bin/python agents/runner.py --only B --wait-pairing        # add --
   in `in_duel` until the oracle callback and is skipped.
 
 The solver side is `PAIR_EVERY_S=60 bun run solver` (0, the default, keeps the loop off; `PAIR_EXCLUDE=<pk,pk>` keeps the operator's own two-sided pair out of the loop; `PAIR_MIN_BOND=<yocto>`,
-`DUEL_SECONDS=330`, `PAIR_SYMBOL=wrap.near` are optional). Every tick it reads `leaderboard`, keeps agents with
-`tee == true`, `in_duel == null` and `bond > PAIR_MIN_BOND`, sorts by pk, pairs neighbours (an odd agent waits one
-tick) and opens one `DUEL_SECONDS` duel per pair through `open_duel`. `GET /pairing` shows the next tick and the last
-50 duels it opened. Run either the two-sided runner or the pairing loop against one deployment, not both: the loop
+`DUEL_SECONDS=330`, `PAIR_SYMBOL=wrap.near`, `PAIR_STAGGER_S=60` are optional). Every tick it reads `leaderboard`,
+keeps agents with `tee == true`, `in_duel == null` and `bond > PAIR_MIN_BOND`, sorts by pk, pairs neighbours (an odd
+agent waits one tick) and opens one duel per pair through `open_duel`. Each new duel closes at least `PAIR_STAGGER_S`
+seconds from every running duel (the excluded pair's included; 0 turns it off), so countdowns overlap and the next
+close is never all of them at once; a duel is never shorter than `DUEL_SECONDS`, only longer. `GET /pairing` shows the
+next tick, `stagger_s` and the last 50 duels it opened. Run either the two-sided runner or the pairing loop against one deployment, not both: the loop
 also pairs the demo agents A/B between rounds, and an idle verified agent with no runner behind it scores 0 bps.
 
 Follower fills (dry 1Click quotes at each intent) follow the agent's side: a Short sells the mandate amount of wNEAR
@@ -693,16 +695,8 @@ You see, in order:
 Open the settlement tx on nearblocks: one `settle_batch` call, one transfer receipt to the payee, an
 `EVENT_JSON` log with `"event":"settle"`.
 
-Live terminal-style dashboard (Next.js, read-only, polls the contract every 2 s and the local solver's ledger):
-
-```sh
-cd web && bun install && cd ..
-bun run web            # http://localhost:3000
-```
-
-Run `bun run demo` in another shell and watch the SOLVER box climb to 100 carried IOUs, then drop to 0 as the vault
-balance and the solver's lifetime counter move in the EVENTS box. Paste the base64 agent key printed at step 3 into
-the MANDATE box to watch `spent / allowance` update.
+The vault and the mandate are contract state: `get_vault`, `get_solver` and `get_mandate` on any RPC, or the vault
+account on nearblocks, show the same numbers the demo prints.
 
 Run the pieces separately if you prefer:
 
@@ -908,8 +902,9 @@ flowchart LR
 
 The runner holds the agent keys and the model API key; it never holds NEAR. The solver account is the contract
 owner and its one registered solver; it pays gas, oracle deposits and bonds for hosted agents. Spectators and
-followers sign their own NEAR transactions. The web app has no keys: its three API routes (`/api/state`,
-`/api/arena`, `/api/agent`) call contract views over the public RPC (the pages poll every 2-20 s); the solver's `GET /arena`
+followers sign their own NEAR transactions. The web app has no keys: its API routes (`/api/arena`,
+`/api/duel`, `/api/agent`, `/api/flips`, `/api/verify`) call contract views over the public RPC (the pages poll every 2-20 s; `/api/spot` reads
+a public NEAR/USD trade price for display only); the solver's `GET /arena`
 only adds injection payloads, quotes and fills when it is reachable.
 
 One duel, in order:
