@@ -36,6 +36,8 @@ import {
 
 type Pane = 1 | 2 | 3 | 4 | 5;
 type Spot = { price: string; at: number };
+/** A spot price older than this is no price: a frozen number would read as a calm market. */
+const SPOT_MAX_AGE_MS = 30_000;
 /** GET /api/flips: answered attacks for the replay, and the saboteurs board. `chain_error`: the chain could not be
  *  read and no earlier good body exists; `unread`: duels whose records failed to read this time. */
 type Flips = {
@@ -233,6 +235,7 @@ export default function Term() {
   const cardAt = Math.floor(since / CARD_MS) + skip;
   const card = cards.length ? (cards[cardAt % cards.length] ?? null) : null;
   const beat = still ? 4 : Math.floor((since % CARD_MS) / 1000); // 0-1 headline, 2-3 + answer, 4+ + verdict
+  const live = spot && now - spot.at <= SPOT_MAX_AGE_MS ? Number(spot.price) : null;
   const closeMs = duel ? Number(BigInt(duel.close_at) / 1_000_000n) : 0;
   const open = !!duel && !duel.resolved && closeMs > now;
   const left = duel && open ? countdown(duel.close_at, now) : null;
@@ -597,7 +600,9 @@ export default function Term() {
   // void_duel writes both prices 0: the oracle never answered and the duel was never played
   const voided = !!duel?.resolved && isVoid(duel.outcome);
   const closePx = duel?.outcome?.close_price ? Number(duel.outcome.close_price) / 1e8 : null;
-  const spotPx = duel?.resolved ? closePx : spot ? Number(spot.price) : null;
+  // resolved: the oracle's close; open: the live price; closed and waiting for the oracle: no number, since the live
+  // price after the close is not what the duel settles on
+  const spotPx = duel?.resolved ? closePx : open ? live : null;
   const move = openPx && spotPx ? ((spotPx / openPx - 1) * 1e4).toFixed(1) : null;
   const attacks = duel ? attacksOf(duel) : 0;
   const callCells = (t: Target): Cell[] => {
@@ -746,10 +751,10 @@ export default function Term() {
               { t: duel.symbol === "wrap.near" ? "NEAR/USD" : duel.symbol, c: "hi" },
               { t: "  open ", c: "dim" },
               openPx ? openPx.toFixed(4) : { t: voided ? "void: no oracle price" : "oracle pending", c: "dim" },
-              { t: duel.resolved ? "  close " : "  now ", c: "dim" },
+              { t: open ? "  now " : "  close ", c: "dim" },
               spotPx
                 ? spotPx.toFixed(4)
-                : { t: voided ? "void: no oracle price" : duel.resolved ? "oracle pending" : "reading", c: "dim" },
+                : { t: voided ? "void: no oracle price" : open ? "reading" : "oracle pending", c: "dim" },
               move ? { t: `  ${Number(move) >= 0 ? "+" : ""}${move} bps`, c: Number(move) >= 0 ? "win" : "loss" } : "",
             ]}
           />
@@ -1187,7 +1192,7 @@ export default function Term() {
                     : " reading the arena "}
           </span>
           <span aria-hidden="true">│</span>
-          <span title="live trade price, display only; duels settle on the oracle">{`${two ? " NEAR/USD" : ""} ${spot ? Number(spot.price).toFixed(4) : "…"} `}</span>
+          <span title="live trade price, display only; duels settle on the oracle">{`${two ? " NEAR/USD" : ""} ${live ? live.toFixed(4) : "…"} `}</span>
           <span aria-hidden="true">│</span>
           <button type="button" className="barbtn" onClick={() => run(account ? "disconnect" : "connect")}>
             {account ? ` ${account} ` : two ? " connect wallet " : " connect "}

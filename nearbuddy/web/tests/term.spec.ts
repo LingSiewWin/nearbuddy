@@ -121,7 +121,9 @@ async function stub(page: Page, arenaBody: () => unknown) {
   await page.route("**/api/arena", (r) => r.fulfill({ json: arenaBody() }));
   await page.route("**/api/board", (r) => r.fulfill({ json: board }));
   await page.route("**/api/flips", (r) => r.fulfill({ json: flips }));
-  await page.route("**/api/spot", (r) => r.fulfill({ json: { symbol: "NEAR/USD", price: "3.7111", source: "coinbase", at: now } }));
+  await page.route("**/api/spot", (r) =>
+    r.fulfill({ json: { symbol: "NEAR/USD", price: "3.7111", source: "coinbase", at: Date.now() } }),
+  );
   await page.route("**/api/chaos", (r) => r.fulfill({ status: 503, json: { error: "solver offline", offline: true } }));
 }
 const shot = async (page: Page, name: string) => {
@@ -291,6 +293,31 @@ test.describe("no duel live", () => {
     await pane(page, 2).getByRole("button", { name: /watch duel 4/ }).click();
     await expect(page.locator("#cmdline")).toHaveValue(/^duel 4(77|58)$/);
     await shot(page, "term-replay-390");
+  });
+});
+
+test.describe("prices the duel does not settle on", () => {
+  test.use({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
+
+  test("a spot price older than 30 s is no price: no live P&L, the bar waits", async ({ page }) => {
+    await stub(page, () => arena("Short", true));
+    await page.route("**/api/spot", (r) =>
+      r.fulfill({ json: { symbol: "NEAR/USD", price: "3.7111", source: "coinbase", at: Date.now() - 60_000 } }),
+    );
+    await page.goto("/");
+    await expect(pane(page, 2)).toContainText("closes in");
+    await expect(pane(page, 2)).toContainText("now reading");
+    await expect(pane(page, 2)).not.toContainText("+15.0 bps");
+    await expect(page.locator("header")).toContainText("NEAR/USD …");
+  });
+
+  test("a duel closed and waiting for the oracle shows no live move", async ({ page }) => {
+    const closed = { ...duel("Short"), close_at: NS(Date.now() - 60_000) };
+    await stub(page, () => ({ ...arena("Short", true), duels: [closed] }));
+    await page.goto("/");
+    await expect(pane(page, 2)).toContainText("closed · waiting for the oracle");
+    await expect(pane(page, 2)).toContainText("close oracle pending");
+    await expect(pane(page, 2)).not.toContainText("bps");
   });
 });
 
