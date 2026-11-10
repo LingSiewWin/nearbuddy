@@ -17,7 +17,8 @@ import {
   verifySummary,
 } from "../../cells";
 import { NO_OUTCOME, noOutcome } from "../../eras";
-import type { AgentView as Agent } from "../../lib/abi/arena"; // passed through unchanged by the API route
+import type { AgentView as Agent, Chaos } from "../../lib/abi/arena"; // passed through unchanged by the API route
+import { attacksOf } from "../../term/model";
 import {
   addrHref,
   agentHref,
@@ -71,6 +72,8 @@ type Duel = {
   last_intent_b: Intent | null;
   outcome?: Outcome | null;
   open_price?: string | null;
+  /** Deploy 17: every planted headline with its arm, outcome and payout (get_chaos). */
+  chaos?: Chaos[] | null;
 };
 /** GET /api/events: the duel's open tx and commit/intent events from FastNEAR's window of the newest arena txs. */
 type Events = {
@@ -99,6 +102,13 @@ const openMs = (d: { open_at?: string | null }) =>
 const when = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(0, 19).replace("T", " ");
 const proven = (i: Intent | null) => hasProof(i, ZERO);
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
+const OUTCOME: Record<Chaos["outcome"], [string, string]> = {
+  Pending: ["pending", "open"],
+  Flipped: ["FLIPPED", "loss"],
+  Held: ["HELD", "win"],
+  NoTrial: ["not counted", "dim"],
+  Expired: ["expired", "dim"],
+};
 
 export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -215,6 +225,8 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
   const pa = o?.pnl_a ?? 0;
   const pb = o?.pnl_b ?? 0;
   const injections = d?.injections ?? [];
+  const records = d?.chaos ?? [];
+  const attacks = d ? attacksOf(d) : 0;
 
   return (
     <>
@@ -380,36 +392,57 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
 
         {boxTitle(3, "attacks", "paid prompt injections at a side, recorded on-chain")}
         {"\n"}
-        {d?.resolved
-          ? rowx("attacks", [
-              `${o?.injections ?? 0} during the duel`,
-              { t: "   payloads leave contract storage at resolve; only the count survives", c: "dim" },
-            ])
-          : injections.length
-            ? injections.map((j, k) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
-                <span key={k}>
-                  {rowx(k ? "" : "attacks", [
-                    kindCell(j.kind),
-                    " → ",
-                    {
-                      t: `${tag(j.target)} ${name(j.target)}`.slice(0, 30),
-                      href: agentHref(j.target),
-                      title: j.target,
-                    },
-                    " ".repeat(Math.max(2, 32 - `${tag(j.target)} ${name(j.target)}`.length)),
-                    "sha256 ",
-                    { t: short(j.payload_hash, 12), title: j.payload_hash },
-                    "  block ",
-                    { t: j.block, href: blockHref(j.block), c: "dim" },
-                  ])}
-                  {"\n"}
-                </span>
-              ))
-            : rowx("attacks", [{ t: "none yet", c: "dim" }])}
-        {d?.resolved || !injections.length ? "\n" : ""}
+        {records.length
+          ? records.map((c, k) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: get_chaos order, append-only
+              <span key={k}>
+                {rowx(`#${k} ${tag(c.target)}`, [
+                  { t: `${(c.kind === "Placebo" ? "placebo" : c.kind.toUpperCase()).padEnd(7)} `, c: "dim" },
+                  { t: `${c.arm.toLowerCase().padEnd(6)} `, c: "dim" },
+                  { t: OUTCOME[c.outcome][0].padEnd(12), c: OUTCOME[c.outcome][1] },
+                  BigInt(c.stake) > 0n
+                    ? { t: `${near(c.stake)} in → ${near(c.payout)} out  `, c: "ok", title: `paid to ${c.injector}` }
+                    : "",
+                  { t: `"${c.headline}"`, c: "warn", title: `${c.headline} · by ${c.injector}` },
+                ])}
+                {"\n"}
+              </span>
+            ))
+          : d?.resolved
+            ? rowx("attacks", [
+                `${attacks} during the duel`,
+                {
+                  t: attacks ? "   planted before deploy 17: only the count stays on chain" : "",
+                  c: "dim",
+                },
+              ])
+            : injections.length
+              ? injections.map((j, k) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
+                  <span key={k}>
+                    {rowx(k ? "" : "attacks", [
+                      kindCell(j.kind),
+                      " → ",
+                      {
+                        t: `${tag(j.target)} ${name(j.target)}`.slice(0, 30),
+                        href: agentHref(j.target),
+                        title: j.target,
+                      },
+                      " ".repeat(Math.max(2, 32 - `${tag(j.target)} ${name(j.target)}`.length)),
+                      "sha256 ",
+                      { t: short(j.payload_hash, 12), title: j.payload_hash },
+                      "  block ",
+                      { t: j.block, href: blockHref(j.block), c: "dim" },
+                    ])}
+                    {"\n"}
+                  </span>
+                ))
+              : rowx("attacks", [{ t: d ? "0 so far: the inject pane on / plants one" : "loading", c: "dim" }])}
+        {records.length || (!d?.resolved && injections.length) ? "" : "\n"}
         {legend(
-          "attack = anyone pays a deposit to send one prompt to one side mid-duel · sha256 = hash of that prompt",
+          records.length
+            ? "attack = anyone pays chaos_fee to plant one headline at one side mid-duel · FLIPPED = the side's next proved call moved to the lie's side · in → out = stake and what claim_chaos pays"
+            : "attack = anyone pays a deposit to send one prompt to one side mid-duel · sha256 = hash of that prompt",
         )}
         {"\n"}
         {bottom()}

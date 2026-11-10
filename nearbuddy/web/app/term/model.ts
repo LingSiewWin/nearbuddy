@@ -71,6 +71,12 @@ const nsToMs = (ns: string) => Number(BigInt(ns) / 1_000_000n);
 /** "z-ai/glm-5.3-flash" -> "glm-5.3-flash". */
 export const shortModel = (id: string | null | undefined) => (id ? (id.split("/").pop() ?? id) : "?");
 
+/** Attacks on a duel. Deploy 17 lists each one (`get_chaos`); a duel attacked before deploy 17 has no records there,
+ *  but the contract counted its attacks at resolve (`outcome.injections`), and an open deploy-16 duel lists them in
+ *  `injections`: the largest is the count every pane shows. */
+export const attacksOf = (d: Duel): number =>
+  Math.max(d.chaos?.length ?? 0, d.outcome?.injections ?? 0, d.injections.length);
+
 /** The duel pane 2 follows: one taking calls now, else one closed and awaiting its oracle, else the newest. */
 export function pickLive(duels: (Duel | null)[] | undefined, nowMs: number): Duel | null {
   const list = (duels ?? []).filter((d): d is Duel => !!d);
@@ -226,7 +232,7 @@ export function fields(s: Snap | null, b: Board | null, d: Duel | null): Record<
     out[`duel:${d.id}:a`] = d.last_intent_a ? `${d.last_intent_a.side}:${d.last_intent_a.size_bps}` : "";
     out[`duel:${d.id}:b`] = d.last_intent_b ? `${d.last_intent_b.side}:${d.last_intent_b.size_bps}` : "";
     out[`duel:${d.id}:pot`] = d.pool;
-    out[`duel:${d.id}:attacks`] = String(d.chaos?.length ?? d.injections.length);
+    out[`duel:${d.id}:attacks`] = String(attacksOf(d));
     out[`duel:${d.id}:state`] = d.resolved ? "resolved" : "open";
     for (const [i, c] of (d.chaos ?? []).entries()) out[`duel:${d.id}:chaos:${i}`] = c.outcome;
   }

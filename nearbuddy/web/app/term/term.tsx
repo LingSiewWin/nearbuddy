@@ -13,6 +13,7 @@ import * as wallet from "../lib/wallet";
 import { agentHref, countdown, duelHref, getJson, NETWORK_ID, near, short, txHref, ZERO } from "../tui";
 import { Box, type Cell, col, FlashCtx, Line, Note, Slot, wrap } from "./box";
 import {
+  attacksOf,
   type Board,
   changed,
   type Duel,
@@ -641,12 +642,7 @@ export default function Term() {
               { t: "pot ", c: "dim" },
               { t: `${near(duel.pool)} NEAR`, k: `duel:${duel.id}:pot` },
               { t: "  attacks ", c: "dim" },
-              {
-                t: String(
-                  duel.chaos?.length ?? (duel.resolved ? (duel.outcome?.injections ?? 0) : duel.injections.length),
-                ),
-                k: `duel:${duel.id}:attacks`,
-              },
+              { t: String(attacksOf(duel)), k: `duel:${duel.id}:attacks` },
               { t: "  next attack ", c: "dim" },
               { t: open && price ? `${near(price)} NEAR` : "-", c: "warn", k: "price" },
             ]}

@@ -2,7 +2,18 @@
 // changed cells flash after a poll.
 import { expect, test } from "bun:test";
 import type { Chaos } from "../lib/abi/arena";
-import { changed, type Duel, feed, fields, pickLive, type Snap, shortModel, textsOf, VERDICT_OF } from "../term/model";
+import {
+  attacksOf,
+  changed,
+  type Duel,
+  feed,
+  fields,
+  pickLive,
+  type Snap,
+  shortModel,
+  textsOf,
+  VERDICT_OF,
+} from "../term/model";
 
 const NS = (ms: number) => String(BigInt(ms) * 1_000_000n);
 const now = Date.UTC(2026, 10, 9, 12);
@@ -29,6 +40,20 @@ test("pane 2 follows a duel taking calls, then one awaiting its oracle, then the
   expect(pickLive([old], now)?.id).toBe("10");
   expect(pickLive([], now)).toBeNull();
   expect(pickLive(undefined, now)).toBeNull();
+});
+
+test("one attack count per duel: chain records, else the count kept at resolve, else the open list (duel 462)", () => {
+  const inj = { kind: "fake_news/web", payload_hash: "h", target: "B=", block: "1" };
+  // deploy 16 attack read under deploy 17: get_chaos is empty, the outcome still counts it
+  const d462 = duel("462", now - 600_000, true, {
+    chaos: [],
+    outcome: { pnl_a: -3, pnl_b: -3, winner: null, injections: 1 },
+  });
+  expect(attacksOf(d462)).toBe(1);
+  expect(fields(null, null, d462)["duel:462:attacks"]).toBe("1");
+  expect(attacksOf(duel("13", now + 1, false, { injections: [inj, inj] }))).toBe(2);
+  expect(attacksOf(duel("14", now + 1, false, { chaos: null, injections: [inj] }))).toBe(1);
+  expect(attacksOf(duel("15", now + 1, false))).toBe(0);
 });
 
 test("the feed puts this browser's attacks first, then attacks on open duels, then the dataset's", () => {
