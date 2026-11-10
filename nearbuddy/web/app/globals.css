@@ -118,11 +118,22 @@ button.lnk {
     font-size: 11.5px;
     padding: 10px;
   }
-  /* rows wrap instead of scrolling: the right padding and border go, box rules clip at the viewport */
+  /* a 112-column box cannot fit 375 px: its rows reflow instead. Borders and padding go, each row is one block of
+     "label value" text that wraps at words (a hash breaks anywhere), and box rules clip at the viewport */
   pre {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     overflow-x: hidden;
+  }
+  pre:not(.wrap) {
+    white-space: normal;
+  }
+  pre .r {
+    display: block;
+    padding: 0.1em 0;
+  }
+  pre .r .k {
+    color: var(--dim);
   }
   .pad {
     display: none;
@@ -131,6 +142,7 @@ button.lnk {
     display: block;
     white-space: pre;
     overflow: hidden;
+    margin-top: 0.6em;
   }
 }
 @media (prefers-color-scheme: light) {

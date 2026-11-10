@@ -1,7 +1,7 @@
 // Terminal-UI primitives shared by /arena, /agent and /duel: fixed-width boxes, rows, bars and links drawn
 // with box-drawing characters inside a <pre>, btop-style (numbered box titles, block-character bars).
-// Every line is exactly W characters wide; under 600 px the trailing padding is hidden and rows wrap
-// (globals.css), so the text stays readable on a phone at the cost of the right border.
+// Every line is exactly W characters wide. Under 600 px (globals.css) a row drops its borders and padding and reflows
+// as "label value" text wrapping at words, and box rules clip at the screen edge, so nothing breaks mid-column.
 import type { ReactNode } from "react";
 import { NETWORK_ID, NETWORKS, type NetworkId } from "./network";
 
@@ -85,15 +85,18 @@ export const rowx = (k: string | Cell | Cell[], v: Cell[], kc?: string): ReactNo
   const [key, ku] = cells(ks, KEY, kc);
   const [val, vu] = cells(v, VW);
   return (
-    <>
-      {"│ "}
-      {key}
-      {" ".repeat(KEY - ku)} {val}
+    <span className="r">
+      <span className="pad">{"│ "}</span>
+      <span className="k">
+        {key}
+        {" ".repeat(KEY - ku)}
+      </span>{" "}
+      <span className="v">{val}</span>
       <span className="pad">
         {" ".repeat(VW - vu)}
         {" │"}
       </span>
-    </>
+    </span>
   );
 };
 export const row = (k: string, v: string) => rowx(k, [v]);
