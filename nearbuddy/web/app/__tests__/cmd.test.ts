@@ -116,3 +116,8 @@ test("predict: a free prediction on the duel's winner or on one attack, its clic
   expect(complete("predict 480 1 f", known)).toEqual({ line: "predict 480 1 fooled ", options: [] });
   expect(complete("claim p", known)).toEqual({ line: "claim predictions ", options: [] });
 });
+
+test("duel ids are canonical: a leading zero is refused, so a held '480' always matches", () => {
+  expect(parse("predict 0480 A")).toMatchObject({ k: "error" });
+  expect(parse("predict 0 A")).toMatchObject({ k: "predict", duel: "0" });
+});

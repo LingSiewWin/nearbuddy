@@ -51,7 +51,7 @@ export const COMMANDS = [
 ] as const;
 const NAMES: readonly string[] = [...COMMANDS.map((c) => c.name), "disconnect"];
 
-const ID_RE = /^\d{1,12}$/;
+const ID_RE = /^(0|[1-9]\d{0,11})$/;
 /** The predict contract's bound: 32 attacks per duel, numbered from 0 as pane 2 and `get_chaos` list them. */
 const MAX_ATTACK = 31;
 const PICKS = new Map<string, Pick>([

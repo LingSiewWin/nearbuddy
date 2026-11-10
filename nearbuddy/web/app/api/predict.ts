@@ -51,7 +51,9 @@ export function marketsOf(
   const at = BigInt(duel.open_at);
   const close = BigInt(duel.close_at);
   const half = at + (close - at) / 2n;
-  const duelOpen = !duel.resolved && lock !== null && nowNs < half && nowNs + BigInt(lock) < close;
+  // 30 s margin: a body may be ~20 s old (caches + poll) and signing takes time; the contract stays the authority
+  const margin = 30_000_000_000n;
+  const duelOpen = !duel.resolved && lock !== null && nowNs + margin < half && nowNs + margin + BigInt(lock) < close;
   // the duel market's label, and a closed market's (never shown)
   const plain: Label = { steered_by: null, open_until_reveal: false };
   return [

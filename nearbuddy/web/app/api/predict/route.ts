@@ -9,7 +9,7 @@ import { MAX_INJECTIONS, marketsOf, type Opens } from "../predict";
 
 const EDGE = "public, s-maxage=3, stale-while-revalidate=10";
 const TTL = 3_000;
-const ID_RE = /^\d{1,12}$/;
+const ID_RE = /^(0|[1-9]\d{0,11})$/;
 // a NEAR account id: 2 to 64 characters, lowercase letters and digits joined by single - _ or . separators
 const ACCOUNT_RE = /^(?=.{2,64}$)(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
 /** An arena without `chaos_open` (deploy 17) fails that view; asked again after this long, not on every build. */
@@ -49,7 +49,8 @@ export async function GET(req: Request) {
   try {
     return json(await p, 200, EDGE);
   } catch (e) {
-    return hit ? json(hit.body, 200, EDGE) : failed(e);
+    // a stale body may say open after the market closed: serve it only while it is under 30 s old
+    return hit && Date.now() - hit.at < 30_000 ? json(hit.body, 200, EDGE) : failed(e);
   }
 }
 
