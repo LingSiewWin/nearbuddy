@@ -1,11 +1,12 @@
 // The NearBuddy MCP tools, so an agent can read the arena and plant a headline with its own key. Reads go through a
 // Reader (the site's own API bodies in production, fixtures in tests). The server holds no key and signs nothing:
-// `inject` and `claim` validate their input with the contract's rules and hand back the unsigned call, which the
-// agent signs and sends itself. Mounted at /api/mcp (route.ts); tested in app/__tests__/mcp.test.ts.
+// `inject`, `claim` and `enter` validate their input with the contract's rules and hand back the unsigned call, which
+// the agent signs and sends itself. Mounted at /api/mcp (route.ts); tested in app/__tests__/mcp.test.ts.
 import type { McpServer } from "@modelcontextprotocol/server";
 import { getPublicOrigin } from "mcp-handler";
 import { z } from "zod";
 import type { AgentView, Duel as ChainDuel, Chaos } from "../../lib/abi/arena";
+import { DEFAULT_BOND_NEAR, enterCall, MIN_BOND_NEAR } from "../../lib/enter";
 import type { Score } from "../../lib/fool";
 import { wilson } from "../../lib/fool";
 import { adapterFor, type Call, claimable, claimCall, isChaosV2 } from "../../lib/inject";
@@ -31,6 +32,8 @@ export type Reader = {
   fee(id: string): Promise<string>;
   /** deploy 16 only: what the browser's POST /api/chaos does (relay the text to the solver for its hash). */
   fetcher: typeof fetch;
+  /** The keyless arena (deploy 18, null on a network without one) and the models pinned on it (api/keyless.ts). */
+  keyless(): Promise<{ contract: string | null; models: { model_id: string; signer: string }[] }>;
 };
 
 // a number is taken too (some clients send 483 for "483"); the contract's U64 is a string on the wire
@@ -193,6 +196,47 @@ export async function inject(input: z.infer<typeof injectInput>, read: Reader): 
   });
 }
 
+export const enterInput = z.object({
+  model_id: z.string().describe("a model pinned on the keyless arena; a wrong one is refused with the pinned list"),
+  strategy: z
+    .string()
+    .describe("the agent's strategy, the last line of its system prompt: printable ASCII, 1 to 512 bytes, one line"),
+  bond_near: z
+    .string()
+    .optional()
+    .describe(
+      `NEAR to attach, default ${DEFAULT_BOND_NEAR}, at least ${MIN_BOND_NEAR}: the bond, less its records' storage`,
+    ),
+  signer_id: ACCOUNT.optional().describe(
+    "your NEAR account: it becomes the agent's owner; fills signerId and the CLI line",
+  ),
+});
+
+/** `enter`: the contract's checks (strategy, model id, a pinned model, the bond), then the unsigned register_keyless. */
+export async function enter(input: z.infer<typeof enterInput>, read: Reader): Promise<Out> {
+  const { contract, models } = await read.keyless();
+  if (!contract) return fail(`no keyless arena on ${read.network} yet`);
+  const pinned = models.map((m) => m.model_id);
+  if (!pinned.includes(input.model_id))
+    return fail(`model_id must be a model pinned on ${contract}: ${pinned.join(", ") || "none pinned yet"}`);
+  let call: Call;
+  try {
+    call = enterCall(contract, input);
+  } catch (e) {
+    return fail(`the contract would refuse this: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return ok({
+    deploy: 18,
+    network: read.network,
+    contract,
+    model_id: input.model_id,
+    deposit_yocto: call.deposit,
+    deposit_near: near(call.deposit),
+    ...unsigned(call, read.network, input.signer_id),
+    note: "Unsigned: sign and send it with your own key; you become the owner. The call returns the agent's AgentView (pk = its id). No agent key exists: the contract builds each request (keyless_request), anyone may keep the agent by posting those bytes to NEAR AI Cloud and calling submit_completion with the enclave's signature. Watch it at /enter?agent=<pk>.",
+  });
+}
+
 /** Every tool on one server. */
 export function register(server: McpServer, read: Reader) {
   const ro = { readOnlyHint: true, openWorldHint: true } as const;
@@ -311,6 +355,17 @@ export function register(server: McpServer, read: Reader) {
         ...unsigned(claimCall(contract, duel_id), read.network, account_id),
       });
     },
+  );
+  server.registerTool(
+    "enter",
+    {
+      title: "Enter a keyless AI agent (unsigned)",
+      description:
+        "Builds register_keyless(model_id, strategy, template_version 1) on the keyless arena: an AI trading agent with no key of its own. The contract writes its prompt from chain state plus your strategy, a NEAR AI Cloud enclave signs the model's reply, the contract parses the decision; any keeper drives it. Checks the strategy with the contract's exact rules and that the model is pinned. Returns the UNSIGNED transaction (deposit = the bond) for you to sign with your own NEAR account, which becomes the owner; this server never signs.",
+      inputSchema: enterInput,
+      annotations: ro,
+    },
+    (input) => enter(input, read),
   );
   server.registerTool(
     "verify",

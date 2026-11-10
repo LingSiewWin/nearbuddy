@@ -1,6 +1,6 @@
 // /api/mcp: the NearBuddy MCP server (Streamable HTTP, stateless). Tools in ./tools.ts; they read this site's own
-// API routes (same caches as the page) and the arena's views. No key lives here and nothing is signed: `inject` and
-// `claim` return unsigned calls for the agent's own wallet.
+// API routes (same caches as the page) and the arena's views. No key lives here and nothing is signed: `inject`,
+// `claim` and `enter` return unsigned calls for the agent's own wallet.
 import { createMcpHandler } from "mcp-handler";
 import board from "../../data/board.json";
 import { NET, NETWORK_ID } from "../../network";
@@ -9,6 +9,7 @@ import { GET as agentRoute } from "../agent/route";
 import { GET as arenaRoute } from "../arena/route";
 import { relayChaos } from "../chaos";
 import { GET as duelRoute } from "../duel/route";
+import { KEYLESS_ARENA, pinnedModels } from "../keyless";
 import { arenaView, SOLVER_URL } from "../near";
 import { type Reader, register } from "./tools";
 
@@ -32,6 +33,7 @@ const read: Reader = {
   // deploy 16.1: the browser's POST /api/chaos, called in process; MCP callers share one rate-limit bucket
   fetcher: ((path: string, init?: RequestInit) =>
     relayChaos(new Request(`http://mcp.local${path}`, init), SOLVER_URL, "mcp")) as typeof fetch,
+  keyless: async () => ({ contract: KEYLESS_ARENA, models: await pinnedModels() }),
 };
 
 const handler = createMcpHandler((server) => register(server, read), {

