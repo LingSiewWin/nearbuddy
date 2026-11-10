@@ -1,6 +1,7 @@
 // GET /api/keyless/verify?duel=N: /api/verify's checks (lib/verify.ts, the same as `bun run verify-duel N`) on a duel
-// of the keyless arena, which /api/verify does not read (it is fixed to ARENA_CONTRACT). Same caching: a complete
-// result for good, an incomplete one 60 s, a failure 45 s, one scan per duel at a time.
+// of the keyless arena, which /api/verify does not read (it is fixed to ARENA_CONTRACT). Same caching, except that a
+// result with a FAIL is kept 60 s like an incomplete one: a complete clean result for good, an error 45 s, one scan
+// per duel at a time.
 // ponytail: a copy of /api/verify's cache over another contract; one route with an arena allow-list once that file
 // is free to change.
 import { checkDuel, collect, incomplete, state } from "../../../lib/verify";
@@ -39,7 +40,8 @@ async function run(arena: string, id: string): Promise<string> {
     degraded,
     command,
   });
-  keep(id, body, degraded ? 60_000 : Number.POSITIVE_INFINITY);
+  // a FAIL is re-checked after 60 s too: collect() reads a view that failed (an RPC 429) as null, which fails a check
+  keep(id, body, degraded || counts.FAIL ? 60_000 : Number.POSITIVE_INFINITY);
   return body;
 }
 
