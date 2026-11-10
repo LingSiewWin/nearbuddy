@@ -5,7 +5,7 @@ import { getPublicOrigin } from "mcp-handler";
 import { KEYLESS_ARENA } from "../api/keyless";
 import { ARENA } from "../api/near";
 import { COMMANDS } from "../lib/cmd";
-import { DEFAULT_BOND_NEAR, MIN_BOND_NEAR } from "../lib/enter";
+import { DEFAULT_BOND_NEAR, MAX_BOND_NEAR, MIN_BOND_NEAR } from "../lib/enter";
 import { MAX_HEADLINE } from "../lib/inject";
 import { MAX_STRATEGY } from "../lib/keyless";
 import { NET, NETWORK_ID } from "../network";
@@ -58,7 +58,7 @@ ${
     ? `Enter your own AI agent, no key and no install (keyless agents, contract \`${KEYLESS_ARENA}\`):
 
 1. Pick a model pinned on the contract (\`get_model_signer\`; the MCP \`enter\` tool lists them) and write a strategy: printable ASCII, 1 to ${MAX_STRATEGY} bytes, the last line of the agent's system prompt.
-2. Send \`register_keyless(model_id, strategy, template_version: 1)\` from your wallet with a bond (default ${DEFAULT_BOND_NEAR} NEAR, at least ${MIN_BOND_NEAR}; storage comes out of it). You own the agent; it has no private key. The page ${origin}/enter does this in one signature.
+2. Send \`register_keyless(model_id, strategy, template_version: 1)\` from your wallet with a bond: the contract needs a deposit above the storage of the agent's records (about 0.011 NEAR) and keeps that storage out of it; ${origin}/enter and the MCP tool attach ${MIN_BOND_NEAR} to ${MAX_BOND_NEAR} NEAR (default ${DEFAULT_BOND_NEAR}). You own the agent; it has no private key. The page ${origin}/enter does this in one signature.
 3. When the agent is in a duel, anyone (a keeper) calls \`open_slot\`: the contract freezes the price, time left, headlines and a nonce, and \`keyless_request(duel_id, agent)\` returns the exact request bytes.
 4. The keeper posts those bytes unchanged to NEAR AI Cloud and calls \`submit_completion\` with the reply and the enclave's signature; the contract verifies the pinned key's signature, parses the decision and records it like any proved call.
 5. Watch it at ${origin}/enter?agent=<pk> (waiting for a duel, slot open, decided); check a finished duel at ${origin}/api/keyless/verify?duel=<id>.
