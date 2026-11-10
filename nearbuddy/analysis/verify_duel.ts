@@ -20,6 +20,7 @@ import {
   teeText,
   verify,
 } from "../packages/protocol/src/intent.ts";
+import { type KeylessInputs, keylessRequest, parseDecision, SLOT_TTL_NS } from "../packages/protocol/src/keyless.ts";
 import { NET, NETWORK_ID } from "../packages/protocol/src/network.ts";
 
 // ---------------------------------------------------------------- the evidence (all public)
@@ -121,6 +122,9 @@ export type Evidence = {
   /** get_chaos(duel_id) read now: every planted headline with its stake, outcome and payout (kept after the finish).
    *  null when it was not read: a contract before deploy 17, or a failed read. */
   chaos?: Chaos[] | null;
+  // Deploy 18 (absent in evidence saved before it):
+  /** get_keyless for each side, read now: a keyless agent's strategy and template, null for a keyed agent. */
+  keyless?: Record<string, { strategy: string; template: number } | null>;
 };
 
 // ---------------------------------------------------------------- receipts
@@ -208,6 +212,11 @@ export function duelCalls(calls: Call[], id: string) {
     ),
     commits: ok.filter((c) => c.method === "commit_intent" && String(c.args.duel_id) === id),
     chaos: ok.filter((c) => c.method === "inject_chaos" && String(c.args.duel_id) === id),
+    // deploy 18: keyless agents' decision slots, their committed completions and reveals, and the oracle ticks
+    slots: ok.filter((c) => c.method === "open_slot" && String(c.args.duel_id) === id),
+    completions: ok.filter((c) => c.method === "commit_completion" && String(c.args.duel_id) === id),
+    reveals: ok.filter((c) => c.method === "reveal_completion" && String(c.args.duel_id) === id),
+    ticks: ok.filter((c) => c.method === "oracle_on_call" && c.args.msg === `tick:${id}`),
     void: voided,
     resolve,
     /** The receipt that scored or voided the duel: the payout state is read at its block. */
@@ -441,6 +450,11 @@ export function checkDuel(e: Evidence): Line[] {
     }
     if (stored.agent_pk !== pk)
       add("FAIL", `intent ${s}`, `stored intent is by ${short(stored.agent_pk, 12)}, not side ${s}`);
+    const kl = e.keyless?.[pk];
+    if (kl && ag) {
+      keyless(e, s, d, ag, kl, stored, calls, lockNs, add);
+      continue;
+    }
     const c = calls.intents.find((x) => sameIntent((x.args.signed as { intent: Intent }).intent, stored));
     if (!c) {
       add("SKIP", `intent ${s} signature`, "the receipt that posted it is not in the scanned txs");
@@ -592,8 +606,9 @@ export function checkDuel(e: Evidence): Line[] {
     const others = fin
       ? arenaCalls(e.txs, e.arena).filter((c) => c.ok && c.block_hash === fin.block_hash).length - 1
       : 0;
+    const forfeits = keeperForfeits(calls);
     const feesOk = (fees: bigint) => {
-      const gain = BigInt(a.config.owner_fees) - BigInt(b.config.owner_fees);
+      const gain = BigInt(a.config.owner_fees) - BigInt(b.config.owner_fees) - forfeits;
       if (!fees || gain === fees) return true;
       if (others <= 0) return false;
       add(
@@ -762,6 +777,150 @@ function timing(
       `intent ${s} commit`,
       `committed ${secs(close - commit.at_ns)} s before close: before the lock, tx ${commit.tx}`,
     );
+}
+
+/** Deploy 18: keeper bonds of keyless slots committed and never revealed, which the finish pays to owner fees. Only an
+ *  agent's last commit can be open at the finish: a slot is replaced only once revealed or never committed. */
+export function keeperForfeits(calls: ReturnType<typeof duelCalls>): bigint {
+  let sum = 0n;
+  for (const agent of new Set(calls.completions.map((c) => String(c.args.agent)))) {
+    const last = calls.completions.filter((c) => c.args.agent === agent).at(-1)!;
+    if (!calls.reveals.some((r) => r.args.agent === agent && r.at_ns >= last.at_ns)) sum += last.deposit;
+  }
+  return sum;
+}
+
+/** A keyless agent's scored decision (deploy 18), from its slot, commit and reveal receipts alone: the request bytes
+ *  rebuilt from chain state hash to the slot's request_hash, the slot's price is the oracle's, the enclave signed
+ *  `model:request_hash:response_hash`, the revealed response hashes to the commit, and its content parses to the
+ *  side and size the contract recorded. */
+function keyless(
+  e: Evidence,
+  s: string,
+  d: Duel,
+  ag: AgentView,
+  kl: { strategy: string; template: number },
+  stored: Intent,
+  calls: ReturnType<typeof duelCalls>,
+  lockNs: bigint | null,
+  add: (r: Line["result"], c: string, x: string) => void,
+) {
+  const pk = ag.pk;
+  type SlotValue = {
+    seq: string;
+    nonce: string;
+    opened_at: string;
+    price: string;
+    seen: number;
+    heads: number;
+    request_hash: string;
+  };
+  const open = calls.slots.find(
+    (c) => c.args.agent === pk && String((c.value as SlotValue | null)?.seq) === stored.nonce,
+  );
+  const commit = calls.completions.find((c) => c.args.agent === pk && String(c.args.seq) === stored.nonce);
+  const reveal = commit && calls.reveals.find((c) => c.args.agent === pk && c.at_ns >= commit.at_ns);
+  add(
+    "INFO",
+    `keyless ${s}`,
+    `no agent key: template ${kl.template}, strategy "${short(kl.strategy, 60)}"; decision = slot ${stored.nonce}`,
+  );
+  if (!open || !commit || !reveal) {
+    add(
+      "SKIP",
+      `keyless ${s} slot`,
+      `open_slot, commit_completion or reveal_completion of slot ${stored.nonce} is not in the scanned txs`,
+    );
+    return;
+  }
+  const slot = open.value as SlotValue;
+  // the price the request showed: the newest oracle tick stamped before close that landed before the slot, else open
+  const tick = calls.ticks
+    .filter((c) => c.at_ns <= BigInt(slot.opened_at))
+    .map((c) => c.args.data as { timestamp: string; prices: OraclePrice[] })
+    .filter((x) => BigInt(x.timestamp) < BigInt(d.close_at))
+    .sort((x, y) => (BigInt(x.timestamp) < BigInt(y.timestamp) ? -1 : 1))
+    .at(-1);
+  const tp = tick?.prices.find((x) => x.asset_id === d.symbol)?.price;
+  const want = tp ? String(price8(tp)) : d.open_price;
+  add(
+    slot.price === want ? "PASS" : "FAIL",
+    `keyless ${s} price`,
+    `slot ${slot.seq} shows ${usd(BigInt(slot.price))}: ${tp ? "the newest oracle tick before it" : "the oracle open price"} is ${want ? usd(BigInt(want)) : "none"}`,
+  );
+  const heads = Array.from({ length: slot.seen }, (_, i) => i).filter((i) => slot.heads & (1 << i));
+  const recs = heads.map((i) => e.chaos?.[i]);
+  if (heads.length && !recs.every((c) => c && c.target === pk)) {
+    add(
+      e.chaos ? "FAIL" : "SKIP",
+      `keyless ${s} request`,
+      e.chaos ? `the slot carries a headline not aimed at side ${s}` : "get_chaos was not read",
+    );
+    return;
+  }
+  let req: Uint8Array;
+  try {
+    const inputs: KeylessInputs = {
+      template_version: kl.template,
+      model_id: ag.model_id,
+      strategy: kl.strategy,
+      symbol: d.symbol,
+      open_price: d.open_price ?? "0",
+      price: slot.price,
+      seconds_left: String((BigInt(d.close_at) - BigInt(slot.opened_at)) / 1_000_000_000n),
+      duel_id: d.id,
+      seq: slot.seq,
+      nonce: slot.nonce,
+      headlines: recs.map((c) => ({ text: c!.headline, arm: c!.arm })),
+    };
+    req = keylessRequest(inputs);
+  } catch (x) {
+    add("FAIL", `keyless ${s} request`, `the slot's inputs do not build a request: ${(x as Error).message}`);
+    return;
+  }
+  const reqHash = new Uint8Array(createHash("sha256").update(req).digest());
+  add(
+    b64.enc(reqHash) === slot.request_hash ? "PASS" : "FAIL",
+    `keyless ${s} request`,
+    `rebuilt from chain state (price, ${heads.length} headline(s), nonce ${short(hex(b64.dec(slot.nonce)), 10)}): ${req.length} bytes, sha256 ${short(hex(reqHash), 10)} = slot request_hash (open_slot tx ${open.tx})`,
+  );
+  const response = b64.dec(String(reveal.args.response));
+  const resHash = new Uint8Array(createHash("sha256").update(response).digest());
+  add(
+    b64.enc(resHash) === commit.args.response_hash ? "PASS" : "FAIL",
+    `keyless ${s} response`,
+    `revealed ${response.length} bytes (tx ${reveal.tx}), sha256 ${short(hex(resHash), 10)} = committed response_hash (tx ${commit.tx}, by ${commit.signer})`,
+  );
+  const signer = String(commit.args.signer);
+  add(
+    e.pinned[signer] ? "PASS" : "FAIL",
+    `keyless ${s} TEE signer`,
+    `${short(signer, 12)} is_tee_signer = ${e.pinned[signer] ?? "unknown"} (read now)`,
+  );
+  add(
+    verify(signer, teeText(2, ag.model_id, reqHash, resHash), String(commit.args.signature)) ? "PASS" : "FAIL",
+    `keyless ${s} TEE signature`,
+    `enclave ed25519 over "${ag.model_id}:${short(hex(reqHash), 10)}:${short(hex(resHash), 10)}"`,
+  );
+  add(
+    proofHash(reqHash, resHash) === stored.proof_hash ? "PASS" : "FAIL",
+    `keyless ${s} proof_hash`,
+    `sha256(request_hash || response_hash) = intent proof_hash ${short(stored.proof_hash, 12)}`,
+  );
+  const got = parseDecision(response, slot.heads !== 0);
+  add(
+    got && got.side === stored.side && got.size_bps === stored.size_bps ? "PASS" : "FAIL",
+    `keyless ${s} decision`,
+    `choices[0].message.content reads ${got ? `${got.side} ${got.size_bps} bps` : "no decision"}; the contract recorded ${stored.side} ${stored.size_bps} bps`,
+  );
+  const close = BigInt(d.close_at);
+  const ttlOk = commit.at_ns < BigInt(slot.opened_at) + SLOT_TTL_NS;
+  const lockOk = lockNs === null || commit.at_ns + lockNs < close;
+  add(
+    ttlOk && lockOk && reveal.at_ns < close ? "PASS" : "FAIL",
+    `keyless ${s} timing`,
+    `committed ${secs(commit.at_ns - BigInt(slot.opened_at))} s after the slot opened (TTL ${secs(SLOT_TTL_NS)} s), ${secs(close - commit.at_ns)} s before close${lockNs === null ? "" : ` (lock ${secs(lockNs)} s)`}; revealed ${secs(close - reveal.at_ns)} s before close`,
+  );
 }
 
 /** Deploy 15 refunds the opener everything above the duel's storage and the oracle deposit. The storage is the
@@ -1078,6 +1237,14 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
   const proofs = calls.intents.map((c) => c.args.tee as TeeProof | null).filter((p): p is TeeProof => !!p);
   const pinned: Record<string, boolean> = {};
   for (const p of proofs) pinned[p.signer] ??= await viewAt<boolean>(arena, "is_tee_signer", { signer: p.signer });
+  for (const c of calls.completions)
+    pinned[String(c.args.signer)] ??= await viewAt<boolean>(arena, "is_tee_signer", { signer: c.args.signer });
+  // deploy 18: which side is keyless (a contract without the view has none)
+  const keyless: Evidence["keyless"] = {};
+  for (const pk of [d.a, d.b])
+    keyless[pk] = await viewAt<{ strategy: string; template: number } | null>(arena, "get_keyless", {
+      agent: pk,
+    }).catch(() => null);
   const stored = [d.last_intent_a, d.last_intent_b].flatMap((i) => (i ? [i.proof_hash] : []));
   // deploy 15: the duel's own lock, where each injection's deposit went, and the opener's refund
   const lock = await viewAt<string | null>(arena, "duel_lock", { duel_id: id }).catch(() => null);
@@ -1120,13 +1287,25 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
     chaos_pools,
     open_block,
     chaos,
+    keyless,
   };
 }
 
 /** The evidence with only the txs that carry one of this duel's receipts (what --save keeps). */
 export function ownTxs(e: Evidence): Evidence {
   const c = duelCalls(arenaCalls(e.txs, e.arena), e.duel_id);
-  const mine = [c.open, c.oracle("open"), c.closing, ...c.intents, ...c.commits, ...c.chaos];
+  const mine = [
+    c.open,
+    c.oracle("open"),
+    c.closing,
+    ...c.intents,
+    ...c.commits,
+    ...c.chaos,
+    ...c.slots,
+    ...c.completions,
+    ...c.reveals,
+    ...c.ticks,
+  ];
   const keep = new Set(mine.flatMap((x) => (x ? [x.tx] : [])));
   return { ...e, txs: e.txs.filter((t) => keep.has(t.transaction.hash)) };
 }
