@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   partialPrefetching: true,
   reactCompiler: true,
   env: { NEXT_PUBLIC_NEAR_NETWORK: network },
-  // "/" is the Fool-the-AI terminal; the full record stays at /arena, the clearinghouse dashboard at /clearinghouse
+  // "/" is the Fool-the-AI terminal; the full record stays at /arena
 };
 
 export default nextConfig;
