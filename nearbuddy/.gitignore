@@ -22,3 +22,4 @@ playwright-report/
 dataset/decisions.parquet
 sentinel/data/
 sentinel/spend.jsonl
+packages/keeper/data/

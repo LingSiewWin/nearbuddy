@@ -9,7 +9,7 @@
     "api": "bun packages/resource-server/src/index.ts",
     "solver": "bun packages/solver/src/index.ts",
     "demo": "bun packages/demo/src/index.ts",
-    "test": "bun test packages/protocol/src packages/solver/src packages/demo/src analysis",
+    "test": "bun test packages/protocol/src packages/solver/src packages/demo/src packages/keeper/src analysis",
     "lint": "biome check .",
     "format": "biome format --write .",
     "web": "bun --cwd web dev",
@@ -21,6 +21,7 @@
     "status": "scripts/arena-status.sh",
     "e2e": "bun e2e/run.ts",
     "verify-duel": "bun analysis/verify_duel.ts",
+    "keeper": "bun packages/keeper/src/index.ts",
     "gen:types": "bun packages/protocol/src/abi/gen.ts",
     "readout": "agents/.venv/bin/python analysis/night_readout.py"
   },
