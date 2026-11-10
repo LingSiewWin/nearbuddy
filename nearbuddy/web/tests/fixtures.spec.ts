@@ -677,6 +677,40 @@ test("duel: a resolved duel shows the verifier's counts, its lines on demand, an
   await shot(page, "duel-verified");
 });
 
+test("duel: deploy 17 records show their payout only once the duel is resolved", async ({ page }) => {
+  const rec = (outcome: string, payout: string) => ({
+    arm: "Cue",
+    at: NS(now - 30_000),
+    claimed: false,
+    decided_by: null,
+    headline: "Binance delists NEAR at midnight",
+    injector: "spectator.testnet",
+    kind: "Short",
+    next: null,
+    outcome,
+    payout,
+    prev: "Long",
+    stake: "95000000000000000000000",
+    target: duel.b,
+  });
+  await stub(page, "events", events(null));
+  await stub(
+    page,
+    "duel",
+    duelBody({ ...duel, resolved: false, close_at: NS(now + 120_000), outcome: null, chaos: [rec("Pending", "0")] }, null),
+  );
+  await page.goto("/duel/411");
+  const body = page.locator("body");
+  await expect(body).toContainText("0.095 in, settles at close");
+  await expect(body).not.toContainText("0.000 out"); // a payout of 0 before the finish is not a loss
+  await page.unrouteAll();
+  await stub(page, "verify", { duel_id: "411", status: "checked", command: "bun run verify-duel 411", counts: { PASS: 0, FAIL: 0, SKIP: 0, INFO: 0 }, lines: [] });
+  await stub(page, "events", events(null));
+  await stub(page, "duel", duelBody({ ...duel, chaos: [rec("Flipped", "90250000000000000000000")] }, null));
+  await page.reload();
+  await expect(body).toContainText("0.095 in → 0.090 out");
+});
+
 test("duel: an open duel is never sent to the verifier", async ({ page }) => {
   const asked: string[] = [];
   await page.route("**/api/verify**", (r) => {

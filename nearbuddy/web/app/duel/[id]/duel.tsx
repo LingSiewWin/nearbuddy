@@ -400,8 +400,11 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                   { t: `${(c.kind === "Placebo" ? "placebo" : c.kind.toUpperCase()).padEnd(7)} `, c: "dim" },
                   { t: `${c.arm.toLowerCase().padEnd(6)} `, c: "dim" },
                   { t: OUTCOME[c.outcome][0].padEnd(12), c: OUTCOME[c.outcome][1] },
+                  // payouts are set when the duel finishes: before that, "0.000 out" would read as a loss
                   BigInt(c.stake) > 0n
-                    ? { t: `${near(c.stake)} in → ${near(c.payout)} out  `, c: "ok", title: `paid to ${c.injector}` }
+                    ? d?.resolved
+                      ? { t: `${near(c.stake)} in → ${near(c.payout)} out  `, c: "ok", title: `paid to ${c.injector}` }
+                      : { t: `${near(c.stake)} in, settles at close  `, c: "dim", title: `staked by ${c.injector}` }
                     : "",
                   { t: `"${c.headline}"`, c: "warn", title: `${c.headline} · by ${c.injector}` },
                 ])}
