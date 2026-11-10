@@ -370,7 +370,10 @@ export default function Term() {
       // deploy 17's card reads the headline from chain; deploy 16's needs it in the link
       setShare(`${location.origin}/i/${tx}${hash ? `?t=${encodeURIComponent(headline)}` : ""}`);
       setText("");
-      say(`planted in duel #${id}, side ${side}: tx ${short(tx, 10)} · type copy for the share link`, "ok");
+      say(
+        `planted in duel #${id}, side ${side}: tx ${short(tx, 10)} · copy shares it · claim ${id} after it closes`,
+        "ok",
+      );
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       // chaos_fee rises with every paid attack: someone else's landed first
@@ -545,7 +548,8 @@ export default function Term() {
         k.focusPane(4);
         return textRef.current?.focus();
       }
-      if (e.key === "v" && k.duel) return k.run(`verify ${k.duel.id}`);
+      // like the [verify] button: a duel nobody attacked has no verdict to check
+      if (e.key === "v" && k.duel && attacksOf(k.duel)) return k.run(`verify ${k.duel.id}`);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1056,7 +1060,7 @@ export default function Term() {
       ) : !open ? (
         <Note
           w={P}
-          text={`drafting is free · your headline plants once a duel opens${terms ? `; each paid attack in a duel costs ${(terms.r_bps - 10_000) / 100}% more, up to ${near(terms.cap)} NEAR` : ""}`}
+          text={`drafting is free · plant it once a duel opens${terms ? `; each paid attack in a duel costs ${(terms.r_bps - 10_000) / 100}% more, up to ${near(terms.cap)} NEAR` : ""}`}
         />
       ) : tgtPk ? (
         <Note

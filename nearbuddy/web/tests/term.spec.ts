@@ -284,7 +284,7 @@ test.describe("no duel live", () => {
     const box2 = (await pane(page, 2).boundingBox())!;
     expect(box2.y).toBeLessThan(200);
     await expect(pane(page, 4)).toContainText("first attack 0.100 NEAR");
-    await expect(pane(page, 4)).toContainText("drafting is free");
+    await expect(pane(page, 4)).toContainText("drafting is free · plant it once");
     await expect(page.getByLabel("your fake headline")).toBeEnabled();
     // the duel and inject panes never read "-" or "no ... duel" (an untested model's rate on the board is "-" on purpose)
     const text = `${await pane(page, 2).innerText()}\n${await pane(page, 4).innerText()}`;
