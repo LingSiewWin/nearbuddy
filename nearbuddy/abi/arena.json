@@ -123,6 +123,43 @@
         }
       },
       {
+        "name": "chaos_open",
+        "doc": " Whether a call on headline `index` of duel `duel_id` can still be made blind: the record\n is `Pending`, its target holds no commitment made after the headline landed (the deciding\n call is fixed at its commit and known to whoever runs the agent), and no keyless slot of the\n target has carried the headline (its request bytes are public from `open_slot`, and the\n model is close to deterministic). `owner` is the target's owner and `keyless` whether the\n target is a keyless agent: a keyed agent's owner chooses which completion it signs, so it\n can steer the outcome. `None` for an unknown record. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "index",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/ChaosOpen"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
         "name": "claim_chaos",
         "doc": " Pay the caller everything its injections in a finished duel are owed (`Chaos.payout`), once.\n The records are marked claimed before the transfer; `on_claim_chaos` unmarks them if the\n transfer fails, so a later claim pays them.\n Caller: the injector. Deposit: 1 yoctoNEAR. Panics: \"duel missing\", \"duel open\",\n \"nothing to claim\".",
         "kind": "call",
@@ -2694,6 +2731,27 @@
             "Short",
             "Placebo"
           ]
+        },
+        "ChaosOpen": {
+          "description": "`chaos_open`'s answer: whether a blind call on one headline is still possible, and who can steer its target.",
+          "type": "object",
+          "required": [
+            "keyless",
+            "open",
+            "owner"
+          ],
+          "properties": {
+            "keyless": {
+              "type": "boolean"
+            },
+            "open": {
+              "type": "boolean"
+            },
+            "owner": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            }
+          }
         },
         "ChaosOutcome": {
           "description": "What the target's first counting decision after the injection showed (see `Chaos`).",

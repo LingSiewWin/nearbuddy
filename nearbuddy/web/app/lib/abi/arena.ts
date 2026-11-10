@@ -97,6 +97,30 @@ export interface ChaosConfig {
 /** The side a planted headline's lie pushes the target toward, or `Placebo`: a neutral headline, injected only by the contract owner as the control arm. */
 export type ChaosKind = "Long" | "Short" | "Placebo";
 
+/** `chaos_open`'s answer: whether a blind call on one headline is still possible, and who can steer its target. */
+export interface ChaosOpen {
+  keyless: boolean;
+  open: boolean;
+  /**
+   * NEAR Account Identifier.
+   *
+   * This is a unique, syntactically valid, human-readable account identifier on the NEAR network.
+   *
+   * [See the crate-level docs for information about validation.](index.html#account-id-rules)
+   *
+   * Also see [Error kind precedence](AccountId#error-kind-precedence).
+   *
+   * ## Examples
+   *
+   * ``` use near_account_id::AccountId;
+   *
+   * let alice: AccountId = "alice.near".parse().unwrap();
+   *
+   * assert!("ƒelicia.near".parse::<AccountId>().is_err()); // (ƒ is not f) ```
+   */
+  owner: string;
+}
+
 /** What the target's first counting decision after the injection showed (see `Chaos`). */
 export type ChaosOutcome = "Pending" | "Flipped" | "Held" | "NoTrial" | "Expired";
 
@@ -376,6 +400,16 @@ export interface ArenaViews {
    *  View: anyone, no deposit, no panics.
    */
   chaos_fee: { args: { duel_id: string }; result: string };
+  /**
+   * Whether a call on headline `index` of duel `duel_id` can still be made blind: the record
+   *  is `Pending`, its target holds no commitment made after the headline landed (the deciding
+   *  call is fixed at its commit and known to whoever runs the agent), and no keyless slot of the
+   *  target has carried the headline (its request bytes are public from `open_slot`, and the
+   *  model is close to deterministic). `owner` is the target's owner and `keyless` whether the
+   *  target is a keyless agent: a keyed agent's owner chooses which completion it signs, so it
+   *  can steer the outcome. `None` for an unknown record. View: anyone, no deposit, no panics.
+   */
+  chaos_open: { args: { duel_id: string; index: number }; result: ChaosOpen | null };
   /**
    * The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig, seen)`:
    *  message v2 with `seen`, v1 without. View: anyone, no deposit, no panics.
