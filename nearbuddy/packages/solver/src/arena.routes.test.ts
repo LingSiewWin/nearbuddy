@@ -791,6 +791,43 @@ test("pairOnce staggers the closes of one tick's duels around the duels already 
   assert.ok(Math.max(...closes) - t0 < 330_000 + 4 * 60_000, "no duel longer than its place in the queue needs");
 });
 
+test("pairOnce reads the running duels' closes 8 at a time, not all at once", async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const board = Array.from({ length: 40 }, (_, i) => agent(`R${i}`, { bond: "1", in_duel: String(100 + (i >> 1)) }));
+  const arena = new Arena(fakeSolver(() => "1").account, "s.testnet", {
+    config: async () => configV14({ require_consent: false }),
+    leaderboard: async () => [...board, agent("P1", { bond: "1" }), agent("P2", { bond: "1" })],
+    getDuel: async (id) => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      inFlight--;
+      return duel({ id, close_at: String(BigInt(Date.now() + 400_000) * 1_000_000n) });
+    },
+  });
+  await withRpc({ get_config: () => ({ oracle_deposit: "100" }) }, () => arena.pairOnce());
+  assert.ok(peak <= 8, `${peak} duel reads in flight`);
+});
+
+test("pairOnce keeps a failed open's close taken: the duel may have landed while the RPC dropped the wait", async () => {
+  const { calls, account } = fakeSolver(() => {
+    if (calls.length === 1) throw new Error("Internal server error"); // the first open: no answer
+    return String(40 + calls.length);
+  });
+  const arena = new Arena(account, "s.testnet", {
+    config: async () => configV14({ oracle_deposit: "100", require_consent: false }),
+    leaderboard: async () => ["P1", "P2", "P3", "P4"].map((pk) => agent(pk, { bond: "1" })),
+    sleep: async () => {},
+  });
+  const opened = await withRpc(
+    { get_config: () => ({ oracle_deposit: "100", next_duel: "40" }), get_duel: () => null }, // findDuel misses it
+    () => arena.pairOnce(),
+  );
+  assert.deepEqual(opened, ["42"]);
+  const [first, second] = calls.map((c) => Number(BigInt(String(c.args.close_at)) / 1_000_000n));
+  assert.ok(second! - first! >= 60_000, `second close ${second! - first!} ms after the failed one`);
+});
+
 test("pairOnce reads the leaderboard paged {from: 0, limit: 100}", async () => {
   let args: Record<string, unknown> | null = null;
   const arena = new Arena(fakeSolver().account, "s.testnet", {

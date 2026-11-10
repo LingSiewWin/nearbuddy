@@ -109,6 +109,8 @@ const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330);
  *  close one gap apart instead of all at once, so their countdowns overlap and a spectator always has a close (with
  *  its reveal and attack verdicts) at most one gap away, given enough pairs. A duel only ever gets longer. */
 const PAIR_STAGGER_S = Number(process.env.PAIR_STAGGER_S ?? 60);
+/** Duel reads in flight at once while collecting the running closes. */
+const CLOSE_READS = 8;
 /** Yocto bond an agent needs above to be paired; 0 = any funded agent. */
 const PAIR_MIN_BOND = BigInt(process.env.PAIR_MIN_BOND ?? "0");
 /** Agents the pairing loop must leave alone (comma-separated pks): the operator's own two-sided runner drives them. */
@@ -309,9 +311,11 @@ export class Arena {
       // computed at each open, so a slow open before it never leaves this duel under min_duel_s
       const close = staggerClose(Date.now(), DUEL_SECONDS, PAIR_STAGGER_S, taken);
       const close_at = (BigInt(close) * 1_000_000n).toString();
+      // taken before the open: a failed open may still have landed (the RPC dropped the wait and findDuel missed
+      // it), and keeping its close costs at most one gap of spacing for the next pair
+      taken.push(close);
       try {
         const r = await this.openDuel(a, b, PAIR_SYMBOL, close_at);
-        taken.push(close);
         this.pairing.last.push({ at: Date.now(), duel_id: r.duel_id, a, b, tx: r.tx });
         opened.push(r.duel_id);
         console.log(`[arena] paired ${a.slice(0, 8)} vs ${b.slice(0, 8)}: duel ${r.duel_id} tx ${r.tx}`);
@@ -328,8 +332,13 @@ export class Arena {
   private async runningCloses(agents: AgentView[]): Promise<number[]> {
     const getDuel = this.deps.getDuel ?? ((id: string) => arenaView("get_duel", { duel_id: id }));
     const ids = [...new Set(agents.flatMap((a) => (a.in_duel == null ? [] : [String(a.in_duel)])))];
-    const duels = await Promise.all(ids.map((id) => getDuel(id).catch(() => null)));
-    return duels.flatMap((d) => (d && !d.resolved ? [Number(BigInt(d.close_at) / 1_000_000n)] : []));
+    const closes: number[] = [];
+    // CLOSE_READS at a time: a public RPC rate-limits a burst of views, and a 100-agent board is up to 50 duels
+    for (let i = 0; i < ids.length; i += CLOSE_READS) {
+      const duels = await Promise.all(ids.slice(i, i + CLOSE_READS).map((id) => getDuel(id).catch(() => null)));
+      for (const d of duels) if (d && !d.resolved) closes.push(Number(BigInt(d.close_at) / 1_000_000n));
+    }
+    return closes;
   }
 
   /** Every `everyS` seconds pair the idle enclave agents. ponytail: pairs every idle verified agent whether or
