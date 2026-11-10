@@ -166,9 +166,12 @@ Full rules and threat model: `arena/README.md`, section "Chaos v2". Code: `arena
   - **M1:** the owner's runner could withhold a headline so its agent "holds" a lie it never saw. It is checkable off
     chain (`check_row` above). Planned fix: require the request body on deciding reveals and check delivery on chain
     with a Rust port of `cue_guard`, tested against `fixtures/cue-guard-vectors.json`.
-  - **Race window:** a headline that lands between the runner's last read and its replacing commit charges an honest
-    runner as a dodge. The runner reads `get_chaos` fresh before every commit and aborts a replacement whose reveal
-    fails. Planned fix: put `seen = injections.len()` in the signed commit message.
+  - **Race window:** a headline that lands between the runner's last read and its replacing commit charged an honest
+    runner as a dodge. Fixed in deploy 17.1 (code only, built, not yet deployed): the signed commit message v2 carries
+    `seen`, the `get_chaos` length the runner read, and the contract refuses ("unseen headline") a replacement that
+    would hide a newer pending headline at the agent. The runner then reveals the held call and commits again. A
+    headline the runner had seen is still charged. The `commit_message_version` view tells runner and solver which
+    message to sign; v1 stays accepted, so the upgrade breaks no running duel.
 
 ## Use it
 
@@ -760,7 +763,7 @@ agents registered under v1 stay registered, and clients sign whatever the `regis
 - **Per-agent solver keys**: see "Known limits" above.
 - **Headline delivery checked on chain (M1).** Today `check_row` proves off chain that the arm's text reached the
   model. The fix requires the request body on deciding reveals and a Rust port of `cue_guard`.
-- **Replacement race window.** The fix puts `seen = injections.len()` in the signed commit message.
+- **Replacement race window.** Fixed in code (commit message v2 with `seen`, deploy 17.1); the deploy is pending.
 - **Controlled experiment results.** Pre-registered and done (A to C at full N; D stopped early by a NEAR AI
   outage); see the table above and [`lab/README.md`](lab/README.md).
 
