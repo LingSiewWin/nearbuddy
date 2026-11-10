@@ -1,7 +1,7 @@
 // GET /api/flips' body from plain inputs: the replay list (decided chain records first, then the dataset's answered
 // attacks) and the saboteurs board ranked by Flipped.
 import { expect, test } from "bun:test";
-import { replay, saboteurs } from "../api/flips";
+import { flipsCache, replay, saboteurs } from "../api/flips";
 import type { Chaos } from "../lib/abi/arena";
 import type { Attack } from "../lib/fool";
 
@@ -49,7 +49,13 @@ test("replay: decided chain records newest first with stake and payout, then dat
     ["462", "held", null],
     ["460", "fooled", null],
   ]);
-  expect(out[0]).toMatchObject({ model: "Qwen/Qwen3.8-27B", payout: String(7n * NEAR), reply: null, after: "Long" });
+  expect(out[0]).toMatchObject({
+    model: "Qwen/Qwen3.8-27B",
+    payout: String(7n * NEAR),
+    reply: null,
+    after: "Long",
+    index: 1, // (duel, index) names a chain record
+  });
   expect(out[2]).toMatchObject({ reply: "words 462", stake: null, payout: null });
   // at most n from each source
   expect(replay(chain, data, () => null, 1).map((f) => f.duel)).toEqual(["540", "462"]);
@@ -85,4 +91,62 @@ test("saboteurs: ranked by Flipped, then paid, then attacks; placebo controls ar
   ]);
   expect(s[0]).toMatchObject({ staked: String(NEAR / 5n), paid: String(2n * NEAR + NEAR / 10n) });
   expect(saboteurs([])).toEqual([]);
+});
+
+test("a chain failure serves the last good body, and the dead RPC is asked again only after the negative TTL", async () => {
+  let t = 0;
+  let builds = 0;
+  const answers: { body: string; ok: boolean }[] = [
+    { body: "good-1", ok: true },
+    { body: "dataset-only", ok: false }, // the chain read failed: saboteurs [] and chain_error
+    { body: "good-2", ok: true },
+  ];
+  const serve = flipsCache(
+    async () => answers[builds++]!,
+    60_000,
+    10_000,
+    () => t,
+  );
+  expect(await serve()).toBe("good-1");
+  t = 30_000;
+  expect(await serve()).toBe("good-1"); // fresh: no build
+  expect(builds).toBe(1);
+  t = 61_000;
+  expect(await serve()).toBe("good-1"); // the rebuild failed: the last good body, not an empty board
+  expect(builds).toBe(2);
+  t = 65_000;
+  expect(await serve()).toBe("good-1"); // inside the negative TTL: no rebuild against the dead RPC
+  expect(builds).toBe(2);
+  t = 72_000;
+  expect(await serve()).toBe("good-2");
+  expect(builds).toBe(3);
+  // never a good body yet: the failed one is what there is, still cached for the negative TTL
+  let n = 0;
+  const cold = flipsCache(
+    async () => ({ body: `failed-${++n}`, ok: false }),
+    60_000,
+    10_000,
+    () => t,
+  );
+  expect(await cold()).toBe("failed-1");
+  expect(await cold()).toBe("failed-1");
+  t += 10_001;
+  expect(await cold()).toBe("failed-2");
+});
+
+test("concurrent requests share one build", async () => {
+  let builds = 0;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const serve = flipsCache(async () => {
+    builds++;
+    await gate;
+    return { body: "b", ok: true };
+  });
+  const all = Promise.all([serve(), serve(), serve()]);
+  release();
+  expect(await all).toEqual(["b", "b", "b"]);
+  expect(builds).toBe(1);
 });

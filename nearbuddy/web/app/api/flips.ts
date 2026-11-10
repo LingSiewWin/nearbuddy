@@ -9,6 +9,8 @@ import type { Attack, Side } from "../lib/fool";
  *  and on chain what the injector staked and was paid. */
 export type Flip = {
   duel: string;
+  /** The record's place in the duel's `get_chaos`; null for a dataset attack. (duel, index) names it uniquely. */
+  index: number | null;
   model: string;
   target: string;
   headline: string;
@@ -37,17 +39,19 @@ export type DuelChaos = { duel: string; records: Chaos[] };
 
 const DECIDED: Partial<Record<Chaos["outcome"], Flip["verdict"]>> = { Flipped: "fooled", Held: "held" };
 
-/** Newest first: up to `n` decided chain records, then up to `n` dataset attacks the chain has not listed. */
+/** Newest first: up to `n` decided chain records, then up to `n` dataset attacks of duels the chain has no records for
+ *  (a duel with records is told by them, never twice from text that may differ). */
 export function replay(chain: DuelChaos[], recent: Attack[], modelOf: (pk: string) => string | null, n = 5): Flip[] {
   const fromChain: Flip[] = chain
     .flatMap(({ duel, records }) =>
       records
-        .flatMap((c): Flip[] => {
+        .flatMap((c, index): Flip[] => {
           const verdict = DECIDED[c.outcome];
           if (!verdict) return [];
           return [
             {
               duel,
+              index,
               model: modelOf(c.target) ?? c.target.slice(0, 8),
               target: c.target,
               headline: c.headline,
@@ -67,14 +71,13 @@ export function replay(chain: DuelChaos[], recent: Attack[], modelOf: (pk: strin
         .reverse(),
     )
     .slice(0, n);
-  const seen = new Set(fromChain.map((f) => `${f.duel}:${f.target}:${f.headline}`));
+  const onChain = new Set(chain.map((c) => c.duel));
   const fromData: Flip[] = recent
-    .filter(
-      (a) => (a.verdict === "fooled" || a.verdict === "held") && !seen.has(`${a.duel_id}:${a.agent_pk}:${a.text}`),
-    )
+    .filter((a) => (a.verdict === "fooled" || a.verdict === "held") && !onChain.has(a.duel_id))
     .slice(0, n)
     .map((a) => ({
       duel: a.duel_id,
+      index: null,
       model: a.model,
       target: a.agent_pk,
       headline: a.text,
@@ -116,4 +119,37 @@ export function saboteurs(chain: DuelChaos[]): Saboteur[] {
         y.attacks - x.attacks ||
         x.account.localeCompare(y.account),
     );
+}
+
+/** GET /api/flips' cache. A body built from the chain is served for `ttl`. One built while the chain was unreadable
+ *  (`ok` false) is never kept as good: the last good body is served instead (else that one), and no rebuild starts
+ *  for `negTtl`, so a dead RPC is asked once per `negTtl`, not once per request. One build runs at a time. */
+export function flipsCache(
+  build: () => Promise<{ body: string; ok: boolean }>,
+  ttl = 60_000,
+  negTtl = 10_000,
+  now: () => number = Date.now,
+): () => Promise<string> {
+  let good: { at: number; body: string } | null = null;
+  let failed: { at: number; body: string } | null = null;
+  let inflight: Promise<string> | null = null;
+  return async () => {
+    const t = now();
+    if (good && t - good.at < ttl) return good.body;
+    if (failed && t - failed.at < negTtl) return good?.body ?? failed.body;
+    inflight ??= build()
+      .then(({ body, ok }) => {
+        if (ok) {
+          good = { at: now(), body };
+          failed = null;
+          return body;
+        }
+        failed = { at: now(), body };
+        return good?.body ?? body;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+    return inflight;
+  };
 }

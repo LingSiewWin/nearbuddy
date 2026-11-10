@@ -289,6 +289,20 @@ test.describe("no duel live", () => {
   });
 });
 
+test.describe("chain unreadable", () => {
+  test.use({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
+
+  test("pane 5 says the chain is unreadable instead of an empty board; the replay still plays", async ({ page }) => {
+    await stub(page, arena17);
+    await page.route("**/api/flips", (r) =>
+      r.fulfill({ json: { ...flips, flips: [], saboteurs: [], scanned: null, chain_error: "FailoverRpcError: 429" } }),
+    );
+    await page.goto("/");
+    await expect(pane(page, 5)).toContainText("chain unreadable");
+    await expect(pane(page, 5)).not.toContainText("be first");
+  });
+});
+
 test.describe("phone 390", () => {
   test.use({ viewport: { width: 390, height: 844 }, colorScheme: "dark", hasTouch: true });
 

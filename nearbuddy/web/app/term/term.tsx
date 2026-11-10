@@ -35,8 +35,16 @@ import {
 
 type Pane = 1 | 2 | 3 | 4 | 5;
 type Spot = { price: string; at: number };
-/** GET /api/flips: answered attacks for the replay, and the saboteurs board. */
-type Flips = { at: number; flips: Flip[]; saboteurs: Saboteur[]; scanned: { from: number; to: number } | null };
+/** GET /api/flips: answered attacks for the replay, and the saboteurs board. `chain_error`: the chain could not be
+ *  read and no earlier good body exists; `unread`: duels whose records failed to read this time. */
+type Flips = {
+  at: number;
+  flips: Flip[];
+  saboteurs: Saboteur[];
+  scanned: { from: number; to: number } | null;
+  unread?: number | null;
+  chain_error?: string | null;
+};
 const PANES: [Pane, string][] = [
   [1, "board"],
   [2, "duel"],
@@ -1063,7 +1071,11 @@ export default function Term() {
     <Box
       n={5}
       title="saboteurs"
-      extra={flips?.scanned ? `by flips · last ${flips.scanned.to - flips.scanned.from} duels` : "by flips"}
+      extra={
+        flips?.scanned
+          ? `by flips · last ${flips.scanned.to - flips.scanned.from} duels${flips.unread ? `, ${flips.unread} unread` : ""}`
+          : "by flips"
+      }
       w={P}
       on={pane === 5}
       id="pane-5"
@@ -1100,7 +1112,11 @@ export default function Term() {
       {!sabShown.length ? (
         <Line
           w={P}
-          cells={[{ t: flips ? "nobody has fooled a model on chain yet: be first" : "reading the chain", c: "dim" }]}
+          cells={[
+            flips?.chain_error
+              ? { t: "chain unreadable: the board is back once the RPC answers", c: "bad", title: flips.chain_error }
+              : { t: flips ? "nobody has fooled a model on chain yet: be first" : "reading the chain", c: "dim" },
+          ]}
         />
       ) : null}
       <Line w={P} cells={[""]} />
