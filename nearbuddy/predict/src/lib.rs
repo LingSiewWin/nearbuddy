@@ -3,8 +3,8 @@
 //! A spectator calls, before the answer is public, whether the arena's model is fooled by a
 //! planted headline (`Flipped` or `Held`, one market per chaos injection) or who wins a duel (`A`,
 //! `B` or `Tie`, one market per duel). There is no stake. A call attaches `DEPOSIT`, which pays the
-//! storage of the prediction's record and comes back whole with `claim` once it is scored. Right
-//! calls climb a public board (`get_board`).
+//! storage of the prediction's record and comes back with `claim` once it is scored (the first
+//! claim keeps back the caller's board row, once). Right calls climb a public board (`get_board`).
 //!
 //! The arena is only read, through its views, never written:
 //! - a chaos market `(duel_id, Some(index))` takes predictions while the arena's
@@ -28,8 +28,10 @@
 //! state when the view ran, never against what a client says. A refused prediction's deposit goes
 //! straight back. `settle(duel_id)` (anyone) reads `get_duel` and `get_chaos`, fixes the outcome of
 //! every market of that duel the arena has decided (once), and scores up to `SCORE_PAGE`
-//! predictions; it returns how many are left, and anyone calls it again while that is above 0. A
-//! failed or unreadable arena answer panics the callback, which changes nothing.
+//! predictions; it returns how many are left, and anyone calls it again while that is above 0. The
+//! two answers are read apart: a bad one settles nothing that depends on it, and the callback
+//! panics (changing nothing) only when neither is usable. `void_stale` voids markets the arena
+//! never settles.
 //!
 //! Scoring: a prediction is `Right` when its pick is the market's outcome, `Wrong` otherwise, and
 //! `Void` (refunded, not counted) when the market has no outcome: a chaos injection that met no
@@ -48,7 +50,7 @@ use near_sdk::{
 #[cfg(test)]
 mod tests;
 
-/// Attached to every `predict` (0.003 NEAR) and refunded whole by `claim` after scoring. It pays
+/// Attached to every `predict` (0.003 NEAR) and refunded by `claim` after scoring. It pays
 /// the prediction's record and its entry in the account's held list: at most 264 bytes, a
 /// 64-character implicit account's first prediction (`tests::deposit_covers_the_largest_prediction`).
 pub const DEPOSIT: u128 = 3_000_000_000_000_000_000_000;
