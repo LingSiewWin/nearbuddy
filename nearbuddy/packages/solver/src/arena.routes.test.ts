@@ -333,7 +333,11 @@ test("POST /commit with seen verifies commit message v2 and passes seen to commi
   assert.equal(calls[0]!.methodName, "commit_intent");
   assert.deepEqual(calls[0]!.args, body);
   // another seen, or the v2 signature without seen (checked as v1): refused before any gas is spent
-  for (const bad of [{ ...body, seen: 3 }, { ...body, seen: undefined }, { ...body, seen: -1 }]) {
+  for (const bad of [
+    { ...body, seen: 3 },
+    { ...body, seen: undefined },
+    { ...body, seen: -1 },
+  ]) {
     await assert.rejects(arena.route("POST", "/commit", JSON.stringify(bad), KEY), /bad commit signature/);
   }
   assert.equal(calls.length, 1);

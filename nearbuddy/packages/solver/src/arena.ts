@@ -435,7 +435,8 @@ export class Arena {
       throw new Error("bad commit signature");
     }
     if (!verify(agent_pk, msg, sig)) throw new Error("bad commit signature");
-    const args = seen === undefined ? { duel_id, agent_pk, commitment, sig } : { duel_id, agent_pk, commitment, sig, seen };
+    const args =
+      seen === undefined ? { duel_id, agent_pk, commitment, sig } : { duel_id, agent_pk, commitment, sig, seen };
     const r = await this.call("commit_intent", args);
     const cfg = r.block ? await this.config() : null;
     return { tx: r.tx, at: cfg && isChaosV2(cfg) ? await this.blockTime(r.block) : null };
@@ -877,7 +878,13 @@ export class Arena {
       return { code: 200, body: await this.postIntent(signed, q.tee ?? undefined) };
     }
     if (url === "/commit") {
-      const q = JSON.parse(body) as { duel_id: string; agent_pk: string; commitment: string; sig: string; seen?: number };
+      const q = JSON.parse(body) as {
+        duel_id: string;
+        agent_pk: string;
+        commitment: string;
+        sig: string;
+        seen?: number;
+      };
       return {
         code: 200,
         body: await this.commitIntent(String(q.duel_id), q.agent_pk, q.commitment, q.sig, q.seen ?? undefined),
