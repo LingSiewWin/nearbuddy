@@ -102,6 +102,7 @@ from intent_client import (
     Solver,
     TeeProofError,
     commit_message,
+    commit_message_v2,
     commitment,
     consent_message,
     proof_hash,
@@ -700,7 +701,7 @@ def commit_decision(
     held call saw, so only the new ones are delivered then. With a new headline the call is always committed, never
     kept: the call that saw the headline must be the one revealed next.
 
-    Deploy 17, right before every commit: the pending headlines are read again from chain (`chaos_pending`, not the
+    Deploy 17, right before every commit: the pending headlines are read again from chain (`chaos_read`, not the
     solver's GET /arena, memoised for 3 s). When the read fails and a held call would be replaced, nothing is
     committed. A headline that landed while the model decided was never seen by this call, which would decide that
     headline's trial blind once revealed. The call is then recorded as not committed, the held call is revealed if it
@@ -773,12 +774,15 @@ def commit_decision(
         consume(solver, pk, duel_id, inj)
         print(f"  {label} keeps its commitment (same {intent['side']} {intent['size_bps']} bps), nonce {nonce} unused")
         return nonce, "kept"
+    seen_n: int | None = None  # len(get_chaos(duel)) at the last read: signed as `seen` (commit message v2)
     for again in (True, False) if chaos_v2 else ():
-        # ponytail: a read before every commit and one redo; a headline landing after the last read and before the
-        # commit lands is decided blind, or charged as a dodge if the commit replaces its prev. The contract accepts
-        # that race (arena/README.md); a commit message carrying the headlines seen would close it.
+        # a read before every commit and one redo; a headline landing after the last read and before the commit lands
+        # is decided blind. Under commit message v2 (deploy 17.1) the commit signs how many records that read saw, so
+        # the contract refuses a replacement that would hide such a headline ("unseen headline") instead of charging
+        # it as a dodge; the runner then reveals the held call and commits again. Under v1 it is charged.
         uncommitted = {**row, "commitment": None, "committed_tx": None, "revealed_tx": None, "tx": None}
-        fresh = chaos_pending(duel_id, pk)
+        read = chaos_read(duel_id, pk)
+        fresh, seen_n = (None, None) if read is None else read
         if fresh is None and held.get(label):
             record({**uncommitted, "error": "not committed: get_chaos unreadable, the held call stays"})
             print(f"  {label} get_chaos unreadable: not replacing the held call unread, nonce {nonce} unused")
@@ -821,14 +825,29 @@ def commit_decision(
     )
     p.row["committed_tx"] = None  # unknown until the solver answers
     cands.append(p)
-    body = {
-        "duel_id": duel_id,
-        "agent_pk": pk,
-        "commitment": p.row["commitment"],
-        "sig": sign_b64(sk, commit_message(ARENA, duel_id, c)),
-    }
+    body: dict[str, Any] = {"duel_id": duel_id, "agent_pk": pk, "commitment": p.row["commitment"]}
+    if seen_n is not None and commit_version() >= 2:
+        body["sig"] = sign_b64(sk, commit_message_v2(ARENA, duel_id, seen_n, c))
+        body["seen"] = seen_n
+    else:
+        body["sig"] = sign_b64(sk, commit_message(ARENA, duel_id, c))
     try:
-        committed = solver.post("/commit", body, deadline_ns=cutoff)
+        try:
+            committed = solver.post("/commit", body, deadline_ns=cutoff)
+        except RuntimeError as e:
+            if "unseen headline" not in str(e):
+                raise
+            # a headline landed after the read and the commit would hide it: nothing changed on chain. The held call
+            # is that headline's prev, so it is revealed now; with nothing held the same commit cannot be refused so
+            cands.remove(p)
+            print(f"  {label} commit refused (unseen headline): revealing the held call, then committing again")
+            if not reveal_now(solver, held, label, cutoff):
+                record({**p.row, "committed_tx": None, "revealed_tx": None, "tx": None, "error": "unseen headline"})
+                print(f"  {label} held call not revealed: not replacing it this cycle, nonce {nonce} unused")
+                return nonce, "skipped"
+            cands = held.setdefault(label, [])
+            cands.append(p)
+            committed = solver.post("/commit", body, deadline_ns=cutoff)
     except RuntimeError as e:
         unsent = isinstance(e, DeadlineError)  # the cutoff passed before the POST: nothing reached the chain
         if not (unsent or _refused(e)):
@@ -880,12 +899,38 @@ def reveal_prev(
     return new, set(top.saw)
 
 
+_commit_version: tuple[float, int] | None = None  # (read at, commit_message_version), memoised for a minute
+
+
+def commit_version() -> int:
+    """The newest commit message the deployed arena accepts: `commit_message_version`, 2 from deploy 17.1 (it takes
+    `seen`). A contract without the view (deploy 17 and older) or a failed read gives 1: v1 is accepted by every
+    deploy, so a code-only upgrade at a batch boundary never breaks a running duel, and a runner started before it
+    switches to v2 within a minute."""
+    global _commit_version
+    now = time.monotonic()
+    if _commit_version is not None and now - _commit_version[0] < 60:
+        return _commit_version[1]
+    try:
+        v = int(_view("commit_message_version", {}, retries=1, timeout=(3, 5)))
+    except Exception:  # MethodNotFound on deploy 17, or the read failed: v1 is always accepted
+        v = 1
+    _commit_version = (now, v)
+    return v
+
+
 def chaos_pending(duel_id: str, pk: str) -> list[dict[str, Any]] | None:
+    """`chaos_read` without the record count."""
+    read = chaos_read(duel_id, pk)
+    return None if read is None else read[0]
+
+
+def chaos_read(duel_id: str, pk: str) -> tuple[list[dict[str, Any]], int] | None:
     """Deploy 17: the headlines get_chaos lists as Pending at `pk`, read from chain rather than through the solver's
-    GET /arena (memoised for 3 s), in the shape GET /arena lists them. It runs right before a commit, so it is one
-    attempt of at most (3 s connect, 5 s read), no backoff. None when the read fails in any way (transport, RPC error,
-    a malformed answer): a first commit then goes out without the re-read, and a commit that would replace a held call
-    is not sent."""
+    GET /arena (memoised for 3 s), in the shape GET /arena lists them, and how many records get_chaos listed in all
+    (the `seen` a v2 commit signs). It runs right before a commit, so it is one attempt of at most (3 s connect, 5 s
+    read), no backoff. None when the read fails in any way (transport, RPC error, a malformed answer): a first commit
+    then goes out without the re-read, and a commit that would replace a held call is not sent."""
     try:
         chaos = _view("get_chaos", {"duel_id": duel_id}, retries=1, timeout=(3, 5))
         return [
@@ -899,7 +944,7 @@ def chaos_pending(duel_id: str, pk: str) -> list[dict[str, Any]] | None:
             }
             for n, c in enumerate(chaos)
             if c["outcome"] == "Pending" and c["target"] == pk
-        ]
+        ], len(chaos)
     except Exception as e:  # a KeyError or a TypeError must not end the duel loop with a commitment held
         print(f"  get_chaos {duel_id} unreadable ({type(e).__name__}: {str(e)[:80]}); committing without the re-read")
         return None

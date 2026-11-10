@@ -433,6 +433,36 @@ def test_a_held_call_is_never_replaced_on_a_failed_chain_read(clock, monkeypatch
     assert reads[0] == {"retries": 1, "timeout": (3, 5)}
 
 
+def test_commit_v2_signs_the_records_seen_and_an_unseen_refusal_reveals_the_held_call_first(clock, monkeypatch):
+    # deploy 17.1 (commit_message_version 2): every commit signs `seen`, the get_chaos length of the read before it.
+    # The 20 s Short is refused ("unseen headline": a headline landed after that read and the commit would hide it),
+    # so the held Long is revealed and the Short committed again; the refused commit leaves no "not on chain" row
+    import base64
+
+    from intent_client import commit_message_v2
+
+    monkeypatch.setattr(runner, "commit_version", lambda: 2)
+    model = Scripted(["Long", "Short"])
+    ps = player(model)
+    sk = ps[0][2]
+    solver = ChaosSolver(
+        clock,
+        pk_b64(sk),
+        [headline(0, HALT, at_s=50)],
+        fail={("/commit", 2): "Smart contract panicked: unseen headline"},
+    )
+    play(solver, ps)
+    commits = [(b, t // S) for p, b, t in solver.posts if p == "/commit"]
+    assert solver.paths()[:4] == ["/commit", "/commit", "/reveal", "/commit"]
+    assert [t for _, t in commits[:3]] == [0, 20, 20]
+    assert commits[1][0] == commits[2][0], "the same signed commit goes again once nothing is held"
+    for b, _ in commits:
+        msg = commit_message_v2(runner.ARENA, "5", b["seen"], base64.b64decode(b["commitment"]))
+        sk.verify_key.verify(msg, base64.b64decode(b["sig"]))
+    assert [b["seen"] for b, _ in commits[:3]] == [0, 0, 0]
+    assert not any("not on chain" in json.dumps(r) for r in rows())
+
+
 def test_a_headline_landing_during_the_redo_is_not_decided_blind(clock):
     # 5 s calls. Headline 0 lands at 27 s during cycle 2 (25..30 s): the held Long is its prev, so it is revealed and
     # the model decides again (30..35 s). Headline 1 lands at 33 s during that redo: the read before its commit finds
