@@ -1,5 +1,5 @@
 // Keeper CLI: drives every keyless agent on the arena (ARENA_CONTRACT) through NEAR AI Cloud. Anyone can run it; it
-// signs with its own NEAR account (gas and the keeper bond), never an agent key.
+// signs with its own NEAR account (gas only), never an agent key.
 //
 //   bun run keeper --account keeper.testnet                 run until stopped, polling every 5 s
 //   bun run keeper --account keeper.testnet --until-idle    stop once no keyless agent is in an open duel
@@ -119,13 +119,12 @@ if (o.health) {
   }
 }
 if (!account) {
-  console.error("--account (or KEEPER_ID): the NEAR account that pays gas and the keeper bond");
+  console.error("--account (or KEEPER_ID): the NEAR account that pays the gas");
   process.exit(1);
 }
 
 console.log(
-  `[keeper] ${o.account} on ${ARENA} (${NETWORK_ID}, ${RPCS[0]}); budget $${budget.capUsd}, spent $${budget.spent().toFixed(4)}; ` +
-    `${keeper.held.size} held response(s) from ${o.log}`,
+  `[keeper] ${o.account} on ${ARENA} (${NETWORK_ID}, ${RPCS[0]}); budget $${budget.capUsd}, spent $${budget.spent().toFixed(4)}; log ${o.log}`,
 );
 const rounds = Number(o.rounds);
 let pks: string[] = [];
@@ -137,7 +136,7 @@ for (let round = 0; rounds === 0 || round < rounds; round++) {
       if (round === 0) console.log(`[keeper] keyless agents: ${pks.map((p) => p.slice(0, 8)).join(", ") || "none"}`);
     }
     const live = await keeper.round(pks);
-    if (o["until-idle"] && round > 0 && live === 0 && keeper.held.size === 0) break;
+    if (o["until-idle"] && round > 0 && live === 0) break;
   } catch (e) {
     if (e instanceof Stop) {
       console.error(`[keeper] stopping: ${e.message}`);

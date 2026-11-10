@@ -1,6 +1,6 @@
 // The keeper's slot lifecycle against a fake arena (the keyless.rs rules it depends on) and a fake NEAR AI Cloud
-// that signs like the enclave: first decision, hold until the lock, reveal early for a new headline, the budget stop
-// and the deadline skip.
+// that signs like the enclave: the first decision, a new slot for a headline, nothing inside the lock, a slot another
+// keeper filled, an unpinned signer, the budget stop and the deadline skip.
 import assert from "node:assert/strict";
 import { createHash, sign } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -29,7 +29,10 @@ class FakeArena implements Chain {
   seq = 1n;
   chaos: Chaos[] = [];
   calls: string[] = [];
-  revealed: { side: string; size_bps: number } | null = null;
+  decided: { side: string; size_bps: number } | null = null;
+  pinned = new Map([[pkOf(enclave), MODEL]]);
+  /** Another keeper fills the next slot first. */
+  rival = false;
   agent = {
     pk: AGENT,
     model_id: MODEL,
@@ -63,15 +66,14 @@ class FakeArena implements Chain {
       duel_lock: String(this.lock),
       get_slot: this.slot,
       get_chaos: this.chaos,
-      is_tee_signer: a.signer === pkOf(enclave),
-      keyless_commit_bond: "300",
+      get_model_signer: this.pinned.get(a.signer as string) ?? null,
     };
     return v[m] as ArenaViews[M]["result"];
   }
   async call<M extends keyof ArenaCalls>(
     m: M,
     args: ArenaCalls[M]["args"],
-    deposit: bigint,
+    _deposit: bigint,
   ): Promise<{ tx: string; value: ArenaCalls[M]["result"] }> {
     const a = args as Record<string, unknown>;
     this.calls.push(m);
@@ -89,8 +91,8 @@ class FakeArena implements Chain {
         seen: this.chaos.length,
         heads,
         request_hash: "",
-        commit: null,
-        revealed: false,
+        response_hash: null,
+        submitter: null,
         side: null,
         size_bps: 0,
       };
@@ -101,27 +103,17 @@ class FakeArena implements Chain {
       return { tx, value: s as ArenaCalls[M]["result"] };
     }
     const s = this.slot!;
-    if (m === "commit_completion") {
-      assert.ok(this.t < BigInt(s.opened_at) + SLOT_TTL_NS && this.t + this.lock < this.close, "commit window");
-      assert.ok(deposit >= 300n, "keeper bond");
-      const text = teeText(2, MODEL, b64.dec(s.request_hash), b64.dec(a.response_hash as string));
-      assert.ok(verify(a.signer as string, text, a.signature as string), "bad tee signature");
-      s.commit = {
-        response_hash: a.response_hash as string,
-        signer: a.signer as string,
-        committer: "k",
-        bond: String(deposit),
-        committed_at: String(this.t),
-      };
-      return { tx, value: undefined as ArenaCalls[M]["result"] };
-    }
-    if (m === "reveal_completion") {
-      if (this.t >= this.close) throw new Error("reveal_completion failed: Smart contract panicked: duel closed");
+    if (m === "submit_completion") {
+      if (this.rival || s.response_hash)
+        throw new Error("submit_completion failed: Smart contract panicked: slot taken");
+      assert.ok(this.t < BigInt(s.opened_at) + SLOT_TTL_NS && this.t + this.lock < this.close, "slot window");
+      assert.equal(this.pinned.get(a.signer as string), MODEL, "signer not pinned to model");
       const res = b64.dec(a.response as string);
-      assert.equal(b64.enc(sha(res)), s.commit!.response_hash, "response mismatch");
-      s.revealed = true;
-      this.revealed = parseDecision(res, s.heads !== 0);
-      return { tx, value: undefined as ArenaCalls[M]["result"] };
+      const text = teeText(2, MODEL, b64.dec(s.request_hash), sha(res));
+      assert.ok(verify(a.signer as string, text, a.signature as string), "bad tee signature");
+      s.response_hash = b64.enc(sha(res));
+      this.decided = parseDecision(res, s.heads !== 0);
+      return { tx, value: (this.decided?.side ?? null) as ArenaCalls[M]["result"] };
     }
     throw new Error(`unexpected ${m}`);
   }
@@ -191,14 +183,14 @@ function setup(cap = 1.5, delayMs = 0) {
   return { dir, arena, k, lines, budget, step };
 }
 
-test("first decision, held to the lock, revealed early for a headline, then again inside the lock", async () => {
-  const { dir, arena, k, step, budget } = setup();
+test("first decision at once, a new slot for a headline, nothing inside the lock", async () => {
+  const { dir, arena, step, budget } = setup();
   await step();
-  assert.deepEqual(arena.calls, ["open_slot", "commit_completion"]);
-  assert.equal(k.held.size, 1);
+  assert.deepEqual(arena.calls, ["open_slot", "submit_completion"]);
+  assert.deepEqual(arena.decided, { side: "Long", size_bps: 4000 });
   arena.t += 20n * S;
   await step();
-  assert.equal(arena.calls.length, 2, "committed and no headline: held, nothing sent");
+  assert.equal(arena.calls.length, 2, "filled and no headline: nothing to do");
   arena.chaos.push({
     target: AGENT,
     outcome: "Pending",
@@ -206,42 +198,39 @@ test("first decision, held to the lock, revealed early for a headline, then agai
     arm: "Cue",
   } as Chaos);
   await step();
-  assert.deepEqual(arena.calls.slice(2), ["reveal_completion"], "revealed at once for the new headline");
-  assert.deepEqual(arena.revealed, { side: "Long", size_bps: 4000 });
-  await step();
-  assert.deepEqual(arena.calls.slice(3), ["open_slot", "commit_completion"]);
+  assert.deepEqual(arena.calls.slice(2), ["open_slot", "submit_completion"]);
   assert.equal(arena.slot!.heads, 1, "the new slot carries the headline");
+  assert.deepEqual(arena.decided, { side: "Short", size_bps: 1000 }, "capped under a paid headline");
+  arena.chaos.push({ target: AGENT, outcome: "Pending", headline: "Second lie", arm: "Clean" } as Chaos);
   arena.t = arena.close - 30n * S; // inside the 60 s lock
   await step();
-  assert.deepEqual(arena.calls.slice(5), ["reveal_completion"]);
-  assert.deepEqual(arena.revealed, { side: "Short", size_bps: 1000 }, "capped under a paid headline");
-  await step();
-  assert.equal(arena.calls.length, 6, "no new slot inside the lock");
+  assert.equal(arena.calls.length, 4, "no slot inside the lock, even for a new headline");
   assert.equal(readFileSync(join(dir, "spend.jsonl"), "utf8").trim().split("\n").length, 2);
   assert.ok(Math.abs(budget.spent() - 2 * (900 * 8e-8 + 60 * 5e-7)) < 1e-12);
-  // a restarted keeper reads nothing left to reveal
-  assert.equal(
-    new Keeper(arena, fakeAi(), budget, new Outage(), { marginS: 10, logFile: join(dir, "keeper.jsonl") }).held.size,
-    0,
+  const rows = readFileSync(join(dir, "keeper.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    rows.map((r) => r.event),
+    ["open", "submit", "open", "submit"],
   );
 });
 
-test("a restarted keeper still reveals the response it committed", async () => {
-  const { dir, arena, step, budget } = setup();
-  await step();
-  const again = new Keeper(arena, fakeAi(), budget, new Outage(), {
-    marginS: 10,
-    logFile: join(dir, "keeper.jsonl"),
-    print: () => {},
-  });
-  assert.equal(again.held.size, 1);
-  arena.t = arena.close - 5n * S;
-  await again.round([AGENT]);
-  await again.settle();
-  assert.deepEqual(arena.calls, ["open_slot", "commit_completion", "reveal_completion"]);
+test("a slot another keeper filled first is logged and left; an unpinned signer is never submitted", async () => {
+  const a = setup();
+  a.arena.rival = true;
+  await a.step();
+  assert.deepEqual(a.arena.calls, ["open_slot", "submit_completion"]);
+  assert.match(a.lines.join("\n"), /seq 1: SKIP submit refused: slot taken/);
+  const b = setup();
+  b.arena.pinned.clear();
+  await b.step();
+  assert.deepEqual(b.arena.calls, ["open_slot"]);
+  assert.match(b.lines.join("\n"), /is pinned to no model/);
 });
 
-test("a model call that runs past the commit deadline skips the slot", { timeout: 15_000 }, async () => {
+test("a model call that runs past the slot deadline skips the slot", { timeout: 15_000 }, async () => {
   const { arena, step, lines } = setup(1.5, 60_000);
   arena.t = arena.close - arena.lock - 16n * S; // 6 s to the deadline (lock + 10 s margin)
   await step();

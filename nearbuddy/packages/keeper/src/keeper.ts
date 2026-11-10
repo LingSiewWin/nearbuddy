@@ -1,20 +1,17 @@
 // Permissionless keeper for keyless agents (arena/src/keyless.rs). Per round, for every keyless agent in an open
 // duel: open a decision slot when one is due (the duel's first decision, or a paid headline the latest slot did not
 // carry), rebuild the slot's request bytes from chain views alone and check them against the slot's request_hash,
-// post them to NEAR AI Cloud, fetch the enclave's signature record, `commit_completion`, and later
-// `reveal_completion` inside the duel's intent lock (or at once when a new headline needs a fresh decision). The
-// keeper holds a NEAR account key for gas and the keeper bond, never an agent key: the enclave signature is the
-// agent's custody.
+// post them to NEAR AI Cloud, fetch the enclave's signature record and `submit_completion` (one step: the request is
+// public and the model close to deterministic at temperature 0, so there is nothing to hide). The keeper holds a
+// NEAR account key for gas, never an agent key: the enclave signature is the agent's custody.
 //
 // Every wait has a deadline on the chain clock and an outcome when it passes, and agents run side by side, so one
-// slow slot never blocks another agent or the next round:
-//   - the model call and the signature fetch must finish before the slot's commit deadline (slot TTL or the intent
-//     lock, whichever is first, less a margin): past it the slot is skipped, its spend logged, nothing committed;
-//   - a commit that would land after that deadline is not sent;
-//   - a held response is revealed once the chain clock is inside the intent lock; a reveal refused as late ("duel
-//     closed") is logged as a forfeit of the keeper bond, any other failure retried next round.
+// slow slot never blocks another agent or the next round: the model call and the signature fetch must finish before
+// the slot's deadline (slot TTL or the intent lock, whichever is first, less a margin); past it the slot is skipped
+// (its spend logged, nothing sent) and the next one opens once the TTL has run out. A slot another keeper filled
+// first ("slot taken") is logged and left.
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
   AgentView,
@@ -84,13 +81,6 @@ export function slotInputs(agent: AgentView, k: KeylessAgent, d: Duel, s: Slot, 
 const freshHeadline = (chaos: Chaos[] | null, agent: string, s: Slot) =>
   (chaos ?? []).some((c, i) => i >= s.seen && c.target === agent && c.outcome === "Pending");
 
-/** A response the keeper committed and has not revealed yet. */
-export interface Held {
-  duel_id: string;
-  agent: string;
-  seq: string;
-  response: string; // the exact response text (strict UTF-8, as the enclave hashed it)
-}
 type Row = Record<string, unknown> & { event: string };
 
 /** Stops the keeper: the budget cap or a model outage. */
@@ -106,13 +96,12 @@ export class Stop extends Error {
 export interface KeeperOpts {
   /** Seconds kept free before each deadline for the transaction to land. */
   marginS: number;
-  /** jsonl of every slot event (commit rows carry the response, so a restart can still reveal). */
+  /** jsonl of every slot event: open, submit (with the response), skip, drop. */
   logFile: string;
   print?: (line: string) => void;
 }
 
 export class Keeper {
-  readonly held = new Map<string, Held>();
   private readonly keyless = new Map<string, boolean>();
   private readonly print: (line: string) => void;
 
@@ -124,11 +113,6 @@ export class Keeper {
     private readonly opts: KeeperOpts,
   ) {
     this.print = opts.print ?? ((l) => console.log(`[keeper ${new Date().toISOString().slice(11, 19)}] ${l}`));
-    for (const r of readRows(opts.logFile)) {
-      const k = `${r.duel_id}/${r.agent}/${r.seq}`;
-      if (r.event === "commit") this.held.set(k, r as unknown as Held);
-      else if (r.event === "reveal" || r.event === "forfeit" || r.event === "drop") this.held.delete(k);
-    }
   }
 
   private record(row: Row) {
@@ -205,10 +189,9 @@ export class Keeper {
     throw this.stopped;
   }
 
-  /** One agent's step: reveal a held response when due, else open or take a slot and keep it. */
+  /** One agent's step: open a slot when a decision is due, or take an open one, and fill it. */
   private async agent(agent: string, av: AgentView, d: Duel, price: Pricing): Promise<void> {
     const tag = `duel ${d.id} agent ${short(agent)}`;
-    const close = BigInt(d.close_at);
     const [lock, slot, now] = await Promise.all([
       this.chain.view("duel_lock", { duel_id: d.id }),
       this.chain.view("get_slot", { duel_id: d.id, agent }),
@@ -216,31 +199,20 @@ export class Keeper {
     ]);
     const lockNs = BigInt(lock ?? "0");
     const margin = BigInt(this.opts.marginS) * S;
-    const canDecide = now + lockNs + margin < close;
+    if (now + lockNs + margin >= BigInt(d.close_at)) return; // no decision lands inside the intent lock
     const chaos = await this.chain.view("get_chaos", { duel_id: d.id }).catch(() => null);
-    if (slot?.commit && !slot.revealed) {
-      const k = `${d.id}/${agent}/${slot.seq}`;
-      const h = this.held.get(k);
-      if (!h) return; // another keeper's commit (or one this keeper lost): only its response can open it
-      const fresh = freshHeadline(chaos, agent, slot);
-      if (now + lockNs >= close || (fresh && canDecide))
-        await this.reveal(tag, h, k, fresh ? "a new headline" : "lock");
-      return;
-    }
-    if (!canDecide) return;
     let s = slot;
-    const takeable = s && !s.commit && !s.revealed && now + margin < BigInt(s.opened_at) + SLOT_TTL_NS;
-    if (!takeable) {
-      // due: the duel's first decision, a headline the last slot did not carry, or a slot that expired uncommitted
-      const due =
-        !s || freshHeadline(chaos, agent, s) || (!s.commit && !s.revealed && now >= BigInt(s.opened_at) + SLOT_TTL_NS);
+    const ends = s ? BigInt(s.opened_at) + SLOT_TTL_NS : 0n;
+    if (!(s && !s.response_hash && now + margin < ends)) {
+      // due: the duel's first decision, a headline the last slot did not carry, or a slot that expired unfilled
+      const due = !s || freshHeadline(chaos, agent, s) || (!s.response_hash && now >= ends);
       if (!due) return;
       const r = await this.chain.call("open_slot", { duel_id: d.id, agent }, 0n, 100);
       s = r.value;
       this.print(`${tag}: opened slot ${s.seq} (price ${s.price}, ${popcount(s.heads)} headline(s)), tx ${r.tx}`);
       this.record({ event: "open", duel_id: d.id, agent, seq: s.seq, tx: r.tx, request_hash: s.request_hash });
     }
-    if (s) await this.keep(tag, agent, av, d, s, price, lockNs, chaos);
+    await this.keep(tag, agent, av, d, s, price, lockNs, chaos);
   }
 
   private async keep(
@@ -271,7 +243,7 @@ export class Keeper {
     if (refused) throw new Stop(refused, 1);
     const left = async () => Number((deadline - (await this.chain.now())) / 1_000_000n);
     let ms = await left();
-    if (ms < 5_000) return this.skip(at, d, agent, s, "commit window closed before the model call");
+    if (ms < 5_000) return this.skip(at, d, agent, s, "slot window closed before the model call");
     let c: Awaited<ReturnType<NearAi["complete"]>>;
     try {
       c = await this.ai.complete(req, ms);
@@ -300,31 +272,37 @@ export class Keeper {
     } catch (e) {
       return this.skip(at, d, agent, s, `enclave record refused: ${(e as Error).message}`);
     }
-    if (!(await this.chain.view("is_tee_signer", { signer: proof.signer })))
-      return this.skip(at, d, agent, s, `enclave key ${proof.signer} is not pinned on the arena`);
+    const pinned = await this.chain.view("get_model_signer", { signer: proof.signer });
+    if (pinned !== av.model_id)
+      return this.skip(at, d, agent, s, `enclave key ${proof.signer} is pinned to ${pinned ?? "no model"}`);
     const decision = parseDecision(c.response, s.heads !== 0);
     ms = await left();
-    if (ms < 0) return this.skip(at, d, agent, s, "commit window closed during the model call");
-    const bond = BigInt(await this.chain.view("keyless_commit_bond", { duel_id: d.id }));
-    const response = new TextDecoder().decode(c.response);
-    const r = await this.chain.call(
-      "commit_completion",
-      {
-        duel_id: d.id,
-        agent,
-        seq: s.seq,
-        response_hash: proof.response_hash,
-        signer: proof.signer,
-        signature: proof.signature,
-      },
-      bond,
-      100,
-    );
-    const h: Held = { duel_id: d.id, agent, seq: s.seq, response };
-    this.held.set(`${d.id}/${agent}/${s.seq}`, h);
+    if (ms < 0) return this.skip(at, d, agent, s, "slot window closed during the model call");
+    let r: { tx: string };
+    try {
+      r = await this.chain.call(
+        "submit_completion",
+        {
+          duel_id: d.id,
+          agent,
+          seq: s.seq,
+          response: b64.enc(c.response),
+          signer: proof.signer,
+          signature: proof.signature,
+        },
+        0n,
+        150,
+      );
+    } catch (e) {
+      const why = /slot taken|stale slot|slot expired|intent lock|duel closed/.exec(String(e))?.[0];
+      if (!why) throw e;
+      return this.skip(at, d, agent, s, `submit refused: ${why}`);
+    }
     this.record({
-      event: "commit",
-      ...h,
+      event: "submit",
+      duel_id: d.id,
+      agent,
+      seq: s.seq,
       tx: r.tx,
       model: av.model_id,
       chat_id: c.chatId,
@@ -333,54 +311,17 @@ export class Keeper {
       signer: proof.signer,
       decision,
       usd,
-      bond: String(bond),
+      response: new TextDecoder().decode(c.response),
     });
-    const said = decision ? `${decision.side} ${decision.size_bps} bps` : "no decision";
-    this.print(`${at}: committed (${said}, hidden until reveal), $${usd.toFixed(5)}, bond ${bond}, tx ${r.tx}`);
+    const said = decision ? `${decision.side} ${decision.size_bps} bps` : "no readable decision";
+    this.print(`${at}: submitted (${said}), $${usd.toFixed(5)}, tx ${r.tx}`);
   }
 
   private skip(at: string, d: Duel, agent: string, s: Slot, why: string) {
     this.print(`${at}: SKIP ${why}`);
     this.record({ event: "skip", duel_id: d.id, agent, seq: s.seq, why });
   }
-
-  private async reveal(tag: string, h: Held, k: string, why: string) {
-    try {
-      const r = await this.chain.call(
-        "reveal_completion",
-        { duel_id: h.duel_id, agent: h.agent, response: b64.enc(new TextEncoder().encode(h.response)) },
-        0n,
-        150,
-      );
-      this.held.delete(k);
-      this.record({ event: "reveal", duel_id: h.duel_id, agent: h.agent, seq: h.seq, tx: r.tx });
-      this.print(`${tag} seq ${h.seq}: revealed (${why}), tx ${r.tx}`);
-    } catch (e) {
-      const msg = String(e);
-      const gone = /duel closed|no commitment|duel missing/.exec(msg)?.[0];
-      if (!gone) throw e; // transient: retried next round
-      this.held.delete(k);
-      this.record({
-        event: gone === "duel closed" ? "forfeit" : "drop",
-        duel_id: h.duel_id,
-        agent: h.agent,
-        seq: h.seq,
-        why: gone,
-      });
-      this.print(
-        `${tag} seq ${h.seq}: reveal refused (${gone}); ${gone === "duel closed" ? "keeper bond forfeited" : "dropped"}`,
-      );
-    }
-  }
 }
 
 const min = (a: bigint, b: bigint) => (a < b ? a : b);
 const popcount = (n: number) => n.toString(2).replace(/0/g, "").length;
-
-function readRows(file: string): Row[] {
-  if (!existsSync(file)) return [];
-  return readFileSync(file, "utf8")
-    .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as Row);
-}
