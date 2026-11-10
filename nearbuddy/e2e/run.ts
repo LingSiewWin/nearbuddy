@@ -17,8 +17,8 @@
 // Not in the per-push CI (sandbox download, ~5 minutes): nightly and on demand. Everything it writes goes to a temp dir printed at the start; the
 // runner's dataset goes there through NEARBUDDY_DATA, and its attestation reports beside it. Every scenario runs with withdraw_delay_s = 60 (the minimum), so
 // scenario 3b's binds_until passes within the run.
-// Every check reports PASS, FAIL or SKIP with its reason (the offline-only replacement check in an online run), so
-// the total is the same in every run and the summary names what was skipped.
+// Every check reports PASS, FAIL or SKIP with its reason (a chaos arm the contract did not draw, the offline-only
+// replacement check in an online run), so the total is the same in every run and the summary names what was skipped.
 //
 // Scenarios:
 //   1. commit-reveal duel: owner turns commit-reveal on, the runner plays one duel with two stub agents, the oracle
@@ -1424,20 +1424,34 @@ async function main() {
           "import json, sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); " +
             "from export_dataset import check_row; " +
             "rows = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]; " +
-            "print(json.dumps([check_row(r, Path(sys.argv[3])) for r in rows if r.get('chaos') and r.get('revealed_tx')]))",
+            "print(json.dumps([[*check_row(r, Path(sys.argv[3])), [c['arm'] for c in r['chaos']]] " +
+            "for r in rows if r.get('chaos') and r.get('revealed_tx')]))",
           join(ROOT, "agents"),
           data,
           ATTEST, // the folder the runner saved its attestation reports to
         ],
         { encoding: "utf8", env: { ...process.env, NEAR_AI_API_KEY: "" } },
       );
-      const verdicts = py.status === 0 ? (JSON.parse(py.stdout.trim().split("\n").at(-1)!) as [boolean, string][]) : [];
+      const verdicts =
+        py.status === 0 ? (JSON.parse(py.stdout.trim().split("\n").at(-1)!) as [boolean, string, string[]][]) : [];
       check(
         sc,
         "check_row: every revealed headline row verifies (arm text in the signed request)",
         verdicts.length >= 2 && verdicts.every(([ok]) => ok),
         py.status === 0 ? JSON.stringify(verdicts) : py.stderr.slice(-200),
       );
+      // the contract draws each arm from the block's random seed (draw_arm), so a run delivers Cue, Clean or both;
+      // an arm it did not draw keeps its row as SKIP instead of passing unexercised inside the check above
+      for (const [arm, how] of [
+        ["Cue", "as written"],
+        ["Clean", "after cue_guard"],
+      ] as const) {
+        const name = `${arm} arm: a headline delivered ${how} verifies`;
+        const rowsBy = verdicts.filter(([, , arms]) => arms.includes(arm));
+        if ([cb?.arm, ca?.arm].includes(arm))
+          check(sc, name, rowsBy.length > 0 && rowsBy.every(([ok]) => ok), JSON.stringify(rowsBy));
+        else skip(sc, name, `arm not drawn (B ${cb?.arm}, A ${ca?.arm})`);
+      }
       // settlement at finish: in the oracle's close answer, the receipt that logged `resolve`
       const answer = oracle.answered.get(`close:${duelId}`);
       const h = answer ? await eventHeight(answer.hash, oracleAcct.accountId, "resolve") : null;
