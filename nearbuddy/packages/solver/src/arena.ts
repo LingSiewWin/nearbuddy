@@ -6,7 +6,7 @@
 //                  with both sigs: open_duel_consented, each agent's ed25519 over consentMessage)
 //   POST /intent   {signed: SignedIntent, tee?: TeeProof}    -> {tx, quotes:[{follower, amount, quote}]}
 //                  once the intent landed the route answers 200; a quote failure comes back as quote_error
-//   POST /commit   {duel_id, agent_pk, commitment, sig}      -> {tx, at}  (commit_intent; no quotes, the call is still hidden;
+//   POST /commit   {duel_id, agent_pk, commitment, sig, seen?} -> {tx, at}  (commit_intent; no quotes, the call is still hidden;
 //                  `at` = the commit's block time in ns, the time the contract holds it under, null when unread)
 //   POST /reveal   {signed, salt, tee?}                      -> {tx, quotes}  (reveal_intent; followers are quoted here)
 //   POST /chaos    {payload}  (open)                         -> {payload_hash}; spectator then calls inject_chaos on chain
@@ -37,6 +37,7 @@ import {
 import { b64 } from "../../protocol/src/index.ts";
 import {
   commitMessage,
+  commitMessageV2,
   consentMessage,
   type Side,
   type SignedIntent,
@@ -421,16 +422,21 @@ export class Arena {
   /** Commit-reveal, step 1: relay the agent's signed commitment. Nothing about the call is public yet: no quotes.
    *  `at` is the commit's block time, deploy 17 only (null before, and when unreadable): a commit that replaces this
    *  one voids every headline planted at or after it, so the runner reveals it first when a headline that late is
-   *  pending. Deploy 16.1 has no planted headlines and skips the block read. */
-  async commitIntent(duel_id: string, agent_pk: string, commitment: string, sig: string) {
+   *  pending. Deploy 16.1 has no planted headlines and skips the block read.
+   *  `seen` (commit message v2, deploy 17.1): the chaos records the agent had read, signed with the commitment and
+   *  passed through; without it the v1 message is checked and the call carries no `seen`, as deploy 17 expects. */
+  async commitIntent(duel_id: string, agent_pk: string, commitment: string, sig: string, seen?: number) {
     let c: Uint8Array;
+    let msg: Uint8Array;
     try {
       c = b64.strict(commitment); // the contract's Base64VecU8 refuses url-safe or non-canonical input on chain
+      msg = seen === undefined ? commitMessage(ARENA, duel_id, c) : commitMessageV2(ARENA, duel_id, seen, c);
     } catch {
       throw new Error("bad commit signature");
     }
-    if (!verify(agent_pk, commitMessage(ARENA, duel_id, c), sig)) throw new Error("bad commit signature");
-    const r = await this.call("commit_intent", { duel_id, agent_pk, commitment, sig });
+    if (!verify(agent_pk, msg, sig)) throw new Error("bad commit signature");
+    const args = seen === undefined ? { duel_id, agent_pk, commitment, sig } : { duel_id, agent_pk, commitment, sig, seen };
+    const r = await this.call("commit_intent", args);
     const cfg = r.block ? await this.config() : null;
     return { tx: r.tx, at: cfg && isChaosV2(cfg) ? await this.blockTime(r.block) : null };
   }
@@ -871,8 +877,11 @@ export class Arena {
       return { code: 200, body: await this.postIntent(signed, q.tee ?? undefined) };
     }
     if (url === "/commit") {
-      const q = JSON.parse(body) as { duel_id: string; agent_pk: string; commitment: string; sig: string };
-      return { code: 200, body: await this.commitIntent(String(q.duel_id), q.agent_pk, q.commitment, q.sig) };
+      const q = JSON.parse(body) as { duel_id: string; agent_pk: string; commitment: string; sig: string; seen?: number };
+      return {
+        code: 200,
+        body: await this.commitIntent(String(q.duel_id), q.agent_pk, q.commitment, q.sig, q.seen ?? undefined),
+      };
     }
     if (url === "/reveal") {
       const q = JSON.parse(body) as { signed: SignedIntent; salt: string; tee?: TeeProof | null };

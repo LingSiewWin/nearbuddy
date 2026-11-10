@@ -11,6 +11,7 @@ import type { Mandate } from "../../protocol/src/abi/arena.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import {
   commitMessage,
+  commitMessageV2,
   commitment,
   consentMessage,
   type Intent,
@@ -312,6 +313,29 @@ test("POST /commit verifies the agent's commit signature and relays commit_inten
     arena.route("POST", "/commit", JSON.stringify({ ...body, duel_id: "4" }), KEY),
     /bad commit signature/,
   );
+  assert.equal(calls.length, 1);
+});
+
+test("POST /commit with seen verifies commit message v2 and passes seen to commit_intent", async () => {
+  const kp = KeyPair.fromRandom("ed25519");
+  const s = signed(kp);
+  const c = commitment(s.intent, new Uint8Array(32).fill(9));
+  const body = {
+    duel_id: "3",
+    agent_pk: s.intent.agent_pk,
+    commitment: b64.enc(c),
+    sig: b64.enc(kp.sign(commitMessageV2(ARENA_ID, "3", 2, c)).signature),
+    seen: 2,
+  };
+  const { calls, account } = fakeSolver();
+  const arena = new Arena(account, "s.testnet", { listFollowers: async () => [] });
+  await arena.route("POST", "/commit", JSON.stringify(body), KEY);
+  assert.equal(calls[0]!.methodName, "commit_intent");
+  assert.deepEqual(calls[0]!.args, body);
+  // another seen, or the v2 signature without seen (checked as v1): refused before any gas is spent
+  for (const bad of [{ ...body, seen: 3 }, { ...body, seen: undefined }, { ...body, seen: -1 }]) {
+    await assert.rejects(arena.route("POST", "/commit", JSON.stringify(bad), KEY), /bad commit signature/);
+  }
   assert.equal(calls.length, 1);
 });
 
