@@ -125,6 +125,8 @@ export type Evidence = {
   // Deploy 18 (absent in evidence saved before it):
   /** get_keyless for each side, read now: a keyless agent's strategy and template, null for a keyed agent. */
   keyless?: Record<string, { strategy: string; template: number } | null>;
+  /** get_model_signer for every enclave key a submit_completion carries, read now: the model it is pinned to. */
+  model_signers?: Record<string, string | null>;
 };
 
 // ---------------------------------------------------------------- receipts
@@ -214,6 +216,8 @@ export function duelCalls(calls: Call[], id: string) {
     chaos: ok.filter((c) => c.method === "inject_chaos" && String(c.args.duel_id) === id),
     // deploy 18: keyless agents' decision slots, their committed completions and reveals, and the oracle ticks
     slots: ok.filter((c) => c.method === "open_slot" && String(c.args.duel_id) === id),
+    submissions: ok.filter((c) => c.method === "submit_completion" && String(c.args.duel_id) === id),
+    // the first deploy-18 draft: a hidden commit, then a reveal
     completions: ok.filter((c) => c.method === "commit_completion" && String(c.args.duel_id) === id),
     reveals: ok.filter((c) => c.method === "reveal_completion" && String(c.args.duel_id) === id),
     ticks: ok.filter((c) => c.method === "oracle_on_call" && c.args.msg === `tick:${id}`),
@@ -790,10 +794,11 @@ export function keeperForfeits(calls: ReturnType<typeof duelCalls>): bigint {
   return sum;
 }
 
-/** A keyless agent's scored decision (deploy 18), from its slot, commit and reveal receipts alone: the request bytes
- *  rebuilt from chain state hash to the slot's request_hash, the slot's price is the oracle's, the enclave signed
- *  `model:request_hash:response_hash`, the revealed response hashes to the commit, and its content parses to the
- *  side and size the contract recorded. */
+/** A keyless agent's scored decision (deploy 18), from its slot receipt and the one that filled it alone
+ *  (`submit_completion`, or the first draft's commit then reveal): the request bytes rebuilt from chain state hash to
+ *  the slot's request_hash, the slot's price is the oracle's, the enclave key pinned to the agent's model signed
+ *  `model:request_hash:sha256(response)`, and the response's content parses to the side and size the contract
+ *  recorded. */
 function keyless(
   e: Evidence,
   s: string,
@@ -818,18 +823,21 @@ function keyless(
   const open = calls.slots.find(
     (c) => c.args.agent === pk && String((c.value as SlotValue | null)?.seq) === stored.nonce,
   );
+  const sub = calls.submissions.find((c) => c.args.agent === pk && String(c.args.seq) === stored.nonce);
   const commit = calls.completions.find((c) => c.args.agent === pk && String(c.args.seq) === stored.nonce);
   const reveal = commit && calls.reveals.find((c) => c.args.agent === pk && c.at_ns >= commit.at_ns);
+  const filled = sub ?? commit; // carries the enclave signer and signature
   add(
     "INFO",
     `keyless ${s}`,
     `no agent key: template ${kl.template}, strategy "${short(kl.strategy, 60)}"; decision = slot ${stored.nonce}`,
   );
-  if (!open || !commit || !reveal) {
+  const body = sub ?? reveal; // carries the response bytes
+  if (!open || !filled || !body) {
     add(
       "SKIP",
       `keyless ${s} slot`,
-      `open_slot, commit_completion or reveal_completion of slot ${stored.nonce} is not in the scanned txs`,
+      `open_slot, or the submit_completion (or commit and reveal) of slot ${stored.nonce}, is not in the scanned txs`,
     );
     return;
   }
@@ -884,21 +892,31 @@ function keyless(
     `keyless ${s} request`,
     `rebuilt from chain state (price, ${heads.length} headline(s), nonce ${short(hex(b64.dec(slot.nonce)), 10)}): ${req.length} bytes, sha256 ${short(hex(reqHash), 10)} = slot request_hash (open_slot tx ${open.tx})`,
   );
-  const response = b64.dec(String(reveal.args.response));
+  const response = b64.dec(String(body.args.response));
   const resHash = new Uint8Array(createHash("sha256").update(response).digest());
+  if (sub)
+    add(
+      "INFO",
+      `keyless ${s} response`,
+      `submitted ${response.length} bytes in one step (tx ${sub.tx}, by ${sub.signer}), sha256 ${short(hex(resHash), 10)}`,
+    );
+  else
+    add(
+      b64.enc(resHash) === filled.args.response_hash ? "PASS" : "FAIL",
+      `keyless ${s} response`,
+      `revealed ${response.length} bytes (tx ${body.tx}), sha256 ${short(hex(resHash), 10)} = committed response_hash (tx ${filled.tx}, by ${filled.signer})`,
+    );
+  const signer = String(filled.args.signer);
+  const model = e.model_signers?.[signer];
   add(
-    b64.enc(resHash) === commit.args.response_hash ? "PASS" : "FAIL",
-    `keyless ${s} response`,
-    `revealed ${response.length} bytes (tx ${reveal.tx}), sha256 ${short(hex(resHash), 10)} = committed response_hash (tx ${commit.tx}, by ${commit.signer})`,
-  );
-  const signer = String(commit.args.signer);
-  add(
-    e.pinned[signer] ? "PASS" : "FAIL",
+    (sub ? model === ag.model_id : e.pinned[signer]) ? "PASS" : "FAIL",
     `keyless ${s} TEE signer`,
-    `${short(signer, 12)} is_tee_signer = ${e.pinned[signer] ?? "unknown"} (read now)`,
+    sub
+      ? `${short(signer, 12)} get_model_signer = ${model === undefined ? "unknown" : model} (read now), agent model ${ag.model_id}`
+      : `${short(signer, 12)} is_tee_signer = ${e.pinned[signer] ?? "unknown"} (read now)`,
   );
   add(
-    verify(signer, teeText(2, ag.model_id, reqHash, resHash), String(commit.args.signature)) ? "PASS" : "FAIL",
+    verify(signer, teeText(2, ag.model_id, reqHash, resHash), String(filled.args.signature)) ? "PASS" : "FAIL",
     `keyless ${s} TEE signature`,
     `enclave ed25519 over "${ag.model_id}:${short(hex(reqHash), 10)}:${short(hex(resHash), 10)}"`,
   );
@@ -914,12 +932,12 @@ function keyless(
     `choices[0].message.content reads ${got ? `${got.side} ${got.size_bps} bps` : "no decision"}; the contract recorded ${stored.side} ${stored.size_bps} bps`,
   );
   const close = BigInt(d.close_at);
-  const ttlOk = commit.at_ns < BigInt(slot.opened_at) + SLOT_TTL_NS;
-  const lockOk = lockNs === null || commit.at_ns + lockNs < close;
+  const ttlOk = filled.at_ns < BigInt(slot.opened_at) + SLOT_TTL_NS;
+  const lockOk = lockNs === null || filled.at_ns + lockNs < close;
   add(
-    ttlOk && lockOk && reveal.at_ns < close ? "PASS" : "FAIL",
+    ttlOk && lockOk && body.at_ns < close ? "PASS" : "FAIL",
     `keyless ${s} timing`,
-    `committed ${secs(commit.at_ns - BigInt(slot.opened_at))} s after the slot opened (TTL ${secs(SLOT_TTL_NS)} s), ${secs(close - commit.at_ns)} s before close${lockNs === null ? "" : ` (lock ${secs(lockNs)} s)`}; revealed ${secs(close - reveal.at_ns)} s before close`,
+    `${sub ? "submitted" : "committed"} ${secs(filled.at_ns - BigInt(slot.opened_at))} s after the slot opened (TTL ${secs(SLOT_TTL_NS)} s), ${secs(close - filled.at_ns)} s before close${lockNs === null ? "" : ` (lock ${secs(lockNs)} s)`}${sub ? "" : `; revealed ${secs(close - body.at_ns)} s before close`}`,
   );
 }
 
@@ -1239,6 +1257,11 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
   for (const p of proofs) pinned[p.signer] ??= await viewAt<boolean>(arena, "is_tee_signer", { signer: p.signer });
   for (const c of calls.completions)
     pinned[String(c.args.signer)] ??= await viewAt<boolean>(arena, "is_tee_signer", { signer: c.args.signer });
+  const model_signers: Evidence["model_signers"] = {};
+  for (const c of calls.submissions)
+    model_signers[String(c.args.signer)] ??= await viewAt<string | null>(arena, "get_model_signer", {
+      signer: c.args.signer,
+    }).catch(() => null);
   // deploy 18: which side is keyless (a contract without the view has none)
   const keyless: Evidence["keyless"] = {};
   for (const pk of [d.a, d.b])
@@ -1288,6 +1311,7 @@ export async function collect(arena: string, id: string): Promise<Evidence> {
     open_block,
     chaos,
     keyless,
+    model_signers,
   };
 }
 
@@ -1302,6 +1326,7 @@ export function ownTxs(e: Evidence): Evidence {
     ...c.commits,
     ...c.chaos,
     ...c.slots,
+    ...c.submissions,
     ...c.completions,
     ...c.reveals,
     ...c.ticks,
