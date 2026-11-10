@@ -654,7 +654,7 @@ export function checkDuel(e: Evidence): Line[] {
           ? `void: the injections settle as on a tie, then the pool ${near(pool)} NEAR less their stakes is split; ${bondsLine(m)}`
           : `void: pool ${near(pool)} NEAR split, A ${near(bonds[0])} -> ${near(got[0])}, B ${near(bonds[1])} -> ${near(got[1])}`,
       );
-      if (settle) settlement(m.settled!, { ...settle, voided: true }, add);
+      if (settle) settlement(m.settled!, { ...settle, voided: true }, add, calls);
     } else {
       const m = finishMath(
         bonds,
@@ -684,7 +684,7 @@ export function checkDuel(e: Evidence): Line[] {
           ? `pool ${near(pool)} NEAR of stakes, each settled by its record; the winner keeps the whole slash, the loser pays the flips' shares on top; ${bondsLine(m)}`
           : `pool ${near(pool)} NEAR; A ${near(bonds[0])} -> ${near(got[0])} (expected ${near(m.after[0])}), B ${near(bonds[1])} -> ${near(got[1])} (expected ${near(m.after[1])})`,
       );
-      if (settle) settlement(m.settled!, settle, add);
+      if (settle) settlement(m.settled!, settle, add, calls);
       // shield: the winner's count of injections it outlasted, as finish() credits it
       const sh = [b.a.shield, b.b.shield, a.a.shield, a.b.shield];
       if (straddled) add("SKIP", "shield", `not judged: ${straddled}`);
@@ -739,12 +739,23 @@ export function shieldGain(
 }
 
 /** Deploy 17: each settled record's payout against settle_records on the same records, and its outcome against its
- *  own kind, prev and next. */
+ *  own kind, prev and next. A NoTrial with no `next` (a keyless reply with no readable decision) must name, in
+ *  `decided_by`, a submit_completion of its target whose reply reads as no decision. */
 function settlement(
   s: ReturnType<typeof settleRecords>,
   settle: { records: Chaos[]; terms: ChaosConfig; voided?: boolean },
   add: (r: Line["result"], c: string, x: string) => void,
+  calls: ReturnType<typeof duelCalls>,
 ) {
+  const unread = (c: Chaos) => {
+    if (c.outcome !== "NoTrial" || c.next !== null || c.decided_by == null) return true;
+    const sub = calls.submissions.find((x) => x.args.agent === c.target && String(x.args.seq) === c.decided_by);
+    try {
+      return !!sub && parseDecision(b64.dec(String(sub.args.response)), true) === null;
+    } catch {
+      return false;
+    }
+  };
   const list = settle.records;
   const each = settle.voided ? "of each but the expired ones (void: no fee)" : "of each";
   const bad = list.flatMap((c, i) => {
@@ -753,9 +764,11 @@ function settlement(
         ? "still pending after the finish"
         : !judged(c)
           ? `${c.outcome} does not follow from prev ${c.prev} and next ${c.next} for a ${c.kind} headline`
-          : BigInt(c.payout) !== s.payouts[i]
-            ? `payout ${near(BigInt(c.payout))}, expected ${near(s.payouts[i]!)}`
-            : "";
+          : !unread(c)
+            ? `NoTrial with no call, but slot ${c.decided_by} of its target has no submission whose reply reads as no decision`
+            : BigInt(c.payout) !== s.payouts[i]
+              ? `payout ${near(BigInt(c.payout))}, expected ${near(s.payouts[i]!)}`
+              : "";
     return why ? [`#${i} ${why}`] : [];
   });
   const n = (x: Chaos["outcome"]) => list.filter((c) => c.outcome === x).length;
@@ -947,7 +960,7 @@ function keyless(
     `keyless ${s} proof_hash`,
     `sha256(request_hash || response_hash) = intent proof_hash ${short(stored.proof_hash, 12)}`,
   );
-  const got = parseDecision(response, slot.heads !== 0);
+  const got = keylessDecisions(calls, pk).get(stored.nonce) ?? parseDecision(response, slot.heads !== 0);
   add(
     got && got.side === stored.side && got.size_bps === stored.size_bps ? "PASS" : "FAIL",
     `keyless ${s} decision`,
@@ -1007,10 +1020,43 @@ export function incomplete(e: Evidence): boolean {
   const c = duelCalls(arenaCalls(e.txs, e.arena), e.duel_id);
   if (!c.closing || !e.before || !e.after) return true;
   if ([d.a, d.b].some((pk) => keylessUnread(e, c, pk))) return true;
+  // a submission's signer pin that was not read (its TEE signer line is SKIP) must be read again
+  if (e.model_signers && c.submissions.some((x) => !(String(x.args.signer) in e.model_signers!))) return true;
   if (e.chaos_pools && c.chaos.some((x) => !e.chaos_pools?.[x.block_hash])) return true;
   if (c.open && e.open_block === null) return true;
   if (e.now.config.chaos && e.chaos === null) return true; // deploy 17 has get_chaos: null = a failed read
   return !!e.now.config.intents_account && e.lock_ns === null;
+}
+
+/** The decision each of keyless agent `pk`'s submissions in the duel recorded, by slot seq, as submit_completion
+ *  records it: the reply's parse, a hold under a headline keeping at least the size of the agent's call before it
+ *  (null: no readable decision). */
+export function keylessDecisions(
+  calls: ReturnType<typeof duelCalls>,
+  pk: string,
+): Map<string, { side: "Long" | "Short"; size_bps: number } | null> {
+  const heads = new Map(
+    calls.slots
+      .filter((c) => c.args.agent === pk && c.value)
+      .map((c) => [String((c.value as { seq: string }).seq), (c.value as { heads: number }).heads]),
+  );
+  const subs = calls.submissions
+    .filter((c) => c.args.agent === pk)
+    .sort((x, y) => (BigInt(String(x.args.seq)) < BigInt(String(y.args.seq)) ? -1 : 1));
+  const out = new Map<string, { side: "Long" | "Short"; size_bps: number } | null>();
+  let cur: { side: "Long" | "Short"; size_bps: number } | null = null;
+  for (const c of subs) {
+    const h = heads.get(String(c.args.seq)) ?? 0;
+    let got: { side: "Long" | "Short"; size_bps: number } | null = null;
+    try {
+      got = parseDecision(b64.dec(String(c.args.response)), h !== 0);
+    } catch {}
+    if (got && h !== 0 && cur && cur.side === got.side)
+      got = { ...got, size_bps: Math.max(got.size_bps, cur.size_bps) };
+    out.set(String(c.args.seq), got);
+    if (got) cur = got;
+  }
+  return out;
 }
 
 /** Whether side `pk`'s get_keyless read failed in a duel where `pk` has keyless calls (a slot, a submission or a

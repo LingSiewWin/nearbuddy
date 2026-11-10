@@ -749,6 +749,33 @@ test("keyless duel: every line passes, and a forged strategy, reveal or pin fail
   );
 });
 
+// Re-audit 2026-11-11. N1: a hold under a headline keeps the size of the agent's call before it, so the recorded
+// size can exceed the reply's capped size. V1: an unread signer pin makes the evidence incomplete. V2: a NoTrial with
+// no call must point at a submitted reply that reads as no decision.
+test("keyless re-audit: held size, unread pin incomplete, unread NoTrial backed by its reply", () => {
+  const e = load("keyless_v2_0");
+  const b = e.now.duel!.b;
+  const slot2 = (x: Evidence) =>
+    receipts(x, "submit_completion").find((y) => args(y).agent === b && args(y).seq === "2")!;
+  const reply = (content: string) =>
+    b64.enc(new TextEncoder().encode(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })));
+  // N1: B held Long under the headline but asked for 100 bps; the contract keeps the 500 bps in force
+  const held = structuredClone(e);
+  setArgs(slot2(held), { ...args(slot2(held)), response: reply('{"direction":"long","size_bps":100}') });
+  assert.deepEqual(result(checkDuel(held), "keyless B decision"), ["PASS"]);
+  // V1
+  const v1 = structuredClone(e);
+  v1.model_signers = {};
+  assert.equal(incomplete(v1), true);
+  // V2: a NoTrial with no call whose deciding reply reads as a decision fails; with an unreadable reply it is fine
+  const v2 = structuredClone(e);
+  Object.assign(v2.chaos![0]!, { outcome: "NoTrial", next: null });
+  const why = (x: Evidence) => checkDuel(x).find((l) => l.check === "chaos settlement")?.detail ?? "";
+  assert.match(why(v2), /reads as no decision/);
+  setArgs(slot2(v2), { ...args(slot2(v2)), response: reply("I would rather not say.") });
+  assert.doesNotMatch(why(v2), /reads as no decision/);
+});
+
 // An RPC error on get_keyless (a 429) read as null checked a keyless side as keyed: its 7 keyless checks vanished
 // with no FAIL and incomplete() said false, so /api/keyless/verify cached a clean result. Now the side is SKIP and
 // the evidence is incomplete.
