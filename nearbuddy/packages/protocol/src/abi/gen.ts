@@ -403,7 +403,7 @@ export function emitPy(abi: Obj, src: string, prefix: string): string {
 }
 
 // Paths from nearbuddy/. web is its own bun project (ADR 0004), so it gets its own copy of the TS.
-// Python only needs the arena: the agents never call the vault contract.
+// Python gets the arena and predict types; the agents never call the vault contract.
 const OUTPUTS = [
   {
     abi: "abi/arena.json",
@@ -412,6 +412,12 @@ const OUTPUTS = [
     py: "agents/arena_types.py",
   },
   { abi: "abi/vault.json", prefix: "Vault", ts: ["packages/protocol/src/abi/vault.ts", "web/app/lib/abi/vault.ts"] },
+  {
+    abi: "abi/predict.json",
+    prefix: "Predict",
+    ts: ["packages/protocol/src/abi/predict.ts", "web/app/lib/abi/predict.ts"],
+    py: "agents/predict_types.py",
+  },
 ];
 
 if (import.meta.main) {

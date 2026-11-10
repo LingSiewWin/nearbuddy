@@ -1,0 +1,598 @@
+{
+  "schema_version": "0.4.0",
+  "metadata": {
+    "name": "nearbuddy-predict",
+    "version": "0.1.0"
+  },
+  "body": {
+    "functions": [
+      {
+        "name": "claim",
+        "doc": " Pay the caller the deposits of every prediction it holds that has been scored, and forget\n those predictions (their record stays in the market counts, the board and the logs).\n Returns the amount sent. Caller: a predictor. Deposit: none. Panics: \"nothing to claim\".",
+        "kind": "call",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "contract_source_metadata",
+        "kind": "view"
+      },
+      {
+        "name": "get_board",
+        "doc": " Predictors ranked by right minus wrong, then best streak, then account; `limit` (at most\n 100) from rank `from`. ponytail: sorts every row per call, like the arena's leaderboard; a\n sorted index once predictors number in the thousands. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "from",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "limit",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/BoardRow"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_config",
+        "doc": " The arena account, the deposit and the bounds. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Config"
+          }
+        }
+      },
+      {
+        "name": "get_duel_markets",
+        "doc": " Every market of a duel with at least one prediction: the duel market first, then chaos\n markets by index. View: anyone, no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/MarketView"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_market",
+        "doc": " One market's crowd split and outcome; `None` before its first prediction. View: anyone,\n no deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "index",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/MarketView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_predictions",
+        "doc": " The predictions `account` holds, oldest first: open ones and scored ones not yet claimed.\n Claimed ones live on in `get_stats` and the `predict` / `settle` logs. View: anyone, no\n deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/PredictionView"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_stats",
+        "doc": " `account`'s scored record; `None` before its first non-void verdict. View: anyone, no\n deposit, no panics.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Stats"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "new",
+        "doc": " `arena`: the arena contract whose views decide every market. It cannot change.",
+        "kind": "call",
+        "modifiers": [
+          "init"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "arena",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "on_predict",
+        "doc": " `predict`'s callback: stores the prediction if the market is still open, else sends the\n deposit back. Returns whether it was accepted. Never panics, so a refused deposit is never\n kept. Caller: this contract (private).",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "index",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "pick",
+              "type_schema": {
+                "$ref": "#/definitions/Pick"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "on_settle",
+        "doc": " `settle`'s callback. Fixes, once, the outcome of each market of the duel the arena has\n decided: a chaos market when its injection left `Pending` (`Flipped`, `Held`; void on\n `NoTrial` or `Expired`), the duel market when the duel resolved (`A`, `B`, `Tie`; void when\n voided). Then scores up to `SCORE_PAGE` predictions of settled markets, in order, and returns\n how many are still unscored. Caller: this contract (private).",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        }
+      },
+      {
+        "name": "predict",
+        "doc": " Call `pick` on a market: a chaos injection (`index` = its index in `get_chaos(duel_id)`,\n pick `Flipped` or `Held`) or the duel (`index` = `None`, pick `A`, `B` or `Tie`). One call\n per account per market. Accepted in `on_predict` only if the arena's views show the market\n open (see the crate doc); otherwise the deposit goes back. Returns that promise.\n Caller: anyone. Deposit: exactly `DEPOSIT`. Panics: \"attach exactly the deposit\", \"pick does\n not fit the market\", \"index out of range\", \"predictions closed\", \"already predicted\", \"too\n many open predictions: claim first\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "index",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "pick",
+              "type_schema": {
+                "$ref": "#/definitions/Pick"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "settle",
+        "doc": " Read the arena's `get_duel` and `get_chaos` for `duel_id`, then settle and score in\n `on_settle`. Caller: anyone. Deposit: none. Panics in the callback (changing nothing): \"arena\n failed\", \"arena answer unreadable\", \"duel missing\".",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      }
+    ],
+    "root_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "String",
+      "type": "string",
+      "definitions": {
+        "BoardRow": {
+          "type": "object",
+          "required": [
+            "account",
+            "best",
+            "count",
+            "right",
+            "streak"
+          ],
+          "properties": {
+            "account": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "best": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "count": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "right": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "streak": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        "Config": {
+          "type": "object",
+          "required": [
+            "arena",
+            "deposit",
+            "max_held",
+            "max_injections",
+            "score_page"
+          ],
+          "properties": {
+            "arena": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "deposit": {
+              "type": "string"
+            },
+            "max_held": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "max_injections": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "score_page": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        "MarketView": {
+          "description": "The crowd's split on one market and, once settled, its outcome.",
+          "type": "object",
+          "required": [
+            "duel_id",
+            "picks",
+            "scored",
+            "settled",
+            "total"
+          ],
+          "properties": {
+            "duel_id": {
+              "type": "string"
+            },
+            "index": {
+              "description": "The chaos injection's index in `get_chaos(duel_id)`; `None` for the duel market.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "outcome": {
+              "description": "The winning pick; `None` while open, or when settled void.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Pick"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "picks": {
+              "description": "`Flipped`, `Held` for a chaos market; `A`, `B`, `Tie` for a duel market.",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PickCount"
+              }
+            },
+            "scored": {
+              "description": "Predictions scored so far.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "settled": {
+              "type": "boolean"
+            },
+            "total": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        "Pick": {
+          "description": "A call on one market. `Flipped` and `Held` go with a chaos injection, `A`, `B` and `Tie` with a duel (`A` and `B` are the duel's `a` and `b` agents).",
+          "type": "string",
+          "enum": [
+            "Flipped",
+            "Held",
+            "A",
+            "B",
+            "Tie"
+          ]
+        },
+        "PickCount": {
+          "type": "object",
+          "required": [
+            "n",
+            "pick"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "pick": {
+              "$ref": "#/definitions/Pick"
+            }
+          }
+        },
+        "PredictionView": {
+          "description": "One prediction an account still holds: open, or scored and not yet claimed.",
+          "type": "object",
+          "required": [
+            "at",
+            "duel_id",
+            "pick"
+          ],
+          "properties": {
+            "at": {
+              "description": "When it was accepted (ns).",
+              "type": "string"
+            },
+            "duel_id": {
+              "type": "string"
+            },
+            "index": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "pick": {
+              "$ref": "#/definitions/Pick"
+            },
+            "verdict": {
+              "description": "`None` until scored.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Verdict"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "Promise": true,
+        "Stats": {
+          "description": "One account's scored predictions (`Void` not counted).",
+          "type": "object",
+          "required": [
+            "best",
+            "count",
+            "right",
+            "streak"
+          ],
+          "properties": {
+            "best": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "count": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "right": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "streak": {
+              "description": "Right calls in a row, in the order they were scored.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        "Verdict": {
+          "description": "How a scored prediction came out. `Void`: the market had no outcome; refunded, not counted.",
+          "type": "string",
+          "enum": [
+            "Right",
+            "Wrong",
+            "Void"
+          ]
+        }
+      }
+    }
+  }
+}
