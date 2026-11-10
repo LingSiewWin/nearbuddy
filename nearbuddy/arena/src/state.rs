@@ -36,6 +36,9 @@ pub(crate) enum StorageKey {
     SelfChaos,
     NonceTimes,
     Chaos,
+    KeylessAgents,
+    KeylessSlots,
+    KeylessTicks,
 }
 
 /// Most accounts one `reconcile_vault_total` reads, so the call stays inside one transaction's gas.

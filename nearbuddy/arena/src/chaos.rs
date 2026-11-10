@@ -249,7 +249,10 @@ impl Contract {
     /// An accepted decision of agent `pk` in duel `id`, made at `decided_at` (its commit time when
     /// revealed, else now). Pending injections at `pk` made at or after it take its side as `prev`
     /// (unless their `prev` was hidden); a later decision decides them only when `counts` (revealed
-    /// from a commitment, with a verified provider-TEE proof).
+    /// from a commitment, with a verified provider-TEE proof). A keyless decision gives `seen`: it
+    /// was made after exactly the injections below index `seen` (its request carried every one of
+    /// them still pending at `pk`), whatever the block times.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe_decision(
         &mut self,
         id: u64,
@@ -258,6 +261,7 @@ impl Contract {
         nonce: u64,
         decided_at: u64,
         counts: bool,
+        seen: Option<u32>,
     ) {
         let Some(list) = self.chaos.get_mut(&id) else {
             return;
@@ -268,7 +272,8 @@ impl Contract {
                 continue;
             }
             let hid = hidden & (1 << index) != 0;
-            if decided_at <= c.at.0 {
+            let after = seen.map_or(decided_at > c.at.0, |n| (index as u32) < n);
+            if !after {
                 if !hid {
                     c.prev = Some(side);
                 }

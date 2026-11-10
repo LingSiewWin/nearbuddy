@@ -196,7 +196,7 @@ impl Contract {
         let _ = self.ask_oracle(&d.symbol.clone(), format!("open:{}", duel_id.0));
     }
 
-    fn ask_oracle(&self, asset: &str, msg: String) -> Promise {
+    pub(crate) fn ask_oracle(&self, asset: &str, msg: String) -> Promise {
         ext_oracle::ext(self.oracle_account.clone())
             .with_attached_deposit(NearToken::from_yoctonear(self.oracle_deposit))
             .with_static_gas(ORACLE_GAS)
@@ -348,7 +348,6 @@ impl Contract {
         tee: Option<TeeProof>,
         committed_at: Option<u64>,
     ) {
-        let lock = committed_at.is_none();
         let before = env::storage_usage();
         let i = &signed.intent;
         require!(i.agent_pk.0.len() == 32, "agent_pk length");
@@ -378,6 +377,32 @@ impl Contract {
                 0
             }
         };
+        self.record_intent(
+            before,
+            i,
+            Some(&signed.signature.0),
+            tee_kind,
+            committed_at,
+            None,
+        );
+    }
+
+    /// The duel-side checks and effects of every accepted decision, keyed or keyless. `before` is
+    /// the storage usage the decision's storage is measured from. `sig` is the agent key's
+    /// signature over the intent, checked after the nonce checks; `None` only for a keyless
+    /// decision, whose enclave signature `commit_completion` checked. `committed_at` is set for a
+    /// reveal (see `accept_intent`). `seen` (keyless): the decision was made after exactly the
+    /// first `seen` records of `get_chaos(duel)` (see `observe_decision`).
+    pub(crate) fn record_intent(
+        &mut self,
+        before: u64,
+        i: &Intent,
+        sig: Option<&[u8]>,
+        tee_kind: u8,
+        committed_at: Option<u64>,
+        seen: Option<u32>,
+    ) {
+        let lock = committed_at.is_none();
         let lock_ns = self.lock_of(i.duel_id.0);
         let duel = self.duels.get_mut(&i.duel_id.0).expect("duel missing");
         require!(
@@ -405,10 +430,12 @@ impl Contract {
         if let Some(prev) = slot.as_ref() {
             require!(i.nonce.0 > prev.nonce.0, "stale nonce");
         }
-        require!(
-            verify(&i.agent_pk.0, &intent_message(i), &signed.signature.0),
-            "bad signature"
-        );
+        if let Some(sig) = sig {
+            require!(
+                verify(&i.agent_pk.0, &intent_message(i), sig),
+                "bad signature"
+            );
+        }
         *slot = Some(i.clone());
         self.nonce_times.insert(key, env::block_timestamp());
         if tee_kind != 0 {
@@ -422,6 +449,7 @@ impl Contract {
             i.nonce.0,
             committed_at.unwrap_or(env::block_timestamp()),
             committed_at.is_some() && tee_kind == 2,
+            seen,
         );
         self.duels.flush();
         self.nonce_times.flush();
@@ -479,13 +507,15 @@ impl Contract {
         let _ = self.ask_oracle(&d.symbol.clone(), format!("close:{}", duel_id.0));
     }
 
-    /// Outlayer delivers the price here. `msg` is `open:<id>` or `close:<id>` as sent by
-    /// `ask_oracle`; `sender_id` is who called `oracle_call` and must be this contract. An open price
-    /// is taken only when stamped within the oracle's recency window before `open_at` and at most
-    /// ten minutes after it (and before `close_at`), so a late answer cannot set a wrong open price.
+    /// Outlayer delivers the price here. `msg` is `open:<id>`, `close:<id>` or `tick:<id>` (a
+    /// keyless slot's fresh price, see `request_tick`) as sent by `ask_oracle`; `sender_id` is who
+    /// called `oracle_call` and must be this contract. An open price is taken only when stamped
+    /// within the oracle's recency window before `open_at` and at most ten minutes after it (and
+    /// before `close_at`), so a late answer cannot set a wrong open price. A tick is kept when newer
+    /// than the one held.
     /// Caller: `oracle_account` only. Deposit: none. Panics: "not oracle", "not our request",
     /// "bad msg", "duel missing", "no price", "price overflow", "bad price", "resolved",
-    /// "open price stale", "duel open", "price before close", "no open price".
+    /// "open price stale", "duel open", "price before close", "no open price", "tick after close".
     pub fn oracle_on_call(&mut self, sender_id: AccountId, data: PriceData, msg: String) {
         require!(
             env::predecessor_account_id() == self.oracle_account,
@@ -540,6 +570,7 @@ impl Contract {
                     .0;
                 self.finish(id, open, price);
             }
+            "tick" => self.on_tick(id, price, data.timestamp.0, close_at),
             _ => env::panic_str("bad msg"),
         }
     }
@@ -578,6 +609,7 @@ impl Contract {
             injections: n,
         });
         let pool = self.settle_chaos(duel_id.0, None, 0, pool, true);
+        self.end_keyless(duel_id.0, &pk_a, &pk_b);
         let half = pool / 2;
         for (pk, share) in [(&pk_a, half + pool % 2), (&pk_b, half)] {
             self.commitments.remove(&commit_key(duel_id.0, pk));
@@ -613,6 +645,7 @@ impl Contract {
         duel.resolved = true;
         duel.pool = U128(0);
         self.open_duels = self.open_duels.saturating_sub(1); // duels opened before migrate_v12 were never counted
+        self.end_keyless(id, &pk_a, &pk_b);
 
         let slash_bps = self.slash_bps as u128;
         let mut outcome = Outcome {
