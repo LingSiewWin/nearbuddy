@@ -145,6 +145,7 @@ impl Contract {
             agent.in_duel = Some(U64(id));
             self.agent_duels.entry(pk.clone()).or_default().push(id);
         }
+        self.start_keyless(&a.0, &b.0);
         self.duels.insert(
             id,
             Duel {

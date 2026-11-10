@@ -59,6 +59,9 @@ pub const UNVERIFIED_CAP_BPS: u16 = 1000;
 /// What a keeper attaches to `open_slot` and `submit_completion`: above the most storage either adds
 /// (a slot record, or a decision's nonce, proof and 32 decided headlines). The excess comes back.
 pub const KEEPER_DEPOSIT: NearToken = NearToken::from_millinear(10);
+/// Raw storage key of the number of open duels with a keyless side (u64 LE). Only the owner's
+/// `open_duel` can pair a keyless agent (it cannot sign a consent), so only the owner raises it.
+const OPEN_KEY: &[u8] = b"keyless_open";
 /// Raw storage key of the number of keyless agents registered (u64 borsh).
 const COUNT_KEY: &[u8] = b"keyless_n";
 
@@ -345,8 +348,21 @@ fn tick_entry_cost() -> u128 {
 }
 
 impl Contract {
-    /// Duel `id` is finishing or voided: its slots and its tick go.
+    /// A duel between `a` and `b` opened: counted in `keyless_open` when either side is keyless.
+    pub(crate) fn start_keyless(&mut self, a: &[u8], b: &[u8]) {
+        let ks = agents_map();
+        if ks.contains_key(a) || ks.contains_key(b) {
+            set_keyless_open(keyless_open() + 1);
+        }
+    }
+
+    /// Duel `id` is finishing or voided: its slots and its tick go, and it leaves `keyless_open`.
+    /// Saturating: a keyless duel opened before the counter existed never raised it.
     pub(crate) fn end_keyless(&mut self, id: u64, a: &[u8], b: &[u8]) {
+        let ks = agents_map();
+        if ks.contains_key(a) || ks.contains_key(b) {
+            set_keyless_open(keyless_open().saturating_sub(1));
+        }
         let mut slots = slots_map();
         for pk in [a, b] {
             slots.remove(&commit_key(id, pk));
@@ -397,6 +413,15 @@ impl Contract {
             headlines,
         }
     }
+}
+
+/// Open duels with a keyless side (see `OPEN_KEY`).
+pub(crate) fn keyless_open() -> u64 {
+    env::storage_read(OPEN_KEY).map_or(0, |b| u64::from_le_bytes(b.try_into().expect("count")))
+}
+
+fn set_keyless_open(n: u64) {
+    env::storage_write(OPEN_KEY, &n.to_le_bytes());
 }
 
 /// `model_signer` event: `model` is the JSON value, a quoted model id or `null` for an unpin.
@@ -515,9 +540,9 @@ impl Contract {
     ///
     /// A slot opens only on new information, so nobody can redraw a prompt until it gets the side it
     /// wants: the agent's first slot in the duel, a headline planted at the agent since the previous
-    /// slot opened (it replaces that slot, filled or not), or, for liveness, a previous slot nobody
-    /// filled within `SLOT_TTL_NS`. A filled slot with no new headline since is final: a fresh tick
-    /// alone does not reopen it.
+    /// slot opened (once that slot is filled), or, for liveness, a previous slot nobody filled within
+    /// `SLOT_TTL_NS`. A filled slot with no new headline since is final: a fresh tick alone does not
+    /// reopen it. An unfilled slot stands until its TTL whatever lands meanwhile.
     /// Caller: anyone (keeper). Deposit: the slot record's storage (`KEEPER_DEPOSIT` covers it),
     /// excess refunded. Panics: "paused", "not keyless", "duel missing", "duel closed", "intent
     /// lock", "bad target", "no open price", "slot busy", "no new headline", "attach storage", then
@@ -545,9 +570,14 @@ impl Contract {
                     .skip(s.seen as usize)
                     .any(|c| c.target.0 == agent.0 && c.outcome == ChaosOutcome::Pending)
             });
-            let expired = now >= s.opened_at.0 + SLOT_TTL_NS;
-            require!(fresh || expired, "slot busy");
-            require!(fresh || s.response_hash.is_none(), "no new headline");
+            let (filled, expired) = (
+                s.response_hash.is_some(),
+                now >= s.opened_at.0 + SLOT_TTL_NS,
+            );
+            // an unfilled slot stands until its TTL, headline or not: replacing it early would let
+            // anyone who previewed its public reply void a hold with one fee-only headline
+            require!(expired || (fresh && filled), "slot busy");
+            require!(fresh || !filled, "no new headline");
         }
         let seq = k.next_seq;
         k.next_seq = U64(seq.0 + 1);
@@ -600,7 +630,8 @@ impl Contract {
     /// ed25519 signature of `signer`, the enclave key pinned to the agent's model (see
     /// `pin_model_signer`), over `"{model_id}:{hex(request_hash)}:{hex(sha256(response))}"` (kind
     /// 2), where `request_hash` is the slot's own. The first valid submission wins. The decision
-    /// `parse_decision` reads is recorded as a revealed, enclave-proved intent with `nonce = seq`
+    /// `parse_decision` reads (a hold under a headline keeping at least the size already in force)
+    /// is recorded as a revealed, enclave-proved intent with `nonce = seq`
     /// and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
     /// the request carried. A response with no readable decision is accepted too (the completion
     /// is the agent's): its proof is burned, the agent's previous call stays, and every headline
@@ -639,6 +670,13 @@ impl Contract {
         require!(!d.resolved && now < d.close_at.0, "duel closed");
         require!(now + self.lock_of(duel_id.0) < d.close_at.0, "intent lock");
         let close_at = d.close_at;
+        let prev = if agent.0 == d.a.0 {
+            &d.last_intent_a
+        } else {
+            &d.last_intent_b
+        }
+        .as_ref()
+        .map(|i| (i.side, i.size_bps));
         let model_id = self
             .agents
             .get(&agent.0)
@@ -655,7 +693,13 @@ impl Contract {
         let proof = proof_hash(&s.request_hash.0, &response_hash);
         require!(!self.used_proofs.contains(&proof), "proof used");
         let before = env::storage_usage();
-        let decision = parse_decision(&response.0, s.heads != 0);
+        // a hold under a headline keeps the size already in force: the cap limits what a paid
+        // headline can push, and a headline the agent resisted must not shrink its position (else
+        // one fee-only headline whose lie is the agent's own side caps it for the rest of the duel)
+        let decision = parse_decision(&response.0, s.heads != 0).map(|(side, size)| match prev {
+            Some((p, z)) if s.heads != 0 && p == side => (side, size.max(z)),
+            _ => (side, size),
+        });
         s.response_hash = Some(Base64VecU8(response_hash.clone()));
         if let Some((side, size)) = decision {
             s.side = Some(side);
@@ -703,14 +747,16 @@ impl Contract {
     /// agents of `model_id` only, replacing any model it was pinned to. The owner takes the pair
     /// from `GET /v1/attestation/report?model=..` (the signer listed under that model) after
     /// verifying the quotes off chain. Keyed agents keep using `add_tee_signer`. Only while no duel
-    /// is open, so the owner cannot pin a key it holds and author a running duel's decisions (pause
-    /// is the lever for a compromised key mid-duel: it stops every submission).
-    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "duels open", "signer length",
+    /// with a keyless side is open (`keyless_open`), so the owner cannot pin a key it holds and
+    /// author a running duel's decisions; pause is the lever for a compromised key mid-duel, since
+    /// it stops every submission. Keyed duels do not count: a stranger's consented duel cannot
+    /// freeze the pins.
+    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "keyless duels open", "signer length",
     /// "model_id too long", "control character".
     #[payable]
     pub fn pin_model_signer(&mut self, signer: Base64VecU8, model_id: String) {
         self.only_owner_yocto();
-        require!(self.open_duels == 0, "duels open");
+        require!(keyless_open() == 0, "keyless duels open");
         require!(signer.0.len() == 32, "signer length");
         require!(model_id.len() <= 64, "model_id too long");
         let mut quoted = String::from("\"");
@@ -721,12 +767,12 @@ impl Contract {
     }
 
     /// Stop accepting `signer` for keyless agents; decisions already recorded stand. Only while no
-    /// duel is open (see `pin_model_signer`).
-    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "duels open".
+    /// duel with a keyless side is open (see `pin_model_signer`).
+    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "keyless duels open".
     #[payable]
     pub fn unpin_model_signer(&mut self, signer: Base64VecU8) {
         self.only_owner_yocto();
-        require!(self.open_duels == 0, "duels open");
+        require!(keyless_open() == 0, "keyless duels open");
         signer_event(&signer.0, "null");
         signers_map().remove(&signer.0);
     }

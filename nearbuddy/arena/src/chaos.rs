@@ -55,7 +55,7 @@ pub(crate) fn check_headline(h: &str) {
 /// and U+FE0F stay: emoji need them) and the invisible fillers (combining grapheme joiner, Hangul
 /// fillers). ponytail: a range table, not a Unicode database; unassigned code points inside
 /// assigned planes pass, add a range when a corpus finds one used.
-const INVISIBLE: [(u32, u32); 31] = [
+const INVISIBLE: [(u32, u32); 33] = [
     (0x00AD, 0x00AD),
     (0x034F, 0x034F),
     (0x0600, 0x0605),
@@ -65,10 +65,11 @@ const INVISIBLE: [(u32, u32); 31] = [
     (0x0890, 0x0891),
     (0x08E2, 0x08E2),
     (0x115F, 0x1160),
-    (0x180E, 0x180E),
+    (0x180B, 0x180F),
     (0x200B, 0x200F),
     (0x2028, 0x202E),
     (0x2060, 0x206F),
+    (0x2800, 0x2800),
     (0x3164, 0x3164),
     (0xE000, 0xF8FF),
     (0xFDD0, 0xFDEF),
@@ -80,6 +81,7 @@ const INVISIBLE: [(u32, u32); 31] = [
     (0x110CD, 0x110CD),
     (0x13430, 0x1343F),
     (0x1BCA0, 0x1BCA3),
+    (0x16FE4, 0x16FE4),
     (0x1D173, 0x1D17A),
     (0x40000, 0xDFFFF),
     (0xE0000, 0xE00FF),
@@ -90,13 +92,16 @@ const INVISIBLE: [(u32, u32); 31] = [
 ];
 
 /// Look-alikes of `<` and `>`: the request escapes only the ASCII pair, so these could draw a block
-/// tag a model reads as real (fullwidth, small, modifier, Canadian syllabics, angle quotes and
-/// brackets).
-const LOOKALIKE: [char; 26] = [
+/// tag a model reads as real (fullwidth, small, modifier, Canadian syllabics, angle quotes,
+/// guillemets, much-less/greater, precedes/succeeds, nested and circled comparison signs).
+/// ponytail: a list can always miss one; a template 2 with an unguessable per-slot block id in
+/// every tag is the real fix.
+const LOOKALIKE: [char; 38] = [
     '\u{02C2}', '\u{02C3}', '\u{1433}', '\u{1438}', '\u{2039}', '\u{203A}', '\u{2329}', '\u{232A}',
     '\u{276C}', '\u{276D}', '\u{276E}', '\u{276F}', '\u{2770}', '\u{2771}', '\u{27E8}', '\u{27E9}',
     '\u{27EA}', '\u{27EB}', '\u{29FC}', '\u{29FD}', '\u{3008}', '\u{3009}', '\u{FE64}', '\u{FE65}',
-    '\u{FF1C}', '\u{FF1E}',
+    '\u{FF1C}', '\u{FF1E}', '\u{00AB}', '\u{00BB}', '\u{226A}', '\u{226B}', '\u{227A}', '\u{227B}',
+    '\u{22D6}', '\u{22D7}', '\u{29C0}', '\u{29C1}', '\u{2AA1}', '\u{2AA2}',
 ];
 
 /// `check_headline` plus the `INVISIBLE` and `LOOKALIKE` tables: what `inject_chaos` stores.
