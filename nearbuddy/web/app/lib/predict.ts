@@ -1,7 +1,8 @@
 // Free predictions on the arena (predict/ contract): will the model be fooled (`Flipped` / `Held`, per chaos
 // injection), and who wins the duel (`A` / `B` / `Tie`). No stake: `predict` attaches a storage deposit that `claim`
-// pays back once the call is scored (the first claim keeps back the caller's board row, about 0.0015 NEAR, once). Views go straight to the public RPC (no API route), typed from
-// abi/predict.json; calls are signed by the connected wallet (wallet.ts).
+// pays back once the call is scored (the first claim keeps back the caller's board row, at most 0.00141 NEAR, once).
+// Views go straight to the public RPC (no API route), typed from abi/predict.json; calls are signed by the connected
+// wallet (wallet.ts).
 import { NET, NETWORK_ID } from "../network";
 import type { MarketView, Pick, PredictCalls, PredictionView, PredictViews } from "./abi/predict";
 import type { Call } from "./inject";
@@ -9,9 +10,9 @@ import * as wallet from "./wallet";
 
 /** The predict contract; NEXT_PUBLIC_PREDICT_CONTRACT overrides. None on mainnet until one is deployed. */
 export const PREDICT: string | null =
-  process.env.NEXT_PUBLIC_PREDICT_CONTRACT ?? (NETWORK_ID === "testnet" ? "nb-predict-v2-1111.testnet" : null);
-/** The contract's `DEPOSIT` (0.003 NEAR, also `get_config().deposit`): exactly this is attached to `predict`. */
-export const DEPOSIT = "3000000000000000000000";
+  process.env.NEXT_PUBLIC_PREDICT_CONTRACT ?? (NETWORK_ID === "testnet" ? "nb-predict-v3-1111.testnet" : null);
+/** The contract's `DEPOSIT` (0.0041 NEAR, also `get_config().deposit`): exactly this is attached to `predict`. */
+export const DEPOSIT = "4100000000000000000000";
 // two arena views (10 TGas each) plus the callback's 15 TGas floor; measured burn is in predict/README.md
 const GAS_PREDICT = "60000000000000";
 // two arena views plus a scoring page of up to 50 calls

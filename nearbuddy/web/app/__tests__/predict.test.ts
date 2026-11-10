@@ -60,7 +60,7 @@ describe("predict", () => {
     const c = predictCall("567", null, "Tie");
     expect(c).toMatchObject({ methodName: "predict", args: { duel_id: "567", index: null, pick: "Tie" } });
     expect(c.deposit).toBe(DEPOSIT);
-    expect(DEPOSIT).toBe((3n * 10n ** 21n).toString());
+    expect(DEPOSIT).toBe((41n * 10n ** 20n).toString());
     expect(picksOf(null)).toEqual(["A", "B", "Tie"]);
     expect(picksOf(0)).toEqual(["Flipped", "Held"]);
   });
