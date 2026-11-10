@@ -66,7 +66,7 @@ export interface MarketView {
   /** Predictions scored so far. */
   scored: number;
   settled: boolean;
-  /** Chaos market: the target's owner when the target is a keyed agent. That owner chooses which completion its agent signs, so it can steer the outcome. `None` for a keyless target, a duel market, or when the arena had no `chaos_open` view. */
+  /** Chaos market: the target's owner when the target is a keyed agent. That owner chooses which completion its agent signs, so it can steer the outcome. `None` for a duel market, when the arena had no `chaos_open` view, or for a keyless target. For a keyless target `None` means no single owner, not that nobody can steer: any keeper may resample the public request and submit the reply it likes (the side changes on about 11% of real duel prompts). */
   steered_by: string | null;
   total: number;
 }
@@ -170,9 +170,11 @@ export interface PredictCalls {
   settle: { args: { duel_id: string }; result: unknown };
   /**
    * Escape hatch for a market the arena never settles (nobody voids the duel, or its answers
-   *  stop parsing): every market of `duel_id` still unsettled `STALE_NS` after its first
-   *  prediction becomes void (refunded, not counted). Then scores like `settle` and returns how
-   *  many predictions are still unscored. Caller: anyone. Deposit: none. No panics.
+   *  stop parsing). Reads the arena like `settle` first, so a market the arena did decide gets
+   *  its real outcome rather than a void. In `on_void_stale`, every market of `duel_id` still
+   *  unsettled `STALE_NS` after its first prediction then becomes void (refunded, not counted),
+   *  whatever the arena answered or failed to. Then scores like `settle`. Caller: anyone.
+   *  Deposit: none.
    */
-  void_stale: { args: { duel_id: string }; result: number };
+  void_stale: { args: { duel_id: string }; result: unknown };
 }

@@ -285,6 +285,33 @@
         }
       },
       {
+        "name": "on_void_stale",
+        "doc": " `void_stale`'s callback: settles what the arena decided, voids what is stale, scores a\n page and returns how many predictions are still unscored. Never panics on an arena answer.\n Caller: this contract (private).",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "duel_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        }
+      },
+      {
         "name": "predict",
         "doc": " Call `pick` on a market: a chaos injection (`index` = its index in `get_chaos(duel_id)`,\n pick `Flipped` or `Held`; views `chaos_open` and `get_chaos`) or the duel (`index` =\n `None`, pick `A`, `B` or `Tie`; views `get_duel` and `duel_lock`). One call per account per\n market. Accepted in `on_predict` only if the arena's views show the market open (see the\n crate doc); otherwise the deposit goes back. Returns that promise.\n Caller: anyone. Deposit: exactly `DEPOSIT`. Panics: \"attach exactly the deposit\", \"pick does\n not fit the market\", \"index out of range\", \"predictions closed\", \"already predicted\", \"too\n many open predictions: claim first\".",
         "kind": "call",
@@ -350,7 +377,7 @@
       },
       {
         "name": "void_stale",
-        "doc": " Escape hatch for a market the arena never settles (nobody voids the duel, or its answers\n stop parsing): every market of `duel_id` still unsettled `STALE_NS` after its first\n prediction becomes void (refunded, not counted). Then scores like `settle` and returns how\n many predictions are still unscored. Caller: anyone. Deposit: none. No panics.",
+        "doc": " Escape hatch for a market the arena never settles (nobody voids the duel, or its answers\n stop parsing). Reads the arena like `settle` first, so a market the arena did decide gets\n its real outcome rather than a void. In `on_void_stale`, every market of `duel_id` still\n unsettled `STALE_NS` after its first prediction then becomes void (refunded, not counted),\n whatever the arena answered or failed to. Then scores like `settle`. Caller: anyone.\n Deposit: none.",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -366,9 +393,7 @@
         "result": {
           "serialization_type": "json",
           "type_schema": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0.0
+            "$ref": "#/definitions/Promise"
           }
         }
       }
@@ -516,7 +541,7 @@
               "type": "boolean"
             },
             "steered_by": {
-              "description": "Chaos market: the target's owner when the target is a keyed agent. That owner chooses which completion its agent signs, so it can steer the outcome. `None` for a keyless target, a duel market, or when the arena had no `chaos_open` view.",
+              "description": "Chaos market: the target's owner when the target is a keyed agent. That owner chooses which completion its agent signs, so it can steer the outcome. `None` for a duel market, when the arena had no `chaos_open` view, or for a keyless target. For a keyless target `None` means no single owner, not that nobody can steer: any keeper may resample the public request and submit the reply it likes (the side changes on about 11% of real duel prompts).",
               "type": [
                 "string",
                 "null"
