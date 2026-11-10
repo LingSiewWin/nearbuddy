@@ -605,7 +605,8 @@ impl Contract {
     /// is `Pending`, its target holds no commitment made after the headline landed (the deciding
     /// call is fixed at its commit and known to whoever runs the agent), and no keyless slot of the
     /// target has carried the headline (its request bytes are public from `open_slot`, and the
-    /// model is close to deterministic). `owner` is the target's owner and `keyless` whether the
+    /// model is close to deterministic), and no call of the target was accepted after the headline
+    /// (it is public in `get_duel`, even a reveal that did not count). `owner` is the target's owner and `keyless` whether the
     /// target is a keyless agent: a keyed agent's owner chooses which completion it signs, so it
     /// can steer the outcome. `None` for an unknown record. View: anyone, no deposit, no panics.
     pub fn chaos_open(&self, duel_id: U64, index: u32) -> Option<ChaosOpen> {
@@ -618,8 +619,21 @@ impl Contract {
         let carried = crate::keyless::slots_map()
             .get(&key)
             .is_some_and(|s| s.heads & (1u32 << index) != 0);
+        // a call of the target accepted after the headline is public in `get_duel`, even one that
+        // did not count (a reveal with no enclave proof deletes the commitment above)
+        let d = self.duels.get(&duel_id.0)?;
+        let last = if d.a.0 == c.target.0 {
+            &d.last_intent_a
+        } else {
+            &d.last_intent_b
+        };
+        let spoke = last.as_ref().is_some_and(|i| {
+            self.nonce_times
+                .get(&crate::nonce_key(&c.target.0, i.nonce.0))
+                .is_some_and(|&t| t > c.at.0)
+        });
         Some(ChaosOpen {
-            open: c.outcome == ChaosOutcome::Pending && !committed && !carried,
+            open: c.outcome == ChaosOutcome::Pending && !committed && !carried && !spoke,
             owner: self.agents.get(&c.target.0)?.owner.clone(),
             keyless: crate::keyless::agents_map().contains_key(&c.target.0),
         })

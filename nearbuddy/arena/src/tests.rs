@@ -5705,3 +5705,93 @@ fn chaos_open_closes_at_the_targets_first_commit_after_the_headline() {
     assert_eq!(c.chaos_open(U64(d), 1), None);
     assert_eq!(c.chaos_open(U64(d + 1), 0), None);
 }
+
+/// B (plain) reveals a commitment made after the headline without an enclave proof: the call does
+/// not count, the record stays Pending and the commitment is gone, but B's post-headline side is
+/// public in `get_duel`, so the market stays closed.
+#[test]
+fn chaos_open_stays_closed_after_a_non_counting_reveal() {
+    let (mut c, _, skb, tee, d) = fool_setup();
+    decide_b(&mut c, &skb, d, Side::Long, 1, NOW);
+    let ix = plant(&mut c, d, 2, ChaosKind::Short, NOW + 1);
+    assert!(c.chaos_open(U64(d), ix).unwrap().open);
+    let i2 = intent(&key(2).1, d, Side::Short, 5_000, 2);
+    commit_at(&mut c, &skb, &i2, &SALT, NOW + 2);
+    assert!(
+        !c.chaos_open(U64(d), ix).unwrap().open,
+        "closed at the commit"
+    );
+    reveal_at(&mut c, &skb, &i2, &SALT, NOW + 3);
+    assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Pending);
+    let side = c.get_duel(U64(d)).unwrap().last_intent_b.unwrap().side;
+    assert_eq!(side, Side::Short, "the post-headline call is public");
+    assert!(!c.chaos_open(U64(d), ix).unwrap().open, "still closed");
+    // the next counting call decides it as everyone now expects
+    let (req, res) = ([3u8; 32], [4u8; 32]);
+    let mut i3 = intent(&key(2).1, d, Side::Short, 5_000, 3);
+    i3.proof_hash = Base64VecU8(proof_hash(&req, &res));
+    commit_at(&mut c, &skb, &i3, &[3u8; 32], NOW + 4);
+    ctx_at(OPERATOR, 0, NOW + 5);
+    c.reveal_intent(
+        sign(&skb, &i3),
+        Base64VecU8(vec![3u8; 32]),
+        Some(tee_proof(&tee, 2, MODEL_B, req, res)),
+    );
+    assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Flipped);
+}
+
+/// Same, after B replaced (hid) the commitment it held at the headline: a reopened market could
+/// only end Flipped or NoTrial, so `Flipped` would be a call that cannot be Wrong.
+#[test]
+fn chaos_open_stays_closed_on_a_hidden_record_after_a_non_counting_reveal() {
+    let (mut c, _, skb, tee, d) = fool_setup();
+    decide_b(&mut c, &skb, d, Side::Long, 1, NOW);
+    let i2 = intent(&key(2).1, d, Side::Long, 5_000, 2);
+    commit_at(&mut c, &skb, &i2, &SALT, NOW + 1); // held at the headline
+    let ix = plant(&mut c, d, 2, ChaosKind::Short, NOW + 2);
+    let i3 = intent(&key(2).1, d, Side::Long, 5_000, 3);
+    commit_at(&mut c, &skb, &i3, &[5u8; 32], NOW + 3); // replaces i2 unrevealed: prev hidden
+    assert!(!c.chaos_open(U64(d), ix).unwrap().open);
+    reveal_at(&mut c, &skb, &i3, &[5u8; 32], NOW + 4); // no proof: does not count
+    assert!(!c.chaos_open(U64(d), ix).unwrap().open, "still closed");
+    let (req, res) = ([6u8; 32], [7u8; 32]);
+    let mut i4 = intent(&key(2).1, d, Side::Long, 5_000, 4);
+    i4.proof_hash = Base64VecU8(proof_hash(&req, &res));
+    commit_at(&mut c, &skb, &i4, &[6u8; 32], NOW + 5);
+    ctx_at(OPERATOR, 0, NOW + 6);
+    c.reveal_intent(
+        sign(&skb, &i4),
+        Base64VecU8(vec![6u8; 32]),
+        Some(tee_proof(&tee, 2, MODEL_B, req, res)),
+    );
+    assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::NoTrial);
+}
+
+/// A commit in the same block as the headline (equal timestamps) is a call before it, for both
+/// `observe_decision` and `chaos_open`; its reveal after the headline makes it public and closes
+/// the market (conservative: it shows `prev`, not the decider).
+#[test]
+fn chaos_open_same_block_commit_is_before_the_headline_until_revealed() {
+    let (mut c, ska, _, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+    let ix = plant(&mut c, d, 1, ChaosKind::Short, NOW + 1);
+    let req: [u8; 32] = key(1).1.try_into().unwrap();
+    let res = [2u8; 32];
+    let mut i = intent(&key(1).1, d, Side::Short, 5_000, 2);
+    i.proof_hash = Base64VecU8(proof_hash(&req, &res));
+    commit_at(&mut c, &ska, &i, &[2u8; 32], NOW + 1); // same timestamp as the headline
+    assert!(c.chaos_open(U64(d), ix).unwrap().open);
+    ctx_at(OPERATOR, 0, NOW + 2);
+    c.reveal_intent(
+        sign(&ska, &i),
+        Base64VecU8(vec![2u8; 32]),
+        Some(tee_proof(&tee, 2, MODEL_A, req, res)),
+    );
+    let s = chaos_at(&c, d, ix);
+    assert_eq!(
+        (s.outcome, s.prev),
+        (ChaosOutcome::Pending, Some(Side::Short)),
+        "prev, not the decider"
+    );
+    assert!(!c.chaos_open(U64(d), ix).unwrap().open);
+}
