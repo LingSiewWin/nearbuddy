@@ -103,10 +103,8 @@ const fakeView = async (method: string, args: Record<string, unknown>): Promise<
 mock.module("../api/near", () => ({
   RPC: "https://fake.rpc",
   ARENA: "arena.fake.testnet",
-  CONTRACT: "vault.fake.testnet",
   SOLVER_URL: "http://127.0.0.1:9", // refused at once: solver offline
   arenaView: fakeView,
-  legacyArenaView: fakeView,
   arenaConfigAnyDeploy: () => fakeView("get_config", {}),
   jsonBody: (v: unknown) => JSON.stringify(v),
   json: (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "application/json" } }),

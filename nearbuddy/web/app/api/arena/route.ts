@@ -1,6 +1,6 @@
-// Read-only arena snapshot from the public RPC: config, leaderboard, the last 3 duels and every older open one in full (on deploy 17 with
-// their `get_chaos` records and `chaos_fee`), followers
-// per agent, and counts over the last SCAN duels (verified decisions, attacks). The solver's /arena route
+// Read-only arena snapshot from the public RPC: config, leaderboard, the last 3 duels and every older open one in
+// full (on deploy 17 with their `get_chaos` records and `chaos_fee`), and counts over the last SCAN duels (verified
+// decisions, attacks). The solver's /arena route
 // is optional enrichment (intent txs, injection payloads, quotes, fills); the page renders without it.
 // Cached 20 s and built once at a time however many tabs poll; a stale body beats a 500 while the RPC
 // is throttled. Resolved duels never change, so they are kept in memory and not re-read.
@@ -13,8 +13,7 @@ import { eraSplit, ORACLE_ERA_FROM, oracleIds, unread } from "../../eras";
 import type { AgentView, Intent } from "../../lib/abi/arena";
 import { isChaosV2 } from "../../lib/inject";
 import { chaosOf, chunked, type ReadDuel, readDuel, shownDuels } from "../duels";
-import { followersOf } from "../followers";
-import { ARENA, arenaConfigAnyDeploy, arenaView, json, jsonBody, legacyArenaView, RPC, SOLVER_URL } from "../near";
+import { ARENA, arenaConfigAnyDeploy, arenaView, json, jsonBody, RPC, SOLVER_URL } from "../near";
 
 const SCAN = Number(process.env.ARENA_SCAN ?? 40);
 const SHOW = 3;
@@ -83,9 +82,6 @@ async function build(): Promise<string> {
       oracle.filter((d): d is ReadDuel => !!d),
     ),
   };
-  const followers = Object.fromEntries(
-    await Promise.all(leaderboard.map(async (a) => [a.pk, await followersOf(legacyArenaView, a.pk)])),
-  );
   const seen = scanned.filter((d): d is ReadDuel => !!d);
   const proven = (i: Intent | null) => hasProof(i, ZERO);
   const stats = {
@@ -111,7 +107,6 @@ async function build(): Promise<string> {
     duels,
     stats,
     eras,
-    followers,
     solver,
   });
   cache = { at: Date.now(), body };
