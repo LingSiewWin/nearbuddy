@@ -1,6 +1,6 @@
 // Free predictions on the arena (predict/ contract): will the model be fooled (`Flipped` / `Held`, per chaos
 // injection), and who wins the duel (`A` / `B` / `Tie`). No stake: `predict` attaches a storage deposit that `claim`
-// pays back once the call is scored. Views go straight to the public RPC (no API route), typed from
+// pays back once the call is scored (the first claim keeps back the caller's board row, about 0.0015 NEAR, once). Views go straight to the public RPC (no API route), typed from
 // abi/predict.json; calls are signed by the connected wallet (wallet.ts).
 import { NET, NETWORK_ID } from "../network";
 import type { MarketView, Pick, PredictCalls, PredictionView, PredictViews } from "./abi/predict";
@@ -9,7 +9,7 @@ import * as wallet from "./wallet";
 
 /** The predict contract; NEXT_PUBLIC_PREDICT_CONTRACT overrides. None on mainnet until one is deployed. */
 export const PREDICT: string | null =
-  process.env.NEXT_PUBLIC_PREDICT_CONTRACT ?? (NETWORK_ID === "testnet" ? "nb-predict-1111.testnet" : null);
+  process.env.NEXT_PUBLIC_PREDICT_CONTRACT ?? (NETWORK_ID === "testnet" ? "nb-predict-v2-1111.testnet" : null);
 /** The contract's `DEPOSIT` (0.003 NEAR, also `get_config().deposit`): exactly this is attached to `predict`. */
 export const DEPOSIT = "3000000000000000000000";
 // two arena views (10 TGas each) plus the callback's 15 TGas floor; measured burn is in predict/README.md
@@ -101,6 +101,14 @@ export function crowdLine(m: MarketView | null): string | null {
 /** The account's call on one market among the ones it holds (claimed calls are gone from this list). */
 export const mine = (held: PredictionView[] | null, duel_id: string, index: number | null) =>
   held?.find((p) => p.duel_id === duel_id && p.index === index) ?? null;
+
+/** Why a market's answer may not be blind, for the page to say next to the buttons; null when it is. */
+export function steerLine(m: MarketView | null): string | null {
+  if (!m) return null;
+  if (m.steered_by) return `the agent's owner ${m.steered_by} picks which reply it signs, so it can steer this`;
+  if (m.open_until_reveal) return "closes at the reveal: whoever runs the agent knows the answer first";
+  return null;
+}
 
 /** What the predictor sees about their call. */
 export function resultLine(p: PredictionView | null): string | null {

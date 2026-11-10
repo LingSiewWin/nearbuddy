@@ -16,6 +16,7 @@ import {
   send,
   settleCall,
   split,
+  steerLine,
 } from "../lib/predict";
 import * as wallet from "../lib/wallet";
 import { Box, Line, Note } from "./box";
@@ -125,6 +126,7 @@ export default function Predict({
         );
       })}
       <Note w={w} text={crowdLine(market) ?? "no calls yet: be the first"} />
+      {steerLine(market) ? <Note w={w} text={steerLine(market) ?? ""} /> : null}
       {me ? <Note w={w} c={me.verdict === "Right" ? "ok" : "dim"} text={resultLine(me) ?? ""} /> : null}
       {me && !me.verdict ? (
         <Line

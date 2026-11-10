@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { MarketView, PredictionView } from "../lib/abi/predict";
-import { crowdLine, DEPOSIT, mine, picksOf, predictCall, predictView, resultLine, split } from "../lib/predict";
+import {
+  crowdLine,
+  DEPOSIT,
+  mine,
+  picksOf,
+  predictCall,
+  predictView,
+  resultLine,
+  split,
+  steerLine,
+} from "../lib/predict";
 
 const market = (n: [number, number], outcome: MarketView["outcome"] = null): MarketView => ({
   duel_id: "567",
@@ -13,6 +23,8 @@ const market = (n: [number, number], outcome: MarketView["outcome"] = null): Mar
   settled: outcome !== null,
   outcome,
   scored: 0,
+  steered_by: null,
+  open_until_reveal: false,
 });
 
 describe("predict", () => {
@@ -22,6 +34,13 @@ describe("predict", () => {
     expect(crowdLine(market([3, 1]))).toBe("75% say it will be fooled");
     expect(crowdLine(market([0, 0]))).toBeNull();
     expect(split(null)).toEqual([]);
+  });
+
+  test("a market says who can steer it or when it is not blind", () => {
+    expect(steerLine(market([1, 1]))).toBeNull();
+    expect(steerLine({ ...market([1, 1]), steered_by: "op.testnet" })).toContain("op.testnet");
+    expect(steerLine({ ...market([1, 1]), open_until_reveal: true })).toContain("closes at the reveal");
+    expect(steerLine(null)).toBeNull();
   });
 
   test("the viewer's call and its verdict", () => {
