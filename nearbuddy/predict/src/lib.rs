@@ -20,9 +20,11 @@
 //!
 //! Who can steer an outcome: a keyed agent's owner chooses which completion its key signs, so it
 //! can make its own agent hold, flip, win or lose. `chaos_open` names that owner and a chaos
-//! market's view shows it as `steered_by` (`None` for a keyless target, whose request the contract
-//! builds and anyone may submit). Both duel agents' owners can steer a duel market the same way.
-//! The board counts these markets like any other: the label is how a page warns the reader.
+//! market's view shows it as `steered_by`. `None` on a keyless target means no single owner, not
+//! nobody: the contract builds its request and any keeper may submit, but a keeper can sample the
+//! same request several times and submit the reply it likes (the side changes on about 11% of
+//! real duel prompts). Both duel agents' owners can steer a duel market the same way. The board
+//! counts these markets like any other: the label is how a page warns the reader.
 //!
 //! `predict` asks those views and accepts in its callback, so the test runs against the arena's
 //! state when the view ran, never against what a client says. A refused prediction's deposit goes
@@ -193,8 +195,10 @@ pub struct MarketView {
     /// Predictions scored so far.
     pub scored: u32,
     /// Chaos market: the target's owner when the target is a keyed agent. That owner chooses
-    /// which completion its agent signs, so it can steer the outcome. `None` for a keyless target,
-    /// a duel market, or when the arena had no `chaos_open` view.
+    /// which completion its agent signs, so it can steer the outcome. `None` for a duel market, when
+    /// the arena had no `chaos_open` view, or for a keyless target. For a keyless target `None`
+    /// means no single owner, not that nobody can steer: any keeper may resample the public request
+    /// and submit the reply it likes (the side changes on about 11% of real duel prompts).
     pub steered_by: Option<AccountId>,
     /// Chaos market opened against an arena without `chaos_open`: it closes at the target's
     /// reveal, not at its commit, so whoever runs the target knows the outcome before it closes.

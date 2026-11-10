@@ -2,8 +2,8 @@
 
 Free predictions on the arena. A spectator calls, before the answer is public, whether the model is fooled by a planted
 headline (`Flipped` or `Held`, one market per chaos injection) or who wins a duel (`A`, `B` or `Tie`, one market per duel).
-There is no stake: each call attaches a 0.003 NEAR storage deposit that `claim` pays back once the call is scored. The
-first claim keeps back the storage of the caller's board row (about 0.0015 NEAR), once. Right calls climb a public
+There is no stake: each call attaches a 0.0041 NEAR storage deposit that `claim` pays back once the call is scored. The
+first claim keeps back the storage of the caller's board row (up to 0.00141 NEAR), once. Right calls climb a public
 board ranked by right minus wrong, so random guessing does not climb it.
 
 The arena is only read through its views. It is never written.
@@ -33,7 +33,10 @@ the view, never against what a client says. A refused call's deposit goes straig
 A keyed agent's owner chooses which completion its key signs, so that owner can make its own agent hold, flip, win or
 lose. `chaos_open` names the target's owner, and the market's view shows it as `steered_by`:
 
-- `steered_by` is `None` for a keyless target, whose request the contract builds and which anyone may submit;
+- `steered_by` is `None` for a keyless target. That means no single owner, not that nobody can steer:
+  - the contract builds the request and any keeper may submit;
+  - a keeper can sample the same request several times and submit the reply it likes;
+  - the side changes on about 11% of real duel prompts.
 - `steered_by` is also `None` when the arena had no `chaos_open`;
 - both agents' owners can steer a duel market the same way.
 
@@ -45,9 +48,9 @@ check against the owner, so the contract makes none.
 | Method | Kind | Who | Deposit | Does |
 |---|---|---|---|---|
 | `new(arena)` | init | deployer | | fixes the arena account for good |
-| `predict(duel_id, index, pick)` | call | anyone | exactly 0.003 NEAR | asks the arena, then `on_predict` stores the call or refunds it |
+| `predict(duel_id, index, pick)` | call | anyone | exactly 0.0041 NEAR | asks the arena, then `on_predict` stores the call or refunds it |
 | `settle(duel_id)` | call | anyone | | reads `get_duel` and `get_chaos`, then `on_settle` (see below) |
-| `void_stale(duel_id)` | call | anyone | | voids the duel's markets still unsettled 4 days after their first call, then scores |
+| `void_stale(duel_id)` | call | anyone | | reads the arena like `settle` and settles what it decided, then voids the duel's markets still unsettled 4 days after their first call, and scores |
 | `claim()` | call | predictor | | pays back the deposits of every scored call the caller holds, less its board row once |
 | `get_market(duel_id, index)` | view | | | crowd split per pick, total, settled, outcome, `steered_by`, `open_until_reveal` |
 | `get_duel_markets(duel_id)` | view | | | every market of a duel that has predictions: the duel first, then injections |
@@ -81,8 +84,11 @@ The events are `EVENT_JSON` with the standard `nearbuddy-predict` 1.0.0. They ar
 
 ## Storage
 
-- The deposit pays exactly the bytes `claim` frees.
-  - A 64-character implicit account's first call adds 264 bytes (0.00264 NEAR); later calls add 151.
+- The deposit (410 bytes) covers everything one call can leave on the contract, even if its account never claims.
+  - A 64-character implicit account's first call adds 264 bytes; later calls add 151.
+  - Its verdict and its new board row add 1 and 141 bytes, so the worst case is 409.
+  - At 0.003 NEAR an account that never claimed left 109 bytes on the contract, which drains it in about 3,500
+    accounts.
 - A board row outlives every call. Its storage is recorded on the row (`storage_owed`) when the account's first call is
   scored, and kept back from that account's next claim.
 - Market records are the contract's. There is one per market, and markets exist only for real arena duels and
@@ -104,6 +110,17 @@ whole transaction, receipts included.
 | `settle`, scoring 2 or 4 calls | 15.5 to 16.0 TGas | 200 TGas |
 | `void_stale` with nothing stale | 7.3 TGas | 50 TGas |
 | `claim` | 3.3 to 3.7 TGas | 30 TGas |
+
+## Accepted limits
+
+- **`void_stale` and `settle`.** `void_stale` reads the arena first and settles what it decided, so a market the arena
+  did decide gets its real outcome. Only a market still undecided 4 days after its first call is voided. Run `settle`
+  as each duel decides, so that scores land promptly.
+- **Sybil sets.** A pair calling both sides of the same markets ranks neither account. But 32 accounts covering every
+  pick combination of 5 chaos markets put one account at 5 out of 5 on the board. Each costs its calls' gas, and the
+  deposits come back. The board is a reputation signal, not money.
+- **Top 100 is approximate below a drop.** A row whose score drops stays at the bottom. An account that fell out
+  earlier stays out until it scores above the last row again.
 
 ## Trust
 
