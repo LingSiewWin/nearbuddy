@@ -1,6 +1,7 @@
 // The terminal's view model: which duel pane 2 follows, the feed's order and verdicts, and the field diff that makes
 // changed cells flash after a poll.
 import { expect, test } from "bun:test";
+import { shownDuels } from "../api/duels";
 import type { Chaos } from "../lib/abi/arena";
 import {
   attacksOf,
@@ -9,6 +10,7 @@ import {
   type Duel,
   feed,
   fields,
+  firstToClose,
   livePnl,
   pickLive,
   type Snap,
@@ -44,6 +46,20 @@ test("pane 2 follows a duel taking calls, then one closed lately awaiting its or
   expect(pickLive([stuck, old], now)).toBeNull();
   expect(pickLive([], now)).toBeNull();
   expect(pickLive(undefined, now)).toBeNull();
+});
+
+test("staggered closes: pane 2 and /arena follow the open duel that closes first, not the newest", () => {
+  // the solver opened three pairs in one tick, closing 330, 390 and 450 s out; the snapshot lists newest first
+  const at = (s: number, id: string) => duel(id, now + s * 1000, false);
+  const list = [at(450, "22"), at(390, "21"), at(330, "20"), duel("19", now - 600_000, true)];
+  expect(pickLive(list, now)?.id).toBe("20");
+  expect(firstToClose(list, now)?.id).toBe("20");
+  // once it closes, the next one up
+  expect(pickLive(list, now + 331_000)?.id).toBe("21");
+  expect(firstToClose([], now)).toBeNull();
+  // /api/arena lists the newest three plus every older open duel, so the first to close is always in the snapshot
+  const scanned = [at(450, "22"), duel("21", now - 60_000, true), null, duel("19", now - 9e5, true), at(330, "18")];
+  expect(shownDuels(scanned, 3).map((d) => d?.id ?? null)).toEqual(["22", "21", null, "18"]);
 });
 
 test("one attack count per duel: chain records, else the count kept at resolve, else the open list (duel 462)", () => {

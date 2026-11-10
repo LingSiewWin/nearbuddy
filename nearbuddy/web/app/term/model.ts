@@ -74,15 +74,22 @@ export const shortModel = (id: string | null | undefined) => (id ? (id.split("/"
 /** How long after its close a duel still counts as "closing": the oracle answers within seconds to minutes, so an
  *  unresolved duel older than this is stuck, not news, and pane 2 replays answered attacks instead. */
 export const CLOSING_MS = 10 * 60_000;
-/** The duel pane 2 follows: one taking calls now, else one closed in the last CLOSING_MS and awaiting its oracle,
- *  else null (pane 2 replays the last answered attacks). */
+/** The open duel that closes first: the solver staggers closes, so the newest duel is the one closing last. */
+export function firstToClose<D extends { resolved: boolean; close_at: string }>(
+  duels: readonly (D | null)[] | undefined,
+  nowMs: number,
+): D | null {
+  let best: D | null = null;
+  for (const d of duels ?? [])
+    if (d && !d.resolved && nsToMs(d.close_at) > nowMs && (!best || BigInt(d.close_at) < BigInt(best.close_at)))
+      best = d;
+  return best;
+}
+/** The duel pane 2 follows: the open one that closes first, else one closed in the last CLOSING_MS and awaiting its
+ *  oracle, else null (pane 2 replays the last answered attacks). */
 export function pickLive(duels: (Duel | null)[] | undefined, nowMs: number): Duel | null {
   const list = (duels ?? []).filter((d): d is Duel => !!d);
-  return (
-    list.find((d) => !d.resolved && nsToMs(d.close_at) > nowMs) ??
-    list.find((d) => !d.resolved && nsToMs(d.close_at) > nowMs - CLOSING_MS) ??
-    null
-  );
+  return firstToClose(list, nowMs) ?? list.find((d) => !d.resolved && nsToMs(d.close_at) > nowMs - CLOSING_MS) ?? null;
 }
 
 /** Attacks on a duel. Deploy 17 lists each one (`get_chaos`); a duel attacked before deploy 17 has no records there,

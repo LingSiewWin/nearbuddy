@@ -33,6 +33,11 @@ export async function readDuel(id: string, noReveal = false): Promise<ReadDuel |
   return d;
 }
 
+/** The duels /api/arena lists: the newest `show` scanned, plus every older one still unresolved, newest first. The
+ *  solver staggers closes, so the duel closing next is often not among the newest few. */
+export const shownDuels = <D extends { resolved: boolean }>(scanned: (D | null)[], show: number): (D | null)[] =>
+  scanned.filter((d, i) => i < show || (d !== null && !d.resolved));
+
 /** Deploy 17's view of one duel's attacks: every `get_chaos` record (headline, arm, outcome, payout) and the price of
  *  the next one. Records change after a duel resolves (claims), so they are never memoised. */
 export type ChaosView = { chaos: Chaos[]; chaos_fee: string };

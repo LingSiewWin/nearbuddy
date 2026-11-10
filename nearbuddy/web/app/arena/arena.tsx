@@ -17,6 +17,7 @@ import {
 } from "../cells";
 import type { EraSplit } from "../eras";
 import type { AgentView as Agent } from "../lib/abi/arena"; // passed through unchanged by the API route
+import { firstToClose } from "../term/model";
 import {
   addrHref,
   agentHref,
@@ -150,7 +151,7 @@ export default function Arena() {
       : `lifetime ${bps(a.alpha_bps)} bps`;
   };
   const duels = (s?.duels ?? []).filter((d): d is Duel => !!d);
-  const live = duels.find((d) => !d.resolved && countdown(d.close_at, now));
+  const live = firstToClose(duels, now);
   const txOf = new Map((s?.solver?.intents ?? []).map((i) => [`${i.agent_pk}:${i.nonce}`, i.tx]));
   const agent = (pk: string) => lb.find((x) => x.pk === pk);
   // the newest running pairs, pair 1 = started first; [] unless 2+. Fixture pairs are left out like their agents
@@ -306,7 +307,7 @@ export default function Arena() {
         {bottom()}
         {"\n\n"}
 
-        {boxTitle(2, "duels", "last 3 · newest first")}
+        {boxTitle(2, "duels", "last 3 and every open one · newest first")}
         {"\n"}
         {pairs.map((p, i) => (
           <span key={`${p.a}|${p.b}`}>
