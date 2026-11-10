@@ -1,19 +1,40 @@
 // NEAR wallet for the browser through the NEAR Connect connector (@hot-labs/near-connect): one connector per tab,
 // loaded on first use so the terminal renders before any wallet code arrives. Network = this build's NEAR network.
+// Creating the connector fetches its wallet list (a manifest on raw.githubusercontent.com), so a visit that never
+// connected creates none: `account` answers null and `onChange` waits until something else created it.
 import type { NearConnector } from "@hot-labs/near-connect";
 import { NETWORK_ID } from "../network";
 import type { Call } from "./inject";
 
 let connector: Promise<NearConnector> | null = null;
+const listeners = new Set<(account: string | null) => void>();
 const get = () => {
-  connector ??= import("@hot-labs/near-connect").then(
-    ({ NearConnector }) => new NearConnector({ network: NETWORK_ID }),
-  );
+  connector ??= import("@hot-labs/near-connect").then(({ NearConnector }) => {
+    const c = new NearConnector({ network: NETWORK_ID });
+    c.on("wallet:signIn", (e) => {
+      for (const cb of listeners) cb(e.accounts[0]?.accountId ?? null);
+    });
+    c.on("wallet:signOut", () => {
+      for (const cb of listeners) cb(null);
+    });
+    return c;
+  });
   return connector;
 };
 
-/** The signed-in account, or null; never opens a popup. */
+/** NEAR Connect's own record of the wallet a previous visit connected (its LocalStorage key "selected-wallet"). */
+const remembered = () => {
+  try {
+    return localStorage.getItem("selected-wallet") !== null;
+  } catch {
+    return false;
+  }
+};
+
+/** The signed-in account, or null; never opens a popup, and never loads the connector for a visitor who has not
+ *  connected before. */
 export async function account(): Promise<string | null> {
+  if (!connector && !remembered()) return null;
   try {
     const { accounts } = await (await get()).getConnectedWallet();
     return accounts[0]?.accountId ?? null;
@@ -33,16 +54,12 @@ export async function signOut(): Promise<void> {
   await (await get()).disconnect();
 }
 
-/** Calls back on sign-in and sign-out from any wallet (another tab, the wallet's own UI). */
+/** Calls back on sign-in and sign-out from any wallet (another tab, the wallet's own UI) once the connector exists;
+ *  resolves with the unsubscribe. */
 export async function onChange(cb: (account: string | null) => void): Promise<() => void> {
-  const c = await get();
-  const inn = (e: { accounts: { accountId: string }[] }) => cb(e.accounts[0]?.accountId ?? null);
-  const out = () => cb(null);
-  c.on("wallet:signIn", inn);
-  c.on("wallet:signOut", out);
+  listeners.add(cb);
   return () => {
-    c.off("wallet:signIn", inn);
-    c.off("wallet:signOut", out);
+    listeners.delete(cb);
   };
 }
 
