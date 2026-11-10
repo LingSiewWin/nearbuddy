@@ -133,7 +133,7 @@ async function main() {
       expires_at: expires,
     },
   });
-  console.log(`    agent key   ${agent.pkString}   (base64 for the web dashboard: ${agent.pkB64})`);
+  console.log(`    agent key   ${agent.pkString}   (base64, as get_mandate takes it: ${agent.pkB64})`);
   console.log(
     `    allowance   ${fmtNear(allowance)} NEAR, per-IOU cap ${fmtNear(PRICE * 2n)} NEAR, payees [${API}], expires in 1h`,
   );
