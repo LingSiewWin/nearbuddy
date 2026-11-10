@@ -934,7 +934,7 @@
       },
       {
         "name": "inject_chaos",
-        "doc": " Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes\n toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with\n no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the\n stake (more than 0 when paid), escrowed in the pool until the duel finishes. When the payer owns either agent the\n stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).\n The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the\n injection's index in `get_chaos(duel_id)`.\n Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the\n record's storage. Panics: \"paused\", \"headline empty\", \"headline too long\", \"headline control\n character\", \"placebo is system-run\", \"duel missing\", \"chaos deposit too small\", \"duel\n closed\", \"bad target\", \"chaos full\".",
+        "doc": " Plant `headline` at `target` in an open duel. `kind` is the side the headline's lie pushes\n toward; `Placebo` (neutral) is the control arm and only the contract owner injects it, with\n no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the\n stake (more than 0 when paid), escrowed in the pool until the duel finishes. When the payer owns either agent the\n stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).\n The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the\n injection's index in `get_chaos(duel_id)`.\n Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the\n record's storage. Panics: \"paused\", \"headline empty\", \"headline too long\", \"headline control\n character\", \"headline hidden character\", \"headline lookalike bracket\",\n \"placebo is system-run\", \"duel missing\", \"chaos deposit too small\", \"duel\n closed\", \"bad target\", \"chaos full\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -1593,8 +1593,11 @@
       },
       {
         "name": "open_slot",
-        "doc": " Open the next decision slot of keyless `agent` in duel `duel_id`, freezing its inputs: the\n latest tick's price (else the open price), the seconds left, the headlines pending at the\n agent in `get_chaos(duel_id)` and a nonce from the block's random seed. The request hash is\n stored; `keyless_request` returns the bytes. Replaces the agent's previous slot in this duel\n once that one was filled, or is older than `SLOT_TTL_NS`.\n Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"not keyless\", \"duel missing\", \"duel closed\", \"intent lock\", \"bad target\", \"no open\n price\", \"slot busy\", \"bond exhausted\", then as `request_bytes`.",
+        "doc": " Open the next decision slot of keyless `agent` in duel `duel_id`, freezing its inputs: the\n latest tick's price (else the open price), the seconds left, the headlines pending at the\n agent in `get_chaos(duel_id)` and a nonce from the block's random seed. The request hash is\n stored; `keyless_request` returns the bytes.\n\n A slot opens only on new information, so nobody can redraw a prompt until it gets the side it\n wants: the agent's first slot in the duel, a headline planted at the agent since the previous\n slot opened (it replaces that slot, filled or not), or, for liveness, a previous slot nobody\n filled within `SLOT_TTL_NS`. A filled slot with no new headline since is final: a fresh tick\n alone does not reopen it.\n Caller: anyone (keeper). Deposit: the slot record's storage (`KEEPER_DEPOSIT` covers it),\n excess refunded. Panics: \"paused\", \"not keyless\", \"duel missing\", \"duel closed\", \"intent\n lock\", \"bad target\", \"no open price\", \"slot busy\", \"no new headline\", \"attach storage\", then\n as `request_bytes`.",
         "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
         "params": {
           "serialization_type": "json",
           "args": [
@@ -1650,7 +1653,7 @@
       },
       {
         "name": "pin_model_signer",
-        "doc": " Accept `signer` (a NEAR AI Cloud model enclave's ed25519 `signing_address`) for keyless\n agents of `model_id` only, replacing any model it was pinned to. The owner takes the pair\n from `GET /v1/attestation/report?model=..` (the signer listed under that model) after\n verifying the quotes off chain. Keyed agents keep using `add_tee_signer`.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"signer length\", \"model_id too\n long\".",
+        "doc": " Accept `signer` (a NEAR AI Cloud model enclave's ed25519 `signing_address`) for keyless\n agents of `model_id` only, replacing any model it was pinned to. The owner takes the pair\n from `GET /v1/attestation/report?model=..` (the signer listed under that model) after\n verifying the quotes off chain. Keyed agents keep using `add_tee_signer`. Only while no duel\n is open, so the owner cannot pin a key it holds and author a running duel's decisions (pause\n is the lever for a compromised key mid-duel: it stops every submission).\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"duels open\", \"signer length\",\n \"model_id too long\", \"control character\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -1925,7 +1928,7 @@
       },
       {
         "name": "request_tick",
-        "doc": " Ask the oracle for a fresh price of an open duel's asset; it lands through `oracle_on_call`\n (`tick:<id>`) and later slots show it. The caller attaches the oracle deposit plus the tick\n record's storage.\n Caller: anyone. Deposit: `oracle_deposit` + 0.00065 NEAR, excess refunded. Panics: \"attach\n oracle_deposit\", \"duel missing\", \"duel closed\", \"no open price\".",
+        "doc": " Ask the oracle for a fresh price of an open duel's asset; it lands through `oracle_on_call`\n (`tick:<id>`) and later slots show it. The caller attaches the oracle deposit plus the tick\n record's storage.\n Caller: anyone. Deposit: `oracle_deposit` + 0.00065 NEAR, excess refunded. Panics: \"paused\",\n \"attach oracle_deposit\", \"duel missing\", \"duel closed\", \"no open price\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -2240,8 +2243,11 @@
       },
       {
         "name": "submit_completion",
-        "doc": " Fill slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the\n ed25519 signature of `signer`, the enclave key pinned to the agent's model (see\n `pin_model_signer`), over `\"{model_id}:{hex(request_hash)}:{hex(sha256(response))}\"` (kind\n 2), where `request_hash` is the slot's own. The first valid submission wins. The decision\n `parse_decision` reads is recorded as a revealed, enclave-proved intent with `nonce = seq`\n and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines\n the request carried. A response with no readable decision is accepted too (the completion\n is the agent's): its proof is burned, the agent's previous call stays, and every headline\n the request carried is judged as if the reply took the lie's side, so an unreadable reply\n never dodges a trial. Only before the intent lock and within `SLOT_TTL_NS` of the open.\n Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"response too long\", \"no slot\", \"stale slot\", \"slot taken\", \"slot expired\", \"duel\n closed\", \"intent lock\", \"signer not pinned to model\", \"bad tee signature\", \"proof used\", then\n as a revealed intent (\"stale nonce\", \"bond exhausted\", ...).",
+        "doc": " Fill slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the\n ed25519 signature of `signer`, the enclave key pinned to the agent's model (see\n `pin_model_signer`), over `\"{model_id}:{hex(request_hash)}:{hex(sha256(response))}\"` (kind\n 2), where `request_hash` is the slot's own. The first valid submission wins. The decision\n `parse_decision` reads is recorded as a revealed, enclave-proved intent with `nonce = seq`\n and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines\n the request carried. A response with no readable decision is accepted too (the completion\n is the agent's): its proof is burned, the agent's previous call stays, and every headline\n the request carried is decided `NoTrial`, so the injector gets its stake back less the fee\n and the target earns no resistance credit or shield for it. A reply cannot buy the injector\n a flip by breaking its format, and an agent that never answers in JSON forfeits every hold.\n Only before the intent lock and within `SLOT_TTL_NS` of the open.\n Caller: anyone (keeper). Deposit: the storage the decision adds (`KEEPER_DEPOSIT` covers it),\n excess refunded; the agent's bond pays nothing. Panics: \"paused\", \"response too long\", \"no\n slot\", \"stale slot\", \"slot taken\", \"slot expired\", \"duel closed\", \"intent lock\", \"signer not\n pinned to model\", \"bad tee signature\", \"proof used\", \"attach storage\", then as a revealed\n intent (\"stale nonce\", ...).",
         "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
         "params": {
           "serialization_type": "json",
           "args": [
@@ -2378,6 +2384,31 @@
         }
       },
       {
+        "name": "top_up_bond",
+        "doc": " Add the attached deposit to an agent's bond (keyed or keyless), so its storage-paying calls\n keep landing. Returns the new bond.\n Caller: the agent owner. Deposit: the top-up. Panics: \"agent missing\", \"not owner\", \"zero\n deposit\".",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "agent_pk",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
         "name": "unfollow",
         "doc": " Revoke the caller's mandate for `agent_pk`; a no-op when there is none. Open while paused.\n Fills for intents accepted before now stay settleable for `withdraw_delay_s`; intents\n accepted from now on never settle against this mandate (see `apply_fill`).\n Caller: the follower. Deposit: none. Panics: \"migrating\".",
         "kind": "call",
@@ -2395,7 +2426,7 @@
       },
       {
         "name": "unpin_model_signer",
-        "doc": " Stop accepting `signer` for keyless agents; decisions already recorded stand.\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\".",
+        "doc": " Stop accepting `signer` for keyless agents; decisions already recorded stand. Only while no\n duel is open (see `pin_model_signer`).\n Caller: owner. Deposit: 1 yoctoNEAR. Panics: \"not owner\", \"duels open\".",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -3485,7 +3516,7 @@
               "$ref": "#/definitions/Base64VecU8"
             },
             "response_hash": {
-              "description": "sha256 of the accepted response, once a submission filled the slot.",
+              "description": "sha256 of the accepted response, once a submission filled the slot (the `slot_filled` event names the submitter).",
               "anyOf": [
                 {
                   "$ref": "#/definitions/Base64VecU8"
@@ -3519,13 +3550,6 @@
               "type": "integer",
               "format": "uint16",
               "minimum": 0.0
-            },
-            "submitter": {
-              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
-              "type": [
-                "string",
-                "null"
-              ]
             }
           }
         },

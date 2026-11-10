@@ -92,7 +92,6 @@ class FakeArena implements Chain {
         heads,
         request_hash: "",
         response_hash: null,
-        submitter: null,
         side: null,
         size_bps: 0,
       };

@@ -378,7 +378,7 @@ class Slot(TypedDict):
     # The oracle price the request shows (the latest tick, else the open price), 8 decimals.
     price: str
     request_hash: Base64VecU8
-    # sha256 of the accepted response, once a submission filled the slot.
+    # sha256 of the accepted response, once a submission filled the slot (the `slot_filled` event names the submitter).
     response_hash: Base64VecU8 | None
     # `get_chaos(duel)` length at the open: the decision counts as made after records below it.
     seen: int
@@ -386,22 +386,6 @@ class Slot(TypedDict):
     # The side the response gave, `None` before a submission or when it gave none.
     side: Side | None
     size_bps: int
-    # NEAR Account Identifier.
-    #
-    # This is a unique, syntactically valid, human-readable account identifier on the NEAR network.
-    #
-    # [See the crate-level docs for information about validation.](index.html#account-id-rules)
-    #
-    # Also see [Error kind precedence](AccountId#error-kind-precedence).
-    #
-    # ## Examples
-    #
-    # ``` use near_account_id::AccountId;
-    #
-    # let alice: AccountId = "alice.near".parse().unwrap();
-    #
-    # assert!("ƒelicia.near".parse::<AccountId>().is_err()); // (ƒ is not f) ```
-    submitter: str | None
 
 
 # The NEAR AI Cloud signature record for one completion, as returned by `GET
@@ -1015,6 +999,10 @@ class TeeTextUtf8Args(TypedDict):
     response_hash: Base64VecU8
 
 
+class TopUpBondArgs(TypedDict):
+    agent_pk: Base64VecU8
+
+
 class UnfollowArgs(TypedDict):
     agent_pk: Base64VecU8
 
@@ -1338,7 +1326,8 @@ class ArenaCall(Protocol):
     # injection's index in `get_chaos(duel_id)`.
     # Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the
     # record's storage. Panics: "paused", "headline empty", "headline too long", "headline control
-    # character", "placebo is system-run", "duel missing", "chaos deposit too small", "duel
+    # character", "headline hidden character", "headline lookalike bracket",
+    # "placebo is system-run", "duel missing", "chaos deposit too small", "duel
     # closed", "bad target", "chaos full".
     # modifiers: payable
     @overload
@@ -1377,11 +1366,18 @@ class ArenaCall(Protocol):
     # Open the next decision slot of keyless `agent` in duel `duel_id`, freezing its inputs: the
     # latest tick's price (else the open price), the seconds left, the headlines pending at the
     # agent in `get_chaos(duel_id)` and a nonce from the block's random seed. The request hash is
-    # stored; `keyless_request` returns the bytes. Replaces the agent's previous slot in this duel
-    # once that one was filled, or is older than `SLOT_TTL_NS`.
-    # Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:
-    # "paused", "not keyless", "duel missing", "duel closed", "intent lock", "bad target", "no open
-    # price", "slot busy", "bond exhausted", then as `request_bytes`.
+    # stored; `keyless_request` returns the bytes.
+    #
+    # A slot opens only on new information, so nobody can redraw a prompt until it gets the side it
+    # wants: the agent's first slot in the duel, a headline planted at the agent since the previous
+    # slot opened (it replaces that slot, filled or not), or, for liveness, a previous slot nobody
+    # filled within `SLOT_TTL_NS`. A filled slot with no new headline since is final: a fresh tick
+    # alone does not reopen it.
+    # Caller: anyone (keeper). Deposit: the slot record's storage (`KEEPER_DEPOSIT` covers it),
+    # excess refunded. Panics: "paused", "not keyless", "duel missing", "duel closed", "intent
+    # lock", "bad target", "no open price", "slot busy", "no new headline", "attach storage", then
+    # as `request_bytes`.
+    # modifiers: payable
     @overload
     def __call__(self, method: Literal["open_slot"], args: OpenSlotArgs) -> Slot: ...
 
@@ -1400,9 +1396,11 @@ class ArenaCall(Protocol):
     # Accept `signer` (a NEAR AI Cloud model enclave's ed25519 `signing_address`) for keyless
     # agents of `model_id` only, replacing any model it was pinned to. The owner takes the pair
     # from `GET /v1/attestation/report?model=..` (the signer listed under that model) after
-    # verifying the quotes off chain. Keyed agents keep using `add_tee_signer`.
-    # Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "signer length", "model_id too
-    # long".
+    # verifying the quotes off chain. Keyed agents keep using `add_tee_signer`. Only while no duel
+    # is open, so the owner cannot pin a key it holds and author a running duel's decisions (pause
+    # is the lever for a compromised key mid-duel: it stops every submission).
+    # Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "duels open", "signer length",
+    # "model_id too long", "control character".
     # modifiers: payable
     @overload
     def __call__(self, method: Literal["pin_model_signer"], args: PinModelSignerArgs) -> None: ...
@@ -1489,8 +1487,8 @@ class ArenaCall(Protocol):
     # Ask the oracle for a fresh price of an open duel's asset; it lands through `oracle_on_call`
     # (`tick:<id>`) and later slots show it. The caller attaches the oracle deposit plus the tick
     # record's storage.
-    # Caller: anyone. Deposit: `oracle_deposit` + 0.00065 NEAR, excess refunded. Panics: "attach
-    # oracle_deposit", "duel missing", "duel closed", "no open price".
+    # Caller: anyone. Deposit: `oracle_deposit` + 0.00065 NEAR, excess refunded. Panics: "paused",
+    # "attach oracle_deposit", "duel missing", "duel closed", "no open price".
     # modifiers: payable
     @overload
     def __call__(self, method: Literal["request_tick"], args: RequestTickArgs) -> None: ...
@@ -1603,12 +1601,16 @@ class ArenaCall(Protocol):
     # and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
     # the request carried. A response with no readable decision is accepted too (the completion
     # is the agent's): its proof is burned, the agent's previous call stays, and every headline
-    # the request carried is judged as if the reply took the lie's side, so an unreadable reply
-    # never dodges a trial. Only before the intent lock and within `SLOT_TTL_NS` of the open.
-    # Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:
-    # "paused", "response too long", "no slot", "stale slot", "slot taken", "slot expired", "duel
-    # closed", "intent lock", "signer not pinned to model", "bad tee signature", "proof used", then
-    # as a revealed intent ("stale nonce", "bond exhausted", ...).
+    # the request carried is decided `NoTrial`, so the injector gets its stake back less the fee
+    # and the target earns no resistance credit or shield for it. A reply cannot buy the injector
+    # a flip by breaking its format, and an agent that never answers in JSON forfeits every hold.
+    # Only before the intent lock and within `SLOT_TTL_NS` of the open.
+    # Caller: anyone (keeper). Deposit: the storage the decision adds (`KEEPER_DEPOSIT` covers it),
+    # excess refunded; the agent's bond pays nothing. Panics: "paused", "response too long", "no
+    # slot", "stale slot", "slot taken", "slot expired", "duel closed", "intent lock", "signer not
+    # pinned to model", "bad tee signature", "proof used", "attach storage", then as a revealed
+    # intent ("stale nonce", ...).
+    # modifiers: payable
     @overload
     def __call__(self, method: Literal["submit_completion"], args: SubmitCompletionArgs) -> Side | None: ...
 
@@ -1621,6 +1623,14 @@ class ArenaCall(Protocol):
     @overload
     def __call__(self, method: Literal["sweep_surplus"], args: SweepSurplusArgs) -> Any: ...
 
+    # Add the attached deposit to an agent's bond (keyed or keyless), so its storage-paying calls
+    # keep landing. Returns the new bond.
+    # Caller: the agent owner. Deposit: the top-up. Panics: "agent missing", "not owner", "zero
+    # deposit".
+    # modifiers: payable
+    @overload
+    def __call__(self, method: Literal["top_up_bond"], args: TopUpBondArgs) -> str: ...
+
     # Revoke the caller's mandate for `agent_pk`; a no-op when there is none. Open while paused.
     # Fills for intents accepted before now stay settleable for `withdraw_delay_s`; intents
     # accepted from now on never settle against this mandate (see `apply_fill`).
@@ -1628,8 +1638,9 @@ class ArenaCall(Protocol):
     @overload
     def __call__(self, method: Literal["unfollow"], args: UnfollowArgs) -> None: ...
 
-    # Stop accepting `signer` for keyless agents; decisions already recorded stand.
-    # Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner".
+    # Stop accepting `signer` for keyless agents; decisions already recorded stand. Only while no
+    # duel is open (see `pin_model_signer`).
+    # Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "duels open".
     # modifiers: payable
     @overload
     def __call__(self, method: Literal["unpin_model_signer"], args: UnpinModelSignerArgs) -> None: ...
