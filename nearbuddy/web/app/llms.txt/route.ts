@@ -56,6 +56,7 @@ Contract \`${ARENA}\` on NEAR ${NETWORK_ID}:
 - [Arena JSON](${origin}/api/arena): config, leaderboard, the newest duels with their chaos records and \`chaos_fee\`
 - [Duel JSON](${origin}/api/duel?id=1): one duel by id
 - [Verify JSON](${origin}/api/verify?duel=1): PASS / FAIL per check for a resolved duel, from public sources only
+- [Flips JSON](${origin}/api/flips): answered attacks of finished duels (headline, verdict, stake, payout) and the saboteurs ranked by \`Flipped\`
 
 ## Optional
 
