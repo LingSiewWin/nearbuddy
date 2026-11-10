@@ -49,6 +49,9 @@ export interface Chain {
 }
 
 const S = 1_000_000_000n;
+/** arena `KEEPER_DEPOSIT`: attached to `open_slot` and `submit_completion`, which take their storage from the caller
+ *  (0.01 NEAR covers the most either adds; the contract refunds the rest). */
+export const KEEPER_DEPOSIT = 10n ** 22n;
 const sha256 = (b: Uint8Array) => new Uint8Array(createHash("sha256").update(b).digest());
 const short = (pk: string) => pk.slice(0, 8);
 
@@ -207,7 +210,7 @@ export class Keeper {
       // due: the duel's first decision, a headline the last slot did not carry, or a slot that expired unfilled
       const due = !s || freshHeadline(chaos, agent, s) || (!s.response_hash && now >= ends);
       if (!due) return;
-      const r = await this.chain.call("open_slot", { duel_id: d.id, agent }, 0n, 100);
+      const r = await this.chain.call("open_slot", { duel_id: d.id, agent }, KEEPER_DEPOSIT, 100);
       s = r.value;
       this.print(`${tag}: opened slot ${s.seq} (price ${s.price}, ${popcount(s.heads)} headline(s)), tx ${r.tx}`);
       this.record({ event: "open", duel_id: d.id, agent, seq: s.seq, tx: r.tx, request_hash: s.request_hash });
@@ -290,7 +293,7 @@ export class Keeper {
           signer: proof.signer,
           signature: proof.signature,
         },
-        0n,
+        KEEPER_DEPOSIT,
         150,
       );
     } catch (e) {
