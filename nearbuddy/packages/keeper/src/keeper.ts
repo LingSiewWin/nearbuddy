@@ -16,7 +16,15 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { AgentView, Chaos, Duel } from "../../protocol/src/abi/arena.ts";
+import type {
+  AgentView,
+  ArenaCalls,
+  ArenaViews,
+  Chaos,
+  Duel,
+  KeylessAgent,
+  Slot,
+} from "../../protocol/src/abi/arena.ts";
 import { b64 } from "../../protocol/src/index.ts";
 import {
   KEYLESS_MAX_TOKENS,
@@ -28,44 +36,17 @@ import {
 import { Budget, ModelError, type NearAi, type Outage, type Pricing } from "./nearai.ts";
 import { teeProofFrom } from "./tee.ts";
 
-export interface SlotCommit {
-  response_hash: string;
-  signer: string;
-  committer: string;
-  bond: string;
-  committed_at: string;
-}
-/** `get_slot` (keyless.rs `Slot`). */
-export interface Slot {
-  seq: string;
-  nonce: string;
-  opened_at: string;
-  price: string;
-  seen: number;
-  heads: number;
-  request_hash: string;
-  commit: SlotCommit | null;
-  revealed: boolean;
-  side: "Long" | "Short" | null;
-  size_bps: number;
-}
-/** `get_keyless`. */
-export interface KeylessAgent {
-  strategy: string;
-  template: number;
-  next_seq: string;
-}
-
 /** The chain as the keeper uses it; `nearChain` in index.ts is the real one, tests pass a fake. */
 export interface Chain {
-  view<T>(method: string, args: Record<string, unknown>): Promise<T>;
-  /** A function call on the arena; throws with the contract's panic text when the receipt fails. */
-  call(
-    method: string,
-    args: Record<string, unknown>,
+  /** An arena view; the method name picks args and result from the generated ABI types (abi/arena.json). */
+  view<M extends keyof ArenaViews>(method: M, args: ArenaViews[M]["args"]): Promise<ArenaViews[M]["result"]>;
+  /** An arena call signed by the keeper; throws with the contract's panic text when the receipt fails. */
+  call<M extends keyof ArenaCalls>(
+    method: M,
+    args: ArenaCalls[M]["args"],
     deposit: bigint,
     tgas: number,
-  ): Promise<{ tx: string; value: unknown }>;
+  ): Promise<{ tx: string; value: ArenaCalls[M]["result"] }>;
   /** Timestamp of the latest final block (ns): any transaction sent now executes at or after it. */
   now(): Promise<bigint>;
 }
@@ -160,13 +141,12 @@ export class Keeper {
   async discover(): Promise<string[]> {
     const all: string[] = [];
     for (let from = 0; ; from += 100) {
-      const page = await this.chain.view<AgentView[]>("leaderboard", { from, limit: 100 });
+      const page = await this.chain.view("leaderboard", { from, limit: 100 });
       all.push(...page.map((a) => a.pk));
       if (page.length < 100) break;
     }
     for (const pk of all)
-      if (!this.keyless.has(pk))
-        this.keyless.set(pk, (await this.chain.view<KeylessAgent | null>("get_keyless", { agent: pk })) !== null);
+      if (!this.keyless.has(pk)) this.keyless.set(pk, (await this.chain.view("get_keyless", { agent: pk })) !== null);
     return all.filter((pk) => this.keyless.get(pk));
   }
 
@@ -181,9 +161,9 @@ export class Keeper {
     if (this.stopped) throw this.stopped;
     const live: { agent: string; av: AgentView; duel: Duel }[] = [];
     for (const agent of agents) {
-      const av = await this.chain.view<AgentView | null>("get_agent", { agent_pk: agent });
+      const av = await this.chain.view("get_agent", { agent_pk: agent });
       if (!av?.in_duel) continue;
-      const duel = await this.chain.view<Duel | null>("get_duel", { duel_id: av.in_duel });
+      const duel = await this.chain.view("get_duel", { duel_id: av.in_duel });
       if (duel && !duel.resolved && duel.open_price !== null) live.push({ agent, av, duel });
     }
     const idle = live.filter((l) => !this.busy.has(l.agent));
@@ -230,14 +210,14 @@ export class Keeper {
     const tag = `duel ${d.id} agent ${short(agent)}`;
     const close = BigInt(d.close_at);
     const [lock, slot, now] = await Promise.all([
-      this.chain.view<string | null>("duel_lock", { duel_id: d.id }),
-      this.chain.view<Slot | null>("get_slot", { duel_id: d.id, agent }),
+      this.chain.view("duel_lock", { duel_id: d.id }),
+      this.chain.view("get_slot", { duel_id: d.id, agent }),
       this.chain.now(),
     ]);
     const lockNs = BigInt(lock ?? "0");
     const margin = BigInt(this.opts.marginS) * S;
     const canDecide = now + lockNs + margin < close;
-    const chaos = await this.chain.view<Chaos[] | null>("get_chaos", { duel_id: d.id }).catch(() => null);
+    const chaos = await this.chain.view("get_chaos", { duel_id: d.id }).catch(() => null);
     if (slot?.commit && !slot.revealed) {
       const k = `${d.id}/${agent}/${slot.seq}`;
       const h = this.held.get(k);
@@ -256,7 +236,7 @@ export class Keeper {
         !s || freshHeadline(chaos, agent, s) || (!s.commit && !s.revealed && now >= BigInt(s.opened_at) + SLOT_TTL_NS);
       if (!due) return;
       const r = await this.chain.call("open_slot", { duel_id: d.id, agent }, 0n, 100);
-      s = r.value as Slot;
+      s = r.value;
       this.print(`${tag}: opened slot ${s.seq} (price ${s.price}, ${popcount(s.heads)} headline(s)), tx ${r.tx}`);
       this.record({ event: "open", duel_id: d.id, agent, seq: s.seq, tx: r.tx, request_hash: s.request_hash });
     }
@@ -277,9 +257,9 @@ export class Keeper {
     const margin = BigInt(this.opts.marginS) * S;
     const deadline = min(BigInt(s.opened_at) + SLOT_TTL_NS, BigInt(d.close_at) - lockNs) - margin;
     // the request bytes, from chain views only, checked against the hash the contract stored
-    const k = await this.chain.view<KeylessAgent | null>("get_keyless", { agent });
+    const k = await this.chain.view("get_keyless", { agent });
     if (!k) throw new Error(`${at}: get_keyless returned null`);
-    const chaos = s.heads ? (chaosNow ?? (await this.chain.view<Chaos[]>("get_chaos", { duel_id: d.id }))) : null;
+    const chaos = s.heads ? (chaosNow ?? (await this.chain.view("get_chaos", { duel_id: d.id }))) : null;
     const req = keylessRequest(slotInputs(av, k, d, s, chaos));
     const reqHash = sha256(req);
     if (b64.enc(reqHash) !== s.request_hash) {
@@ -320,12 +300,12 @@ export class Keeper {
     } catch (e) {
       return this.skip(at, d, agent, s, `enclave record refused: ${(e as Error).message}`);
     }
-    if (!(await this.chain.view<boolean>("is_tee_signer", { signer: proof.signer })))
+    if (!(await this.chain.view("is_tee_signer", { signer: proof.signer })))
       return this.skip(at, d, agent, s, `enclave key ${proof.signer} is not pinned on the arena`);
     const decision = parseDecision(c.response, s.heads !== 0);
     ms = await left();
     if (ms < 0) return this.skip(at, d, agent, s, "commit window closed during the model call");
-    const bond = BigInt(await this.chain.view<string>("keyless_commit_bond", { duel_id: d.id }));
+    const bond = BigInt(await this.chain.view("keyless_commit_bond", { duel_id: d.id }));
     const response = new TextDecoder().decode(c.response);
     const r = await this.chain.call(
       "commit_completion",

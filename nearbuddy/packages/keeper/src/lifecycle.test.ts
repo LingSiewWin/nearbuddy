@@ -7,11 +7,11 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { Chaos } from "../../protocol/src/abi/arena.ts";
+import type { ArenaCalls, ArenaViews, Chaos, Slot } from "../../protocol/src/abi/arena.ts";
 import { b64, hex } from "../../protocol/src/index.ts";
 import { keyFromSeed, pkOf, teeText, verify } from "../../protocol/src/intent.ts";
 import { keylessRequest, parseDecision, SLOT_TTL_NS } from "../../protocol/src/keyless.ts";
-import { type Chain, Keeper, type Slot, Stop, slotInputs } from "./keeper.ts";
+import { type Chain, Keeper, Stop, slotInputs } from "./keeper.ts";
 import { Budget, NearAi, Outage } from "./nearai.ts";
 
 const S = 1_000_000_000n;
@@ -53,7 +53,8 @@ class FakeArena implements Chain {
   async now() {
     return this.t;
   }
-  async view<T>(m: string, a: Record<string, unknown>): Promise<T> {
+  async view<M extends keyof ArenaViews>(m: M, args: ArenaViews[M]["args"]): Promise<ArenaViews[M]["result"]> {
+    const a = args as Record<string, unknown>;
     const v: Record<string, unknown> = {
       leaderboard: [this.agent],
       get_keyless: a.agent === AGENT ? this.keyless : null,
@@ -65,9 +66,14 @@ class FakeArena implements Chain {
       is_tee_signer: a.signer === pkOf(enclave),
       keyless_commit_bond: "300",
     };
-    return v[m] as T;
+    return v[m] as ArenaViews[M]["result"];
   }
-  async call(m: string, a: Record<string, unknown>, deposit: bigint) {
+  async call<M extends keyof ArenaCalls>(
+    m: M,
+    args: ArenaCalls[M]["args"],
+    deposit: bigint,
+  ): Promise<{ tx: string; value: ArenaCalls[M]["result"] }> {
+    const a = args as Record<string, unknown>;
     this.calls.push(m);
     const tx = `tx${this.calls.length}`;
     if (m === "open_slot") {
@@ -92,7 +98,7 @@ class FakeArena implements Chain {
         sha(keylessRequest(slotInputs(this.agent as never, this.keyless, this.duel as never, s, this.chaos))),
       );
       this.slot = s;
-      return { tx, value: s };
+      return { tx, value: s as ArenaCalls[M]["result"] };
     }
     const s = this.slot!;
     if (m === "commit_completion") {
@@ -107,7 +113,7 @@ class FakeArena implements Chain {
         bond: String(deposit),
         committed_at: String(this.t),
       };
-      return { tx, value: null };
+      return { tx, value: undefined as ArenaCalls[M]["result"] };
     }
     if (m === "reveal_completion") {
       if (this.t >= this.close) throw new Error("reveal_completion failed: Smart contract panicked: duel closed");
@@ -115,7 +121,7 @@ class FakeArena implements Chain {
       assert.equal(b64.enc(sha(res)), s.commit!.response_hash, "response mismatch");
       s.revealed = true;
       this.revealed = parseDecision(res, s.heads !== 0);
-      return { tx, value: null };
+      return { tx, value: undefined as ArenaCalls[M]["result"] };
     }
     throw new Error(`unexpected ${m}`);
   }

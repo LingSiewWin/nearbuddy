@@ -50,8 +50,9 @@ const views = providers.length > 1 ? new FailoverRpcProvider(providers) : provid
  *  never resend after a timeout (the transaction may have landed). */
 function nearChain(account: Account | null): Chain {
   return {
-    view: async <T>(method: string, args: Record<string, unknown>) =>
-      (await views.callFunction({ contractId: ARENA, method, args })) as T,
+    view: async (method, args) =>
+      // the generated type of `method`'s result: a view answers JSON in exactly that shape
+      (await views.callFunction({ contractId: ARENA, method, args: args as Record<string, unknown> })) as never,
     async call(method, args, deposit, tgas) {
       if (!account) throw new Error("no keeper account");
       let r!: Awaited<ReturnType<Account["callFunctionRaw"]>>;
@@ -60,7 +61,7 @@ function nearChain(account: Account | null): Chain {
           r = await account.callFunctionRaw({
             contractId: ARENA,
             methodName: method,
-            args,
+            args: args as Record<string, unknown>,
             gas: BigInt(tgas) * 10n ** 12n,
             deposit,
           });
@@ -101,7 +102,7 @@ if (o.health) {
   const pks = await agents();
   const models = new Set<string>();
   for (const pk of pks) {
-    const a = await nearChain(null).view<{ model_id: string } | null>("get_agent", { agent_pk: pk });
+    const a = await nearChain(null).view("get_agent", { agent_pk: pk });
     if (a) models.add(a.model_id);
   }
   try {
