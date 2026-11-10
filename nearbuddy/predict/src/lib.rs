@@ -69,6 +69,9 @@ const PREDICT_CALLBACK_GAS: Gas = Gas::from_tgas(15);
 const SETTLE_CALLBACK_GAS: Gas = Gas::from_tgas(40);
 /// Largest arena answer read: 32 chaos records are about 25 KB.
 const MAX_ANSWER: usize = 256 * 1024;
+/// A market still unsettled this long after its first prediction can be voided by anyone
+/// (`void_stale`): twice the arena's longest duel (24 h) plus its void window (24 h).
+pub const STALE_NS: u64 = 4 * 24 * 3600 * 1_000_000_000;
 
 /// A call on one market. `Flipped` and `Held` go with a chaos injection, `A`, `B` and `Tie` with
 /// a duel (`A` and `B` are the duel's `a` and `b` agents).
@@ -112,6 +115,8 @@ pub(crate) struct Market {
     steered_by: Option<AccountId>,
     /// The arena had no `chaos_open` at the first prediction: the market closes at the reveal.
     open_until_reveal: bool,
+    /// Block time of the first prediction (ns); `void_stale` counts from it.
+    first_at: u64,
     /// Predictions per pick (`Pick::slot`).
     counts: [u32; 3],
     /// Predictions made; entry `seq` of this market is `(duel, slot, seq)` for `seq < n`.
@@ -230,6 +235,9 @@ enum ChaosOutcome {
     Held,
     NoTrial,
     Expired,
+    /// An outcome a later arena adds, or a record that does not parse: never settled, never open.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Deserialize)]
@@ -287,6 +295,16 @@ fn answer<T: DeserializeOwned>(i: u64) -> Result<T, &'static str> {
     serde_json::from_slice(&bytes).map_err(|_| "arena answer unreadable")
 }
 
+/// Promise result `i` as the outcome of every chaos record, each parsed on its own so one record
+/// this contract cannot read does not hide the others.
+fn chaos_outcomes(i: u64) -> Result<Vec<ChaosOutcome>, &'static str> {
+    let list: Vec<serde_json::Value> = answer(i)?;
+    Ok(list
+        .into_iter()
+        .map(|v| serde_json::from_value::<ArenaChaos>(v).map_or(ChaosOutcome::Other, |c| c.outcome))
+        .collect())
+}
+
 /// Whether the market is still open, by the arena's answers to `predict`'s views, and what its
 /// record says about the target.
 fn still_open(id: u64, index: Option<u32>) -> Result<Label, &'static str> {
@@ -316,10 +334,10 @@ fn still_open(id: u64, index: Option<u32>) -> Result<Label, &'static str> {
             Ok(Some(_)) => Err("predictions closed"),
             // a failed view call: an arena without `chaos_open`; read the record itself
             Err("arena failed") => {
-                let list: Vec<ArenaChaos> = answer(1)?;
+                let list = chaos_outcomes(1)?;
                 match list.get(i as usize) {
                     None => Err("injection missing"),
-                    Some(c) if c.outcome == ChaosOutcome::Pending => Ok(Label {
+                    Some(ChaosOutcome::Pending) => Ok(Label {
                         steered_by: None,
                         open_until_reveal: true,
                     }),
@@ -442,6 +460,7 @@ impl Contract {
         let m = self.markets.entry((id, slot)).or_insert_with(|| Market {
             steered_by: label.steered_by,
             open_until_reveal: label.open_until_reveal,
+            first_at: env::block_timestamp(),
             ..Market::default()
         });
         let seq = m.n;
@@ -483,34 +502,64 @@ impl Contract {
 
     /// `settle`'s callback. Fixes, once, the outcome of each market of the duel the arena has
     /// decided: a chaos market when its injection left `Pending` (`Flipped`, `Held`; void on
-    /// `NoTrial` or `Expired`), the duel market when the duel resolved (`A`, `B`, `Tie`; void when
-    /// voided). Then scores up to `SCORE_PAGE` predictions of settled markets, in order, and returns
-    /// how many are still unscored. Caller: this contract (private).
+    /// `NoTrial` or `Expired`; an outcome this contract does not know is left open), the duel
+    /// market when the duel resolved (`A`, `B`, `Tie`; void when voided). The two answers are read
+    /// apart: a failed or unreadable one (or a duel record for another id) settles nothing that
+    /// depends on it, and the call panics, changing nothing, only when neither is usable. Then
+    /// scores up to `SCORE_PAGE` predictions of settled markets, in order, and returns how many are
+    /// still unscored. Caller: this contract (private).
     #[private]
     pub fn on_settle(&mut self, duel_id: U64) -> u32 {
         let id = duel_id.0;
-        let duel: Option<ArenaDuel> = answer(0).unwrap_or_else(|e| env::panic_str(e));
-        let chaos: Vec<ArenaChaos> = answer(1).unwrap_or_else(|e| env::panic_str(e));
-        let duel = duel.unwrap_or_else(|| env::panic_str("duel missing"));
-        require!(duel.id.0 == id, "arena answer unreadable");
-        let n = chaos.len().min(MAX_INJECTIONS as usize) as u32;
-        for (i, c) in chaos.iter().take(n as usize).enumerate() {
-            let won = match c.outcome {
-                ChaosOutcome::Pending => continue,
+        let duel = match answer::<Option<ArenaDuel>>(0) {
+            Ok(Some(d)) if d.id.0 == id => Ok(d),
+            Ok(Some(_)) => Err("arena answer unreadable"),
+            Ok(None) => Err("duel missing"),
+            Err(e) => Err(e),
+        };
+        let chaos = chaos_outcomes(1);
+        if let (Err(e), Err(_)) = (&duel, &chaos) {
+            env::panic_str(e);
+        }
+        for (i, c) in chaos
+            .unwrap_or_default()
+            .iter()
+            .take(MAX_INJECTIONS as usize)
+            .enumerate()
+        {
+            let won = match c {
+                ChaosOutcome::Pending | ChaosOutcome::Other => continue,
                 ChaosOutcome::Flipped => Some(Pick::Flipped),
                 ChaosOutcome::Held => Some(Pick::Held),
                 ChaosOutcome::NoTrial | ChaosOutcome::Expired => None,
             };
             self.decide(id, i as u32, won);
         }
-        if duel.resolved {
-            self.decide(id, DUEL_SLOT, duel_outcome(&duel));
+        if let Ok(d) = &duel
+            && d.resolved
+        {
+            self.decide(id, DUEL_SLOT, duel_outcome(d));
         }
-        let mut budget = SCORE_PAGE;
-        (0..n)
-            .chain([DUEL_SLOT])
-            .map(|slot| self.score(id, slot, &mut budget))
-            .sum()
+        self.score_duel(id)
+    }
+
+    /// Escape hatch for a market the arena never settles (nobody voids the duel, or its answers
+    /// stop parsing): every market of `duel_id` still unsettled `STALE_NS` after its first
+    /// prediction becomes void (refunded, not counted). Then scores like `settle` and returns how
+    /// many predictions are still unscored. Caller: anyone. Deposit: none. No panics.
+    pub fn void_stale(&mut self, duel_id: U64) -> u32 {
+        let id = duel_id.0;
+        let now = env::block_timestamp();
+        for slot in (0..MAX_INJECTIONS).chain([DUEL_SLOT]) {
+            let stale = self
+                .markets
+                .get(&(id, slot))
+                .is_some_and(|m| m.outcome.is_none() && now >= m.first_at.saturating_add(STALE_NS));
+            if stale {
+                self.decide(id, slot, None);
+            }
+        }
+        self.score_duel(id)
     }
 
     /// Pay the caller the deposits of every prediction it holds that has been scored, and forget
@@ -665,6 +714,16 @@ impl Contract {
             VIEW_GAS,
             GasWeight(0),
         )
+    }
+
+    /// Scores up to `SCORE_PAGE` predictions across the duel's settled markets; returns how many
+    /// are still unscored.
+    fn score_duel(&mut self, id: u64) -> u32 {
+        let mut budget = SCORE_PAGE;
+        (0..MAX_INJECTIONS)
+            .chain([DUEL_SLOT])
+            .map(|slot| self.score(id, slot, &mut budget))
+            .sum()
     }
 
     /// Sets an existing, unsettled market's outcome.

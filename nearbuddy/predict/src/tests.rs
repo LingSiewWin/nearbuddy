@@ -722,48 +722,132 @@ fn void_duel_and_no_trial_refund_without_scoring() {
 }
 
 #[test]
-fn settle_with_a_failed_or_wrong_answer_changes_nothing() {
-    let mut w = World::new();
-    let mut a = ArenaSim::open(T0);
-    a.chaos = vec!["Pending"];
-    w.predict(
-        PEOPLE[0],
-        4,
-        Some(0),
-        Pick::Held,
-        &a.predict_answers(4, Some(0)),
-    )
-    .unwrap();
-    a.chaos[0] = "Held";
-    a.resolve(1);
+fn settle_reads_each_answer_apart_and_reverts_only_when_neither_is_usable() {
+    let setup = || {
+        let mut w = World::new();
+        let mut a = ArenaSim::open(T0);
+        a.chaos = vec!["Pending"];
+        w.predict(
+            PEOPLE[0],
+            4,
+            Some(0),
+            Pick::Held,
+            &a.predict_answers(4, Some(0)),
+        )
+        .unwrap();
+        w.predict(PEOPLE[0], 4, None, Pick::B, &a.predict_answers(4, None))
+            .unwrap();
+        a.chaos[0] = "Held";
+        a.resolve(1);
+        (w, a)
+    };
+    let (mut w, a) = setup();
     let good = a.settle_answers(4);
     let trie = w.trie.clone();
     for (bad, why) in [
-        (vec![None, good[1].clone()], "arena failed"),
-        (vec![good[0].clone(), None], "arena failed"),
-        (vec![good[0].clone()], "arena failed"),
+        (vec![None, None], "arena failed"),
+        (vec![], "arena failed"),
         (
-            vec![Some("[1]".into()), good[1].clone()],
+            vec![Some("[1]".into()), Some("{".into())],
             "arena answer unreadable",
         ),
-        (
-            vec![
-                good[0].clone(),
-                Some(good[1].clone().unwrap().replace("Held", "Won")),
-            ],
-            "arena answer unreadable",
-        ),
-        (vec![Some("null".into()), good[1].clone()], "duel missing"),
-        (
-            vec![Some(a.duel_json(5)), good[1].clone()],
-            "arena answer unreadable",
-        ),
+        (vec![Some("null".into()), None], "duel missing"),
+        (vec![Some(a.duel_json(5)), None], "arena answer unreadable"),
     ] {
         assert_eq!(w.settle(4, &bad), Err(why.into()));
         assert_eq!(w.trie, trie);
     }
+    let settled = |w: &World| (market(w, 4, Some(0)).settled, market(w, 4, None).settled);
+    // a failed or foreign duel answer still lets the chaos list settle its markets, and back
+    for duel in [None, Some(a.duel_json(5)), Some("{".to_string())] {
+        let (mut w, _) = setup();
+        assert_eq!(w.settle(4, &[duel, good[1].clone()]), Ok(0));
+        assert_eq!(settled(&w), (true, false));
+    }
+    let (mut w, _) = setup();
+    assert_eq!(w.settle(4, &[good[0].clone(), None]), Ok(0));
+    assert_eq!(settled(&w), (false, true));
+    let (mut w, _) = setup();
     assert_eq!(w.settle(4, &good), Ok(0));
-    assert_ne!(w.trie, trie);
+    assert_eq!(settled(&w), (true, true));
+}
+
+#[test]
+fn an_unknown_chaos_record_leaves_only_its_own_market_open() {
+    // ported from the audit: a sixth arena outcome used to make the whole answer unreadable
+    let mut w = World::new();
+    let mut a = ArenaSim::open(T0);
+    a.chaos = vec!["Pending", "Pending"];
+    for i in [0, 1] {
+        w.predict(
+            PEOPLE[0],
+            1,
+            Some(i),
+            Pick::Held,
+            &a.predict_answers(1, Some(i)),
+        )
+        .unwrap();
+    }
+    w.predict(PEOPLE[0], 1, None, Pick::A, &a.predict_answers(1, None))
+        .unwrap();
+    a.resolve(0);
+    a.chaos = vec!["Disputed", "Held"];
+    assert_eq!(w.settle(1, &a.settle_answers(1)), Ok(0));
+    assert!(!market(&w, 1, Some(0)).settled);
+    assert_eq!(market(&w, 1, Some(1)).outcome, Some(Pick::Held));
+    assert_eq!(market(&w, 1, None).outcome, Some(Pick::A));
+    // a record that does not parse at all counts the same
+    let broken = a
+        .chaos_json()
+        .replacen(r#""outcome":"Disputed""#, r#""outcome":7"#, 1);
+    assert_eq!(w.settle(1, &[Some(a.duel_json(1)), Some(broken)]), Ok(0));
+    assert!(!market(&w, 1, Some(0)).settled);
+    assert_eq!(w.claim(PEOPLE[0]), Ok(2 * DEPOSIT));
+    // nor is an unknown record open to predictions on an arena without `chaos_open`
+    let legacy = ArenaSim {
+        legacy: true,
+        ..a.clone()
+    };
+    assert_eq!(
+        w.predict(
+            PEOPLE[1],
+            1,
+            Some(0),
+            Pick::Held,
+            &legacy.predict_answers(1, Some(0))
+        ),
+        Ok(false)
+    );
+}
+
+#[test]
+fn void_stale_frees_a_market_the_arena_never_settles() {
+    let mut w = World::new();
+    let a = ArenaSim::open(T0);
+    w.predict(PEOPLE[0], 1, None, Pick::A, &a.predict_answers(1, None))
+        .unwrap();
+    let stale = |w: &mut World| {
+        w.call(PEOPLE[1], 0, &[], |c| c.void_stale(U64(1)))
+            .map(|r| r.0)
+    };
+    w.now = T0 + STALE_NS - 1;
+    assert_eq!(stale(&mut w), Ok(0));
+    assert!(!market(&w, 1, None).settled);
+    assert_eq!(w.claim(PEOPLE[0]), Err("nothing to claim".into()));
+    w.now = T0 + STALE_NS;
+    assert_eq!(stale(&mut w), Ok(0));
+    assert_eq!(
+        (market(&w, 1, None).settled, market(&w, 1, None).outcome),
+        (true, None)
+    );
+    assert_eq!(stats(&w, PEOPLE[0]).count, 0);
+    assert_eq!(w.claim(PEOPLE[0]), Ok(DEPOSIT));
+    // a later honest settle changes nothing: the market was fixed once
+    let mut a = a;
+    a.resolve(0);
+    let trie = w.trie.clone();
+    assert_eq!(w.settle(1, &a.settle_answers(1)), Ok(0));
+    assert_eq!(w.trie, trie);
 }
 
 #[test]
@@ -963,9 +1047,14 @@ proptest! {
                     let ans = spoil(a.settle_answers(d), f, a.settle_answers(d + 1));
                     let trie = w.trie.clone();
                     let r = w.settle(d, &ans);
-                    if matches!(f, Fate::Honest) {
+                    if matches!(f, Fate::Honest | Fate::OtherDuel) {
+                        // another duel's record is refused; the chaos list still settles its part
                         prop_assert_eq!(r, Ok(0), "one page settles this world");
-                        for m in made.iter_mut().filter(|m| m.duel == d && m.verdict.is_none()) {
+                        let duel_ok = matches!(f, Fate::Honest);
+                        for m in made
+                            .iter_mut()
+                            .filter(|m| m.duel == d && m.verdict.is_none() && (duel_ok || m.index.is_some()))
+                        {
                             if let Some(won) = a.outcome(m.index) {
                                 m.verdict = Some(match won {
                                     None => Verdict::Void,
