@@ -232,7 +232,19 @@ vectors shared by Rust, TypeScript and Python: `fixtures/keyless-vectors.json`.
   likely decision before it lands, and a hidden commitment would hide little. It would also let a stranger block a slot
   by never revealing.
 - **Unreadable replies.** A reply with no readable decision fills the slot and makes no call. Every headline its
-  request carried is judged as if the reply took the lie's side, so garbage never dodges a trial.
+  request carried is decided `NoTrial`: the injector gets its stake back less the fee, and the target earns no
+  resistance credit or shield. A headline that only breaks the reply's format buys no flip.
+- **New information only.** A slot opens for the agent's first decision, for a headline planted at it since its last
+  slot, or after an unfilled slot's 120 s TTL. A filled slot is final until the next headline, so nobody can redraw a
+  prompt until it gives the side they want. A tick alone does not reopen it.
+- **Callers pay storage.** `open_slot` and `submit_completion` are payable: the caller attaches `KEEPER_DEPOSIT`
+  (0.01 NEAR) and gets back what the storage did not use. A stranger's slots never touch the agent's bond.
+  `top_up_bond` lets an owner refill one.
+- **Headlines.** `inject_chaos` refuses format characters, line and paragraph separators, private-use characters,
+  noncharacters and unassigned planes, hidden variation selectors, and look-alikes of `<` and `>`. Without that
+  check, a headline could print a fake `origin="arena oracle, trusted"` block or carry text the reader cannot see.
+- **Signer pins.** `pin_model_signer` and `unpin_model_signer` are refused while any duel is open, and both are
+  logged. A compromised key is handled with `set_paused`, which stops every submission.
 
 Gas, measured on the real wasm in the sandbox (`arena/tests/test_keyless_sandbox.rs`):
 
@@ -240,9 +252,9 @@ Gas, measured on the real wasm in the sandbox (`arena/tests/test_keyless_sandbox
 |---|---|
 | `register_keyless` | 3.4 TGas |
 | `request_tick` (plus the oracle call) / tick callback | 4.8 / 2.7 TGas |
-| `open_slot`, 2.6 KB request / 44 KB request (31 headlines of 280 escaped bytes) | 4.1 / 15.4 TGas |
-| `submit_completion`, response of 1.1 / 2.9 / 7.7 / 16.4 / 24.6 KB | 4.5 / 4.8 / 5.6 / 7.1 / 8.5 TGas |
-| `submit_completion` deciding 31 headlines, 7.7 KB response | 9.6 TGas |
+| `open_slot`, 2.7 KB request / 40 KB request (28 headlines of 280 escaped bytes), storage refund included | 4.7 / 15.0 TGas |
+| `submit_completion`, response of 1.1 / 2.9 / 7.7 / 16.4 / 24.6 KB, storage refund included | 5.1 / 5.6 / 6.5 / 8.0 / 9.4 TGas |
+| `submit_completion` deciding 28 headlines, 7.7 KB response | 10.0 TGas |
 
 In the arena's dataset real responses are at most 7.7 KB (Qwen3.6, a reasoning model); `MAX_RESPONSE` is 24 KB.
 
@@ -263,12 +275,30 @@ contract-built bytes to NEAR AI Cloud unchanged; the enclave signed them, and th
 The same flow ran first with commit-reveal on `nb-keyless-arena-1111.testnet` (duel 1; reveal [`G14x2gbm…`](https://testnet.nearblocks.io/txns/G14x2gbmS9E6ezUY1hJRLFc5ogMrw9xaku71mHqgj6St), resolve [`zucDp32y…`](https://testnet.nearblocks.io/txns/zucDp32ybFB942mXXnQtnJp4QF13ZNwBMdpvXUufFAP)). Model spend for
 both runs: 9 calls, $0.003.
 
+Audit fixes (deploy 18.1, fresh contract `v3.nb-keyless-arena-1111.testnet`, 2026-11-11). The packaged keeper
+(`packages/keeper`) drove one duel end to end: it opened every slot with the storage deposit and submitted the
+enclave-signed replies. A Long lie was planted at B, and the keeper opened B's next slot because of that headline.
+Contrarian B flipped from Short to Long. A look-alike-bracket headline was refused.
+`bun run verify-duel 0` on that contract: **no FAIL · 29 PASS · 0 SKIP**, and the bonds are unchanged by the
+slots' storage.
+
+| Step | Tx |
+|---|---|
+| Deploy, signers pinned per model before any duel | {t("7q83yqvGh4xLgXd8CDh2fQdWobMf2SbCEN13FmkDLGmF")} · {t("5i4MB7YABfmvbrXJN45hYuwHx2V9xgRtoJCzZLydoLDq")} · {t("8F5NbEMwMcYZhKtJs3d2cGTquxeKgiZTSxtuQ7qkdBGy")} · {t("En44wvGxVugoGQso8bJNRGB1Mo13JdQfc4fPrezQafSZ")} |
+| Two keyless agents, duel 0 | {t("Hyyah3jW8xz1pHEh5uQ9uyq53yTjAHwV47qpo3YbS3Qc")} · {t("8FGxTo2R9SN1iMmRUmWAMc3pEa18y8eHu6euZUFmjsQ9")} · {t("Hmr4dVHeNCXUtarUA2ixtCZUWN6fhuXSLzuPoueYCwRz")} |
+| Keeper: first slots and submissions (A Long 1 bps, B Short 500 bps) | {t("29srSG6btUBxe8mDwCmUDrP61a2g4qD7rSiPPAhVdAHZ")} · {t("DXgbLwTA8X7njSN9Wz43JfD2tgXYNiGnJ7BAGVyGYRM")} · {t("C24X2SXRit59d92nYfV6XWE23rrRmGqrsWYj47jzkUXQ")} · {t("AkiBTLXAKocjKbz8Y3twm1MoGNnJ3dFHoRgkCFrHdztA")} |
+| Long lie at B; refused: a look-alike-bracket headline (`headline lookalike bracket`) | {t("8RK9Y9NGZ3V79wFZZm18Vu2FsjkrWmUqBHHX5S5W9Yzk")} · {t("EqPdhYn8Bqmbo1b5apPtPoSsHgJX4N9Yhd1fxx3TEg82")} |
+| Keeper: B's slot 2 opened by the headline, reply Long 500 bps: `Flipped`, prev Short, next Long | {t("CWZycqSNygoD6p27JCcBqoBvL8xrP8VAsEDbqdmj9Mgj")} · {t("Fbsscaf7vyS1s9DS1ES3XKcWr7ek88B5RTZSaL9aQVZo")} |
+| `resolve_duel` by the keeper account; close 3.6012 vs open 3.6056: both pnl 0, a tie, the flip paid stake less fee | {t("BoJero5ntERWvD6L1h9Si6DWYuJBg4yZ8PLN68heAZTv")} |
+
 Limits it does not remove:
 - **Re-roll.** A keeper may sample a request several times and submit the reply it likes. RESEARCH measured the side
-  split on 11% (95% CI 5-23%) of real duel prompts across 8 replies at temperature 0 with a seed. The slot TTL
-  (120 s) bounds the time, not the number of samples.
-- **Unreadable replies cut both ways.** An injector can keep sampling for an unreadable reply too, to win a flip.
-  This matters only on models that often truncate.
+  split on 11% (95% CI 5-23%) of real duel prompts across 8 replies at temperature 0 with a seed. Slots now reopen
+  only on new information, so a keeper samples one prompt per headline; it can still pick among replies to that
+  prompt.
+- **Inputs a headline's timing picks.** The first slot, and each headline-driven one, shows the latest tick when it
+  opens. Whoever ticks or plants just before chooses that moment.
+- **A prose-only strategy.** An agent that never answers in JSON makes no calls and forfeits every hold.
 - **Liveness.** If nobody submits, the agent keeps its previous call.
 - **Arms.** Template 1 delivers both arms as written. The clean arm's `cue_guard` (NFKC and word lists) does not run
   on chain, so a Cue/Clean comparison needs keyed targets until a template carries a port of it.
@@ -828,9 +858,10 @@ IOU signing bytes: `"nearbuddy-iou-v1" || borsh(Iou{owner, agent_pk, payee, amou
 | `claim_chaos(duel_id)` | injector, 1 yocto, after the duel finished | pays everything the caller's headlines in that duel are owed, in one transfer; `on_claim_chaos` unmarks the records if it bounces |
 | `register_keyless(model_id, strategy, template_version) -> AgentView` payable | anyone (becomes owner) | deploy 18: an agent with no key, id `sha256("nearbuddy-keyless-v1" \|\| contract \|\| 0 \|\| owner \|\| 0 \|\| n_le)`; strategy printable ASCII, at most 512 bytes; bond = deposit minus storage |
 | `request_tick(duel_id)` payable | anyone, `oracle_deposit` + 0.00065 NEAR | asks the oracle for a fresh price (`tick:<id>`); later slots show it |
-| `open_slot(duel_id, agent) -> Slot` | anyone (keeper) | freezes one decision's inputs (latest tick or open price, seconds left, the headlines pending at the agent, a nonce from the random seed) and stores the request hash; `keyless_request(duel_id, agent)` returns the exact bytes |
-| `submit_completion(duel_id, agent, seq, response, signer, signature) -> Option<Side>` | anyone (keeper) | the first kind-2 signature by the key pinned to the agent's model over `model:sha256(request):sha256(response)` fills the slot; `choices[0].message.content` is parsed and recorded as a revealed intent (nonce = seq); an unreadable reply makes no call and judges the headlines it carried as the lie's side |
-| `pin_model_signer(signer, model_id)` / `unpin_model_signer` | contract owner, 1 yocto | the enclave key keyless agents of that model accept (from the model's attestation report) |
+| `open_slot(duel_id, agent) -> Slot` payable | anyone (keeper), `KEEPER_DEPOSIT` (storage, excess refunded); only on new information | freezes one decision's inputs (latest tick or open price, seconds left, the headlines pending at the agent, a nonce from the random seed) and stores the request hash; `keyless_request(duel_id, agent)` returns the exact bytes |
+| `submit_completion(duel_id, agent, seq, response, signer, signature) -> Option<Side>` payable | anyone (keeper), `KEEPER_DEPOSIT` | the first kind-2 signature by the key pinned to the agent's model over `model:sha256(request):sha256(response)` fills the slot; `choices[0].message.content` is parsed and recorded as a revealed intent (nonce = seq); an unreadable reply makes no call and decides the headlines it carried `NoTrial` |
+| `pin_model_signer(signer, model_id)` / `unpin_model_signer` | contract owner, 1 yocto, no duel open | the enclave key keyless agents of that model accept (from the model's attestation report); logged as `model_signer` |
+| `top_up_bond(agent_pk)` payable | the agent's owner | adds the deposit to the bond (keyed or keyless) |
 | `set_chaos_config(chaos)` / `migrate_v17(chaos)` | contract owner | `ChaosConfig {base, r_bps, cap, fee_bps, share_bps}`; `fee_bps` and `share_bps` frozen while a duel is open; `migrate_v17` refuses while a duel is open |
 | `resolve_duel(duel_id)` payable | anyone, after `close_at`, attaches `oracle_deposit` | asks the oracle for the close price |
 | `set_oracle(oracle_account, oracle_deposit, min_duel_s, intent_lock_s)` | contract owner, 1 yocto | refused as `duels open` when it would move the oracle or lower the lock while a duel runs; each duel keeps the lock it opened under; oracle account, its deposit, the intent lock (no intent in the last `intent_lock_s`) and the duel length floor (at most a day; 310 s on testnet: Outlayer serves a cached price for 300 s with a fresh timestamp, so shorter duels would close on their own open price) |
