@@ -24,6 +24,9 @@ export function keylessArena(id: NetworkId, env: Record<string, string | undefin
   return v;
 }
 
+/** A duel id as the contract writes a U64: decimal, no sign, no leading zero, at most 12 digits. */
+export const canonicalDuelId = (s: string): boolean => /^(0|[1-9]\d{0,11})$/.test(s);
+
 /** A 32-byte agent key in canonical base64 (near-sdk's Base64VecU8), so one key has one spelling. */
 export function canonicalPk(s: string): boolean {
   try {

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import type { AgentView, Duel, KeylessAgent, Slot } from "../lib/abi/arena";
 import {
   type AgentState,
+  canonicalDuelId,
   canonicalPk,
   enterCall,
   KEYLESS_ARENAS,
@@ -116,4 +117,10 @@ test("canonicalPk: one spelling per 32-byte key", () => {
     "",
   ])
     expect(canonicalPk(v), v).toBe(false);
+});
+
+test("canonicalDuelId: a U64 as the contract writes it", () => {
+  for (const ok of ["0", "2", "481", "999999999999"]) expect(canonicalDuelId(ok), ok).toBe(true);
+  for (const bad of ["03", "00", "", "-1", "+2", "1.0", " 2", "2 ", "1e3", "0x10", "1000000000000"])
+    expect(canonicalDuelId(bad), bad).toBe(false);
 });

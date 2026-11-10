@@ -1,9 +1,10 @@
 // GET /api/keyless/verify?duel=N: /api/verify's checks (lib/verify.ts, the same as `bun run verify-duel N`) on a duel
-// of the keyless arena, which /api/verify does not read (it is fixed to ARENA_CONTRACT). Same caching, except that a
-// result with a FAIL is kept 60 s like an incomplete one: a complete clean result for good, an error 45 s, one scan
-// per duel at a time.
+// of the keyless arena, which /api/verify does not read (it is fixed to ARENA_CONTRACT). Ids are canonical. Kept: a
+// complete clean result for good, one with a FAIL or incomplete 60 s, an error 45 s, a missing duel 30 s, an open one
+// 5 s; one scan per duel at a time.
 // ponytail: a copy of /api/verify's cache over another contract; one route with an arena allow-list once that file
 // is free to change.
+import { canonicalDuelId } from "../../../lib/enter";
 import { checkDuel, collect, incomplete, state } from "../../../lib/verify";
 import { NETWORK_ID } from "../../../network";
 import { KEYLESS_ARENA } from "../../keyless";
@@ -11,7 +12,6 @@ import { json } from "../../near";
 
 export const maxDuration = 60;
 
-const ID_RE = /^\d{1,12}$/;
 const kept = new Map<string, { until: number; body: string; status: number }>();
 const inflight = new Map<string, Promise<string>>();
 const keep = (id: string, body: string, ttl: number, status = 200) => {
@@ -22,8 +22,16 @@ const keep = (id: string, body: string, ttl: number, status = 200) => {
 async function run(arena: string, id: string): Promise<string> {
   const command = `${NETWORK_ID === "mainnet" ? "NEAR_NETWORK=mainnet " : ""}ARENA_CONTRACT=${arena} bun run verify-duel ${id}`;
   const now = await state(arena, id);
-  if (!now.duel) return JSON.stringify({ duel_id: id, status: "missing", arena, command });
-  if (!now.duel.resolved) return JSON.stringify({ duel_id: id, status: "open", arena, command });
+  if (!now.duel) {
+    const body = JSON.stringify({ duel_id: id, status: "missing", arena, command });
+    keep(id, body, 30_000); // it may be opened later
+    return body;
+  }
+  if (!now.duel.resolved) {
+    const body = JSON.stringify({ duel_id: id, status: "open", arena, command });
+    keep(id, body, 5000); // it resolves within minutes
+    return body;
+  }
   const evidence = await collect(arena, id, now);
   const lines = checkDuel(evidence);
   const degraded = incomplete(evidence);
@@ -47,7 +55,9 @@ async function run(arena: string, id: string): Promise<string> {
 
 export async function GET(req: Request) {
   const id = new URL(req.url).searchParams.get("duel");
-  if (!id || !ID_RE.test(id)) return json(JSON.stringify({ error: "duel must be a duel number" }), 400);
+  // one spelling per duel: "03" would be a second cache entry, and lib/verify compares ids as strings
+  if (!id || !canonicalDuelId(id))
+    return json(JSON.stringify({ error: "duel must be a duel number, no leading zero" }), 400);
   if (!KEYLESS_ARENA) return json(JSON.stringify({ error: `no keyless arena on ${NETWORK_ID}` }), 404);
   const hit = kept.get(id);
   if (hit && Date.now() < hit.until) return json(hit.body, hit.status);
