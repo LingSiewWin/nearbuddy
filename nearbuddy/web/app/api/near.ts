@@ -46,5 +46,5 @@ export const legacyArenaView = (method: "list_followers", args: { agent_pk: stri
 
 /** near-api-js returns bigint in some view responses; stringify them. */
 export const jsonBody = (v: unknown) => JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
-export const json = (body: string, status = 200) =>
-  new Response(body, { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+export const json = (body: string, status = 200, cache = "no-store") =>
+  new Response(body, { status, headers: { "content-type": "application/json", "cache-control": cache } });
