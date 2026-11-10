@@ -11,7 +11,7 @@ import { b64strict, checkStrategy, KEYLESS_TEMPLATE_VERSION, type KeylessInputs,
 /** The keyless arena per network, a contract separate from NET.arena (the production arena has no keyless methods
  *  yet); KEYLESS_ARENA_CONTRACT overrides it on the server (api/keyless.ts). null: none on that network. */
 export const KEYLESS_ARENAS: Record<NetworkId, string | null> = {
-  testnet: "v2.nb-keyless-arena-1111.testnet",
+  testnet: "v3.nb-keyless-arena-1111.testnet",
   mainnet: null,
 };
 

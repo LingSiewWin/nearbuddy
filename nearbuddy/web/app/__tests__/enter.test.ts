@@ -20,7 +20,7 @@ import {
 import { type KeylessInputs, keylessRequest, SLOT_TTL_NS, toHex } from "../lib/keyless";
 
 const V = JSON.parse(readFileSync(`${import.meta.dir}/../../../fixtures/keyless-vectors.json`, "utf8"));
-const C = "v2.nb-keyless-arena-1111.testnet";
+const C = "v3.nb-keyless-arena-1111.testnet";
 const base = V.cases[0].inputs as KeylessInputs;
 
 test("enterCall: register_keyless with template 1, deposit = the bond, 30 TGas", () => {

@@ -12,7 +12,7 @@ const NS = (ms: number) => String(BigInt(ms) * 1_000_000n);
 const PK_A = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=";
 const PK_B = "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=";
 const CONTRACT = "arena.nearbuddy-solver.testnet";
-const KEYLESS = "v2.nb-keyless-arena-1111.testnet";
+const KEYLESS = "v3.nb-keyless-arena-1111.testnet";
 const PINNED = [{ model_id: "deepseek-ai/DeepSeek-V4.1-Flash-1017", signer: PK_A }];
 let keylessContract: string | null = KEYLESS;
 const TERMS = {
