@@ -45,6 +45,7 @@ test("pages carry the policy and load with no violation", async ({ page }) => {
     ["/arena", "pre a[href^='/agent/']"],
     [`/duel/${duel}`, "pre a[href^='/agent/']"],
     [`/agent/${encodeURIComponent(pk)}`, "pre"],
+    ["/enter", "#enter-request"],
     ["/llms.txt", "body"],
     ["/api/mcp", "body"],
   ] as const) {
