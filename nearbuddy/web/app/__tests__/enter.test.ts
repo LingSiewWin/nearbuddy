@@ -166,10 +166,10 @@ test("wrapUnits: lines of at most the width, no unit split, nothing lost", () =>
 });
 
 test("enteredAgent: the new agent's id comes from the register_keyless result, nothing else", () => {
-  // the shape of RPC `tx` for C6KyV6Hv… on testnet (register_keyless from nb-kk-spec-1111.testnet)
+  // the shape of RPC `tx` for 9SfSdWYQ… on v3 (register_keyless from nb-kk-spec-1111.testnet)
   const view = {
     owner: "nb-kk-spec-1111.testnet",
-    pk: "s7wwBC1d/grtRwfGbcZ0gmFmkV7l4NN1FLRwcDHVI58=",
+    pk: "CLizHByPnI6dSCKcR/cFeHLngrgRooZfhetavjHBoJk=",
     model_id: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
     bond: "494490000000000000000000",
     alpha_bps: 0,
@@ -177,7 +177,7 @@ test("enteredAgent: the new agent's id comes from the register_keyless result, n
     in_duel: null,
     tee: true,
   };
-  const ok = { status: { SuccessValue: btoa(JSON.stringify(view)) }, transaction: { hash: "C6KyV6Hv" } };
+  const ok = { status: { SuccessValue: btoa(JSON.stringify(view)) }, transaction: { hash: "9SfSdWYQ" } };
   expect(enteredAgent(ok)?.pk).toBe(view.pk);
   const failed = {
     status: { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "bond required" } } } } },
