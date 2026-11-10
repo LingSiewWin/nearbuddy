@@ -149,7 +149,7 @@
       },
       {
         "name": "commit_intent",
-        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n Replacing a held commitment unrevealed hides the `prev` of every headline still pending at\n this agent that was planted at or after it: they stay pending, and the hidden call counts\n against the agent (its next counting decision flips them when it takes the lie's side, else\n they are no trial, never held). A runner reveals the held call before it commits again.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"agent missing\",\n \"bond exhausted\".",
+        "doc": " Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for\n this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's\n signature over `commit_message(duel_id, commitment)`. Only before the intent lock. The salt\n should be 32 random bytes: the intent space is small enough to brute-force without it.\n Replacing a held commitment unrevealed hides the `prev` of every headline still pending at\n this agent that was planted at or after it: they stay pending, and the hidden call counts\n against the agent (its next counting decision flips them when it takes the lie's side, else\n they are no trial, never held). A runner reveals the held call before it commits again.\n `seen` (message v2, deploy 17.1): how many records of `get_chaos(duel_id)` the agent had\n read when it signed; `sig` is then over `commit_message(duel_id, commitment, seen)`. A\n replacement is refused with \"unseen headline\" while a headline still pending at this agent,\n planted at or after the held commitment, has an index at or above `seen`: it landed after\n the runner's last read, so the runner reveals the held call first instead of being charged\n for a dodge it could not see. A headline it had seen (index below `seen`) is charged as\n above. Without `seen` (message v1) every replacement is charged as above.\n Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:\n \"paused\", \"agent_pk length\", \"commitment length\", \"bad commit signature\", \"duel missing\",\n \"duel closed\", \"intent lock\", \"bad target\", \"commitment used\", \"unseen headline\",\n \"agent missing\", \"bond exhausted\".",
         "kind": "call",
         "params": {
           "serialization_type": "json",
@@ -177,13 +177,24 @@
               "type_schema": {
                 "$ref": "#/definitions/Base64VecU8"
               }
+            },
+            {
+              "name": "seen",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0.0
+              }
             }
           ]
         }
       },
       {
         "name": "commit_message",
-        "doc": " The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig)`.\n View: anyone, no deposit, no panics.",
+        "doc": " The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig, seen)`:\n message v2 with `seen`, v1 without. View: anyone, no deposit, no panics.",
         "kind": "view",
         "params": {
           "serialization_type": "json",
@@ -199,6 +210,17 @@
               "type_schema": {
                 "$ref": "#/definitions/Base64VecU8"
               }
+            },
+            {
+              "name": "seen",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0.0
+              }
             }
           ]
         },
@@ -206,6 +228,19 @@
           "serialization_type": "json",
           "type_schema": {
             "$ref": "#/definitions/Base64VecU8"
+          }
+        }
+      },
+      {
+        "name": "commit_message_version",
+        "doc": " The newest commit message format `commit_intent` accepts: 2 means it takes `seen` (deploy\n 17.1 on). A deployment without this view (deploy 17 and older) accepts only v1. View:\n anyone, no deposit, no panics.",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
           }
         }
       },

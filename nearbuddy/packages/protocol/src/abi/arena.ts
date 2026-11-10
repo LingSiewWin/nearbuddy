@@ -306,10 +306,16 @@ export interface ArenaViews {
    */
   chaos_fee: { args: { duel_id: string }; result: string };
   /**
-   * The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig)`.
-   *  View: anyone, no deposit, no panics.
+   * The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig, seen)`:
+   *  message v2 with `seen`, v1 without. View: anyone, no deposit, no panics.
    */
-  commit_message: { args: { duel_id: string; commitment: Base64VecU8 }; result: Base64VecU8 };
+  commit_message: { args: { duel_id: string; commitment: Base64VecU8; seen: number | null }; result: Base64VecU8 };
+  /**
+   * The newest commit message format `commit_intent` accepts: 2 means it takes `seen` (deploy
+   *  17.1 on). A deployment without this view (deploy 17 and older) accepts only v1. View:
+   *  anyone, no deposit, no panics.
+   */
+  commit_message_version: { args: Record<string, never>; result: number };
   /**
    * The exact bytes each agent key signs for `open_duel_consented(a, b, symbol, close_at, ..)`.
    *  View: anyone, no deposit, no panics.
@@ -462,13 +468,20 @@ export interface ArenaCalls {
    *  this agent that was planted at or after it: they stay pending, and the hidden call counts
    *  against the agent (its next counting decision flips them when it takes the lie's side, else
    *  they are no trial, never held). A runner reveals the held call before it commits again.
+   *  `seen` (message v2, deploy 17.1): how many records of `get_chaos(duel_id)` the agent had
+   *  read when it signed; `sig` is then over `commit_message(duel_id, commitment, seen)`. A
+   *  replacement is refused with "unseen headline" while a headline still pending at this agent,
+   *  planted at or after the held commitment, has an index at or above `seen`: it landed after
+   *  the runner's last read, so the runner reveals the held call first instead of being charged
+   *  for a dodge it could not see. A headline it had seen (index below `seen`) is charged as
+   *  above. Without `seen` (message v1) every replacement is charged as above.
    *  Caller: anyone (relayer). Deposit: none; storage is taken from the agent's bond. Panics:
    *  "paused", "agent_pk length", "commitment length", "bad commit signature", "duel missing",
-   *  "duel closed", "intent lock", "bad target", "commitment used", "agent missing",
-   *  "bond exhausted".
+   *  "duel closed", "intent lock", "bad target", "commitment used", "unseen headline",
+   *  "agent missing", "bond exhausted".
    */
   commit_intent: {
-    args: { duel_id: string; agent_pk: Base64VecU8; commitment: Base64VecU8; sig: Base64VecU8 };
+    args: { duel_id: string; agent_pk: Base64VecU8; commitment: Base64VecU8; sig: Base64VecU8; seen: number | null };
     result: undefined;
   };
   /**
