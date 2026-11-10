@@ -1587,8 +1587,7 @@ async function main() {
           `payout ${ca.payout}: ${typeof heldClaim === "string" ? heldClaim.slice(0, 80) : `claimed, tx ${heldClaim.hash}`}`,
         );
       }
-    } else if (!r.lines.some((l) => l.includes("committed nonce")))
-      check(sc, "runner opened a duel", false, r.lines.slice(-5).join(" | "));
+    } else check(sc, "runner opened a duel", false, r.lines.slice(-5).join(" | ")); // never a silent pass
   }
 
   // ---- scenario 5: keyless agents driven by the keeper (deploy 18) --------------------------------------
