@@ -172,7 +172,8 @@ onChain("intent bytes and tee text match the deployed arena contract", async () 
 onChain("commit and consent bytes match the deployed arena contract", async () => {
   const { ARENA, arenaView } = await import("./chain.ts");
   const c = commitment(fixture, SALT);
-  const onCommit = await arenaView("commit_message", { duel_id: "7", commitment: b64.enc(c) });
+  // seen: null is the v1 message on 17.1 and an ignored field on 17
+  const onCommit = await arenaView("commit_message", { duel_id: "7", commitment: b64.enc(c), seen: null });
   assert.equal(asHex(onCommit), hex(commitMessage(ARENA, "7", c)));
   const onConsent = await arenaView("consent_message", {
     a: PK_A,
