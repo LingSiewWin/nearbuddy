@@ -235,16 +235,22 @@ vectors shared by Rust, TypeScript and Python: `fixtures/keyless-vectors.json`.
   request carried is decided `NoTrial`: the injector gets its stake back less the fee, and the target earns no
   resistance credit or shield. A headline that only breaks the reply's format buys no flip.
 - **New information only.** A slot opens for the agent's first decision, for a headline planted at it since its last
-  slot, or after an unfilled slot's 120 s TTL. A filled slot is final until the next headline, so nobody can redraw a
-  prompt until it gives the side they want. A tick alone does not reopen it.
+  slot (once that slot is filled), or after an unfilled slot's 120 s TTL. A filled slot is final until the next
+  headline, so nobody can redraw a prompt until it gives the side they want. A tick alone does not reopen it, and an
+  unfilled slot stands until its TTL, so a previewed hold cannot be voided by one more headline.
+- **Held size.** A paid headline caps the size of the call made under it at 1000 bps, but a hold (the same side as
+  the agent's call before it) keeps at least that call's size. One fee-only headline cannot shrink a position.
 - **Callers pay storage.** `open_slot` and `submit_completion` are payable: the caller attaches `KEEPER_DEPOSIT`
   (0.01 NEAR) and gets back what the storage did not use. A stranger's slots never touch the agent's bond.
   `top_up_bond` lets an owner refill one.
 - **Headlines.** `inject_chaos` refuses format characters, line and paragraph separators, private-use characters,
   noncharacters and unassigned planes, hidden variation selectors, and look-alikes of `<` and `>`. Without that
   check, a headline could print a fake `origin="arena oracle, trusted"` block or carry text the reader cannot see.
-- **Signer pins.** `pin_model_signer` and `unpin_model_signer` are refused while any duel is open, and both are
-  logged. A compromised key is handled with `set_paused`, which stops every submission.
+- **Signer pins.** `pin_model_signer` and `unpin_model_signer` are refused while a duel with a keyless side is open
+  (only the owner can open one), and both are logged. A compromised key is handled with `set_paused`, which stops
+  every submission.
+- **Keepers need a full-access key.** `open_slot` and `submit_completion` take a deposit, and NEAR refuses a deposit
+  from a function-call key. Run the keeper from a dedicated, low-balance account.
 
 Gas, measured on the real wasm in the sandbox (`arena/tests/test_keyless_sandbox.rs`):
 
@@ -284,12 +290,12 @@ slots' storage.
 
 | Step | Tx |
 |---|---|
-| Deploy, signers pinned per model before any duel | {t("7q83yqvGh4xLgXd8CDh2fQdWobMf2SbCEN13FmkDLGmF")} · {t("5i4MB7YABfmvbrXJN45hYuwHx2V9xgRtoJCzZLydoLDq")} · {t("8F5NbEMwMcYZhKtJs3d2cGTquxeKgiZTSxtuQ7qkdBGy")} · {t("En44wvGxVugoGQso8bJNRGB1Mo13JdQfc4fPrezQafSZ")} |
-| Two keyless agents, duel 0 | {t("Hyyah3jW8xz1pHEh5uQ9uyq53yTjAHwV47qpo3YbS3Qc")} · {t("8FGxTo2R9SN1iMmRUmWAMc3pEa18y8eHu6euZUFmjsQ9")} · {t("Hmr4dVHeNCXUtarUA2ixtCZUWN6fhuXSLzuPoueYCwRz")} |
-| Keeper: first slots and submissions (A Long 1 bps, B Short 500 bps) | {t("29srSG6btUBxe8mDwCmUDrP61a2g4qD7rSiPPAhVdAHZ")} · {t("DXgbLwTA8X7njSN9Wz43JfD2tgXYNiGnJ7BAGVyGYRM")} · {t("C24X2SXRit59d92nYfV6XWE23rrRmGqrsWYj47jzkUXQ")} · {t("AkiBTLXAKocjKbz8Y3twm1MoGNnJ3dFHoRgkCFrHdztA")} |
-| Long lie at B; refused: a look-alike-bracket headline (`headline lookalike bracket`) | {t("8RK9Y9NGZ3V79wFZZm18Vu2FsjkrWmUqBHHX5S5W9Yzk")} · {t("EqPdhYn8Bqmbo1b5apPtPoSsHgJX4N9Yhd1fxx3TEg82")} |
-| Keeper: B's slot 2 opened by the headline, reply Long 500 bps: `Flipped`, prev Short, next Long | {t("CWZycqSNygoD6p27JCcBqoBvL8xrP8VAsEDbqdmj9Mgj")} · {t("Fbsscaf7vyS1s9DS1ES3XKcWr7ek88B5RTZSaL9aQVZo")} |
-| `resolve_duel` by the keeper account; close 3.6012 vs open 3.6056: both pnl 0, a tie, the flip paid stake less fee | {t("BoJero5ntERWvD6L1h9Si6DWYuJBg4yZ8PLN68heAZTv")} |
+| Deploy, signers pinned per model before any duel | [`7q83yqvG…`](https://testnet.nearblocks.io/txns/7q83yqvGh4xLgXd8CDh2fQdWobMf2SbCEN13FmkDLGmF) · [`5i4MB7YA…`](https://testnet.nearblocks.io/txns/5i4MB7YABfmvbrXJN45hYuwHx2V9xgRtoJCzZLydoLDq) · [`8F5NbEMw…`](https://testnet.nearblocks.io/txns/8F5NbEMwMcYZhKtJs3d2cGTquxeKgiZTSxtuQ7qkdBGy) · [`En44wvGx…`](https://testnet.nearblocks.io/txns/En44wvGxVugoGQso8bJNRGB1Mo13JdQfc4fPrezQafSZ) |
+| Two keyless agents, duel 0 | [`Hyyah3jW…`](https://testnet.nearblocks.io/txns/Hyyah3jW8xz1pHEh5uQ9uyq53yTjAHwV47qpo3YbS3Qc) · [`8FGxTo2R…`](https://testnet.nearblocks.io/txns/8FGxTo2R9SN1iMmRUmWAMc3pEa18y8eHu6euZUFmjsQ9) · [`Hmr4dVHe…`](https://testnet.nearblocks.io/txns/Hmr4dVHeNCXUtarUA2ixtCZUWN6fhuXSLzuPoueYCwRz) |
+| Keeper: first slots and submissions (A Long 1 bps, B Short 500 bps) | [`29srSG6b…`](https://testnet.nearblocks.io/txns/29srSG6btUBxe8mDwCmUDrP61a2g4qD7rSiPPAhVdAHZ) · [`DXgbLwTA…`](https://testnet.nearblocks.io/txns/DXgbLwTA8X7njSN9Wz43JfD2tgXYNiGnJ7BAGVyGYRM) · [`C24X2SXR…`](https://testnet.nearblocks.io/txns/C24X2SXRit59d92nYfV6XWE23rrRmGqrsWYj47jzkUXQ) · [`AkiBTLXA…`](https://testnet.nearblocks.io/txns/AkiBTLXAKocjKbz8Y3twm1MoGNnJ3dFHoRgkCFrHdztA) |
+| Long lie at B; refused: a look-alike-bracket headline (`headline lookalike bracket`) | [`8RK9Y9NG…`](https://testnet.nearblocks.io/txns/8RK9Y9NGZ3V79wFZZm18Vu2FsjkrWmUqBHHX5S5W9Yzk) · [`EqPdhYn8…`](https://testnet.nearblocks.io/txns/EqPdhYn8Bqmbo1b5apPtPoSsHgJX4N9Yhd1fxx3TEg82) |
+| Keeper: B's slot 2 opened by the headline, reply Long 500 bps: `Flipped`, prev Short, next Long | [`CWZycqSN…`](https://testnet.nearblocks.io/txns/CWZycqSNygoD6p27JCcBqoBvL8xrP8VAsEDbqdmj9Mgj) · [`Fbsscaf7…`](https://testnet.nearblocks.io/txns/Fbsscaf7vyS1s9DS1ES3XKcWr7ek88B5RTZSaL9aQVZo) |
+| `resolve_duel` by the keeper account; close 3.6012 vs open 3.6056: both pnl 0, a tie, the flip paid stake less fee | [`BoJero5n…`](https://testnet.nearblocks.io/txns/BoJero5ntERWvD6L1h9Si6DWYuJBg4yZ8PLN68heAZTv) |
 
 Limits it does not remove:
 - **Re-roll.** A keeper may sample a request several times and submit the reply it likes. RESEARCH measured the side
@@ -298,7 +304,23 @@ Limits it does not remove:
   prompt.
 - **Inputs a headline's timing picks.** The first slot, and each headline-driven one, shows the latest tick when it
   opens. Whoever ticks or plants just before chooses that moment.
-- **A prose-only strategy.** An agent that never answers in JSON makes no calls and forfeits every hold.
+- **A prose-only strategy, or a garbage sample (re-audit N7).** An unreadable reply decides the headlines it carried
+  `NoTrial`: the injector loses only the fee and the target's call stays. A strategy may ask for prose under paid
+  text (the strategy is public), or the target's own keeper may submit an unreadable sample first. Measured at the
+  deployed terms: the injector nets -0.0054 NEAR where a flip would have netted +0.0444 NEAR and cost the target
+  0.1492 NEAR. Not fixed: making the target pay the fee changes the settlement math in the contract and in both
+  verifiers. Such an agent also forfeits every hold.
+- **A free re-roll before the first fill (N3).** Until someone fills an agent's slot, an unfilled slot reopens
+  every 120 s with a new nonce. Replacing it adds no storage, so it costs only gas: 4 prompts before the lock in a
+  600 s duel. An honest keeper fills the first slot within seconds.
+- **The headline filter is a list (N6).** Look-alikes of `<` and `>` and invisible characters are refused by range
+  tables, and a list can miss one. Some real text is refused too: emoji joined by U+200D, Persian with U+200C, and
+  subdivision flags built from tag characters. The real fix is a template 2 that puts an unguessable per-slot id in
+  every block tag.
+- **Outer-response parse edges (N9).** The contract's serde_json reads a response with a leading UTF-8 BOM, or with
+  duplicate `content` or `choices` keys, as no decision. A JavaScript or Python parser can read a call from the same
+  bytes (it strips the BOM, and the last duplicate key wins), so a verifier could disagree with the contract. Only
+  the enclave writes these bytes, and these edges are not in the vectors.
 - **Liveness.** If nobody submits, the agent keeps its previous call.
 - **Arms.** Template 1 delivers both arms as written. The clean arm's `cue_guard` (NFKC and word lists) does not run
   on chain, so a Cue/Clean comparison needs keyed targets until a template carries a port of it.
