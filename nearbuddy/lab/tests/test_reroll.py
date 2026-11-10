@@ -1,6 +1,6 @@
 import json
 
-from keyless.reroll import body_for, decision, p_all, p_any, p_both
+from reroll.reroll import body_for, decision, p_all, p_any, p_both
 
 PROMPT = {"request_body": '{"model":"m","messages":[],"max_tokens":600,"stream":false}'}
 

@@ -2,11 +2,11 @@
 other side? Real signed duel requests from the arena dataset are replayed byte for byte (`default`), with
 `"temperature": 0` (`t0`), and with `"seed"` (`seed`, `t0_seed`) when the API accepts it. See README.md.
 
-    uv run --locked python keyless/reroll.py select --dataset <decisions.jsonl>   # free: data/prompts.jsonl
-    uv run --locked python keyless/reroll.py run --phase pilot --n 1 --limit 5    # paid: price one call per model
-    uv run --locked python keyless/reroll.py run --n 8 --conditions default,t0,t0_seed
-    uv run --locked python keyless/reroll.py sigs     # free: enclave signatures for one Long and one Short reply
-    uv run --locked python keyless/reroll.py report   # free: results/summary.json and the markdown tables
+    uv run --locked python reroll/reroll.py select --dataset <decisions.jsonl>   # free: data/prompts.jsonl
+    uv run --locked python reroll/reroll.py run --phase pilot --n 1 --limit 5    # paid: price one call per model
+    uv run --locked python reroll/reroll.py run --n 8 --conditions default,t0,t0_seed
+    uv run --locked python reroll/reroll.py sigs     # free: enclave signatures for one Long and one Short reply
+    uv run --locked python reroll/reroll.py report   # free: results/summary.json and the markdown tables
 
 Every paid call goes through harness.Budget: logged to spend.jsonl, refused when its worst case would pass --cap.
 Calls are appended to results/calls.jsonl as they finish, so an interrupted run resumes where it stopped.

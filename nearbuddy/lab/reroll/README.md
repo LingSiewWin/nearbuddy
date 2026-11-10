@@ -1,4 +1,4 @@
-# lab/keyless: can a keeper re-roll a keyless agent's decision?
+# lab/reroll: can a keeper re-roll a keyless agent's decision?
 
 In a keyless agent the contract builds the chat request bytes and accepts a NEAR AI Cloud completion only with the
 model enclave's signature over `model_id:sha256(request):sha256(response)`. Anyone may submit that completion (a
@@ -14,11 +14,11 @@ every reply is enclave-signed against the bytes we sent.
 ```sh
 cd nearbuddy/lab
 uv sync --locked
-uv run --locked python keyless/reroll.py select --dataset ../agents/data/decisions.jsonl  # free; writes data/prompts.jsonl
-uv run --locked python keyless/reroll.py run --phase pilot --n 1 --limit 5 --conditions t0_seed  # 5 paid calls
-uv run --locked python keyless/reroll.py run --n 8 --conditions default,t0,seed,t0_seed --cap 3  # 1440 paid calls
-uv run --locked python keyless/reroll.py sigs    # free: one Long and one Short signature per split prompt
-uv run --locked python keyless/reroll.py report  # free: results/summary.json and the table below
+uv run --locked python reroll/reroll.py select --dataset ../agents/data/decisions.jsonl  # free; writes data/prompts.jsonl
+uv run --locked python reroll/reroll.py run --phase pilot --n 1 --limit 5 --conditions t0_seed  # 5 paid calls
+uv run --locked python reroll/reroll.py run --n 8 --conditions default,t0,seed,t0_seed --cap 3  # 1440 paid calls
+uv run --locked python reroll/reroll.py sigs    # free: one Long and one Short signature per split prompt
+uv run --locked python reroll/reroll.py report  # free: results/summary.json and the table below
 ```
 
 - `select` needs the arena dataset (`agents/data/`, gitignored). The 45 prompts it chose are committed in
