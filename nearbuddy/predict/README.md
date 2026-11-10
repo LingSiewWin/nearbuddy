@@ -90,6 +90,21 @@ The events are `EVENT_JSON` with the standard `nearbuddy-predict` 1.0.0. They ar
 - `on_predict` refuses and refunds when the contract's free balance could not store the call, instead of keeping a deposit
   with no record.
 
+## Gas
+
+Measured on testnet: `nb-predict-v2-1111.testnet` against `arena.nearbuddy-solver.testnet`, duel 568, 2 injections. The
+arena still runs deploy 17, so every chaos call also pays for a failed `chaos_open`. Each figure is the gas burnt by the
+whole transaction, receipts included.
+
+| Call | Burnt | Attach |
+|---|---|---|
+| `predict` on a chaos market (`chaos_open` + `get_chaos`) | 8.8 TGas | 60 TGas |
+| `predict` on the duel market (`get_duel` + `duel_lock`) | 9.5 TGas | 60 TGas |
+| `predict` refused (deposit refunded) | 9.1 to 9.9 TGas | 60 TGas |
+| `settle`, scoring 2 or 4 calls | 15.5 to 16.0 TGas | 200 TGas |
+| `void_stale` with nothing stale | 7.3 TGas | 50 TGas |
+| `claim` | 3.3 to 3.7 TGas | 30 TGas |
+
 ## Trust
 
 The contract has no owner and no setters. The arena account is fixed at `new`.
