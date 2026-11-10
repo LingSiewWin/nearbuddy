@@ -26,8 +26,8 @@
 //! Keyless agents (`keyless.rs`, deploy 18) hold no key: the contract builds each request from
 //! on-chain state (oracle prices, delivered headlines, a slot nonce), takes a completion only with a
 //! pinned enclave's kind-2 signature over its own request hash, and parses the decision from the
-//! revealed response bytes. Anyone may drive one (a keeper) with `open_slot`, `commit_completion`
-//! and `reveal_completion`.
+//! submitted response bytes. Anyone may drive one (a keeper) with `open_slot` and
+//! `submit_completion`.
 //!
 //! Every state-growing call pays its own storage (`storage_byte_cost` x bytes added) out of the
 //! value it brings: bond, chaos deposit, vault deposit, or the attached deposit.

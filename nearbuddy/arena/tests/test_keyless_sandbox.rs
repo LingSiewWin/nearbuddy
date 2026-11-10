@@ -1,8 +1,9 @@
 //! Sandbox run of the real wasm for keyless agents: two are registered, a duel opens, an oracle tick
 //! lands, 31 headlines of 280 bytes (each escaped to its longest) are planted at A, and A's slots run
-//! open -> commit -> reveal with responses from 1 KB to the 24 KB cap, signed by a stand-in enclave
-//! key pinned on the contract. A forged commit and a mismatched reveal are refused; the duel then
-//! resolves through the oracle callback and the slots go. Prints gas per call for the README.
+//! open -> submit with responses from 1 KB to the 24 KB cap, signed by a stand-in enclave key pinned
+//! to the agents' model. A submission signed over another request and a second submission to a
+//! filled slot are refused; the duel then resolves through the oracle callback and the slots go.
+//! Prints gas per call for the README.
 //!   NEAR_SANDBOX_BIN_PATH=... cargo test --test test_keyless_sandbox -- --ignored --nocapture
 use ed25519_dalek::{Signer, SigningKey};
 use near_api::{AccountId, NearGas, NearToken};
@@ -112,8 +113,8 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
     let tee = SigningKey::from_bytes(&[7u8; 32]);
     call("set_oracle", json!({"oracle_account": oracle.account_id(), "oracle_deposit": NearToken::from_millinear(20).as_yoctonear().to_string(), "min_duel_s": 60, "intent_lock_s": 30}), &owner, one).await?.assert_success();
     call(
-        "add_tee_signer",
-        json!({"signer": b64(&tee.verifying_key().to_bytes()), "label": "sandbox enclave"}),
+        "pin_model_signer",
+        json!({"signer": b64(&tee.verifying_key().to_bytes()), "model_id": MODEL}),
         &owner,
         one,
     )
@@ -178,13 +179,6 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
         let s = r.json::<Value>()?;
         testresult::TestResult::Ok((s, gas_of(&r)))
     };
-    let bond: String = view("keyless_commit_bond", json!({"duel_id": duel.to_string()}))
-        .await?
-        .data
-        .as_str()
-        .unwrap()
-        .into();
-    let bond = NearToken::from_yoctonear(bond.parse()?);
     let cycle = |agent: String, res: Vec<u8>, label: String| async move {
         let (s, g_open) = slot(agent.clone()).await?;
         let req = BASE64_STANDARD.decode(
@@ -203,18 +197,9 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
         let sig = tee
             .sign(&tee_text(2, MODEL, &req_hash, &res_hash))
             .to_bytes();
-        let r = call("commit_completion", json!({"duel_id": duel.to_string(), "agent": agent, "seq": s["seq"], "response_hash": b64(&res_hash), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&sig)}), keeper, bond).await?.assert_success();
-        let g_commit = gas_of(&r);
-        let r = call(
-            "reveal_completion",
-            json!({"duel_id": duel.to_string(), "agent": agent, "response": b64(&res)}),
-            keeper,
-            zero,
-        )
-        .await?
-        .assert_success();
+        let r = call("submit_completion", json!({"duel_id": duel.to_string(), "agent": agent, "seq": s["seq"], "response": b64(&res), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&sig)}), keeper, zero).await?.assert_success();
         println!(
-            "GAS {label}: request {} B, open_slot {g_open:.2}, commit_completion {g_commit:.2}, reveal_completion {:.2} TGas",
+            "GAS {label}: request {} B, open_slot {g_open:.2}, submit_completion {:.2} TGas",
             req.len(),
             gas_of(&r)
         );
@@ -270,29 +255,29 @@ async fn keyless_slots_gas_by_response_size() -> testresult::TestResult<()> {
         "the decision after all 31 headlines judged every one"
     );
 
-    // refusals: a commit signed over another request; a reveal with other bytes
+    // refusals: a submission signed over another request; a second one to the filled slot
     let (s, _) = slot(a.clone()).await?;
     let res = response(1_066, content);
     let res_hash = Sha256::digest(&res).to_vec();
     let forged = tee
         .sign(&tee_text(2, MODEL, &[9u8; 32], &res_hash))
         .to_bytes();
-    call("commit_completion", json!({"duel_id": duel.to_string(), "agent": a, "seq": s["seq"], "response_hash": b64(&res_hash), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&forged)}), keeper, bond).await?.assert_failure();
+    let submit = |sig: Vec<u8>, res: Vec<u8>| {
+        call(
+            "submit_completion",
+            json!({"duel_id": duel.to_string(), "agent": a, "seq": s["seq"], "response": b64(&res), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&sig)}),
+            keeper,
+            zero,
+        )
+    };
+    submit(forged.to_vec(), res.clone()).await?.assert_failure();
     let req_hash = BASE64_STANDARD.decode(s["request_hash"].as_str().unwrap())?;
     let sig = tee
         .sign(&tee_text(2, MODEL, &req_hash, &res_hash))
         .to_bytes();
-    call("commit_completion", json!({"duel_id": duel.to_string(), "agent": a, "seq": s["seq"], "response_hash": b64(&res_hash), "signer": b64(&tee.verifying_key().to_bytes()), "signature": b64(&sig)}), keeper, bond).await?.assert_success();
-    call("reveal_completion", json!({"duel_id": duel.to_string(), "agent": a, "response": b64(&response(1_067, content))}), keeper, zero).await?.assert_failure();
-    println!("forged commit and mismatched reveal: refused");
-    call(
-        "reveal_completion",
-        json!({"duel_id": duel.to_string(), "agent": a, "response": b64(&res)}),
-        keeper,
-        zero,
-    )
-    .await?
-    .assert_success();
+    submit(sig.to_vec(), res.clone()).await?.assert_success();
+    submit(sig.to_vec(), res.clone()).await?.assert_failure();
+    println!("forged submission and a second submission to a filled slot: refused");
 
     // resolve: A long 2500 bps on a +0.5 % close wins
     loop {

@@ -390,7 +390,7 @@ impl Contract {
     /// The duel-side checks and effects of every accepted decision, keyed or keyless. `before` is
     /// the storage usage the decision's storage is measured from. `sig` is the agent key's
     /// signature over the intent, checked after the nonce checks; `None` only for a keyless
-    /// decision, whose enclave signature `commit_completion` checked. `committed_at` is set for a
+    /// decision, whose enclave signature `submit_completion` checked. `committed_at` is set for a
     /// reveal (see `accept_intent`). `seen` (keyless): the decision was made after exactly the
     /// first `seen` records of `get_chaos(duel)` (see `observe_decision`).
     pub(crate) fn record_intent(

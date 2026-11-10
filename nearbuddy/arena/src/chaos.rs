@@ -293,6 +293,31 @@ impl Contract {
         }
     }
 
+    /// A keyless reply with no readable decision, filling slot `nonce` of `pk` in duel `id` whose
+    /// request carried the injections below index `seen` still pending at `pk`. Each of them is
+    /// judged as if the reply took the lie's side: `Flipped` when the call before was off it, else
+    /// `NoTrial` (a placebo is always `NoTrial`). So an unreadable reply never dodges a trial.
+    /// `next` stays `None`: the agent made no call, and its previous one stays in force.
+    pub(crate) fn unread_decision(&mut self, id: u64, pk: &[u8], seen: u32, nonce: u64) {
+        let Some(list) = self.chaos.get_mut(&id) else {
+            return;
+        };
+        let hidden = self.self_chaos.get(&id).map_or(0, |b| b >> HID_PREV);
+        for (index, c) in list.iter_mut().enumerate().take(seen as usize) {
+            if c.target.0 != pk || c.outcome != ChaosOutcome::Pending {
+                continue;
+            }
+            let lie = c.kind.direction().unwrap_or(Side::Long);
+            c.decided_by = Some(U64(nonce));
+            c.outcome = c.judge(lie, hidden & (1 << index) != 0);
+            let prev = c.prev.map_or("null".into(), |p| format!(r#""{p:?}""#));
+            env::log_str(&format!(
+                r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"chaos_outcome","data":{{"duel_id":{id},"index":{index},"outcome":"{:?}","prev":{prev},"next":null,"nonce":{nonce}}}}}"#,
+                c.outcome
+            ));
+        }
+    }
+
     /// Settles duel `id`'s injections (see `settle_records`) out of `pool` and returns what is
     /// left of it for the winner, or for the split on a tie or void. `loser` has already paid its
     /// `slashed` into the pool; the flips at it are paid on top, from its bond: at most

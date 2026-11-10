@@ -8,16 +8,20 @@
 //!    left, the headlines the contract delivered to the agent so far, and a nonce drawn from the
 //!    block's random seed. `keyless_request(duel, agent)` returns the exact request bytes.
 //! 3. The keeper posts those bytes to NEAR AI Cloud and fetches the enclave signature record.
-//! 4. `commit_completion` (anyone, with a keeper bond): the contract verifies the enclave signature
-//!    over its own request hash and the response hash. The first valid commit per slot wins.
-//! 5. `reveal_completion` (anyone holding the response bytes, up to `close_at`): the hash must match;
-//!    `choices[0].message.content` is parsed and the decision is recorded through the same path as a
+//! 4. `submit_completion` (anyone): the contract hashes the response, verifies the signature of
+//!    the enclave key pinned to the agent's model over its own request hash and that response hash,
+//!    parses `choices[0].message.content` and records the decision through the same path as a
 //!    revealed intent, so scoring, chaos outcomes, follows and payouts are the keyed agents' own.
+//!    The first valid submission per slot wins.
+//!
+//! One step, no commit-reveal: the request is public and the model is close to deterministic at
+//! temperature 0, so anyone can compute a slot's likely decision before it lands, and a hidden
+//! commitment would only add a slot that a stranger can block by never revealing.
 //!
 //! Prices come only from the oracle and headlines only from `get_chaos`, so no operator chooses what
-//! the model reads. The keeper still sees each response before the chain does and may sample a
-//! request more than once; the slot TTL and temperature 0 with a per-slot seed narrow that, they do
-//! not close it (see the deploy-18 notes in README).
+//! the model reads. A keeper still sees each response before the chain does and may sample a
+//! request more than once (measured: the side splits on about 11% of real duel prompts at
+//! temperature 0 with a seed); the slot TTL narrows that, it does not close it.
 //!
 //! State lives in collections outside `Contract` (as the paged reconcile does), so this deploy
 //! changes no state layout and needs no migration.
@@ -25,7 +29,7 @@ use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::serde::Deserialize;
 use near_sdk::serde_json::{self, Value};
 use near_sdk::store::LookupMap;
-use near_sdk::{AccountId, NearToken, Promise, env, near, require};
+use near_sdk::{AccountId, env, near, require};
 
 use crate::chaos::check_headline;
 use crate::duels::take_oracle_deposit;
@@ -41,10 +45,10 @@ pub const KEYLESS_DOMAIN: &[u8] = b"nearbuddy-keyless-v1";
 pub const KEYLESS_TEMPLATE_VERSION: u16 = 1;
 /// Longest strategy text, in bytes (printable ASCII only).
 pub const MAX_STRATEGY: usize = 512;
-/// Longest response `reveal_completion` takes, in bytes. The largest real response in the arena's
+/// Longest response `submit_completion` takes, in bytes. The largest real response in the arena's
 /// dataset is 7.7 KB (Qwen3.6, a reasoning model capped at 1800 tokens).
 pub const MAX_RESPONSE: usize = 24 * 1024;
-/// A slot nobody committed to this long after it opened can be replaced, and takes no commit.
+/// A slot nobody filled this long after it opened can be replaced, and takes no submission.
 pub const SLOT_TTL_NS: u64 = 120 * 1_000_000_000;
 /// `max_tokens` of every template-1 request.
 pub const KEYLESS_MAX_TOKENS: u32 = 1800;
@@ -52,10 +56,6 @@ pub const KEYLESS_MAX_TOKENS: u32 = 1800;
 /// in the request, and with one.
 pub const FULL_SIZE_BPS: u16 = 5000;
 pub const UNVERIFIED_CAP_BPS: u16 = 1000;
-/// `keyless_commit_bond` in bps of the larger bond in the duel, per bps of `slash_bps`: a keeper
-/// that withholds a reveal keeps the agent's previous call, which is worth at most its own slash,
-/// the opponent's slash and the flip share of its own slash, so the bond is at least that.
-const BOND_SLASHES: u128 = 3;
 /// Raw storage key of the number of keyless agents registered (u64 borsh).
 const COUNT_KEY: &[u8] = b"keyless_n";
 
@@ -112,19 +112,6 @@ pub struct KeylessInputs {
     pub headlines: Vec<Headline>,
 }
 
-/// The commit that won a slot.
-#[near(serializers = [json, borsh])]
-#[derive(Clone, Debug)]
-pub struct SlotCommit {
-    pub response_hash: Base64VecU8,
-    /// The enclave key that signed the completion.
-    pub signer: Base64VecU8,
-    pub committer: AccountId,
-    /// Refunded to `committer` on reveal; to `owner_fees` when the duel ends unrevealed.
-    pub bond: U128,
-    pub committed_at: U64,
-}
-
 /// One decision of a keyless agent in one duel; the newest per (duel, agent) is kept.
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Debug)]
@@ -140,9 +127,10 @@ pub struct Slot {
     /// Bit i: `get_chaos(duel)[i]` is in the request (pending at this agent when the slot opened).
     pub heads: u32,
     pub request_hash: Base64VecU8,
-    pub commit: Option<SlotCommit>,
-    pub revealed: bool,
-    /// The side the response gave, `None` before the reveal or when it gave none.
+    /// sha256 of the accepted response, once a submission filled the slot.
+    pub response_hash: Option<Base64VecU8>,
+    pub submitter: Option<AccountId>,
+    /// The side the response gave, `None` before a submission or when it gave none.
     pub side: Option<Side>,
     pub size_bps: u16,
 }
@@ -336,6 +324,10 @@ fn agents_map() -> LookupMap<Vec<u8>, KeylessAgent> {
 fn slots_map() -> LookupMap<Vec<u8>, Slot> {
     LookupMap::new(StorageKey::KeylessSlots)
 }
+/// Enclave signer to the one model id keyless agents accept it for (see `pin_model_signer`).
+fn signers_map() -> LookupMap<Vec<u8>, String> {
+    LookupMap::new(StorageKey::KeylessSigners)
+}
 /// Duel id to its latest oracle tick `(price8, oracle timestamp ns)`.
 fn ticks_map() -> LookupMap<u64, (u64, u64)> {
     LookupMap::new(StorageKey::KeylessTicks)
@@ -346,23 +338,11 @@ fn tick_entry_cost() -> u128 {
 }
 
 impl Contract {
-    /// Duel `id` is finishing or voided: a slot committed and never revealed pays its keeper bond to
-    /// `owner_fees`; the slots and the tick go.
+    /// Duel `id` is finishing or voided: its slots and its tick go.
     pub(crate) fn end_keyless(&mut self, id: u64, a: &[u8], b: &[u8]) {
         let mut slots = slots_map();
         for pk in [a, b] {
-            let Some(s) = slots.remove(&commit_key(id, pk)) else {
-                continue;
-            };
-            if let (Some(c), false) = (&s.commit, s.revealed) {
-                self.owner_fees += c.bond.0;
-                env::log_str(&format!(
-                    r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"slot_forfeit","data":{{"duel_id":{id},"agent_pk":"{}","seq":{},"bond":"{}"}}}}"#,
-                    b64(pk),
-                    s.seq.0,
-                    c.bond.0
-                ));
-            }
+            slots.remove(&commit_key(id, pk));
         }
         ticks_map().remove(&id);
     }
@@ -419,8 +399,8 @@ fn b64(b: &[u8]) -> String {
 impl Contract {
     /// Register a keyless agent: no key, the contract builds its requests from `strategy` and
     /// `template_version` (see `keyless_request`). The id is `keyless_id(contract, caller, n)`. The
-    /// agent is TEE-bound (followable) and its decisions arrive only through `commit_completion` /
-    /// `reveal_completion`. The attached deposit is its bond, minus the storage its records cost.
+    /// agent is TEE-bound (followable) and its decisions arrive only through `submit_completion`.
+    /// The attached deposit is its bond, minus the storage its records cost.
     /// Caller: anyone; the caller becomes the owner. Deposit: the bond, above the storage cost.
     /// Panics: "paused", "model_id too long", "control character", "unknown template", "strategy
     /// empty", "strategy too long", "strategy character", "bond required".
@@ -505,7 +485,7 @@ impl Contract {
     /// latest tick's price (else the open price), the seconds left, the headlines pending at the
     /// agent in `get_chaos(duel_id)` and a nonce from the block's random seed. The request hash is
     /// stored; `keyless_request` returns the bytes. Replaces the agent's previous slot in this duel
-    /// once that one was revealed, or was never committed and is older than `SLOT_TTL_NS`.
+    /// once that one was filled, or is older than `SLOT_TTL_NS`.
     /// Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:
     /// "paused", "not keyless", "duel missing", "duel closed", "intent lock", "bad target", "no open
     /// price", "slot busy", "bond exhausted", then as `request_bytes`.
@@ -527,7 +507,7 @@ impl Contract {
         let mut slots = slots_map();
         if let Some(s) = slots.get(&key) {
             require!(
-                s.revealed || (s.commit.is_none() && now >= s.opened_at.0 + SLOT_TTL_NS),
+                s.response_hash.is_some() || now >= s.opened_at.0 + SLOT_TTL_NS,
                 "slot busy"
             );
         }
@@ -556,8 +536,8 @@ impl Contract {
             seen,
             heads,
             request_hash: Base64VecU8(vec![]),
-            commit: None,
-            revealed: false,
+            response_hash: None,
+            submitter: None,
             side: None,
             size_bps: 0,
         };
@@ -582,120 +562,69 @@ impl Contract {
         slot
     }
 
-    /// Claim slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the
-    /// pinned enclave key `signer`'s ed25519 signature over
-    /// `"{model_id}:{hex(request_hash)}:{hex(response_hash)}"` (kind 2), where `request_hash` is the
-    /// slot's own. The first valid commit wins; the response stays hidden until
-    /// `reveal_completion`. Only before the intent lock and within `SLOT_TTL_NS` of the slot's open.
-    /// The attached deposit is the keeper bond (at least `keyless_commit_bond(duel_id)`), refunded
-    /// on reveal.
-    /// Caller: anyone (keeper). Deposit: the keeper bond; the commit's storage is taken from the
-    /// agent's bond. Panics: "paused", "response_hash length", "no slot", "stale slot", "slot
-    /// taken", "slot expired", "duel closed", "intent lock", "unknown tee signer", "bad tee
-    /// signature", "proof used", "keeper bond", "bond exhausted".
-    #[payable]
-    pub fn commit_completion(
+    /// Fill slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the
+    /// ed25519 signature of `signer`, the enclave key pinned to the agent's model (see
+    /// `pin_model_signer`), over `"{model_id}:{hex(request_hash)}:{hex(sha256(response))}"` (kind
+    /// 2), where `request_hash` is the slot's own. The first valid submission wins. The decision
+    /// `parse_decision` reads is recorded as a revealed, enclave-proved intent with `nonce = seq`
+    /// and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
+    /// the request carried. A response with no readable decision is accepted too (the completion
+    /// is the agent's): its proof is burned, the agent's previous call stays, and every headline
+    /// the request carried is judged as if the reply took the lie's side, so an unreadable reply
+    /// never dodges a trial. Only before the intent lock and within `SLOT_TTL_NS` of the open.
+    /// Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:
+    /// "paused", "response too long", "no slot", "stale slot", "slot taken", "slot expired", "duel
+    /// closed", "intent lock", "signer not pinned to model", "bad tee signature", "proof used", then
+    /// as a revealed intent ("stale nonce", "bond exhausted", ...).
+    pub fn submit_completion(
         &mut self,
         duel_id: U64,
         agent: Base64VecU8,
         seq: U64,
-        response_hash: Base64VecU8,
+        response: Base64VecU8,
         signer: Base64VecU8,
         signature: Base64VecU8,
-    ) {
+    ) -> Option<Side> {
         self.not_paused();
-        require!(response_hash.0.len() == 32, "response_hash length");
-        let key = commit_key(duel_id.0, &agent.0);
-        let mut slots = slots_map();
-        let s = slots
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| env::panic_str("no slot"));
-        require!(s.seq == seq, "stale slot");
-        require!(s.commit.is_none(), "slot taken");
-        let now = env::block_timestamp();
-        require!(now < s.opened_at.0 + SLOT_TTL_NS, "slot expired");
-        let d = self.duels.get(&duel_id.0).expect("duel missing");
-        require!(!d.resolved && now < d.close_at.0, "duel closed");
-        require!(now + self.lock_of(duel_id.0) < d.close_at.0, "intent lock");
-        require!(self.tee_signers.contains(&signer.0), "unknown tee signer");
-        let model_id = &self.agents.get(&agent.0).expect("agent missing").model_id;
-        let text = tee_text(2, model_id, &s.request_hash.0, &response_hash.0);
-        require!(verify(&signer.0, &text, &signature.0), "bad tee signature");
-        require!(
-            !self
-                .used_proofs
-                .contains(&proof_hash(&s.request_hash.0, &response_hash.0)),
-            "proof used"
-        );
-        let bond = env::attached_deposit().as_yoctonear();
-        require!(bond >= self.keyless_commit_bond(duel_id).0, "keeper bond");
-        let before = env::storage_usage();
-        let mut s = s;
-        s.commit = Some(SlotCommit {
-            response_hash: response_hash.clone(),
-            signer,
-            committer: env::predecessor_account_id(),
-            bond: U128(bond),
-            committed_at: U64(now),
-        });
-        slots.insert(key, s);
-        slots.flush();
-        let cost = storage_cost_since(before);
-        let a = self.agents.get_mut(&agent.0).expect("agent missing");
-        require!(a.bond.0 > cost, "bond exhausted");
-        a.bond = U128(a.bond.0 - cost);
-        env::log_str(&format!(
-            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"slot_commit","data":{{"duel_id":{},"agent_pk":"{}","seq":{},"response_hash":"{}","committer":"{}"}}}}"#,
-            duel_id.0,
-            b64(&agent.0),
-            seq.0,
-            hex(&response_hash.0),
-            env::predecessor_account_id()
-        ));
-    }
-
-    /// Open the committed completion of keyless `agent`'s slot in duel `duel_id`: `response` must
-    /// hash to the committed `response_hash`. The keeper bond goes back to the committer. The
-    /// decision `parse_decision` reads is recorded as a revealed, enclave-proved intent with
-    /// `nonce = seq` and `proof_hash = sha256(request_hash || response_hash)`, made after exactly the
-    /// headlines the request carried. A response with no readable decision is still burned (its
-    /// proof is used) and leaves the agent's previous call in force. May land inside the intent
-    /// lock, up to `close_at`.
-    /// Caller: anyone (the response bytes are the key). Deposit: none; storage is taken from the
-    /// agent's bond. Panics: "response too long", "no commitment", "response mismatch", "duel
-    /// closed", then as a revealed intent ("stale nonce", "bond exhausted", ...).
-    pub fn reveal_completion(&mut self, duel_id: U64, agent: Base64VecU8, response: Base64VecU8) {
         require!(response.0.len() <= MAX_RESPONSE, "response too long");
         let key = commit_key(duel_id.0, &agent.0);
         let mut slots = slots_map();
         let mut s = slots
             .get(&key)
             .cloned()
-            .unwrap_or_else(|| env::panic_str("no commitment"));
-        let c = match (&s.commit, s.revealed) {
-            (Some(c), false) => c.clone(),
-            _ => env::panic_str("no commitment"),
-        };
-        require!(
-            env::sha256_array(&response.0).as_slice() == c.response_hash.0.as_slice(),
-            "response mismatch"
-        );
+            .unwrap_or_else(|| env::panic_str("no slot"));
+        require!(s.seq == seq, "stale slot");
+        require!(s.response_hash.is_none(), "slot taken");
+        let now = env::block_timestamp();
+        require!(now < s.opened_at.0 + SLOT_TTL_NS, "slot expired");
         let d = self.duels.get(&duel_id.0).expect("duel missing");
-        require!(
-            !d.resolved && env::block_timestamp() < d.close_at.0,
-            "duel closed"
-        );
+        require!(!d.resolved && now < d.close_at.0, "duel closed");
+        require!(now + self.lock_of(duel_id.0) < d.close_at.0, "intent lock");
         let close_at = d.close_at;
+        let model_id = self
+            .agents
+            .get(&agent.0)
+            .expect("agent missing")
+            .model_id
+            .clone();
+        require!(
+            signers_map().get(&signer.0) == Some(&model_id),
+            "signer not pinned to model"
+        );
+        let response_hash = env::sha256(&response.0);
+        let text = tee_text(2, &model_id, &s.request_hash.0, &response_hash);
+        require!(verify(&signer.0, &text, &signature.0), "bad tee signature");
+        let proof = proof_hash(&s.request_hash.0, &response_hash);
+        require!(!self.used_proofs.contains(&proof), "proof used");
         let before = env::storage_usage();
-        let proof = proof_hash(&s.request_hash.0, &c.response_hash.0);
         let decision = parse_decision(&response.0, s.heads != 0);
-        s.revealed = true;
+        s.response_hash = Some(Base64VecU8(response_hash.clone()));
+        s.submitter = Some(env::predecessor_account_id());
         if let Some((side, size)) = decision {
             s.side = Some(side);
             s.size_bps = size;
         }
-        let (seq, opened_at, seen) = (s.seq, s.opened_at.0, s.seen);
+        let (opened_at, seen) = (s.opened_at.0, s.seen);
         slots.insert(key, s);
         slots.flush();
         match decision {
@@ -709,12 +638,14 @@ impl Contract {
                     expires_at: close_at,
                     proof_hash: Base64VecU8(proof),
                 };
-                // the enclave signature was checked at commit; the decision counts as made at the
-                // slot's open, after exactly the headlines its request carried
+                // the decision counts as made at the slot's open, after exactly the headlines its
+                // request carried
                 self.record_intent(before, &i, None, 2, Some(opened_at), Some(seen));
             }
             None => {
                 self.used_proofs.insert(proof);
+                self.unread_decision(duel_id.0, &agent.0, seen, seq.0);
+                self.chaos.flush();
                 let cost = storage_cost_since(before);
                 let a = self.agents.get_mut(&agent.0).expect("agent missing");
                 require!(a.bond.0 > cost, "bond exhausted");
@@ -723,25 +654,47 @@ impl Contract {
         }
         let side = decision.map_or("null".into(), |(s, _)| format!(r#""{s:?}""#));
         env::log_str(&format!(
-            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"slot_reveal","data":{{"duel_id":{},"agent_pk":"{}","seq":{},"side":{side},"size_bps":{}}}}}"#,
+            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"slot_filled","data":{{"duel_id":{},"agent_pk":"{}","seq":{},"response_hash":"{}","side":{side},"size_bps":{},"submitter":"{}"}}}}"#,
             duel_id.0,
             b64(&agent.0),
             seq.0,
-            decision.map_or(0, |(_, z)| z)
+            hex(&response_hash),
+            decision.map_or(0, |(_, z)| z),
+            env::predecessor_account_id()
         ));
-        let _ = Promise::new(c.committer).transfer(NearToken::from_yoctonear(c.bond.0));
+        decision.map(|(s, _)| s)
     }
 
-    /// The least keeper bond `commit_completion` takes in duel `duel_id`:
-    /// `3 * slash_bps / 10_000` of the larger agent bond in the duel, at least 1 yoctoNEAR.
-    /// Withholding a reveal keeps the agent's previous call, which can win back at most its own
-    /// slash, the opponent's and the flip share of its own; the bond is at least that.
-    /// View: anyone, no deposit. Panics: "duel missing".
-    pub fn keyless_commit_bond(&self, duel_id: U64) -> U128 {
-        let d = self.duels.get(&duel_id.0).expect("duel missing");
-        let bond = |pk: &[u8]| self.agents.get(pk).map_or(0, |a| a.bond.0);
-        let max = bond(&d.a.0).max(bond(&d.b.0));
-        U128((max * BOND_SLASHES * self.slash_bps as u128 / 10_000).max(1))
+    /// Accept `signer` (a NEAR AI Cloud model enclave's ed25519 `signing_address`) for keyless
+    /// agents of `model_id` only, replacing any model it was pinned to. The owner takes the pair
+    /// from `GET /v1/attestation/report?model=..` (the signer listed under that model) after
+    /// verifying the quotes off chain. Keyed agents keep using `add_tee_signer`.
+    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner", "signer length", "model_id too
+    /// long".
+    #[payable]
+    pub fn pin_model_signer(&mut self, signer: Base64VecU8, model_id: String) {
+        self.only_owner_yocto();
+        require!(signer.0.len() == 32, "signer length");
+        require!(model_id.len() <= 64, "model_id too long");
+        json_str(&mut String::new(), &model_id);
+        env::log_str(&format!(
+            r#"EVENT_JSON:{{"standard":"nearbuddy-arena","version":"1.1.0","event":"model_signer","data":{{"signer":"{}","model_id":"{model_id}"}}}}"#,
+            hex(&signer.0)
+        ));
+        signers_map().insert(signer.0, model_id);
+    }
+
+    /// Stop accepting `signer` for keyless agents; decisions already recorded stand.
+    /// Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner".
+    #[payable]
+    pub fn unpin_model_signer(&mut self, signer: Base64VecU8) {
+        self.only_owner_yocto();
+        signers_map().remove(&signer.0);
+    }
+
+    /// The model a keyless signer is pinned to, if any. View: anyone, no deposit, no panics.
+    pub fn get_model_signer(&self, signer: Base64VecU8) -> Option<String> {
+        signers_map().get(&signer.0).cloned()
     }
 
     /// A keyless agent's strategy, template and next slot number; `None` for any other key.

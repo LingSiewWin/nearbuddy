@@ -1,5 +1,5 @@
 //! Keyless agents: the request template against `fixtures/keyless-vectors.json`, the response
-//! parse, and the slot lifecycle (`open_slot`, `commit_completion`, `reveal_completion`).
+//! parse, and the slot lifecycle (`open_slot`, `submit_completion`).
 use near_sdk::serde_json::{self, Value, json};
 
 use crate::*;
@@ -383,7 +383,7 @@ fn vectors() -> Value {
     let owner: near_sdk::AccountId = "alice.testnet".parse().unwrap();
     let contract: near_sdk::AccountId = "arena.nearbuddy-solver.testnet".parse().unwrap();
     json!({
-        "_": "Keyless request template vectors for arena (Rust, the source: arena/src/keyless.rs), packages/protocol (TS) and agents (Python). Each `cases[i].inputs` (the contract's KeylessInputs JSON: u64 as decimal strings, nonce base64) builds exactly `request_hex` (the chat-completion body a keeper posts and the enclave hashes). `reject[i].patch` applied to cases[0].inputs must be refused with `error`, the contract's panic message; every builder refuses the same input. `parse[i].response` is a chat-completion response body; `decision` is what reveal_completion records from it (null: no decision). Template 1 delivers every arm as written. A template change bumps template_version and adds cases; it never edits a published case.",
+        "_": "Keyless request template vectors for arena (Rust, the source: arena/src/keyless.rs), packages/protocol (TS) and agents (Python). Each `cases[i].inputs` (the contract's KeylessInputs JSON: u64 as decimal strings, nonce base64) builds exactly `request_hex` (the chat-completion body a keeper posts and the enclave hashes). `reject[i].patch` applied to cases[0].inputs must be refused with `error`, the contract's panic message; every builder refuses the same input. `parse[i].response` is a chat-completion response body; `decision` is what submit_completion records from it (null: no call; every headline the request carried is then judged as if the reply took the lie's side). Template 1 delivers every arm as written. A template change bumps template_version and adds cases; it never edits a published case.",
         "format": 1,
         "template_version": KEYLESS_TEMPLATE_VERSION,
         "constants": {
@@ -520,6 +520,7 @@ const RIVAL: &str = "rival.testnet";
 const SEC: u64 = 1_000_000_000;
 const LONG: &str = r#"{"direction": "long", "size_bps": 2500}"#;
 const SHORT: &str = r#"{"direction": "short"}"#;
+const GARBAGE: &str = "I would rather not say.";
 
 fn b(v: &[u8]) -> Base64VecU8 {
     Base64VecU8(v.to_vec())
@@ -531,7 +532,7 @@ fn sha256(v: &[u8]) -> Vec<u8> {
 }
 
 /// Two keyless agents (OPERATOR's `a`, RIVAL's `b`) in duel `d` with its open price, and the
-/// pinned enclave key (seed 7).
+/// enclave key (seed 7) pinned to their model.
 fn kl_setup() -> (Contract, u64, Vec<u8>, Vec<u8>, SigningKey) {
     kl_setup_until(CLOSE)
 }
@@ -540,7 +541,7 @@ fn kl_setup_until(close: u64) -> (Contract, u64, Vec<u8>, Vec<u8>, SigningKey) {
     let mut c = fresh(1_000);
     let (tee, tee_pk) = key(7);
     ctx(OWNER, 1);
-    c.add_tee_signer(b(&tee_pk), "unit".into());
+    c.pin_model_signer(b(&tee_pk), MODEL_A.into());
     ctx(OPERATOR, BOND);
     let a = c
         .register_keyless(MODEL_A.into(), "Trend follower.".into(), 1)
@@ -557,22 +558,44 @@ fn kl_setup_until(close: u64) -> (Contract, u64, Vec<u8>, Vec<u8>, SigningKey) {
     (c, d, a, bb, tee)
 }
 
-fn sign_completion(tee: &SigningKey, req_hash: &[u8], res: &[u8]) -> (Vec<u8>, Vec<u8>) {
-    let rh = sha256(res);
-    let sig = tee
-        .sign(&tee_text(2, MODEL_A, req_hash, &rh))
+/// `sk`'s kind-2 signature over `model`'s text for `req_hash` and `res`.
+fn sign_as(sk: &SigningKey, model: &str, req_hash: &[u8], res: &[u8]) -> Vec<u8> {
+    sk.sign(&tee_text(2, model, req_hash, &sha256(res)))
         .to_bytes()
-        .to_vec();
-    (rh, sig)
+        .to_vec()
 }
 
-fn commit(c: &mut Contract, d: u64, agent: &[u8], s: &Slot, rh: &[u8], sig: &[u8], at: u64) {
-    let bond = c.keyless_commit_bond(U64(d)).0;
-    ctx_at(KEEPER, bond, at);
-    c.commit_completion(U64(d), b(agent), s.seq, b(rh), b(&key(7).1), b(sig));
+#[allow(clippy::too_many_arguments)]
+fn submit_as(
+    c: &mut Contract,
+    d: u64,
+    agent: &[u8],
+    seq: U64,
+    res: &[u8],
+    signer: &[u8],
+    sig: &[u8],
+    at: u64,
+) -> Option<Side> {
+    ctx_at(KEEPER, 0, at);
+    c.submit_completion(U64(d), b(agent), seq, b(res), b(signer), b(sig))
 }
 
-/// Open, commit and reveal one completion whose content is `content`, all at `at`.
+/// A response with `content`, signed by `tee` for slot `s`, submitted at `at`.
+fn submit(
+    c: &mut Contract,
+    tee: &SigningKey,
+    d: u64,
+    agent: &[u8],
+    s: &Slot,
+    content: &str,
+    at: u64,
+) -> Option<Side> {
+    let res = response_with(Some(content));
+    let sig = sign_as(tee, MODEL_A, &s.request_hash.0, &res);
+    submit_as(c, d, agent, s.seq, &res, &key(7).1, &sig, at)
+}
+
+/// Open a slot and fill it with a completion whose content is `content`, all at `at`.
 fn decide(
     c: &mut Contract,
     tee: &SigningKey,
@@ -583,12 +606,12 @@ fn decide(
 ) -> Slot {
     ctx_at(KEEPER, 0, at);
     let s = c.open_slot(U64(d), b(agent));
-    let res = response_with(Some(content));
-    let (rh, sig) = sign_completion(tee, &s.request_hash.0, &res);
-    commit(c, d, agent, &s, &rh, &sig, at);
-    ctx_at(KEEPER, 0, at);
-    c.reveal_completion(U64(d), b(agent), b(&res));
+    submit(c, tee, d, agent, &s, content, at);
     c.get_slot(U64(d), b(agent)).unwrap()
+}
+
+fn refused(f: impl FnOnce()) -> String {
+    panic_of(std::panic::AssertUnwindSafe(f))
 }
 
 #[test]
@@ -631,10 +654,10 @@ fn register_keyless_derives_the_id_and_takes_storage_from_the_bond() {
 fn a_keyless_decision_is_recorded_like_a_revealed_intent_and_scored() {
     let (mut c, d, a, bb, tee) = kl_setup();
     let s = decide(&mut c, &tee, d, &a, LONG, NOW + SEC);
-    assert_eq!(
-        (s.revealed, s.side, s.size_bps),
-        (true, Some(Side::Long), 2500)
-    );
+    assert_eq!((s.side, s.size_bps), (Some(Side::Long), 2500));
+    assert_eq!(s.submitter.unwrap().as_str(), KEEPER);
+    let res = response_with(Some(LONG));
+    assert_eq!(s.response_hash.unwrap().0, sha256(&res));
     let req = c.keyless_request(U64(d), b(&a)).unwrap().0;
     assert_eq!(
         sha256(&req),
@@ -644,7 +667,6 @@ fn a_keyless_decision_is_recorded_like_a_revealed_intent_and_scored() {
     let duel = c.get_duel(U64(d)).unwrap();
     let i = duel.last_intent_a.unwrap();
     assert_eq!((i.side, i.size_bps, i.nonce.0), (Side::Long, 2500, 1));
-    let res = response_with(Some(LONG));
     assert_eq!(i.proof_hash.0, proof_hash(&s.request_hash.0, &sha256(&res)));
     assert_eq!(c.intent_accepted_at(b(&a), U64(1)), Some(U64(NOW + SEC)));
     decide(&mut c, &tee, d, &bb, SHORT, NOW + 2 * SEC);
@@ -661,36 +683,45 @@ fn a_keyless_decision_is_recorded_like_a_revealed_intent_and_scored() {
 }
 
 #[test]
-fn no_decision_without_the_pinned_enclave_signature_over_the_slot_request() {
+fn no_decision_without_the_signer_pinned_to_the_model_over_the_slot_request() {
     let (mut c, d, a, _, tee) = kl_setup();
+    // seed 8 is pinned to another model; seed 9 is a keyed-agent signer only
+    ctx(OWNER, 1);
+    c.pin_model_signer(b(&key(8).1), "Qwen/Qwen3.8-27B".into());
+    c.add_tee_signer(b(&key(9).1), "keyed only".into());
     ctx_at(KEEPER, 0, NOW + SEC);
     let s = c.open_slot(U64(d), b(&a));
     let res = response_with(Some(LONG));
-    let rh = sha256(&res);
-    let bond = c.keyless_commit_bond(U64(d)).0;
-    let other = key(9).0;
+    let req = s.request_hash.0.clone();
     let cases: Vec<(&str, Vec<u8>, Vec<u8>, &str)> = vec![
         (
             "unpinned key",
+            key(5).1,
+            sign_as(&key(5).0, MODEL_A, &req, &res),
+            "signer not pinned to model",
+        ),
+        (
+            "key pinned to another model",
+            key(8).1,
+            sign_as(&key(8).0, MODEL_A, &req, &res),
+            "signer not pinned to model",
+        ),
+        (
+            "key only in the keyed-agent set",
             key(9).1,
-            other
-                .sign(&tee_text(2, MODEL_A, &s.request_hash.0, &rh))
-                .to_bytes()
-                .to_vec(),
-            "unknown tee signer",
+            sign_as(&key(9).0, MODEL_A, &req, &res),
+            "signer not pinned to model",
         ),
         (
             "pinned key over another request",
             key(7).1,
-            tee.sign(&tee_text(2, MODEL_A, &[9; 32], &rh))
-                .to_bytes()
-                .to_vec(),
+            sign_as(&tee, MODEL_A, &[9; 32], &res),
             "bad tee signature",
         ),
         (
             "gateway (kind 1) text",
             key(7).1,
-            tee.sign(&tee_text(1, MODEL_A, &s.request_hash.0, &rh))
+            tee.sign(&tee_text(1, MODEL_A, &req, &sha256(&res)))
                 .to_bytes()
                 .to_vec(),
             "bad tee signature",
@@ -698,9 +729,13 @@ fn no_decision_without_the_pinned_enclave_signature_over_the_slot_request() {
         (
             "another model's text",
             key(7).1,
-            tee.sign(&tee_text(2, "Qwen/Qwen3.8-27B", &s.request_hash.0, &rh))
-                .to_bytes()
-                .to_vec(),
+            sign_as(&tee, "Qwen/Qwen3.8-27B", &req, &res),
+            "bad tee signature",
+        ),
+        (
+            "signature over other response bytes",
+            key(7).1,
+            sign_as(&tee, MODEL_A, &req, &response_with(Some(SHORT))),
             "bad tee signature",
         ),
         (
@@ -711,54 +746,44 @@ fn no_decision_without_the_pinned_enclave_signature_over_the_slot_request() {
         ),
     ];
     for (name, signer, sig, err) in cases {
-        ctx_at(KEEPER, bond, NOW + SEC);
-        let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-            c.commit_completion(U64(d), b(&a), s.seq, b(&rh), b(&signer), b(&sig));
-        }));
+        let msg = refused(|| {
+            submit_as(&mut c, d, &a, s.seq, &res, &signer, &sig, NOW + SEC);
+        });
         assert!(msg.contains(err), "{name}: {msg}");
     }
-    assert!(c.get_slot(U64(d), b(&a)).unwrap().commit.is_none());
+    assert!(c.get_slot(U64(d), b(&a)).unwrap().response_hash.is_none());
     assert!(c.get_duel(U64(d)).unwrap().last_intent_a.is_none());
-    // a valid completion with a bond below the floor is refused too
-    let (rh, sig) = sign_completion(&tee, &s.request_hash.0, &res);
-    ctx_at(KEEPER, bond - 1, NOW + SEC);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        c.commit_completion(U64(d), b(&a), s.seq, b(&rh), b(&key(7).1), b(&sig));
-    }));
-    assert!(msg.contains("keeper bond"), "{msg}");
+    // unpinning stops the key
+    ctx(OWNER, 1);
+    c.unpin_model_signer(b(&key(7).1));
+    assert_eq!(c.get_model_signer(b(&key(7).1)), None);
+    let msg = refused(|| {
+        submit(&mut c, &tee, d, &a, &s, LONG, NOW + SEC);
+    });
+    assert!(msg.contains("signer not pinned to model"), "{msg}");
+    ctx(OPERATOR, 1);
+    let msg = refused(|| c.pin_model_signer(b(&key(7).1), MODEL_A.into()));
+    assert!(msg.contains("not owner"), "{msg}");
 }
 
 #[test]
-fn one_decision_per_slot_first_commit_wins() {
+fn one_decision_per_slot_first_submission_wins() {
     let (mut c, d, a, _, tee) = kl_setup();
     ctx_at(KEEPER, 0, NOW + SEC);
     let s = c.open_slot(U64(d), b(&a));
-    let (r1, r2) = (response_with(Some(LONG)), response_with(Some(SHORT)));
-    let (h1, s1) = sign_completion(&tee, &s.request_hash.0, &r1);
-    let (h2, s2) = sign_completion(&tee, &s.request_hash.0, &r2);
-    commit(&mut c, d, &a, &s, &h1, &s1, NOW + SEC);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        commit(&mut c, d, &a, &s, &h2, &s2, NOW + SEC)
-    }));
+    assert_eq!(
+        submit(&mut c, &tee, d, &a, &s, LONG, NOW + SEC),
+        Some(Side::Long)
+    );
+    let msg = refused(|| {
+        submit(&mut c, &tee, d, &a, &s, SHORT, NOW + SEC);
+    });
     assert!(msg.contains("slot taken"), "{msg}");
-    ctx_at(KEEPER, 0, NOW + SEC);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        c.open_slot(U64(d), b(&a));
-    }));
-    assert!(msg.contains("slot busy"), "{msg}");
-    // the other completion's bytes do not open this commitment
-    ctx_at(KEEPER, 0, NOW + SEC);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        c.reveal_completion(U64(d), b(&a), b(&r2))
-    }));
-    assert!(msg.contains("response mismatch"), "{msg}");
-    ctx_at(KEEPER, 0, NOW + SEC);
-    c.reveal_completion(U64(d), b(&a), b(&r1));
-    ctx_at(KEEPER, 0, NOW + SEC);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        c.reveal_completion(U64(d), b(&a), b(&r1))
-    }));
-    assert!(msg.contains("no commitment"), "{msg}");
+    // the same completion again: still one decision
+    let msg = refused(|| {
+        submit(&mut c, &tee, d, &a, &s, LONG, NOW + SEC);
+    });
+    assert!(msg.contains("slot taken"), "{msg}");
     assert_eq!(
         c.get_duel(U64(d)).unwrap().last_intent_a.unwrap().side,
         Side::Long
@@ -771,33 +796,31 @@ fn replayed_and_cross_slot_proofs_are_refused() {
     ctx_at(KEEPER, 0, NOW + SEC);
     let s1 = c.open_slot(U64(d), b(&a));
     let res = response_with(Some(LONG));
-    let (rh, sig) = sign_completion(&tee, &s1.request_hash.0, &res);
+    let sig = sign_as(&tee, MODEL_A, &s1.request_hash.0, &res);
     // agent b's slot: a's proof does not fit its request
     ctx_at(KEEPER, 0, NOW + SEC);
     let sb = c.open_slot(U64(d), b(&bb));
     assert_ne!(sb.request_hash.0, s1.request_hash.0);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        commit(&mut c, d, &bb, &sb, &rh, &sig, NOW + SEC)
-    }));
+    let msg = refused(|| {
+        submit_as(&mut c, d, &bb, sb.seq, &res, &key(7).1, &sig, NOW + SEC);
+    });
     assert!(msg.contains("bad tee signature"), "cross-agent: {msg}");
-    commit(&mut c, d, &a, &s1, &rh, &sig, NOW + SEC);
-    ctx_at(KEEPER, 0, NOW + SEC);
-    c.reveal_completion(U64(d), b(&a), b(&res));
+    submit_as(&mut c, d, &a, s1.seq, &res, &key(7).1, &sig, NOW + SEC);
     // the next slot of the same agent: a new nonce, a new request, so the old proof fails
     ctx_at(KEEPER, 0, NOW + 2 * SEC);
     let s2 = c.open_slot(U64(d), b(&a));
     assert_eq!(s2.seq.0, 2);
     assert_ne!(s2.nonce.0, s1.nonce.0);
     assert_ne!(s2.request_hash.0, s1.request_hash.0);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        commit(&mut c, d, &a, &s2, &rh, &sig, NOW + 2 * SEC)
-    }));
+    let msg = refused(|| {
+        submit_as(&mut c, d, &a, s2.seq, &res, &key(7).1, &sig, NOW + 2 * SEC);
+    });
     assert!(msg.contains("bad tee signature"), "replay: {msg}");
     // a stale seq is refused even with a fresh signature
-    let (rh2, sig2) = sign_completion(&tee, &s2.request_hash.0, &res);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        commit(&mut c, d, &a, &s1, &rh2, &sig2, NOW + 2 * SEC)
-    }));
+    let sig2 = sign_as(&tee, MODEL_A, &s2.request_hash.0, &res);
+    let msg = refused(|| {
+        submit_as(&mut c, d, &a, s1.seq, &res, &key(7).1, &sig2, NOW + 2 * SEC);
+    });
     assert!(msg.contains("stale slot"), "{msg}");
 }
 
@@ -807,99 +830,131 @@ fn oversize_and_late_inputs_are_refused() {
     ctx_at(KEEPER, 0, NOW + SEC);
     let s = c.open_slot(U64(d), b(&a));
     let big = vec![b' '; MAX_RESPONSE + 1];
-    let (rh, sig) = sign_completion(&tee, &s.request_hash.0, &big);
-    commit(&mut c, d, &a, &s, &rh, &sig, NOW + SEC);
-    ctx_at(KEEPER, 0, NOW + SEC);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        c.reveal_completion(U64(d), b(&a), b(&big))
-    }));
+    let sig = sign_as(&tee, MODEL_A, &s.request_hash.0, &big);
+    let msg = refused(|| {
+        submit_as(&mut c, d, &a, s.seq, &big, &key(7).1, &sig, NOW + SEC);
+    });
     assert!(msg.contains("response too long"), "{msg}");
-    // slot TTL: an uncommitted slot expires and may be replaced
+    // slot TTL: an unfilled slot expires and may be replaced
     let close = NOW + 600 * SEC;
     let (mut c, d, a, _, tee) = kl_setup_until(close);
     ctx_at(KEEPER, 0, NOW + SEC);
     let s = c.open_slot(U64(d), b(&a));
-    let (rh, sig) = sign_completion(&tee, &s.request_hash.0, &response_with(Some(LONG)));
     let late = NOW + SEC + SLOT_TTL_NS;
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
-        commit(&mut c, d, &a, &s, &rh, &sig, late)
-    }));
+    let msg = refused(|| {
+        submit(&mut c, &tee, d, &a, &s, LONG, late);
+    });
     assert!(msg.contains("slot expired"), "{msg}");
     ctx_at(KEEPER, 0, late - 1);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
+    let msg = refused(|| {
         c.open_slot(U64(d), b(&a));
-    }));
+    });
     assert!(msg.contains("slot busy"), "{msg}");
     ctx_at(KEEPER, 0, late);
     assert_eq!(c.open_slot(U64(d), b(&a)).seq.0, 2);
-    // intent lock: no slot and no commit in the last LOCK, but a reveal lands there
+    // intent lock: a slot opened just before it takes no submission inside it, and no slot opens
+    ctx_at(KEEPER, 0, close - LOCK - 1);
+    let s = c.open_slot(U64(d), b(&a));
+    let msg = refused(|| {
+        submit(&mut c, &tee, d, &a, &s, LONG, close - LOCK);
+    });
+    assert!(msg.contains("intent lock"), "{msg}");
     ctx_at(KEEPER, 0, close - LOCK);
-    let msg = panic_of(std::panic::AssertUnwindSafe(|| {
+    let msg = refused(|| {
         c.open_slot(U64(d), b(&a));
-    }));
+    });
     assert!(msg.contains("intent lock"), "{msg}");
 }
 
 #[test]
-fn a_reveal_lands_inside_the_lock_and_an_unparsed_one_makes_no_call() {
+fn an_unread_reply_makes_no_call_but_burns_its_proof() {
     let (mut c, d, a, _, tee) = kl_setup();
-    ctx_at(KEEPER, 0, CLOSE - LOCK - SEC);
-    let s = c.open_slot(U64(d), b(&a));
-    let res = response_with(Some(LONG));
-    let (rh, sig) = sign_completion(&tee, &s.request_hash.0, &res);
-    commit(&mut c, d, &a, &s, &rh, &sig, CLOSE - LOCK - SEC);
-    ctx_at(KEEPER, 0, CLOSE - 1);
-    c.reveal_completion(U64(d), b(&a), b(&res));
-    assert!(c.get_duel(U64(d)).unwrap().last_intent_a.is_some());
-    let (mut c, d, a, _, tee) = kl_setup();
-    let s = decide(&mut c, &tee, d, &a, "I refuse to answer.", NOW + SEC);
-    assert!(s.revealed && s.side.is_none());
+    let s = decide(&mut c, &tee, d, &a, GARBAGE, NOW + SEC);
+    assert!(s.response_hash.is_some() && s.side.is_none());
     assert!(c.get_duel(U64(d)).unwrap().last_intent_a.is_none());
-    // its proof is burned: a reveal is final for the completion
-    let res = response_with(Some("I refuse to answer."));
+    let res = response_with(Some(GARBAGE));
     assert!(
         c.used_proofs
             .contains(&proof_hash(&s.request_hash.0, &sha256(&res)))
     );
-    // and the next slot opens
     ctx_at(KEEPER, 0, NOW + 2 * SEC);
-    assert_eq!(c.open_slot(U64(d), b(&a)).seq.0, 2);
+    assert_eq!(c.open_slot(U64(d), b(&a)).seq.0, 2, "the next slot opens");
+}
+
+/// Plant `kind` at `target` as the spectator at `at`.
+fn plant(c: &mut Contract, d: u64, target: &[u8], kind: ChaosKind, text: &str, at: u64) {
+    let fee = c.chaos_fee(U64(d)).0;
+    ctx_at(
+        if kind == ChaosKind::Placebo {
+            OWNER
+        } else {
+            SPECTATOR
+        },
+        fee + MIN_CHAOS,
+        at,
+    );
+    c.inject_chaos(U64(d), b(target), kind, text.into());
 }
 
 #[test]
-fn an_unrevealed_commit_forfeits_the_keeper_bond_not_the_agent() {
+fn an_unread_reply_under_a_headline_is_judged_as_the_lies_side() {
     let (mut c, d, a, bb, tee) = kl_setup();
+    // a held Long; a Short lie and a placebo land; the reply is unreadable
     decide(&mut c, &tee, d, &a, LONG, NOW + SEC);
-    decide(&mut c, &tee, d, &bb, LONG, NOW + SEC);
-    // a second call of a, committed and withheld
-    ctx_at(KEEPER, 0, NOW + 2 * SEC);
-    let s = c.open_slot(U64(d), b(&a));
-    let (rh, sig) = sign_completion(&tee, &s.request_hash.0, &response_with(Some(SHORT)));
-    let bond = c.keyless_commit_bond(U64(d)).0;
-    assert!(
-        bond >= 3 * (BOND / 1_000) * 9 / 10,
-        "3 slashes of the larger bond: {bond}"
+    plant(
+        &mut c,
+        d,
+        &a,
+        ChaosKind::Short,
+        "Exchange halts NEAR withdrawals",
+        NOW + 2 * SEC,
     );
-    commit(&mut c, d, &a, &s, &rh, &sig, NOW + 2 * SEC);
-    let fees = c.get_config().owner_fees.0;
-    oracle_answers(&mut c, d, "close", OPEN, CLOSE);
-    assert_eq!(c.get_config().owner_fees.0, fees + bond);
-    assert_eq!(c.get_no_reveal(U64(d)), (false, false), "no forfeit");
-    let o = c.get_duel(U64(d)).unwrap().outcome.unwrap();
-    assert_eq!(o.winner, None, "a kept its revealed Long: a tie with b");
+    plant(
+        &mut c,
+        d,
+        &a,
+        ChaosKind::Placebo,
+        "Validators upgrade on schedule",
+        NOW + 2 * SEC,
+    );
+    // b had no call before its lie: no trial
+    plant(
+        &mut c,
+        d,
+        &bb,
+        ChaosKind::Long,
+        "NEAR listed on a new exchange",
+        NOW + 2 * SEC,
+    );
+    decide(&mut c, &tee, d, &a, GARBAGE, NOW + 3 * SEC);
+    decide(&mut c, &tee, d, &bb, GARBAGE, NOW + 3 * SEC);
+    let chaos = c.get_chaos(U64(d));
+    assert_eq!(
+        chaos[0].outcome,
+        ChaosOutcome::Flipped,
+        "Long, then an unread reply"
+    );
+    assert_eq!((chaos[0].next, chaos[0].decided_by), (None, Some(U64(2))));
+    assert_eq!(chaos[1].outcome, ChaosOutcome::NoTrial, "a placebo");
+    assert_eq!(chaos[2].outcome, ChaosOutcome::NoTrial, "no call before");
+    assert_eq!(
+        c.get_duel(U64(d)).unwrap().last_intent_a.unwrap().side,
+        Side::Long,
+        "the previous call stays"
+    );
 }
 
 #[test]
 fn the_request_carries_the_pending_headlines_and_the_decision_judges_exactly_those() {
     let (mut c, d, a, _, tee) = kl_setup();
     decide(&mut c, &tee, d, &a, LONG, NOW + SEC);
-    let fee = c.chaos_fee(U64(d)).0;
-    ctx_at(SPECTATOR, fee + MIN_CHAOS, NOW + 2 * SEC);
-    c.inject_chaos(
-        U64(d),
-        b(&a),
+    plant(
+        &mut c,
+        d,
+        &a,
         ChaosKind::Short,
-        "Exchange <halts> NEAR & \"freezes\" withdrawals".into(),
+        "Exchange <halts> NEAR & \"freezes\" withdrawals",
+        NOW + 2 * SEC,
     );
     ctx_at(KEEPER, 0, NOW + 3 * SEC);
     let s = c.open_slot(U64(d), b(&a));
@@ -908,19 +963,15 @@ fn the_request_carries_the_pending_headlines_and_the_decision_judges_exactly_tho
     assert!(req.contains(r#"Exchange &lt;halts&gt; NEAR &amp; \"freezes\" withdrawals"#));
     assert!(req.contains("move_since_open_bps: +0.0"));
     // a headline planted after the slot opened is not in this request: the decision is before it
-    let fee = c.chaos_fee(U64(d)).0;
-    ctx_at(SPECTATOR, fee + MIN_CHAOS, NOW + 3 * SEC);
-    c.inject_chaos(
-        U64(d),
-        b(&a),
+    plant(
+        &mut c,
+        d,
+        &a,
         ChaosKind::Long,
-        "NEAR listed on a new exchange".into(),
+        "NEAR listed on a new exchange",
+        NOW + 3 * SEC,
     );
-    let res = response_with(Some(SHORT));
-    let (rh, sig) = sign_completion(&tee, &s.request_hash.0, &res);
-    commit(&mut c, d, &a, &s, &rh, &sig, NOW + 4 * SEC);
-    ctx_at(KEEPER, 0, NOW + 4 * SEC);
-    c.reveal_completion(U64(d), b(&a), b(&res));
+    submit(&mut c, &tee, d, &a, &s, SHORT, NOW + 4 * SEC);
     let i = c.get_duel(U64(d)).unwrap().last_intent_a.unwrap();
     assert_eq!((i.side, i.size_bps), (Side::Short, UNVERIFIED_CAP_BPS));
     let chaos = c.get_chaos(U64(d));
@@ -1009,9 +1060,9 @@ fn keyed_paths_never_accept_a_keyless_id() {
 
 /// Random keyless duels, each operation run like a transaction (a panic reverts every write, as in
 /// `invariants.rs`): the contract balance moves only by attached and sent value, the surplus over
-/// what it owes (bonds, pool, fees, unclaimed chaos payouts, held keeper bonds) never shrinks, a
-/// decision lands only from a reveal of a commit carrying the pinned enclave's signature over that
-/// slot's own request, at most one per slot, and every forged, replayed or late commit is refused.
+/// what it owes (bonds, pool, fees, unclaimed chaos payouts) never shrinks, a decision lands only
+/// from a submission signed by the enclave key pinned to the agent's model over that slot's own
+/// request, at most one per slot, and every forged or replayed submission is refused.
 mod props {
     use super::*;
     use crate::invariants::{cached, is_bug, quiet};
@@ -1029,11 +1080,15 @@ mod props {
 
     #[derive(Clone, Debug)]
     enum Forge {
-        Valid { long: bool },
+        Valid {
+            long: bool,
+        },
+        /// A signed reply with no readable decision: accepted, no call.
+        Unread,
         Unpinned,
+        OtherModel,
         OtherRequest,
         StaleSeq,
-        LowBond,
     }
 
     #[derive(Clone, Debug)]
@@ -1044,13 +1099,9 @@ mod props {
         Open {
             agent: usize,
         },
-        Commit {
+        Submit {
             agent: usize,
             how: Forge,
-        },
-        Reveal {
-            agent: usize,
-            right: bool,
         },
         Inject {
             agent: usize,
@@ -1059,7 +1110,7 @@ mod props {
         Advance {
             secs: u16,
         },
-        /// `Open`, a valid `Commit` and the right `Reveal` in a row.
+        /// `Open` and a valid `Submit` in a row.
         Cycle {
             agent: usize,
             long: bool,
@@ -1076,8 +1127,6 @@ mod props {
         ids: [Vec<u8>; 2],
         /// The slot each agent last opened, as returned.
         slot: [Option<Slot>; 2],
-        /// The response behind each agent's winning commit, while unrevealed.
-        held: [Option<Vec<u8>>; 2],
         decided: HashSet<(usize, u64)>,
     }
 
@@ -1163,7 +1212,6 @@ mod props {
                 d: 0,
                 ids: [vec![], vec![]],
                 slot: [None, None],
-                held: [None, None],
                 decided: HashSet::new(),
             };
             w.env(OWNER, 0);
@@ -1188,7 +1236,8 @@ mod props {
                     60,
                     10,
                 );
-                c.add_tee_signer(b(&key(7).1), "prop".into());
+                c.pin_model_signer(b(&key(7).1), MODEL_A.into());
+                c.pin_model_signer(b(&key(8).1), "Qwen/Qwen3.8-27B".into());
                 c.set_chaos_config(ChaosConfig {
                     base: near_sdk::json_types::U128(MIN_CHAOS),
                     r_bps: 12_500,
@@ -1250,13 +1299,7 @@ mod props {
                     .filter(|x| !x.claimed)
                     .map(|x| x.payout.0)
                     .sum();
-                let held: u128 = ids
-                    .iter()
-                    .filter_map(|i| c.get_slot(U64(d), b(i)))
-                    .filter(|s| !s.revealed)
-                    .filter_map(|s| s.commit.map(|x| x.bond.0))
-                    .sum();
-                let owed = bonds + duel.pool.0 + c.get_config().owner_fees.0 + chaos + held;
+                let owed = bonds + duel.pool.0 + c.get_config().owner_fees.0 + chaos;
                 (owed, [duel.last_intent_a, duel.last_intent_b])
             })
             .unwrap()
@@ -1265,16 +1308,15 @@ mod props {
         fn step(&mut self, op: &Op) {
             if let Op::Cycle { agent, long } = *op {
                 self.step(&Op::Open { agent });
-                self.step(&Op::Commit {
+                return self.step(&Op::Submit {
                     agent,
                     how: Forge::Valid { long },
                 });
-                return self.step(&Op::Reveal { agent, right: true });
             }
             let (d, now) = (self.d, self.now);
             let (owed0, last0) = self.read();
             let surplus0 = self.balance - owed0;
-            let mut revealed: Option<(usize, Slot, Vec<u8>)> = None;
+            let mut filled: Option<(usize, Slot, Vec<u8>)> = None;
             match op.clone() {
                 Op::Advance { secs } => self.now += secs as u64 * SEC,
                 Op::Cycle { .. } => unreachable!(),
@@ -1293,65 +1335,38 @@ mod props {
                     let id = self.ids[agent].clone();
                     if let Ok(s) = self.call(KEEPER, 0, |c| c.open_slot(U64(d), b(&id))) {
                         self.slot[agent] = Some(s);
-                        self.held[agent] = None;
                     }
                 }
-                Op::Commit { agent, how } => {
+                Op::Submit { agent, how } => {
                     let id = self.ids[agent].clone();
                     let Some(s) = self.slot[agent].clone() else {
                         return;
                     };
-                    let tee = key(7).0;
                     let res = response_with(Some(match how {
                         Forge::Valid { long: false } => SHORT,
+                        Forge::Unread => GARBAGE,
                         _ => LONG,
                     }));
-                    let mut req = s.request_hash.0.clone();
-                    let (mut signer, mut seq) = (key(7).1, s.seq.0);
-                    let mut sk = tee;
+                    let (mut sk, mut signer) = key(7);
+                    let (mut req, mut seq) = (s.request_hash.0.clone(), s.seq.0);
                     match how {
                         Forge::Unpinned => (sk, signer) = key(9),
+                        Forge::OtherModel => (sk, signer) = key(8),
                         Forge::OtherRequest => req = vec![9; 32],
                         Forge::StaleSeq => seq = seq.saturating_sub(1),
                         _ => {}
                     }
-                    let rh = sha256(&res);
-                    let sig = sk.sign(&tee_text(2, MODEL_A, &req, &rh)).to_bytes();
-                    let need = self
-                        .call(OWNER, 0, |c| c.keyless_commit_bond(U64(d)).0)
-                        .unwrap();
-                    let bond = if matches!(how, Forge::LowBond) {
-                        need - 1
-                    } else {
-                        need
-                    };
-                    let r = self.call(KEEPER, bond, |c| {
-                        c.commit_completion(U64(d), b(&id), U64(seq), b(&rh), b(&signer), b(&sig))
+                    let sig = sign_as(&sk, MODEL_A, &req, &res);
+                    let r = self.call(KEEPER, 0, |c| {
+                        c.submit_completion(U64(d), b(&id), U64(seq), b(&res), b(&signer), b(&sig))
                     });
                     match how {
-                        Forge::Valid { .. } => {
+                        Forge::Valid { .. } | Forge::Unread => {
                             if r.is_ok() {
-                                self.held[agent] = Some(res);
+                                filled = Some((agent, s, res));
                             }
                         }
-                        _ => assert!(r.is_err(), "forged commit {how:?} accepted"),
-                    }
-                }
-                Op::Reveal { agent, right } => {
-                    let id = self.ids[agent].clone();
-                    let bytes = match (&self.held[agent], right) {
-                        (Some(r), true) => r.clone(),
-                        _ => response_with(Some("{\"direction\": \"up\", \"forged\": 1}")),
-                    };
-                    let r = self.call(KEEPER, 0, |c| {
-                        c.reveal_completion(U64(d), b(&id), b(&bytes))
-                    });
-                    if !(right && self.held[agent].is_some()) {
-                        assert!(r.is_err(), "a reveal without the committed bytes landed");
-                    }
-                    if r.is_ok() {
-                        revealed = Some((agent, self.slot[agent].clone().unwrap(), bytes));
-                        self.held[agent] = None;
+                        _ => assert!(r.is_err(), "forged submission {how:?} accepted"),
                     }
                 }
                 Op::Inject { agent, long } => {
@@ -1378,9 +1393,9 @@ mod props {
                     continue;
                 }
                 let i = after.as_ref().expect("a decision vanished");
-                let (agent, s, bytes) = revealed
+                let (agent, s, bytes) = filled
                     .clone()
-                    .expect("a decision landed without a reveal");
+                    .expect("a decision landed without a submission");
                 assert_eq!(agent, side, "decision on the other side");
                 assert_eq!(i.nonce, s.seq, "decision nonce is the slot");
                 assert_eq!(
@@ -1399,16 +1414,16 @@ mod props {
     fn op() -> impl Strategy<Value = Op> {
         let forge = prop_oneof![
             6 => any::<bool>().prop_map(|long| Forge::Valid { long }),
+            1 => Just(Forge::Unread),
             1 => Just(Forge::Unpinned),
+            1 => Just(Forge::OtherModel),
             1 => Just(Forge::OtherRequest),
             1 => Just(Forge::StaleSeq),
-            1 => Just(Forge::LowBond),
         ];
         prop_oneof![
             2 => (-300i16..300).prop_map(|bps| Op::Tick { bps }),
             4 => (0usize..2).prop_map(|agent| Op::Open { agent }),
-            5 => ((0usize..2), forge).prop_map(|(agent, how)| Op::Commit { agent, how }),
-            4 => ((0usize..2), any::<bool>()).prop_map(|(agent, right)| Op::Reveal { agent, right: right || agent == 0 }),
+            6 => ((0usize..2), forge).prop_map(|(agent, how)| Op::Submit { agent, how }),
             2 => ((0usize..2), any::<bool>()).prop_map(|(agent, long)| Op::Inject { agent, long }),
             3 => (1u16..90).prop_map(|secs| Op::Advance { secs }),
             3 => ((0usize..2), any::<bool>()).prop_map(|(agent, long)| Op::Cycle { agent, long }),
@@ -1445,24 +1460,18 @@ mod props {
                 }
                 w.step(op);
             }
-            // finish: held keeper bonds go to owner_fees, every slot goes, money still adds up
+            // finish: every slot goes, money still adds up
             let (owed0, _) = w.read();
             let surplus0 = w.balance - owed0;
-            let unrevealed = w.held.iter().filter(|h| h.is_some()).count();
             w.now = w.close;
-            let fees0 = w.call(OWNER, 0, |c| c.get_config().owner_fees.0).unwrap();
             w.oracle("close", close_price).unwrap();
             let (owed1, _) = w.read();
             prop_assert!(w.balance - owed1 >= surplus0, "finish shrank the surplus");
             let (d, ids) = (w.d, w.ids.clone());
-            let (fees1, slots) = w
-                .call(OWNER, 0, |c| {
-                    let slots = ids.iter().filter(|i| c.get_slot(U64(d), b(i)).is_some()).count();
-                    (c.get_config().owner_fees.0, slots)
-                })
+            let slots = w
+                .call(OWNER, 0, |c| ids.iter().filter(|i| c.get_slot(U64(d), b(i)).is_some()).count())
                 .unwrap();
             prop_assert_eq!(slots, 0);
-            prop_assert!(unrevealed == 0 || fees1 > fees0, "withheld bonds not taken");
         }
     }
 }
