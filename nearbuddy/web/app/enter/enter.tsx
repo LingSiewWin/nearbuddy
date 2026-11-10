@@ -475,7 +475,7 @@ export default function Enter({ contract }: { contract: string | null }) {
           {kv(
             "duels",
             st.duels.length
-              ? st.duels.slice(-6).flatMap((d): Cell[] => [
+              ? st.duels.flatMap((d): Cell[] => [
                   {
                     t: `#${d} verify`,
                     href: `/api/keyless/verify?duel=${d}`,

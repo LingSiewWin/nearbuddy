@@ -2,7 +2,7 @@
 // pinned on it, the keyless agents an account owns and one agent's state. Server only (the public RPC through ./near's
 // provider).
 import type { ArenaViews } from "../lib/abi/arena";
-import { type AgentState, keylessArena } from "../lib/enter";
+import { type AgentState, keylessArena, RECENT_DUELS } from "../lib/enter";
 import { NETWORK_ID } from "../network";
 import { provider } from "./near";
 
@@ -41,31 +41,51 @@ export async function pinnedModels(): Promise<Pinned[]> {
   pinnedCache = { at: Date.now(), list };
   return list;
 }
+/** The last pinned list read, or none: what a page shows while the RPC refuses a fresh read. */
+export const lastPinned = (): Pinned[] => pinnedCache?.list ?? [];
+
+/** Every agent's owner, from one leaderboard scan shared by all callers for 10 s: an ?owner= query for any account
+ *  costs the RPC nothing more.
+ *  ponytail: pages the whole leaderboard; an owner index when the arena has thousands of agents. */
+let owners: { at: number; list: Promise<{ owner: string; pk: string }[]> } | null = null;
+function allOwners(): Promise<{ owner: string; pk: string }[]> {
+  if (owners && Date.now() - owners.at < 10_000) return owners.list;
+  const list = (async () => {
+    const all: { owner: string; pk: string }[] = [];
+    for (let from = 0; ; from += 100) {
+      const page = await keylessView("leaderboard", { from, limit: 100 });
+      all.push(...page.map((a) => ({ owner: a.owner, pk: a.pk })));
+      if (page.length < 100) return all;
+    }
+  })();
+  const entry = { at: Date.now(), list };
+  owners = entry;
+  list.catch(() => {
+    if (owners === entry) owners = null; // a failed scan is not kept
+  });
+  return list;
+}
 
 const keylessKind = new Map<string, boolean>();
-/** The keyless agents `owner` registered, oldest first by the leaderboard's order: every agent, then `get_keyless`
- *  for the ones not seen before (a key never changes kind).
- *  ponytail: pages the whole leaderboard per call; an owner index when the arena has thousands of agents. */
+/** The keyless agents `owner` registered, in the leaderboard's order: `get_keyless` only for keys not seen before (a
+ *  key never changes kind). */
 export async function ownedKeyless(owner: string): Promise<string[]> {
-  const mine: string[] = [];
-  for (let from = 0; ; from += 100) {
-    const page = await keylessView("leaderboard", { from, limit: 100 });
-    mine.push(...page.filter((a) => a.owner === owner).map((a) => a.pk));
-    if (page.length < 100) break;
-  }
+  const mine = (await allOwners()).filter((a) => a.owner === owner).map((a) => a.pk);
   for (const pk of mine)
     if (!keylessKind.has(pk)) keylessKind.set(pk, (await keylessView("get_keyless", { agent: pk })) !== null);
   return mine.filter((pk) => keylessKind.get(pk));
 }
 
-/** One keyless agent's state: its record, its open duel and slot, and its duels. */
+/** One keyless agent's state: its record, its open duel and slot, and its newest duels. An unknown key costs one
+ *  view. */
 export async function agentState(pk: string): Promise<AgentState> {
-  const [agent, keyless, duels] = await Promise.all([
-    keylessView("get_agent", { agent_pk: pk }),
+  const agent = await keylessView("get_agent", { agent_pk: pk });
+  if (!agent) return { agent: null, keyless: null, duel: null, slot: null, chaos: null, duels: [] };
+  const [keyless, duels] = await Promise.all([
     keylessView("get_keyless", { agent: pk }),
-    keylessView("agent_duels", { agent_pk: pk, from: 0, limit: 50 }).catch(() => [] as string[]),
+    keylessView("agent_duels", { agent_pk: pk, from: 0, limit: RECENT_DUELS }).catch(() => [] as string[]),
   ]);
-  const id = agent?.in_duel ?? null;
+  const id = agent.in_duel;
   const [duel, slot] = id
     ? await Promise.all([keylessView("get_duel", { duel_id: id }), keylessView("get_slot", { duel_id: id, agent: pk })])
     : [null, null];

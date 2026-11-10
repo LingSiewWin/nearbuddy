@@ -3,7 +3,16 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { AgentView, Duel, KeylessAgent, Slot } from "../lib/abi/arena";
-import { type AgentState, enterCall, KEYLESS_ARENAS, keylessArena, slotInputs, statusLine, yocto } from "../lib/enter";
+import {
+  type AgentState,
+  canonicalPk,
+  enterCall,
+  KEYLESS_ARENAS,
+  keylessArena,
+  slotInputs,
+  statusLine,
+  yocto,
+} from "../lib/enter";
 import { type KeylessInputs, keylessRequest, toHex } from "../lib/keyless";
 
 const V = JSON.parse(readFileSync(`${import.meta.dir}/../../../fixtures/keyless-vectors.json`, "utf8"));
@@ -87,6 +96,24 @@ test("keyless arena: its own config, testnet default, none on mainnet, override,
   expect(KEYLESS_ARENAS.testnet).toBe(C);
   expect(keylessArena("mainnet", {})).toBeNull();
   expect(keylessArena("testnet", { KEYLESS_ARENA_CONTRACT: "v3.x.testnet" })).toBe("v3.x.testnet");
-  expect(() => keylessArena("mainnet", { KEYLESS_ARENA_CONTRACT: "v3.x.testnet" })).toThrow(/other network/);
-  expect(() => keylessArena("testnet", { KEYLESS_ARENA_CONTRACT: "arena.nearbuddy.near" })).toThrow(/other network/);
+  expect(keylessArena("mainnet", { KEYLESS_ARENA_CONTRACT: "arena.nearbuddy.near" })).toBe("arena.nearbuddy.near");
+  for (const v of ["v3.x.testnet", "keyless.testnet"])
+    expect(() => keylessArena("mainnet", { KEYLESS_ARENA_CONTRACT: v }), v).toThrow(/not a mainnet account/);
+  // a positive suffix: an implicit or a .tg account is not a testnet account either
+  for (const v of ["arena.nearbuddy.near", "keyless.tg", "a".repeat(64), "x.testnet.near"])
+    expect(() => keylessArena("testnet", { KEYLESS_ARENA_CONTRACT: v }), v).toThrow(/not a testnet account/);
+});
+
+test("canonicalPk: one spelling per 32-byte key", () => {
+  const pk = "YLqgTOliaG+cZcWWOmxBwbrryeCafXlq4N5P+ChomTo=";
+  expect(canonicalPk(pk)).toBe(true);
+  // the same bytes with nonzero padding bits, without padding, or with a URL-safe alphabet; then wrong lengths
+  for (const v of [
+    "YLqgTOliaG+cZcWWOmxBwbrryeCafXlq4N5P+ChomTp=",
+    "YLqgTOliaG+cZcWWOmxBwbrryeCafXlq4N5P+ChomTo",
+    "YLqgTOliaG-cZcWWOmxBwbrryeCafXlq4N5P-ChomTo=",
+    "YLqgTOliaG+cZcWWOmxBwbrryeCafXlq4N5P+ChomQ==",
+    "",
+  ])
+    expect(canonicalPk(v), v).toBe(false);
 });

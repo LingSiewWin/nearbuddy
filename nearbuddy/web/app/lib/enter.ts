@@ -6,7 +6,7 @@
 import type { NetworkId } from "../network";
 import type { AgentView, Chaos, Duel, KeylessAgent, Slot } from "./abi/arena";
 import type { Call } from "./inject";
-import { checkStrategy, KEYLESS_TEMPLATE_VERSION, type KeylessInputs } from "./keyless";
+import { b64strict, checkStrategy, KEYLESS_TEMPLATE_VERSION, type KeylessInputs } from "./keyless";
 
 /** The keyless arena per network, a contract separate from NET.arena (the production arena has no keyless methods
  *  yet); KEYLESS_ARENA_CONTRACT overrides it on the server (api/keyless.ts). null: none on that network. */
@@ -15,12 +15,22 @@ export const KEYLESS_ARENAS: Record<NetworkId, string | null> = {
   mainnet: null,
 };
 
-/** The keyless arena of network `id`; throws when the override names the other network (network.ts's rule). */
+/** The keyless arena of network `id`; throws unless the account belongs to that network: a `.testnet` account on
+ *  testnet, anything but one on mainnet. */
 export function keylessArena(id: NetworkId, env: Record<string, string | undefined> = process.env): string | null {
   const v = env.KEYLESS_ARENA_CONTRACT?.trim() || KEYLESS_ARENAS[id];
-  if (v && (id === "mainnet" ? /testnet$/ : /\.near$/).test(v))
-    throw new Error(`NEAR_NETWORK=${id} but KEYLESS_ARENA_CONTRACT=${v} belongs to the other network: fix or unset`);
+  if (v && v.endsWith(".testnet") !== (id === "testnet"))
+    throw new Error(`NEAR_NETWORK=${id} but KEYLESS_ARENA_CONTRACT=${v} is not a ${id} account: fix or unset`);
   return v;
+}
+
+/** A 32-byte agent key in canonical base64 (near-sdk's Base64VecU8), so one key has one spelling. */
+export function canonicalPk(s: string): boolean {
+  try {
+    return b64strict(s).length === 32;
+  } catch {
+    return false;
+  }
 }
 
 const NEAR = 10n ** 24n;
@@ -108,6 +118,9 @@ export function slotInputs(agent: AgentView, k: KeylessAgent, d: Duel, s: Slot, 
   };
 }
 
+/** How many of an agent's duels /enter lists (agent_duels, newest first). */
+export const RECENT_DUELS = 6;
+
 /** GET /api/keyless?agent=: the views one keyless agent's status is read from. */
 export type AgentState = {
   agent: AgentView | null;
@@ -116,7 +129,7 @@ export type AgentState = {
   slot: Slot | null;
   /** get_chaos of the duel, when the slot carries a headline. */
   chaos: Chaos[] | null;
-  /** agent_duels, newest last. */
+  /** agent_duels: the newest few, newest first. */
   duels: string[];
 };
 
