@@ -20,7 +20,8 @@ use near_sdk::base64::{Engine, prelude::BASE64_STANDARD};
 use near_sdk::json_types::{Base64VecU8, U64, U128};
 use near_sdk::serde_json::{Value, json};
 use nearbuddy_arena::{
-    Intent, Side, commit_bytes, consent_bytes, intent_message, register_bytes, tee_text,
+    Intent, Side, commit_bytes, commit_bytes_v2, consent_bytes, intent_message, register_bytes,
+    tee_text,
 };
 use sha2::{Digest, Sha256};
 
@@ -299,7 +300,8 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
     );
 
     // commit-reveal: B hides nonce 2 behind sha256(intent_message || salt), signing the bytes the
-    // commit_message view returns; a bystander relays both halves
+    // commit_message view returns (message v2, `seen` = 0 chaos records); a bystander relays both
+    // halves
     let i2 = Intent {
         agent_pk: Base64VecU8(pkb.clone()),
         duel_id: U64(duel_id),
@@ -324,8 +326,28 @@ async fn full_duel_with_tee_proofs_max_chaos_and_oracle_callback() -> testresult
         msg.0,
         commit_bytes(contract.account_id(), duel_id, &commitment)
     );
+    let version: u32 = contract
+        .call_function("commit_message_version", json!({}))
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(version, 2, "deploy 17.1 takes `seen`");
+    let msg: Base64VecU8 = contract
+        .call_function(
+            "commit_message",
+            json!({"duel_id": duel_id.to_string(), "commitment": b64(&commitment), "seen": 0}),
+        )
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
+    assert_eq!(
+        msg.0,
+        commit_bytes_v2(contract.account_id(), duel_id, 0, &commitment)
+    );
     let csig = skb.sign(&msg.0).to_bytes().to_vec();
-    let r = call("commit_intent", json!({"duel_id": duel_id.to_string(), "agent_pk": b64(&pkb), "commitment": b64(&commitment), "sig": b64(&csig)}), &spectator, zero).await?.assert_success();
+    let r = call("commit_intent", json!({"duel_id": duel_id.to_string(), "agent_pk": b64(&pkb), "commitment": b64(&commitment), "sig": b64(&csig), "seen": 0}), &spectator, zero).await?.assert_success();
     println!("GAS commit_intent {:.2} TGas", gas_of(&r) as f64 / 1e12);
     let isig = skb.sign(&intent_message(&i2)).to_bytes().to_vec();
     let reveal = json!({"signed": {"intent": i2, "signature": b64(&isig)}, "salt": b64(&[0x5bu8; 32]), "tee": null});
