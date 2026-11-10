@@ -211,6 +211,13 @@ class Fill(TypedDict):
     token: str
 
 
+# One planted headline as a request reads it. Template 1 delivers every arm as written: the clean arm's cue guard does
+# not run on chain.
+class Headline(TypedDict):
+    arm: Arm
+    text: str
+
+
 # One injection as `Duel.injections` lists it. From deploy 17 `kind` is the `ChaosKind` name and `payload_hash` is
 # `sha256(headline)`, computed on chain; the full record is in `get_chaos`.
 class Injection(TypedDict):
@@ -234,6 +241,34 @@ class Intent(TypedDict):
     side: Side
     # Position size in basis points of the agent's notional, 1..=10_000.
     size_bps: int
+
+
+# The owner-set part of a keyless agent; the rest is its `Agent` record.
+class KeylessAgent(TypedDict):
+    # The next slot's sequence number: agent-wide, so it doubles as the decision's intent nonce.
+    next_seq: str
+    # Printable ASCII, 1..=`MAX_STRATEGY` bytes; the last line of the system prompt.
+    strategy: str
+    template: int
+
+
+# Everything a request is built from. `keyless_request_bytes` builds one from explicit inputs, for parity checks;
+# `keyless_request` from a slot.
+class KeylessInputs(TypedDict):
+    duel_id: str
+    headlines: list[Headline]
+    model_id: str
+    # 32 bytes.
+    nonce: Base64VecU8
+    # Oracle prices, USD with 8 decimals.
+    open_price: str
+    price: str
+    seconds_left: int
+    seq: str
+    strategy: str
+    # The duel's oracle asset id, e.g. `wrap.near`.
+    symbol: str
+    template_version: int
 
 
 # A follower's bound on what the solver may settle against their vault for one agent. `per_tx_cap` and `allowance` bound
@@ -311,6 +346,52 @@ class SignedIntent(TypedDict):
     signature: Base64VecU8
 
 
+# One decision of a keyless agent in one duel; the newest per (duel, agent) is kept.
+class Slot(TypedDict):
+    commit: SlotCommit | None
+    # Bit i: `get_chaos(duel)[i]` is in the request (pending at this agent when the slot opened).
+    heads: int
+    # 32 bytes from the block's random seed.
+    nonce: Base64VecU8
+    opened_at: str
+    # The oracle price the request shows (the latest tick, else the open price), 8 decimals.
+    price: str
+    request_hash: Base64VecU8
+    revealed: bool
+    # `get_chaos(duel)` length at the open: the decision counts as made after records below it.
+    seen: int
+    seq: str
+    # The side the response gave, `None` before the reveal or when it gave none.
+    side: Side | None
+    size_bps: int
+
+
+# The commit that won a slot.
+class SlotCommit(TypedDict):
+    # Refunded to `committer` on reveal; to `owner_fees` when the duel ends unrevealed.
+    bond: str
+    committed_at: str
+    # NEAR Account Identifier.
+    #
+    # This is a unique, syntactically valid, human-readable account identifier on the NEAR network.
+    #
+    # [See the crate-level docs for information about validation.](index.html#account-id-rules)
+    #
+    # Also see [Error kind precedence](AccountId#error-kind-precedence).
+    #
+    # ## Examples
+    #
+    # ``` use near_account_id::AccountId;
+    #
+    # let alice: AccountId = "alice.near".parse().unwrap();
+    #
+    # assert!("ƒelicia.near".parse::<AccountId>().is_err()); // (ƒ is not f) ```
+    committer: str
+    response_hash: Base64VecU8
+    # The enclave key that signed the completion.
+    signer: Base64VecU8
+
+
 # The NEAR AI Cloud signature record for one completion, as returned by `GET
 # /v1/signature/{chat_id}?signing_algo=ed25519`. The TEE signs the raw text
 # `"{model_id}:{request_hash_hex}:{response_hash_hex}"` (kind 2, `provider_tee`, the model's own enclave) or
@@ -367,6 +448,15 @@ class ChaosFeeArgs(TypedDict):
 
 class ClaimChaosArgs(TypedDict):
     duel_id: str
+
+
+class CommitCompletionArgs(TypedDict):
+    duel_id: str
+    agent: Base64VecU8
+    seq: str
+    response_hash: Base64VecU8
+    signer: Base64VecU8
+    signature: Base64VecU8
 
 
 class CommitIntentArgs(TypedDict):
@@ -515,6 +605,10 @@ class GetHoldingArgs(TypedDict):
     token_id: str
 
 
+class GetKeylessArgs(TypedDict):
+    agent: Base64VecU8
+
+
 class GetNoRevealArgs(TypedDict):
     duel_id: str
 
@@ -536,6 +630,15 @@ class GetPendingWithdrawArgs(TypedDict):
     #
     # assert!("ƒelicia.near".parse::<AccountId>().is_err()); // (ƒ is not f) ```
     account: str
+
+
+class GetSlotArgs(TypedDict):
+    duel_id: str
+    agent: Base64VecU8
+
+
+class GetTickArgs(TypedDict):
+    duel_id: str
 
 
 class GetVaultArgs(TypedDict):
@@ -633,6 +736,24 @@ class IsTeeSignerArgs(TypedDict):
     signer: Base64VecU8
 
 
+class KeylessCommitBondArgs(TypedDict):
+    duel_id: str
+
+
+class KeylessParseArgs(TypedDict):
+    response: Base64VecU8
+    headlines: bool
+
+
+class KeylessRequestArgs(TypedDict):
+    duel_id: str
+    agent: Base64VecU8
+
+
+class KeylessRequestBytesArgs(TypedDict):
+    inputs: KeylessInputs
+
+
 LeaderboardArgs = TypedDict("LeaderboardArgs", {"from": int, "limit": int})
 
 
@@ -654,6 +775,11 @@ class OpenDuelConsentedArgs(TypedDict):
     close_at: str
     sig_a: Base64VecU8
     sig_b: Base64VecU8
+
+
+class OpenSlotArgs(TypedDict):
+    duel_id: str
+    agent: Base64VecU8
 
 
 class OracleOnCallArgs(TypedDict):
@@ -695,6 +821,12 @@ class RegisterAgentArgs(TypedDict):
     model_id: str
     tee: bool
     register_sig: Base64VecU8
+
+
+class RegisterKeylessArgs(TypedDict):
+    model_id: str
+    strategy: str
+    template_version: int
 
 
 class RegisterMessageArgs(TypedDict):
@@ -743,12 +875,22 @@ class RequestOpenPriceArgs(TypedDict):
     duel_id: str
 
 
+class RequestTickArgs(TypedDict):
+    duel_id: str
+
+
 class RequestWithdrawArgs(TypedDict):
     amount: str
 
 
 class ResolveDuelArgs(TypedDict):
     duel_id: str
+
+
+class RevealCompletionArgs(TypedDict):
+    duel_id: str
+    agent: Base64VecU8
+    response: Base64VecU8
 
 
 class RevealIntentArgs(TypedDict):
@@ -974,6 +1116,11 @@ class ArenaView(Protocol):
     @overload
     def __call__(self, method: Literal["get_holding"], args: GetHoldingArgs) -> str: ...
 
+    # A keyless agent's strategy, template and next slot number; `None` for any other key.
+    # View: anyone, no deposit, no panics.
+    @overload
+    def __call__(self, method: Literal["get_keyless"], args: GetKeylessArgs) -> KeylessAgent | None: ...
+
     # Whether side a / side b of a scored duel left a commitment unrevealed and was slashed
     # `no_reveal_bps`. `(false, false)` for unknown, open or clean duels.
     # View: anyone, no deposit, no panics.
@@ -986,6 +1133,16 @@ class ArenaView(Protocol):
     def __call__(
         self, method: Literal["get_pending_withdraw"], args: GetPendingWithdrawArgs
     ) -> tuple[str, str] | None: ...
+
+    # The newest slot of keyless `agent` in duel `duel_id`, if any (removed when the duel ends).
+    # View: anyone, no deposit, no panics.
+    @overload
+    def __call__(self, method: Literal["get_slot"], args: GetSlotArgs) -> Slot | None: ...
+
+    # Duel `duel_id`'s latest oracle tick `(price8, oracle timestamp ns)`, if any.
+    # View: anyone, no deposit, no panics.
+    @overload
+    def __call__(self, method: Literal["get_tick"], args: GetTickArgs) -> tuple[str, str] | None: ...
 
     # Vault balance in yoctoNEAR, 0 for an unknown account. View: anyone, no deposit, no panics.
     @overload
@@ -1006,6 +1163,30 @@ class ArenaView(Protocol):
     # panics.
     @overload
     def __call__(self, method: Literal["is_tee_signer"], args: IsTeeSignerArgs) -> bool: ...
+
+    # The least keeper bond `commit_completion` takes in duel `duel_id`:
+    # `3 * slash_bps / 10_000` of the larger agent bond in the duel, at least 1 yoctoNEAR.
+    # Withholding a reveal keeps the agent's previous call, which can win back at most its own
+    # slash, the opponent's and the flip share of its own; the bond is at least that.
+    # View: anyone, no deposit. Panics: "duel missing".
+    @overload
+    def __call__(self, method: Literal["keyless_commit_bond"], args: KeylessCommitBondArgs) -> str: ...
+
+    # The decision `parse_decision` reads from `response` (`headlines`: a paid headline was in the
+    # request), for parity checks. View: anyone, no deposit, no panics.
+    @overload
+    def __call__(self, method: Literal["keyless_parse"], args: KeylessParseArgs) -> tuple[Side, int] | None: ...
+
+    # The exact request bytes of keyless `agent`'s newest slot in duel `duel_id`: post them as the
+    # body of `POST /v1/chat/completions` unchanged. `None` without a slot.
+    # View: anyone, no deposit, no panics.
+    @overload
+    def __call__(self, method: Literal["keyless_request"], args: KeylessRequestArgs) -> Base64VecU8 | None: ...
+
+    # The request bytes `inputs` build, for parity checks against `fixtures/keyless-vectors.json`.
+    # View: anyone, no deposit. Panics: as `request_bytes`.
+    @overload
+    def __call__(self, method: Literal["keyless_request_bytes"], args: KeylessRequestBytesArgs) -> Base64VecU8: ...
 
     # Agents sorted by alpha, then shield, descending; `limit` (at most 100) from rank `from`.
     # ponytail: sorts every agent per call; a sorted index once agents number in the thousands.
@@ -1054,6 +1235,21 @@ class ArenaCall(Protocol):
     # modifiers: payable
     @overload
     def __call__(self, method: Literal["claim_chaos"], args: ClaimChaosArgs) -> Any: ...
+
+    # Claim slot `seq` of keyless `agent` in duel `duel_id` with one completion: `signature` is the
+    # pinned enclave key `signer`'s ed25519 signature over
+    # `"{model_id}:{hex(request_hash)}:{hex(response_hash)}"` (kind 2), where `request_hash` is the
+    # slot's own. The first valid commit wins; the response stays hidden until
+    # `reveal_completion`. Only before the intent lock and within `SLOT_TTL_NS` of the slot's open.
+    # The attached deposit is the keeper bond (at least `keyless_commit_bond(duel_id)`), refunded
+    # on reveal.
+    # Caller: anyone (keeper). Deposit: the keeper bond; the commit's storage is taken from the
+    # agent's bond. Panics: "paused", "response_hash length", "no slot", "stale slot", "slot
+    # taken", "slot expired", "duel closed", "intent lock", "unknown tee signer", "bad tee
+    # signature", "proof used", "keeper bond", "bond exhausted".
+    # modifiers: payable
+    @overload
+    def __call__(self, method: Literal["commit_completion"], args: CommitCompletionArgs) -> None: ...
 
     # Hide the next decision: store `commitment = sha256(intent_message(intent) || salt)` for
     # this agent in this duel, replacing an earlier unrevealed one. `sig` is the agent key's
@@ -1167,13 +1363,26 @@ class ArenaCall(Protocol):
     @overload
     def __call__(self, method: Literal["open_duel_consented"], args: OpenDuelConsentedArgs) -> str: ...
 
-    # Outlayer delivers the price here. `msg` is `open:<id>` or `close:<id>` as sent by
-    # `ask_oracle`; `sender_id` is who called `oracle_call` and must be this contract. An open price
-    # is taken only when stamped within the oracle's recency window before `open_at` and at most
-    # ten minutes after it (and before `close_at`), so a late answer cannot set a wrong open price.
+    # Open the next decision slot of keyless `agent` in duel `duel_id`, freezing its inputs: the
+    # latest tick's price (else the open price), the seconds left, the headlines pending at the
+    # agent in `get_chaos(duel_id)` and a nonce from the block's random seed. The request hash is
+    # stored; `keyless_request` returns the bytes. Replaces the agent's previous slot in this duel
+    # once that one was revealed, or was never committed and is older than `SLOT_TTL_NS`.
+    # Caller: anyone (keeper). Deposit: none; storage is taken from the agent's bond. Panics:
+    # "paused", "not keyless", "duel missing", "duel closed", "intent lock", "bad target", "no open
+    # price", "slot busy", "bond exhausted", then as `request_bytes`.
+    @overload
+    def __call__(self, method: Literal["open_slot"], args: OpenSlotArgs) -> Slot: ...
+
+    # Outlayer delivers the price here. `msg` is `open:<id>`, `close:<id>` or `tick:<id>` (a
+    # keyless slot's fresh price, see `request_tick`) as sent by `ask_oracle`; `sender_id` is who
+    # called `oracle_call` and must be this contract. An open price is taken only when stamped
+    # within the oracle's recency window before `open_at` and at most ten minutes after it (and
+    # before `close_at`), so a late answer cannot set a wrong open price. A tick is kept when newer
+    # than the one held.
     # Caller: `oracle_account` only. Deposit: none. Panics: "not oracle", "not our request",
     # "bad msg", "duel missing", "no price", "price overflow", "bad price", "resolved",
-    # "open price stale", "duel open", "price before close", "no open price".
+    # "open price stale", "duel open", "price before close", "no open price", "tick after close".
     @overload
     def __call__(self, method: Literal["oracle_on_call"], args: OracleOnCallArgs) -> None: ...
 
@@ -1223,6 +1432,17 @@ class ArenaCall(Protocol):
     @overload
     def __call__(self, method: Literal["register_agent"], args: RegisterAgentArgs) -> AgentView: ...
 
+    # Register a keyless agent: no key, the contract builds its requests from `strategy` and
+    # `template_version` (see `keyless_request`). The id is `keyless_id(contract, caller, n)`. The
+    # agent is TEE-bound (followable) and its decisions arrive only through `commit_completion` /
+    # `reveal_completion`. The attached deposit is its bond, minus the storage its records cost.
+    # Caller: anyone; the caller becomes the owner. Deposit: the bond, above the storage cost.
+    # Panics: "paused", "model_id too long", "control character", "unknown template", "strategy
+    # empty", "strategy too long", "strategy character", "bond required".
+    # modifiers: payable
+    @overload
+    def __call__(self, method: Literal["register_keyless"], args: RegisterKeylessArgs) -> AgentView: ...
+
     # Stop `account_id` from settling. Its settles already in flight are rejected in the
     # callback ("solver removed"). Caller: owner. Deposit: 1 yoctoNEAR. Panics: "not owner",
     # "not a solver".
@@ -1245,6 +1465,15 @@ class ArenaCall(Protocol):
     @overload
     def __call__(self, method: Literal["request_open_price"], args: RequestOpenPriceArgs) -> None: ...
 
+    # Ask the oracle for a fresh price of an open duel's asset; it lands through `oracle_on_call`
+    # (`tick:<id>`) and later slots show it. The caller attaches the oracle deposit plus the tick
+    # record's storage.
+    # Caller: anyone. Deposit: `oracle_deposit` + 0.00065 NEAR, excess refunded. Panics: "attach
+    # oracle_deposit", "duel missing", "duel closed", "no open price".
+    # modifiers: payable
+    @overload
+    def __call__(self, method: Literal["request_tick"], args: RequestTickArgs) -> None: ...
+
     # Queue a vault withdrawal. `withdraw` pays it `withdraw_delay_s` later, so a solver that
     # fronted a swap before this request can still settle it. One request at a time.
     # Caller: the vault owner. Deposit: 1 yoctoNEAR. Panics: "Requires attached deposit of
@@ -1262,6 +1491,19 @@ class ArenaCall(Protocol):
     # modifiers: payable
     @overload
     def __call__(self, method: Literal["resolve_duel"], args: ResolveDuelArgs) -> None: ...
+
+    # Open the committed completion of keyless `agent`'s slot in duel `duel_id`: `response` must
+    # hash to the committed `response_hash`. The keeper bond goes back to the committer. The
+    # decision `parse_decision` reads is recorded as a revealed, enclave-proved intent with
+    # `nonce = seq` and `proof_hash = sha256(request_hash || response_hash)`, made after exactly the
+    # headlines the request carried. A response with no readable decision is still burned (its
+    # proof is used) and leaves the agent's previous call in force. May land inside the intent
+    # lock, up to `close_at`.
+    # Caller: anyone (the response bytes are the key). Deposit: none; storage is taken from the
+    # agent's bond. Panics: "response too long", "no commitment", "response mismatch", "duel
+    # closed", then as a revealed intent ("stale nonce", "bond exhausted", ...).
+    @overload
+    def __call__(self, method: Literal["reveal_completion"], args: RevealCompletionArgs) -> None: ...
 
     # Open a commitment: the intent and salt must hash to the stored commitment for
     # `(intent.duel_id, intent.agent_pk)`; then every `post_intent` check and effect applies,
