@@ -1,152 +1,131 @@
-"use client";
-// One free prediction pane: the market's picks as buttons (Flipped / Held for a planted headline, A / B / Tie for
-// the duel), the crowd's split, and after `settle` whether the viewer was right. Self-contained: it polls the predict
-// contract's views itself and signs through the wallet; the page only says which market it is on.
-import { useCallback, useEffect, useState } from "react";
-import type { MarketView, Pick, PredictionView } from "../lib/abi/predict";
-import {
-  claimCall,
-  crowdLine,
-  mine,
-  PREDICT,
-  picksOf,
-  predictCall,
-  predictView,
-  resultLine,
-  send,
-  settleCall,
-  split,
-  steerLine,
-} from "../lib/predict";
-import * as wallet from "../lib/wallet";
-import { Box, Line, Note } from "./box";
+// Free predictions as lines inside the terminal's panes (term.tsx): one market's picks as buttons with the crowd's
+// split, who can steer it and the viewer's own call; and the predictions the viewer holds, with the settle and claim
+// that pay their deposits back. The page reads GET /api/predict and owns the wallet: a button hands its pick to the
+// page, which types the `predict` command it stands for and signs that.
+import type { Market } from "../api/predict";
+import type { Pick, PredictionView } from "../lib/abi/predict";
+import { crowdLine, resultLine, SAYS, split, steerLine } from "../lib/predict";
+import { type Cell, Line, Note } from "./box";
 
-const POLL_MS = 5_000;
+/** A pick as its button says it. */
+const WORD: Record<Pick, string> = { A: "A", B: "B", Tie: "tie", Flipped: "fooled", Held: "holds" };
+const VERDICT_C = { Right: "win", Wrong: "loss", Void: "dim" } as const;
 
-export default function Predict({
-  duelId,
-  index,
+/** One market: `head`, then a button per pick with its share of the crowd; with `crowd` the crowd's leading pick in
+ *  words; who can steer it; the viewer's call and its verdict. Closed, or already called, the picks show as text. */
+export function Calls({
   w,
-  on = false,
+  head,
+  picks,
+  m,
+  me,
+  crowd = false,
+  connected,
+  onPick,
 }: {
-  duelId: string;
-  /** The injection's index in the arena's `get_chaos(duelId)`; null for the duel's winner. */
-  index: number | null;
   w: number;
-  on?: boolean;
+  head: string;
+  picks: Pick[];
+  /** Undefined until the page has read it. */
+  m: Market | undefined;
+  me: PredictionView | null;
+  crowd?: boolean;
+  /** False: no wallet yet, and each button's label says the click connects one first. */
+  connected: boolean;
+  onPick: (p: Pick) => void;
 }) {
-  const [account, setAccount] = useState<string | null>(null);
-  const [market, setMarket] = useState<MarketView | null>(null);
-  const [held, setHeld] = useState<PredictionView[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    if (!PREDICT) return;
-    try {
-      const [m, h] = await Promise.all([
-        predictView("get_market", { duel_id: duelId, index }),
-        account ? predictView("get_predictions", { account }) : Promise.resolve(null),
-      ]);
-      setMarket(m);
-      setHeld(h);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [duelId, index, account]);
-
-  useEffect(() => {
-    let off = () => {};
-    void wallet.account().then(setAccount);
-    void wallet.onChange(setAccount).then((f) => {
-      off = f;
-    });
-    return () => off();
-  }, []);
-
-  useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(t);
-  }, [load]);
-
-  const act = async (what: string, run: () => Promise<unknown>) => {
-    setBusy(what);
-    setError(null);
-    try {
-      await run();
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const pick = (p: Pick) =>
-    act(p, async () => {
-      const who = account ?? (await wallet.signIn());
-      if (!who) throw new Error("connect a wallet to predict");
-      setAccount(who);
-      await send(predictCall(duelId, index, p));
-    });
-
-  const id = `predict-${duelId}-${index ?? "duel"}`;
-  const title = index === null ? "who wins?" : "will the model be fooled?";
-  if (!PREDICT) {
+  if (!m)
     return (
-      <Box n="?" title={title} w={w} on={on} id={id}>
-        <Line w={w} cells={[{ t: "predictions are not deployed on this network", c: "dim" }]} />
-      </Box>
+      <Line
+        w={w}
+        cells={[
+          { t: `${head} `, c: "dim" },
+          { t: "reading the crowd", c: "dim" },
+        ]}
+      />
+    );
+  const pct = new Map(split(m).map((s) => [s.pick, s.pct]));
+  const live = m.open && !me;
+  const cells: Cell[] = [{ t: `${head} `, c: "dim" }];
+  for (const p of picks) {
+    const t = `${WORD[p]}${m.total ? ` ${pct.get(p)}%` : ""}`;
+    cells.push(
+      live
+        ? {
+            t: `[${t}]`,
+            c: "hi",
+            onClick: () => onPick(p),
+            label: `predict ${SAYS[p]}, free${m.total ? `, ${pct.get(p)}% say so` : ""}${connected ? "" : "; connects a NEAR wallet first"}`,
+          }
+        : { t: me?.pick === p ? `▸${t}` : ` ${t}`, c: me?.pick === p || m.outcome === p ? "hi" : "dim" },
+      " ",
     );
   }
-
-  const me = mine(held, duelId, index);
-  const open = !market?.settled;
-  const shares = split(market);
+  if (!live && !me) cells.push({ t: m.settled ? "· settled" : "· closed", c: "dim" });
+  const say = crowd && (m.total || live) ? (crowdLine(m) ?? "no predictions yet: be the first") : null;
+  const steer = m.open || me ? steerLine(m) : null;
   return (
-    <Box n="?" title={title} extra="free · deposit back" w={w} on={on} id={id}>
-      {picksOf(index).map((p) => {
-        const s = shares.find((x) => x.pick === p);
-        const chosen = me?.pick === p;
-        return (
-          <Line
-            key={p}
-            w={w}
-            sel={chosen}
-            label={`predict ${p}`}
-            onClick={open && !me && !busy ? () => void pick(p) : undefined}
-            cells={[
-              { t: chosen ? "▸ " : "  ", c: "hi" },
-              { t: `${p}`.padEnd(8), c: open && !me ? "hi" : "dim" },
-              { t: `${String(s?.pct ?? 0).padStart(3)}%  `, c: "dim" },
-              { t: "█".repeat(Math.round((s?.pct ?? 0) / 10)), c: p === market?.outcome ? "ok" : "dim" },
-            ]}
-          />
-        );
-      })}
-      <Note w={w} text={crowdLine(market) ?? "no calls yet: be the first"} />
-      {steerLine(market) ? <Note w={w} text={steerLine(market) ?? ""} /> : null}
-      {me ? <Note w={w} c={me.verdict === "Right" ? "ok" : "dim"} text={resultLine(me) ?? ""} /> : null}
-      {me && !me.verdict ? (
+    <>
+      <Line w={w} cells={cells} />
+      {say ? <Note w={w} text={say} /> : null}
+      {steer ? <Note w={w} text={steer} /> : null}
+      {me ? <Note w={w} c={me.verdict ? VERDICT_C[me.verdict] : "dim"} text={resultLine(me) ?? ""} /> : null}
+    </>
+  );
+}
+
+/** The predictions the viewer holds, newest first: each one's result, a settle per duel whose answers may be in (its
+ *  market is not still open), and one claim for every scored deposit. */
+export function Held({
+  w,
+  held,
+  open,
+  onSettle,
+  onClaim,
+}: {
+  w: number;
+  held: PredictionView[];
+  /** Whether the page knows this market is still taking predictions (settling it would score nothing). */
+  open: (p: PredictionView) => boolean;
+  onSettle: (duel: string) => void;
+  onClaim: () => void;
+}) {
+  const shown = [...held].reverse().slice(0, 4);
+  const settle = [...new Set(held.filter((p) => !p.verdict && !open(p)).map((p) => p.duel_id))].slice(0, 3);
+  const scored = held.filter((p) => p.verdict).length;
+  return (
+    <>
+      <Line w={w} cells={[{ t: "your predictions", c: "dim" }]} />
+      {shown.map((p) => (
+        <Note
+          key={`${p.duel_id}:${p.index}`}
+          w={w}
+          c={p.verdict ? VERDICT_C[p.verdict] : "dim"}
+          text={`#${p.duel_id} ${p.index === null ? "who wins" : `attack ${p.index}`}: ${resultLine(p) ?? ""}`}
+        />
+      ))}
+      {held.length > shown.length ? (
+        <Line w={w} cells={[{ t: `+${held.length - shown.length} more`, c: "dim" }]} />
+      ) : null}
+      {settle.length || scored ? (
         <Line
           w={w}
-          label="settle this duel"
-          onClick={busy ? undefined : () => void act("settle", () => send(settleCall(duelId)))}
-          cells={[{ t: busy === "settle" ? "settling…" : "check the result (settle)", c: "dim" }]}
+          cells={[
+            ...settle.flatMap((d): Cell[] => [
+              { t: `[settle #${d}]`, onClick: () => onSettle(d), label: `score the predictions on duel ${d}` },
+              " ",
+            ]),
+            scored
+              ? {
+                  t: `[claim ${scored} deposit${scored > 1 ? "s" : ""} back]`,
+                  c: "ok",
+                  onClick: onClaim,
+                  label: `claim the deposits of your ${scored} scored prediction${scored > 1 ? "s" : ""}`,
+                }
+              : "",
+          ]}
         />
       ) : null}
-      {me?.verdict ? (
-        <Line
-          w={w}
-          label="claim deposits"
-          onClick={busy ? undefined : () => void act("claim", () => send(claimCall()))}
-          cells={[{ t: busy === "claim" ? "claiming…" : "claim your deposit back", c: "hi" }]}
-        />
-      ) : null}
-      {!open && !me ? <Note w={w} text="closed: the model has answered" /> : null}
-      {busy && busy !== "settle" && busy !== "claim" ? <Note w={w} text="sign in your wallet…" /> : null}
-      {error ? <Note w={w} c="err" text={error} /> : null}
-    </Box>
+    </>
   );
 }

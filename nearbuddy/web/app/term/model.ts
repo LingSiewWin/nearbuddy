@@ -126,6 +126,8 @@ export type FeedItem = {
   arm?: Arm | null;
   /** Deploy 17: the nonce of the revealed, enclave-proved call that decided the outcome. */
   decided_by?: string | null;
+  /** Deploy 17: the record's place in its duel's `get_chaos`, which names its prediction market. */
+  index?: number;
 };
 
 /** A deploy-17 outcome as the feed's verdict. */
@@ -174,6 +176,7 @@ export function feed(s: Snap | null, b: Board | null, mine: Mine[], texts: Recor
           mine: !!m,
           arm: c.arm,
           decided_by: c.decided_by,
+          index: i,
         };
       })
       .reverse(),

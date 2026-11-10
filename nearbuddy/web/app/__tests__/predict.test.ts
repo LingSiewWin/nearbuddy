@@ -3,10 +3,10 @@ import type { MarketView, PredictionView } from "../lib/abi/predict";
 import {
   crowdLine,
   DEPOSIT,
+  DEPOSIT_NEAR,
   mine,
   picksOf,
   predictCall,
-  predictView,
   resultLine,
   split,
   steerLine,
@@ -41,6 +41,8 @@ describe("predict", () => {
     expect(steerLine({ ...market([1, 1]), steered_by: "op.testnet" })).toContain("op.testnet");
     expect(steerLine({ ...market([1, 1]), open_until_reveal: true })).toContain("closes at the reveal");
     expect(steerLine(null)).toBeNull();
+    // a duel market is never blind: either agent's owner picks which replies its key signs
+    expect(steerLine({ ...market([1, 1]), index: null })).toContain("either agent's owner can steer this");
   });
 
   test("the viewer's call and its verdict", () => {
@@ -61,23 +63,8 @@ describe("predict", () => {
     expect(c).toMatchObject({ methodName: "predict", args: { duel_id: "567", index: null, pick: "Tie" } });
     expect(c.deposit).toBe(DEPOSIT);
     expect(DEPOSIT).toBe((41n * 10n ** 20n).toString());
+    expect(DEPOSIT_NEAR).toBe("0.0041"); // what the page says next to the buttons
     expect(picksOf(null)).toEqual(["A", "B", "Tie"]);
     expect(picksOf(0)).toEqual(["Flipped", "Held"]);
-  });
-
-  test("a view falls back to the second RPC and decodes the result bytes", async () => {
-    const urls: string[] = [];
-    const answer = [{ account: "a.testnet", count: 2, right: 1, streak: 0, best: 1 }];
-    const fake = (async (url: string, init: RequestInit) => {
-      urls.push(url);
-      const body = JSON.parse(String(init.body));
-      expect(body.params.method_name).toBe("get_board");
-      expect(JSON.parse(atob(body.params.args_base64))).toEqual({ from: 0, limit: 10 });
-      if (urls.length === 1) return new Response("rate limited", { status: 429 });
-      const bytes = [...new TextEncoder().encode(JSON.stringify(answer))];
-      return Response.json({ result: { result: bytes } });
-    }) as unknown as typeof fetch;
-    expect(await predictView("get_board", { from: 0, limit: 10 }, fake)).toEqual(answer);
-    expect(urls.length).toBe(2);
   });
 });

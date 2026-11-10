@@ -1,10 +1,10 @@
 // Free predictions on the arena (predict/ contract): will the model be fooled (`Flipped` / `Held`, per chaos
 // injection), and who wins the duel (`A` / `B` / `Tie`). No stake: `predict` attaches a storage deposit that `claim`
 // pays back once the call is scored (the first claim keeps back the caller's board row, at most 0.00141 NEAR, once).
-// Views go straight to the public RPC (no API route), typed from abi/predict.json; calls are signed by the connected
-// wallet (wallet.ts).
-import { NET, NETWORK_ID } from "../network";
-import type { MarketView, Pick, PredictCalls, PredictionView, PredictViews } from "./abi/predict";
+// The page reads the views through GET /api/predict (api/predict.ts), typed from abi/predict.json; calls are signed by
+// the connected wallet (wallet.ts).
+import { NETWORK_ID } from "../network";
+import type { MarketView, Pick, PredictCalls, PredictionView } from "./abi/predict";
 import type { Call } from "./inject";
 import * as wallet from "./wallet";
 
@@ -13,46 +13,13 @@ export const PREDICT: string | null =
   process.env.NEXT_PUBLIC_PREDICT_CONTRACT ?? (NETWORK_ID === "testnet" ? "nb-predict-v3-1111.testnet" : null);
 /** The contract's `DEPOSIT` (0.0041 NEAR, also `get_config().deposit`): exactly this is attached to `predict`. */
 export const DEPOSIT = "4100000000000000000000";
+/** DEPOSIT in NEAR, as the page says it ("0.0041"). */
+export const DEPOSIT_NEAR = String(Number(BigInt(DEPOSIT) / 10n ** 16n) / 1e8);
 // two arena views (10 TGas each) plus the callback's 15 TGas floor; measured burn is in predict/README.md
 const GAS_PREDICT = "60000000000000";
 // two arena views plus a scoring page of up to 50 calls
 const GAS_SETTLE = "200000000000000";
 const GAS_CLAIM = "30000000000000";
-
-const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
-
-/** One predict view; the method name types args and result. Tries the network's RPC, then its fallback. */
-export async function predictView<M extends keyof PredictViews>(
-  method: M,
-  args: PredictViews[M]["args"],
-  fetcher: typeof fetch = fetch,
-): Promise<PredictViews[M]["result"]> {
-  if (!PREDICT) throw new Error("no predict contract on this network");
-  const body = JSON.stringify({
-    jsonrpc: "2.0",
-    id: "predict",
-    method: "query",
-    params: {
-      request_type: "call_function",
-      finality: "optimistic",
-      account_id: PREDICT,
-      method_name: method,
-      args_base64: b64(JSON.stringify(args)),
-    },
-  });
-  let last: unknown = null;
-  for (const rpc of [NET.rpc, NET.fallback]) {
-    try {
-      const r = await fetcher(rpc, { method: "POST", headers: { "content-type": "application/json" }, body });
-      const j = (await r.json()) as { result?: { result?: number[]; error?: string }; error?: unknown };
-      if (!j.result?.result) throw new Error(JSON.stringify(j.error ?? j.result?.error ?? j).slice(0, 160));
-      return JSON.parse(new TextDecoder().decode(new Uint8Array(j.result.result)));
-    } catch (e) {
-      last = e;
-    }
-  }
-  throw last instanceof Error ? last : new Error(String(last));
-}
 
 const call = <M extends keyof PredictCalls>(
   methodName: M,
@@ -83,7 +50,8 @@ export const picksOf = (index: number | null): Pick[] => (index === null ? ["A",
 export const split = (m: MarketView | null): { pick: Pick; n: number; pct: number }[] =>
   (m?.picks ?? []).map((p) => ({ ...p, pct: m?.total ? Math.round((100 * p.n) / m.total) : 0 }));
 
-const SAYS: Record<Pick, string> = {
+/** A pick in words: "it will hold", "A wins". */
+export const SAYS: Record<Pick, string> = {
   Flipped: "it will be fooled",
   Held: "it will hold",
   A: "A wins",
@@ -103,9 +71,11 @@ export function crowdLine(m: MarketView | null): string | null {
 export const mine = (held: PredictionView[] | null, duel_id: string, index: number | null) =>
   held?.find((p) => p.duel_id === duel_id && p.index === index) ?? null;
 
-/** Why a market's answer may not be blind, for the page to say next to the buttons; null when it is. */
+/** Why a market's answer may not be blind, for the page to say next to the buttons; null when it is. A duel market
+ *  is never blind: each keyed agent's owner picks which replies its key signs (predict/README.md). */
 export function steerLine(m: MarketView | null): string | null {
   if (!m) return null;
+  if (m.index === null) return "either agent's owner can steer this: it picks the replies its agent signs";
   if (m.steered_by) return `the agent's owner ${m.steered_by} picks which reply it signs, so it can steer this`;
   if (m.open_until_reveal) return "closes at the reveal: whoever runs the agent knows the answer first";
   return null;

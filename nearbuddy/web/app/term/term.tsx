@@ -3,15 +3,19 @@
 // replay of answered attacks, 3 tail of attacks, 4 inject, 5 saboteurs), a vim-style status line and a command line.
 // Everything is clickable, and every click types the command it stands for, so a newcomer learns the keyboard path by
 // using the mouse. The live duel and the inject box come first: something resolves within a minute (a duel's close,
-// or the next replayed verdict) and a headline can be drafted for free at once. Data: /api/arena (15 s), /api/board
-// (dataset snapshot), /api/spot (2 s while visible), /api/flips (60 s), /api/duel for a pinned duel. Wallet: NEAR
-// Connect (lib/wallet), loaded on first use.
+// or the next replayed verdict) and a headline can be drafted for free at once. Free predictions sit next to what they
+// are about and before anything paid: who wins the shown duel, and whether each pending attack fools its model (pane 2
+// and the tail). Data: /api/arena (15 s), /api/board (dataset snapshot), /api/spot (2 s while visible), /api/flips
+// (60 s), /api/duel for a pinned duel, /api/predict (5 s per duel with something to predict, 10 s for the account's
+// predictions). Wallet: NEAR Connect (lib/wallet), loaded on first use.
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { type Flip, replay, type Saboteur } from "../api/flips";
+import type { Market } from "../api/predict";
 import { isVoid } from "../eras";
 import type { Arm } from "../lib/abi/arena";
-import { COMMANDS, complete, injectLine, parse, type Target } from "../lib/cmd";
+import type { Pick, PredictionView } from "../lib/abi/predict";
+import { COMMANDS, complete, injectLine, parse, predictLine, type Target } from "../lib/cmd";
 import {
   adapterFor,
   chaosFee,
@@ -22,6 +26,7 @@ import {
   Offline,
   utf8Bytes,
 } from "../lib/inject";
+import * as predict from "../lib/predict";
 import * as wallet from "../lib/wallet";
 import { agentHref, countdown, duelHref, getJson, NETWORK_ID, near, short, txHref, ZERO } from "../tui";
 import { Box, type Cell, col, FlashCtx, Line, Note, Slot, wrap } from "./box";
@@ -42,6 +47,7 @@ import {
   textsOf,
   VERDICT_OF,
 } from "./model";
+import { Calls, Held } from "./predict";
 
 type Pane = 1 | 2 | 3 | 4 | 5;
 type Spot = { price: string; at: number };
@@ -74,6 +80,10 @@ const GLOSSARY: [string, string][] = [
   ["bond", "the NEAR a model stakes; a lost duel slashes it"],
   ["pot", "what the duel pays its winner"],
   ["arm", "how your headline arrives: cue (as written) or clean (BREAKING and named sources removed)"],
+  [
+    "predict",
+    `free: say who wins or whether an attack fools its model; the ${predict.DEPOSIT_NEAR} NEAR deposit comes back`,
+  ],
 ];
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const upper = (s: string | null | undefined) => (s ? s.toUpperCase() : "-");
@@ -148,6 +158,10 @@ export default function Term() {
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [share, setShare] = useState<string | null>(null);
   const [flash, setFlash] = useState<ReadonlyMap<string, number>>(new Map());
+  /** GET /api/predict?duel=: the prediction markets of each duel shown with something to predict. */
+  const [markets, setMarkets] = useState<Record<string, Market[]>>({});
+  /** GET /api/predict?account=: the predictions the connected account holds. */
+  const [held, setHeld] = useState<PredictionView[] | null>(null);
   const [mode, setMode] = useState<"NORMAL" | "COMMAND" | "INSERT">("NORMAL");
   const cmdRef = useRef<HTMLInputElement | null>(null);
   const sending = useRef(false);
@@ -230,6 +244,28 @@ export default function Term() {
       off?.();
     };
   }, []);
+  /** The account's predictions; `fresh` skips the CDN's copy (right after a send). */
+  const loadHeld = (who: string, fresh = false) =>
+    getJson<{ held: PredictionView[] }>(
+      `/api/predict?account=${encodeURIComponent(who)}${fresh ? `&t=${Date.now()}` : ""}`,
+    ).then((j) => j.held);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadHeld only builds a URL
+  useEffect(() => {
+    if (!account || !predict.PREDICT) return setHeld(null);
+    let alive = true;
+    const go = () =>
+      document.visibilityState === "hidden"
+        ? undefined
+        : loadHeld(account)
+            .then((h) => alive && setHeld(h))
+            .catch(() => {});
+    go();
+    const t = setInterval(go, 10_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [account]);
 
   const duel: Duel | null = pinned ? (rec?.duel ?? null) : pickLive(snap?.duels, now);
   const agent = (pk: string) => snap?.leaderboard.find((a) => a.pk === pk) ?? (rec?.a?.pk === pk ? rec.a : rec?.b);
@@ -402,6 +438,84 @@ export default function Term() {
     }
   }
 
+  /** The connected account, else the one the wallet picker returns. `why` says what connecting is for, shown while the
+   *  picker is open. */
+  async function walletFor(why: string): Promise<string | null> {
+    if (account) return account;
+    setBusy(`connect a NEAR ${NETWORK_ID} wallet: ${why}`);
+    try {
+      const a = await wallet.signIn();
+      setAccount(a);
+      return a;
+    } catch (e) {
+      say(`wallet: ${e instanceof Error ? e.message : e}`, "bad");
+      return null;
+    }
+  }
+  const marketOf = (id: string, index: number | null) => markets[id]?.find((m) => m.index === index);
+  async function predictOnce(id: string, index: number | null, p: Pick) {
+    if (!predict.PREDICT) return say(`predictions are not deployed on ${NETWORK_ID}`, "warn");
+    const where = index === null ? `duel #${id}` : `attack ${index} in duel #${id}`;
+    const m = marketOf(id, index);
+    if (m && !m.open)
+      return say(`predictions on ${where} are closed: ${m.settled ? "it is settled" : "its answer is in"}`, "warn");
+    if (predict.mine(held, id, index)) return say(`you already predicted ${where}`, "warn");
+    const who = await walletFor(
+      `it signs your prediction and its ${predict.DEPOSIT_NEAR} NEAR deposit, which you claim back once scored`,
+    );
+    if (!who) return say("no wallet connected: nothing was signed", "warn");
+    setBusy(
+      `sign in your wallet: ${where}, ${predict.SAYS[p]} · free, ${predict.DEPOSIT_NEAR} NEAR deposit back once scored`,
+    );
+    try {
+      const tx = await predict.send(predict.predictCall(id, index, p));
+      const h = await loadHeld(who, true).catch(() => null);
+      if (h) setHeld(h);
+      // a market that closed while the wallet was open refunds the deposit instead of failing the transaction
+      if (h && !predict.mine(h, id, index))
+        return say(
+          `not taken: ${where} closed before your prediction landed; the deposit came back · tx ${short(tx, 10)}`,
+          "warn",
+        );
+      say(
+        `predicted ${where}: ${predict.SAYS[p]} · tx ${short(tx, 10)} · the deposit comes back once it is scored`,
+        "ok",
+      );
+    } catch (e) {
+      say(e instanceof Error ? e.message : String(e), "bad");
+    }
+  }
+  async function settleOnce(id: string) {
+    if (!predict.PREDICT) return say(`predictions are not deployed on ${NETWORK_ID}`, "warn");
+    const who = await walletFor("it signs the settle call that scores the predictions (gas only)");
+    if (!who) return say("no wallet connected: nothing was signed", "warn");
+    setBusy(`sign in your wallet: settle the predictions on duel #${id} · gas only`);
+    try {
+      const tx = await predict.send(predict.settleCall(id));
+      const h = await loadHeld(who, true).catch(() => null);
+      if (h) setHeld(h);
+      say(`settled the predictions on duel #${id}: tx ${short(tx, 10)}`, "ok");
+    } catch (e) {
+      say(e instanceof Error ? e.message : String(e), "bad");
+    }
+  }
+  async function claimPredictionsOnce() {
+    if (!predict.PREDICT) return say(`predictions are not deployed on ${NETWORK_ID}`, "warn");
+    if (!account) return say("connect the wallet that made the predictions first: type connect", "warn");
+    const due = (held ?? []).filter((x) => x.verdict).length;
+    if (!due)
+      return say("nothing to claim yet: a prediction's deposit comes back once it is scored (settle <duel>)", "warn");
+    setBusy(`sign in your wallet: claim ${due} prediction deposit${due > 1 ? "s" : ""} back`);
+    try {
+      const tx = await predict.send(predict.claimCall());
+      const h = await loadHeld(account, true).catch(() => null);
+      if (h) setHeld(h);
+      say(`claimed ${due} prediction deposit${due > 1 ? "s" : ""} back: tx ${short(tx, 10)}`, "ok");
+    } catch (e) {
+      say(e instanceof Error ? e.message : String(e), "bad");
+    }
+  }
+
   /** Types `cmd` into the prompt (so a click shows its command), keeps it in history and runs it. */
   async function run(cmd: string) {
     const c = parse(cmd);
@@ -437,6 +551,12 @@ export default function Term() {
         return once(() => injectOnce(c.duel, c.side, c.text, c.kind));
       case "claim":
         return once(() => claimOnce(c.duel));
+      case "predict":
+        return once(() => predictOnce(c.duel, c.index, c.pick));
+      case "settle":
+        return once(() => settleOnce(c.duel));
+      case "claimPredictions":
+        return once(claimPredictionsOnce);
       case "connect":
         if (account) return say(`connected as ${account} · type disconnect to switch`);
         try {
@@ -480,6 +600,45 @@ export default function Term() {
     4: v2 ? 3 : 2,
     5: 0,
   };
+  // the prediction markets of the shown duel and of every pending attack in the tail; the route caches 3 s
+  const predictDuels = [
+    ...new Set([
+      ...(duel ? [duel.id] : []),
+      ...feedShown.flatMap((f) => (f.index !== undefined && f.verdict === "waiting" ? [f.duel] : [])),
+    ]),
+  ].join(",");
+  useEffect(() => {
+    if (!predictDuels || !predict.PREDICT) return;
+    let alive = true;
+    const go = () => {
+      if (document.visibilityState === "hidden") return;
+      for (const id of predictDuels.split(","))
+        getJson<{ markets: Market[] }>(`/api/predict?duel=${id}`)
+          .then((j) => alive && setMarkets((m) => ({ ...m, [id]: j.markets })))
+          .catch(() => {});
+    };
+    go();
+    const t = setInterval(go, 5000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [predictDuels]);
+  /** A market's buttons; `head` names it. */
+  const calls = (id: string, index: number | null, head: string, crowd = false) =>
+    predict.PREDICT ? (
+      <Calls
+        w={P}
+        head={head}
+        picks={index === null ? ["A", "B"] : ["Flipped", "Held"]}
+        m={marketOf(id, index)}
+        me={predict.mine(held, id, index)}
+        crowd={crowd}
+        connected={!!account}
+        onPick={(p) => run(predictLine(id, index, p))}
+      />
+    ) : null;
+
   const pickTarget = (t: Target) => {
     setTarget(t);
     setKind(null); // the default push follows the new target's call
@@ -787,6 +946,14 @@ export default function Term() {
               cells={callCells(t)}
             />
           ))}
+          {/* free before paid: who wins, under the two calls it is about and above the pot and the attacks */}
+          {calls(duel.id, null, "who wins? free", true)}
+          {predict.PREDICT && !account && marketOf(duel.id, null)?.open ? (
+            <Note
+              w={P}
+              text={`a click connects a NEAR wallet to sign a ${predict.DEPOSIT_NEAR} NEAR deposit you claim back once scored`}
+            />
+          ) : null}
           <Line w={P} cells={[""]} />
           <Line
             w={P}
@@ -809,23 +976,25 @@ export default function Term() {
             const [word, wc] = VERDICT[VERDICT_OF[c.outcome]];
             const decided = c.decided_by ? ` by call #${c.decided_by}` : "";
             return (
-              <Line
-                key={`${duel.id}:${i}`}
-                w={P}
-                cells={[
-                  { t: `#${String(i).padEnd(3)}`, c: "num" },
-                  { t: c.target === duel.a ? "A " : "B ", c: "hi" },
-                  { t: upper(c.kind).padEnd(8), c: "dim", title: "the side the lie pushes" },
-                  { t: c.arm.toLowerCase().padEnd(8), c: "dim", title: ARM_TITLE[c.arm] },
-                  {
-                    t: word.padEnd(12),
-                    c: wc,
-                    k: `duel:${duel.id}:chaos:${i}`,
-                    title: `${c.outcome}${decided}${c.injector === account ? " · yours" : ""}`,
-                  },
-                  { t: `"${c.headline}"`, c: "warn", title: c.headline },
-                ]}
-              />
+              <Fragment key={`${duel.id}:${i}`}>
+                <Line
+                  w={P}
+                  cells={[
+                    { t: `#${String(i).padEnd(3)}`, c: "num" },
+                    { t: c.target === duel.a ? "A " : "B ", c: "hi" },
+                    { t: upper(c.kind).padEnd(8), c: "dim", title: "the side the lie pushes" },
+                    { t: c.arm.toLowerCase().padEnd(8), c: "dim", title: ARM_TITLE[c.arm] },
+                    {
+                      t: word.padEnd(12),
+                      c: wc,
+                      k: `duel:${duel.id}:chaos:${i}`,
+                      title: `${c.outcome}${decided}${c.injector === account ? " · yours" : ""}`,
+                    },
+                    { t: `"${c.headline}"`, c: "warn", title: c.headline },
+                  ]}
+                />
+                {c.outcome === "Pending" ? calls(duel.id, i, "    predict") : null}
+              </Fragment>
             );
           })}
           {(duel.chaos?.length ?? 0) > records.length ? (
@@ -873,6 +1042,18 @@ export default function Term() {
       )}
       {duel && !open && !pinned ? (
         <Note w={P} text="scoring at the oracle's close · this pane switches to the next duel by itself" />
+      ) : null}
+      {held?.length ? (
+        <>
+          <Line w={P} cells={[""]} />
+          <Held
+            w={P}
+            held={held}
+            open={(p) => !!marketOf(p.duel_id, p.index)?.open}
+            onSettle={(d) => run(`settle ${d}`)}
+            onClaim={() => run("claim predictions")}
+          />
+        </>
       ) : null}
       {replaying && card ? (
         <Note
@@ -938,6 +1119,7 @@ export default function Term() {
                 f.tx ? { t: `tx ${short(f.tx, 6)}`, href: txHref(f.tx), title: f.tx, c: "dim" } : "",
               ]}
             />
+            {f.index !== undefined && f.verdict === "waiting" ? calls(f.duel, f.index, "  predict") : null}
           </div>
         );
       })}
@@ -1181,8 +1363,10 @@ export default function Term() {
     ["agents", "MCP server at /api/mcp (it never signs: it hands back the call to sign)"],
     ["keys", "1-5 pane · j/k row · Enter open · i inject · v verify · : or Cmd-K command · ? help · Esc close"],
   ];
-  // the palette lists what can work now: claim needs a wallet, copy needs an attack of yours to share
-  const commands = COMMANDS.filter((c) => (c.name !== "claim" || account) && (c.name !== "copy" || share));
+  // the palette lists what can work now: claim and settle need a wallet, copy needs an attack of yours to share
+  const commands = COMMANDS.filter(
+    (c) => ((c.name !== "claim" && c.name !== "settle") || account) && (c.name !== "copy" || share),
+  );
 
   return (
     <FlashCtx.Provider value={flash}>
