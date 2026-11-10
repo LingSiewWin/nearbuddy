@@ -46,10 +46,10 @@
 //      resistance credit, fees, slash share) and claim_chaos paying the flip's injector once.
 //   5. keyless agents (deploy 18): two agents with no key, registered by an account that is neither solver nor keeper.
 //      The keeper (packages/keeper, its own account) drives their duel through the NEAR AI stand-in: open_slot, the
-//      request bytes rebuilt from chain views, commit_completion, a headline planted at B makes it reveal at once and
-//      decide again with the headline in the contract-built request, and every reveal lands inside the lock. Checks the
-//      keeper's log (one commit and one reveal per slot, no skip), the scored decisions (nonce = slot seq, the size cap
-//      under a paid headline), B Flipped by the headline, and that the keeper exits once the duel is over.
+//      request bytes rebuilt from chain views, submit_completion; a headline planted at B makes it open a new slot and
+//      decide again with the headline in the contract-built request. Checks the keeper's log (every slot submitted, no
+//      skip), the scored decisions (nonce = slot seq, the size cap under a paid headline), every submission before the
+//      lock, B Flipped by the headline, and that the keeper exits once the duel is over.
 //   0. duplicate broadcast (runs first, own account): one signed transfer sent twice with identical bytes, as
 //      sendFailover does when an endpoint times out after the broadcast, while the first copy is in flight and again
 //      once it is final. The node must answer with the transaction's own outcome, never InvalidNonce (which
@@ -604,6 +604,8 @@ async function main() {
   const enclave = KeyPairEd25519.fromRandom();
   const enclavePk = b64.enc(enclave.getPublicKey().data);
   await call(owner, "add_tee_signer", { signer: enclavePk, label: "e2e enclave stand-in" }, 1n);
+  // deploy 18: keyless agents accept an enclave key only for the model it is pinned to (scenario 5)
+  await call(owner, "pin_model_signer", { signer: enclavePk, model_id: "e2e/enclave-model" }, 1n);
   const cfg = await view("get_config");
   log(
     `arena ${ARENA} deployed: commit_reveal ${cfg.commit_reveal}, min_duel_s ${cfg.min_duel_s}, lock ${cfg.intent_lock_s}s`,
@@ -1613,11 +1615,11 @@ async function main() {
         [`NEAR_KEY_${keeperAcct.accountId.replace(/[.-]/g, "_").toUpperCase()}`]: vk.secret_key,
       },
     );
-    const committed = async (pk: string) => !!(await view("get_slot", { duel_id: duelId, agent: pk }))?.commit;
+    const filled = async (pk: string) => !!(await view("get_slot", { duel_id: duelId, agent: pk }))?.response_hash;
     try {
       await until(
-        "both keyless agents' first commit",
-        async () => (await committed(ka)) && (await committed(kb)),
+        "both keyless agents' first decision",
+        async () => (await filled(ka)) && (await filled(kb)),
         40_000,
         500,
       );
@@ -1642,14 +1644,14 @@ async function main() {
       const of = (pk: string, ev: string) => rows.filter((r) => r.agent === pk && r.event === ev).map((r) => r.seq);
       check(
         sc,
-        "keeper log: every slot committed and revealed, no skip, no forfeit",
-        of(ka, "commit").length === 1 &&
-          of(kb, "commit").length === 2 &&
-          JSON.stringify(of(ka, "commit")) === JSON.stringify(of(ka, "reveal")) &&
-          JSON.stringify(of(kb, "commit")) === JSON.stringify(of(kb, "reveal")) &&
-          !rows.some((r) => ["skip", "drop", "forfeit"].includes(r.event)),
-        `A commits ${of(ka, "commit")} reveals ${of(ka, "reveal")}; B commits ${of(kb, "commit")} reveals ${of(kb, "reveal")}; ` +
-          `other: ${rows.filter((r) => !["open", "commit", "reveal"].includes(r.event)).map((r) => `${r.event}:${r.why}`)}`,
+        "keeper log: every slot it opened was submitted, no skip",
+        of(ka, "submit").length === 1 &&
+          of(kb, "submit").length === 2 &&
+          JSON.stringify(of(ka, "open")) === JSON.stringify(of(ka, "submit")) &&
+          JSON.stringify(of(kb, "open")) === JSON.stringify(of(kb, "submit")) &&
+          !rows.some((r) => ["skip", "drop"].includes(r.event)),
+        `A opened ${of(ka, "open")} submitted ${of(ka, "submit")}; B opened ${of(kb, "open")} submitted ${of(kb, "submit")}; ` +
+          `other: ${rows.filter((r) => !["open", "submit"].includes(r.event)).map((r) => `${r.event}:${r.why}`)}`,
       );
       const [ia, ib] = [end.last_intent_a, end.last_intent_b];
       check(
@@ -1657,24 +1659,20 @@ async function main() {
         "scored decisions: A Long at the full cap, B Short at the headline cap, nonce = slot seq",
         ia?.side === "Long" &&
           ia.size_bps === 5000 &&
-          ia.nonce === of(ka, "reveal").at(-1) &&
+          ia.nonce === of(ka, "submit").at(-1) &&
           ib?.side === "Short" &&
           ib.size_bps === 1000 &&
-          ib.nonce === of(kb, "reveal").at(-1),
+          ib.nonce === of(kb, "submit").at(-1),
         `A ${ia?.side} ${ia?.size_bps} nonce ${ia?.nonce}; B ${ib?.side} ${ib?.size_bps} nonce ${ib?.nonce}`,
       );
-      const reveals = rows.filter((r) => r.event === "reveal");
+      const subs = rows.filter((r) => r.event === "submit");
       const lockAt = closeAt - BigInt(LOCK_S) * S;
-      const times = await Promise.all(reveals.map((r) => arenaReceiptTime(r.tx, keeperAcct.accountId)));
-      const lastReveal = (pk: string) => times[reveals.findLastIndex((r) => r.agent === pk)];
+      const times = await Promise.all(subs.map((r) => arenaReceiptTime(r.tx, keeperAcct.accountId)));
       check(
         sc,
-        "each agent's last reveal lands inside [close_at - lock, close_at)",
-        [ka, kb].every((pk) => {
-          const t = lastReveal(pk);
-          return t !== null && t !== undefined && t >= lockAt && t < closeAt;
-        }),
-        [ka, kb].map((pk) => `${Number(closeAt - (lastReveal(pk) ?? 0n)) / 1e9} s before close`).join(", "),
+        "every submission landed before the intent lock",
+        times.every((t) => t !== null && t < lockAt),
+        times.map((t) => `${t === null ? "?" : Number(closeAt - t) / 1e9} s before close`).join(", "),
       );
       const [c] = await view<J[]>("get_chaos", { duel_id: duelId });
       check(
