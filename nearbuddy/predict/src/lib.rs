@@ -36,6 +36,9 @@ use near_sdk::{
     require,
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Attached to every `predict` (0.003 NEAR) and refunded whole by `claim` after scoring. It pays
 /// the prediction's record and its entry in the account's held list: at most 264 bytes, a
 /// 64-character implicit account's first prediction (`tests::deposit_covers_the_largest_prediction`).
