@@ -6,10 +6,11 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { getPublicOrigin } from "mcp-handler";
 import { z } from "zod";
 import type { AgentView, Duel as ChainDuel, Chaos } from "../../lib/abi/arena";
-import { DEFAULT_BOND_NEAR, enterCall, MIN_BOND_NEAR } from "../../lib/enter";
+import { DEFAULT_BOND_NEAR, enterCall, MAX_BOND_NEAR, MIN_BOND_NEAR } from "../../lib/enter";
 import type { Score } from "../../lib/fool";
 import { wilson } from "../../lib/fool";
 import { adapterFor, type Call, claimable, claimCall, isChaosV2 } from "../../lib/inject";
+import { MAX_STRATEGY } from "../../lib/keyless";
 import type { NetworkId } from "../../network";
 
 /** A duel as the site's /api/arena and /api/duel serve it: on deploy 17 with its records and next price. */
@@ -200,12 +201,14 @@ export const enterInput = z.object({
   model_id: z.string().describe("a model pinned on the keyless arena; a wrong one is refused with the pinned list"),
   strategy: z
     .string()
+    .max(MAX_STRATEGY)
     .describe("the agent's strategy, the last line of its system prompt: printable ASCII, 1 to 512 bytes, one line"),
   bond_near: z
     .string()
+    .max(40)
     .optional()
     .describe(
-      `NEAR to attach, default ${DEFAULT_BOND_NEAR}, at least ${MIN_BOND_NEAR}: the bond, less its records' storage`,
+      `NEAR to attach, default ${DEFAULT_BOND_NEAR}, at least ${MIN_BOND_NEAR}, at most ${MAX_BOND_NEAR}: the bond, less its records' storage`,
     ),
   signer_id: ACCOUNT.optional().describe(
     "your NEAR account: it becomes the agent's owner; fills signerId and the CLI line",

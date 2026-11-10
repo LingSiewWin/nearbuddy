@@ -218,10 +218,18 @@ test("enter refuses what the contract would: every strategy reject vector, an un
   const base = { model_id: PINNED[0]?.model_id, strategy: "ok" };
   const strategies = V.reject.filter((r: { patch: object }) => "strategy" in r.patch);
   expect(strategies.length).toBeGreaterThanOrEqual(6);
-  for (const v of strategies)
-    expect((await enter({ ...base, strategy: v.patch.strategy })).content[0]?.text, v.name).toBe(
-      `the contract would refuse this: ${v.error}`,
-    );
+  for (const v of strategies) {
+    const r = await enter({ ...base, strategy: v.patch.strategy });
+    expect(r.isError, v.name).toBe(true);
+    // past 512 characters the input schema refuses it before the contract's own check runs
+    if (v.patch.strategy.length > 512) expect(r.content[0]?.text, v.name).toContain("512");
+    else expect(r.content[0]?.text, v.name).toBe(`the contract would refuse this: ${v.error}`);
+  }
+  expect((await enter({ ...base, strategy: "s".repeat(100_000) })).isError).toBe(true);
+  expect((await enter({ ...base, bond_near: "100.5" })).content[0]?.text).toBe(
+    "the contract would refuse this: bond: at most 100 NEAR",
+  );
+  expect((await enter({ ...base, bond_near: "1".repeat(41) })).isError).toBe(true);
   expect((await enter({ ...base, model_id: "openai/gpt-oss-120b" })).content[0]?.text).toBe(
     `model_id must be a model pinned on ${KEYLESS}: deepseek-ai/DeepSeek-V4.1-Flash-1017`,
   );

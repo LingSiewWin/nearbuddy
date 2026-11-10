@@ -44,10 +44,20 @@ test("enterCall refuses every strategy and model_id reject vector with the contr
     );
 });
 
-test("bond: a NEAR amount of at least 0.02", () => {
+test("bond: a NEAR amount from 0.02 to 100", () => {
   expect(yocto("0.02")).toBe(2n * 10n ** 22n);
   expect(yocto("3")).toBe(3n * 10n ** 24n);
-  for (const bad of ["0.019", "0", "abc", "-1", "1e3", ".5", "1.0000000000000000000000001"])
+  for (const bad of [
+    "0.019",
+    "0",
+    "abc",
+    "-1",
+    "1e3",
+    ".5",
+    "1.0000000000000000000000001",
+    "100.000000000000000000000001",
+    "1000",
+  ])
     expect(() => enterCall(C, { model_id: "m", strategy: "s", bond_near: bad }), bad).toThrow(/^bond: /);
 });
 

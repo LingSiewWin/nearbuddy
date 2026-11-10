@@ -41,6 +41,9 @@ const NEAR = 10n ** 24n;
  *  (64-byte model id, 512-byte strategy) and the contract refuses a deposit at or below that ("bond required"). */
 export const MIN_BOND_NEAR = "0.02";
 export const DEFAULT_BOND_NEAR = "0.1";
+/** The most these tools attach: a bond only pays slot storage and a lost duel's slash, so a typo of 1000 NEAR is
+ *  refused before a wallet sees it. */
+export const MAX_BOND_NEAR = "100";
 /** register_keyless measured 3.4 TGas on the real wasm; the rest is refunded. */
 export const ENTER_GAS = "30000000000000";
 
@@ -70,6 +73,7 @@ export function enterCall(
   checkStrategy(i.strategy);
   const deposit = yocto(i.bond_near?.trim() || DEFAULT_BOND_NEAR);
   if (deposit < yocto(MIN_BOND_NEAR)) throw new RangeError(`bond: at least ${MIN_BOND_NEAR} NEAR`);
+  if (deposit > yocto(MAX_BOND_NEAR)) throw new RangeError(`bond: at most ${MAX_BOND_NEAR} NEAR`);
   return {
     receiverId: contract,
     methodName: "register_keyless",
