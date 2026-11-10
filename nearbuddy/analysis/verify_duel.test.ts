@@ -738,3 +738,37 @@ test("keyless duel: every line passes, and a forged strategy, reveal or pin fail
     ["keyless A TEE signer", "keyless B TEE signer"],
   );
 });
+
+// The one-step flow (submit_completion): testnet v2.nb-keyless-arena-1111.testnet #0, two keyless agents on
+// DeepSeek-V4.1-Flash driven by packages/keeper, a headline planted at B.
+test("one-step keyless duel: every line passes; a forged response, or a signer pinned to another model, fails", () => {
+  const e = load("keyless_v2_0");
+  const lines = checkDuel(e);
+  assert.deepEqual(fails(lines), []);
+  for (const s of ["A", "B"]) {
+    for (const c of ["price", "request", "TEE signer", "TEE signature", "proof_hash", "decision", "timing"])
+      assert.deepEqual(result(lines, `keyless ${s} ${c}`), ["PASS"], `keyless ${s} ${c}`);
+    assert.deepEqual(result(lines, `keyless ${s} response`), ["INFO"], "one step: no commitment to match");
+  }
+  const forged = (f: (x: Evidence) => void) => {
+    const x = structuredClone(e);
+    f(x);
+    return fails(checkDuel(x));
+  };
+  const b = e.now.duel!.b;
+  assert.deepEqual(
+    forged((x) => {
+      const r = receipts(x, "submit_completion").find((y) => args(y).agent === b && args(y).seq === "2")!;
+      const content = JSON.stringify({ direction: "short", size_bps: 900 });
+      const response = JSON.stringify({ choices: [{ message: { role: "assistant", content } }] });
+      setArgs(r, { ...args(r), response: b64.enc(new TextEncoder().encode(response)) });
+    }),
+    ["keyless B TEE signature", "keyless B proof_hash", "keyless B decision"],
+  );
+  assert.deepEqual(
+    forged((x) => {
+      for (const k of Object.keys(x.model_signers!)) x.model_signers![k] = "z-ai/glm-5.3-flash";
+    }),
+    ["keyless A TEE signer", "keyless B TEE signer"],
+  );
+});
