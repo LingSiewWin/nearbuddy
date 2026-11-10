@@ -153,3 +153,33 @@ export function statusLine(s: AgentState, nowNs: bigint): { t: string; c: string
   if (sl.side === null) return { t: `${at} · slot ${sl.seq} answered with no readable decision${tail}`, c: "warn" };
   return { t: `${at} · slot ${sl.seq} decided ${sl.side} ${sl.size_bps} bps${tail}`, c: "ok" };
 }
+
+// Shown as is: printable ASCII but the backslash, and any letter, digit, punctuation or symbol.
+const PLAIN = /^[\x20-\x5b\x5d-\x7e]$|^[\p{L}\p{N}\p{P}\p{S}]$/u;
+/** `s` cut into the units a page shows, so that no character of a request is hidden: a backslash as `\\`, anything
+ *  not plain (controls, format characters such as zero-width spaces, soft hyphens and Unicode tags, combining marks
+ *  and variation selectors, separators other than the space, private use, unassigned) as `\u{HEX}`. The units joined
+ *  name every code point of `s` in order. */
+export function shownUnits(s: string): string[] {
+  return Array.from(s, (c) =>
+    c === "\\" ? "\\\\" : PLAIN.test(c) ? c : `\\u{${(c.codePointAt(0) ?? 0).toString(16).toUpperCase()}}`,
+  );
+}
+
+/** `units` packed into lines of at most `width` characters, never splitting a unit (a longer one gets its own line). */
+export function wrapUnits(units: string[], width: number): string[][] {
+  const lines: string[][] = [];
+  let cur: string[] = [];
+  let n = 0;
+  for (const u of units) {
+    if (cur.length && n + u.length > width) {
+      lines.push(cur);
+      cur = [];
+      n = 0;
+    }
+    cur.push(u);
+    n += u.length;
+  }
+  lines.push(cur);
+  return lines;
+}

@@ -10,8 +10,10 @@ import {
   enterCall,
   KEYLESS_ARENAS,
   keylessArena,
+  shownUnits,
   slotInputs,
   statusLine,
+  wrapUnits,
   yocto,
 } from "../lib/enter";
 import { type KeylessInputs, keylessRequest, toHex } from "../lib/keyless";
@@ -123,4 +125,26 @@ test("canonicalDuelId: a U64 as the contract writes it", () => {
   for (const ok of ["0", "2", "481", "999999999999"]) expect(canonicalDuelId(ok), ok).toBe(true);
   for (const bad of ["03", "00", "", "-1", "+2", "1.0", " 2", "2 ", "1e3", "0x10", "1000000000000"])
     expect(canonicalDuelId(bad), bad).toBe(false);
+});
+
+test("shownUnits: every invisible or look-alike code point is named, text stays text", () => {
+  const show = (s: string) => shownUnits(s).join("");
+  expect(show("Buy NEAR: +5% (café, 中文, €)")).toBe("Buy NEAR: +5% (café, 中文, €)");
+  expect(show("a\u00adb")).toBe("a\\u{AD}b"); // soft hyphen
+  expect(show("x\u2028y")).toBe("x\\u{2028}y"); // line separator
+  expect(show("go\u200blong")).toBe("go\\u{200B}long");
+  expect(show("\u{e0047}\u{e004f}")).toBe("\\u{E0047}\\u{E004F}"); // Unicode tags
+  expect(show("a\u00a0b\ufe0f\u0301")).toBe("a\\u{A0}b\\u{FE0F}\\u{301}"); // NBSP, variation selector, mark
+  expect(show("\t\r\u007f")).toBe("\\u{9}\\u{D}\\u{7F}");
+  expect(show("a\\u{41}")).toBe("a\\\\u{41}"); // a literal backslash cannot pose as an escape
+});
+
+test("wrapUnits: lines of at most the width, no unit split, nothing lost", () => {
+  const units = shownUnits(`${"x".repeat(30)}\u200b${"y".repeat(5)}`);
+  const lines = wrapUnits(units, 32);
+  expect(lines.map((l) => l.join(""))).toEqual(["x".repeat(30), `\\u{200B}${"y".repeat(5)}`]);
+  expect(lines.flat()).toEqual(units);
+  for (const l of wrapUnits(shownUnits("ab\u{e0041}cd"), 3))
+    expect(l.join("").length <= 3 || l.length === 1).toBe(true);
+  expect(wrapUnits([], 10)).toEqual([[]]);
 });

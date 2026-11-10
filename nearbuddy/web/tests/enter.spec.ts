@@ -124,7 +124,7 @@ test("a live agent: status line to decided, and the slot request matches keyless
     await page.waitForTimeout(1000);
   }
   const duel = /duel #(\d+)/.exec(last)?.[1] ?? "";
-  await expect(page.getByTestId("slot-hash")).toContainText("= request_hash the contract stored", { timeout: 20_000 });
+  await expect(page.getByTestId("slot-hash")).toContainText("= request_hash of slot", { timeout: 20_000 });
   const pageHash = hashIn(await shown(page, '[data-testid="slot-hash"]'));
   const onChain = (await view(info.contract, "keyless_request", { duel_id: duel, agent: pk })) as string;
   console.log(`duel ${duel}: page sha256 ${pageHash}, keyless_request sha256 ${sha256hex(Buffer.from(onChain, "base64"))}`);

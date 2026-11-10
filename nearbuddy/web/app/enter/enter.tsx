@@ -11,11 +11,14 @@ import {
   enterCall,
   exampleInputs,
   MIN_BOND_NEAR,
+  shownUnits,
   slotInputs,
   statusLine,
+  wrapUnits,
 } from "../lib/enter";
 import { checkStrategy, KEYLESS_TEMPLATE_VERSION, keylessRequest, MAX_STRATEGY, toHex } from "../lib/keyless";
 import * as wallet from "../lib/wallet";
+import { NET } from "../network";
 import { Box, type Cell, Line, Note, Slot } from "../term/box";
 import { getJson, NETWORK_ID, near, short, txHref } from "../tui";
 
@@ -57,8 +60,42 @@ function useCols(): [React.RefObject<HTMLDivElement | null>, number] {
   return [ref, cols];
 }
 
-/** A request body as the model reads it: the model, each message's text line by line, then the sampling fields. */
-function RequestLines({ bytes, w }: { bytes: Uint8Array; w: number }): ReactNode {
+/** One box line of request text that nothing shortens: units from `shownUnits`, already packed to the box width by
+ *  `wrapUnits`, each named (escaped) unit in the warn colour; a wide glyph that overflows wraps again instead of being
+ *  cut, as box.tsx's lines would cut it. */
+function ExactLine({ w, units, c }: { w: number; units: string[]; c: string }) {
+  // runs of plain units, and each named unit alone; `at` (its offset in the line) is the run's key
+  const parts: { t: string; esc: boolean; at: number }[] = [];
+  let at = 0;
+  for (const u of units) {
+    const esc = u.length > 1;
+    const last = parts.at(-1);
+    if (last && !last.esc && !esc) last.t += u;
+    else parts.push({ t: u, esc, at });
+    at += u.length;
+  }
+  return (
+    <div className="ln">
+      <span aria-hidden="true" className="edge">
+        {"│ "}
+      </span>
+      <span className={`row ${c}`} style={{ width: `${w - 4}ch`, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+        {parts.map((p) => (
+          <span key={p.at} className={p.esc ? "warn" : undefined}>
+            {p.t}
+          </span>
+        ))}
+      </span>
+      <span aria-hidden="true" className="edge">
+        {" │"}
+      </span>
+    </div>
+  );
+}
+
+/** A request body as the model reads it, every code point shown: the model, each message's text line by line,
+ *  then the sampling fields. */
+function RequestView({ bytes, w }: { bytes: Uint8Array; w: number }): ReactNode {
   const body = JSON.parse(new TextDecoder().decode(bytes)) as {
     model: string;
     messages: { role: string; content: string }[];
@@ -67,35 +104,66 @@ function RequestLines({ bytes, w }: { bytes: Uint8Array; w: number }): ReactNode
     seed: number;
     stream: boolean;
   };
+  const text = (t: string, c: string, key: string) => {
+    const rows: ReactNode[] = [];
+    for (const para of t.split("\n"))
+      for (const units of wrapUnits(shownUnits(para), w - 4))
+        rows.push(<ExactLine key={`${key}:${rows.length}`} w={w} units={units} c={c} />);
+    return rows;
+  };
   return (
     <>
-      <Line
-        w={w}
-        cells={[
-          { t: "model   ", c: "dim" },
-          { t: body.model, c: "hi" },
-        ]}
-      />
+      <Line w={w} cells={[{ t: "model:", c: "num" }]} />
+      {text(body.model, "hi", "model")}
       {body.messages.map((m) => (
         <div key={m.role}>
           <Line w={w} cells={[{ t: `${m.role}:`, c: "num" }]} />
-          {m.content.split("\n").map((l, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: lines of one message, in order
-            <Note key={i} w={w} text={l} c={m.role === "system" ? "dim" : "hi"} />
-          ))}
+          {text(m.content, m.role === "system" ? "dim" : "hi", m.role)}
         </div>
       ))}
-      <Line
-        w={w}
-        cells={[
-          {
-            t: `max_tokens ${body.max_tokens} · temperature ${body.temperature} · seed ${body.seed} · stream ${body.stream}`,
-            c: "dim",
-          },
-        ]}
-      />
+      {text(
+        `max_tokens ${body.max_tokens} · temperature ${body.temperature} · seed ${body.seed} · stream ${body.stream}`,
+        "dim",
+        "params",
+      )}
     </>
   );
+}
+
+/** One view of `contract` read by this browser from the public RPC (connect-src allows it), not through this site's
+ *  /api, so the page's own server cannot vouch for itself. Tries the network's RPC, then its fallback. */
+async function chainView<T>(contract: string, method: string, args: object): Promise<{ value: T; host: string }> {
+  let why = "no RPC";
+  for (const url of [NET.rpc, NET.fallback]) {
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "enter",
+          method: "query",
+          params: {
+            request_type: "call_function",
+            finality: "final",
+            account_id: contract,
+            method_name: method,
+            args_base64: btoa(JSON.stringify(args)),
+          },
+        }),
+      });
+      const j = (await r.json()) as { result?: { result?: number[]; error?: string }; error?: unknown };
+      if (j.result?.result)
+        return {
+          value: JSON.parse(new TextDecoder().decode(Uint8Array.from(j.result.result))) as T,
+          host: new URL(url).host,
+        };
+      why = JSON.stringify(j.error ?? j.result?.error ?? r.status).slice(0, 120);
+    } catch (e) {
+      why = String(e).slice(0, 120);
+    }
+  }
+  throw new Error(why);
 }
 
 export default function Enter({ contract }: { contract: string | null }) {
@@ -213,6 +281,23 @@ export default function Enter({ contract }: { contract: string | null }) {
       alive = false;
     };
   }, [slotBody]);
+
+  // the slot's request_hash as the chain has it, read by the browser itself (chainView), for the slot shown
+  const slotKey = st?.duel && st.slot ? `${st.duel.id}:${st.slot.seq}` : "";
+  const [onChain, setOnChain] = useState<
+    { key: string; hash: string | null; host: string } | { key: string; error: string } | null
+  >(null);
+  useEffect(() => {
+    if (!slotKey || !contract || !pk) return;
+    let alive = true;
+    const [duel_id] = slotKey.split(":");
+    chainView<{ request_hash: string; seq: string } | null>(contract, "get_slot", { duel_id, agent: pk })
+      .then(({ value, host }) => alive && setOnChain({ key: slotKey, hash: value?.request_hash ?? null, host }))
+      .catch((e) => alive && setOnChain({ key: slotKey, error: e instanceof Error ? e.message : String(e) }));
+    return () => {
+      alive = false;
+    };
+  }, [slotKey, contract, pk]);
 
   const select = (p: string) => {
     setPk(p);
@@ -368,7 +453,7 @@ export default function Enter({ contract }: { contract: string | null }) {
         text="Template 1, built by the contract from chain state at each slot. Price, open price, seconds left, duel, slot and nonce below are placeholders until a keeper opens a slot; paid headlines arrive as extra unverified blocks."
       />
       {draft ? (
-        <RequestLines bytes={draft} w={P} />
+        <RequestView bytes={draft} w={P} />
       ) : (
         <Note w={P} text={draftErr ? `not buildable: ${draftErr}` : "pick a model"} c={draftErr ? "bad" : "dim"} />
       )}
@@ -491,7 +576,7 @@ export default function Enter({ contract }: { contract: string | null }) {
                 w={P}
                 cells={[{ t: `request of slot ${st.slot.seq}, rebuilt here from the contract's views:`, c: "num" }]}
               />
-              <RequestLines bytes={slotReq} w={P} />
+              <RequestView bytes={slotReq} w={P} />
               <div data-testid="slot-hash">
                 <Line
                   w={P}
@@ -500,15 +585,21 @@ export default function Enter({ contract }: { contract: string | null }) {
                     { t: slotHash ? toHex(Uint8Array.from(atob(slotHash), (c) => c.charCodeAt(0))) : "…", c: "hi" },
                   ]}
                 />
-                <Line
+                <Note
                   w={P}
-                  cells={
-                    slotHash === null
-                      ? [{ t: "hashing", c: "dim" }]
-                      : slotHash === st.slot.request_hash
-                        ? [{ t: `= request_hash the contract stored for slot ${st.slot.seq}: nothing hidden`, c: "ok" }]
-                        : [{ t: `≠ request_hash on chain (${st.slot.request_hash}): do not trust this page`, c: "bad" }]
-                  }
+                  {...(slotHash === null || !onChain || onChain.key !== slotKey
+                    ? { text: "hashing, and reading get_slot from the RPC in this browser", c: "dim" }
+                    : "error" in onChain
+                      ? { text: `could not read get_slot from the RPC in this browser: ${onChain.error}`, c: "warn" }
+                      : slotHash === onChain.hash
+                        ? {
+                            text: `= request_hash of slot ${st.slot.seq} on chain (get_slot, read by this browser from ${onChain.host}): these are the bytes the model is sent`,
+                            c: "ok",
+                          }
+                        : {
+                            text: `≠ request_hash of slot ${st.slot.seq} on chain (${onChain.hash ?? "no slot"}, from ${onChain.host}): do not trust this page`,
+                            c: "bad",
+                          })}
                 />
               </div>
             </>
