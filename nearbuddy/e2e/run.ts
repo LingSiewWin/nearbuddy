@@ -17,6 +17,8 @@
 // Not in the per-push CI (sandbox download, ~5 minutes): nightly and on demand. Everything it writes goes to a temp dir printed at the start; the
 // runner's dataset goes there through NEARBUDDY_DATA, and its attestation reports beside it. Every scenario runs with withdraw_delay_s = 60 (the minimum), so
 // scenario 3b's binds_until passes within the run.
+// Every check reports PASS, FAIL or SKIP with its reason (the offline-only replacement check in an online run), so
+// the total is the same in every run and the summary names what was skipped.
 //
 // Scenarios:
 //   1. commit-reveal duel: owner turns commit-reveal on, the runner plays one duel with two stub agents, the oracle
@@ -172,11 +174,19 @@ function offlineThirdParties(): Promise<string> {
 
 // biome-ignore lint/suspicious/noExplicitAny: RPC and solver JSON are read untyped; the checks below are the schema
 type J = any;
-type Row = { scenario: string; check: string; ok: boolean; detail: string };
+type Row = { scenario: string; check: string; res: "PASS" | "FAIL" | "SKIP"; detail: string };
 const results: Row[] = [];
+function report(scenario: string, name: string, res: Row["res"], detail: string) {
+  results.push({ scenario, check: name, res, detail });
+  console.log(`  ${res} [${scenario}] ${name}${detail ? `: ${detail}` : ""}`);
+}
 function check(scenario: string, name: string, ok: boolean, detail = "") {
-  results.push({ scenario, check: name, ok, detail });
-  console.log(`  ${ok ? "PASS" : "FAIL"} [${scenario}] ${name}${detail ? `: ${detail}` : ""}`);
+  report(scenario, name, ok ? "PASS" : "FAIL", detail);
+}
+/** A check this run cannot exercise (a contract draw, online mode) still reports, with the reason, so the total
+ *  stays the same from run to run and the summary names what did not run. */
+function skip(scenario: string, name: string, why: string) {
+  report(scenario, name, "SKIP", why);
 }
 const log = (m: string) => console.log(`[e2e ${new Date().toISOString().slice(11, 19)}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -778,13 +788,15 @@ async function main() {
             `nonce ${r.intent.nonce} ${t === null ? "untimed" : `${Number((lockAt - t) / 1_000_000n) / 1000} s before the lock`}`,
           );
       }
+      const replacedName = "a changed call replaced the held commitment on chain";
       if (OFFLINE)
         check(
           sc,
-          "a changed call replaced the held commitment on chain",
+          replacedName,
           committed.some((r) => r.replaced_by),
           `${committed.filter((r) => r.replaced_by).length} replaced`,
         );
+      else skip(sc, replacedName, "online: the live spot need not move the stub's call (E2E_OFFLINE=1 alternates it)");
       check(
         sc,
         "every reveal lands inside the intent lock",
@@ -1703,9 +1715,16 @@ function table() {
     `${a.padEnd(w[0]!)} ${b.padEnd(w[1]!)} ${c.padEnd(w[2]!)} ${d}`;
   console.log(`\n${line("SCENARIO", "CHECK", "RES", "DETAIL")}`);
   console.log("-".repeat(140));
-  for (const r of results) console.log(line(r.scenario, r.check, r.ok ? "PASS" : "FAIL", r.detail.slice(0, 160)));
-  const failed = results.filter((r) => !r.ok).length;
-  console.log(`\n${results.length - failed}/${results.length} passed${failed ? `, ${failed} FAILED` : ""}`);
+  for (const r of results) console.log(line(r.scenario, r.check, r.res, r.detail.slice(0, 160)));
+  const failed = results.filter((r) => r.res === "FAIL").length;
+  const skipped = results.filter((r) => r.res === "SKIP");
+  const passed = results.length - failed - skipped.length;
+  console.log(
+    `\n${passed}/${results.length} passed` +
+      (skipped.length ? `, ${skipped.length} skipped` : "") +
+      (failed ? `, ${failed} FAILED` : ""),
+  );
+  for (const r of skipped) console.log(`  SKIP [${r.scenario}] ${r.check}: ${r.detail}`);
   return failed;
 }
 
