@@ -30,9 +30,9 @@ jobs:
       - run: bun install --frozen-lockfile
         working-directory: nearbuddy/web
       - run: bun run test
-      # generated contract types (packages/protocol/src/abi, web/app/lib/abi, agents/arena_types.py) must match
+      # generated contract types (packages/protocol/src/abi, web/app/lib/abi, agents/*_types.py) must match
       # abi/*.json; on a diff run `bun run gen:types` and commit
-      - run: bun run gen:types && git diff --exit-code -- packages/protocol/src/abi web/app/lib/abi agents/arena_types.py
+      - run: bun run gen:types && git diff --exit-code -- packages/protocol/src/abi web/app/lib/abi agents/arena_types.py agents/predict_types.py
       - run: bun x tsc --noEmit -p .
       - run: bun run lint
       - run: bun run build
@@ -86,6 +86,7 @@ jobs:
             nearbuddy/arena
             nearbuddy/intents-stub
             nearbuddy/contract
+            nearbuddy/predict
       # same checks as scripts/check-all.sh rs-* / stub-tests / vault-tests; --locked fails on a stale Cargo.lock
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
@@ -97,6 +98,9 @@ jobs:
       # vault + guarantor contract (layers 1-2)
       - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib
         working-directory: nearbuddy/contract
+      # free predictions on the arena's chaos and duel outcomes
+      - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib
+        working-directory: nearbuddy/predict
       - name: cache cargo-near
         id: cargo-near
         uses: actions/cache@v4
@@ -113,9 +117,11 @@ jobs:
       - run: cargo near abi && diff -u ../abi/arena.json target/near/nearbuddy_arena_abi.json
       # gen.ts types an Option field as always present (`T | null`) because serde writes None as null;
       # skip_serializing_if would drop the key instead, and the ABI schema cannot show that
-      - run: "! grep -rn skip_serializing_if src ../contract/src"
+      - run: "! grep -rn skip_serializing_if src ../contract/src ../predict/src"
       - run: cargo near abi && diff -u ../abi/vault.json target/near/nearbuddy_vault_abi.json
         working-directory: nearbuddy/contract
+      - run: cargo near abi && diff -u ../abi/predict.json target/near/nearbuddy_predict_abi.json
+        working-directory: nearbuddy/predict
 
   # Playwright smoke over the built pages. Reads the live testnet arena contract through the public RPC,
   # so it needs the network but no secrets. Not required by the other jobs.
