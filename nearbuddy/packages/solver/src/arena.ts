@@ -17,7 +17,8 @@
 //                  stand-in: stub_credit the outputs to the arena first)
 //   GET  /arena                                              -> snapshot incl. pending injections with payloads (deploy 17:
 //                  the headlines get_chaos still lists as Pending, with index, arm and time)
-//   GET  /pairing                                            -> {every_s, next_at, last:[{duel_id, a, b, tx, at}]}  (PAIR_EVERY_S loop)
+//   GET  /pairing                                            -> {every_s, next_at, stagger_s, last:[{duel_id, a, b, tx, at}]}
+//                  (PAIR_EVERY_S loop; new duels close PAIR_STAGGER_S apart from every running one)
 //   GET  /agent_duel?pk=<base64>                             -> {agent_pk, registered, duel_id|null}  (a self-hosted runner finds its duel)
 //   GET  /followers?pk=<base64>                              -> [[follower, mandate]]  (list_followers, or get_follow per known follower)
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -104,6 +105,10 @@ interface PairedDuel {
 }
 /** Duel length the pairing loop opens; must stay above the contract's `min_duel_s` (310 s). */
 const DUEL_SECONDS = Number(process.env.DUEL_SECONDS ?? 330);
+/** Seconds the pairing loop keeps between any two duel closes (PAIR_STAGGER_S, 0 = off): duels paired in one tick
+ *  close one gap apart instead of all at once, so their countdowns overlap and a spectator always has a close (with
+ *  its reveal and attack verdicts) at most one gap away, given enough pairs. A duel only ever gets longer. */
+const PAIR_STAGGER_S = Number(process.env.PAIR_STAGGER_S ?? 60);
 /** Yocto bond an agent needs above to be paired; 0 = any funded agent. */
 const PAIR_MIN_BOND = BigInt(process.env.PAIR_MIN_BOND ?? "0");
 /** Agents the pairing loop must leave alone (comma-separated pks): the operator's own two-sided runner drives them. */
@@ -218,6 +223,19 @@ export function meetsFloor(m: Mandate, amountIn: bigint, amountOut: bigint): boo
   return got <= U128_MAX && want <= U128_MAX && got >= want;
 }
 
+/** close_at (ms) for a duel opened at `nowMs`: at least `duelS` away, and at least `gapS` from every close in
+ *  `taken` (the duels already running). The earliest such time; `gapS` 0 = exactly `nowMs + duelS`. */
+export function staggerClose(nowMs: number, duelS: number, gapS: number, taken: readonly number[] = []): number {
+  const gap = gapS * 1000;
+  let t = nowMs + duelS * 1000;
+  // ascending: once t sits a gap before the next close, every later close is further away
+  for (const u of [...taken].sort((x, y) => x - y)) {
+    if (t <= u - gap) break;
+    if (t < u + gap) t = u + gap;
+  }
+  return t;
+}
+
 /** Idle enclave agents with bond above `minBond`, sorted by pk and paired with their neighbour. Deterministic:
  *  two solvers reading the same leaderboard propose the same pairs. An odd agent waits for the next tick. */
 export function pairIdle(
@@ -246,7 +264,7 @@ export class Arena {
   /** [ms, yocto] per quoted fill in the last 24 h, oldest first: the CAP_PER_DAY_YOCTO ledger. */
   private readonly capLedger: [number, string][] = [];
   /** Pairing loop state, served by GET /pairing. `every_s` 0 = loop off. */
-  readonly pairing = { every_s: 0, next_at: 0, last: [] as PairedDuel[] };
+  readonly pairing = { every_s: 0, next_at: 0, stagger_s: PAIR_STAGGER_S, last: [] as PairedDuel[] };
   private pairingRun: Promise<unknown> | null = null;
   constructor(
     private readonly solver: Account,
@@ -272,8 +290,9 @@ export class Arena {
     return (this.deps.sleep ?? ((ms) => new Promise<void>((res) => setTimeout(res, ms))))(ms);
   }
 
-  /** One pairing tick: open a DUEL_SECONDS duel for every pair `pairIdle` makes of the leaderboard. A pair whose
-   *  open fails (one side got a duel meanwhile, RPC error) is skipped and retried on the next tick. With
+  /** One pairing tick: open a duel of at least DUEL_SECONDS for every pair `pairIdle` makes of the leaderboard, each
+   *  closing PAIR_STAGGER_S from every running duel and from the others opened in this tick (`staggerClose`). A pair
+   *  whose open fails (one side got a duel meanwhile, RPC error) is skipped and retried on the next tick. With
    *  `require_consent` on, plain open_duel panics and the loop holds no agent signatures: the tick is skipped.
    *  ponytail: pairing pauses under consent; collect a signed ready message per agent to resume it. */
   async pairOnce(): Promise<string[]> {
@@ -284,10 +303,15 @@ export class Arena {
     // deploy 15 pages the leaderboard; the arg-less view before it ignores the args
     const agents = await (this.deps.leaderboard ?? (() => arenaView("leaderboard", { from: 0, limit: 100 })))();
     const opened: string[] = [];
-    for (const [a, b] of pairIdle(agents, PAIR_MIN_BOND, PAIR_EXCLUDE)) {
-      const close_at = (BigInt(Date.now()) * 1_000_000n + BigInt(DUEL_SECONDS) * 1_000_000_000n).toString();
+    const pairs = pairIdle(agents, PAIR_MIN_BOND, PAIR_EXCLUDE);
+    const taken = pairs.length && PAIR_STAGGER_S > 0 ? await this.runningCloses(agents) : [];
+    for (const [a, b] of pairs) {
+      // computed at each open, so a slow open before it never leaves this duel under min_duel_s
+      const close = staggerClose(Date.now(), DUEL_SECONDS, PAIR_STAGGER_S, taken);
+      const close_at = (BigInt(close) * 1_000_000n).toString();
       try {
         const r = await this.openDuel(a, b, PAIR_SYMBOL, close_at);
+        taken.push(close);
         this.pairing.last.push({ at: Date.now(), duel_id: r.duel_id, a, b, tx: r.tx });
         opened.push(r.duel_id);
         console.log(`[arena] paired ${a.slice(0, 8)} vs ${b.slice(0, 8)}: duel ${r.duel_id} tx ${r.tx}`);
@@ -297,6 +321,15 @@ export class Arena {
     }
     if (this.pairing.last.length > 50) this.pairing.last.splice(0, this.pairing.last.length - 50);
     return opened;
+  }
+
+  /** close_at (ms) of every unresolved duel an agent on `agents` sits in, the operator's excluded pair included. A
+   *  duel that cannot be read is left out: the stagger is best effort, never a reason to skip a tick. */
+  private async runningCloses(agents: AgentView[]): Promise<number[]> {
+    const getDuel = this.deps.getDuel ?? ((id: string) => arenaView("get_duel", { duel_id: id }));
+    const ids = [...new Set(agents.flatMap((a) => (a.in_duel == null ? [] : [String(a.in_duel)])))];
+    const duels = await Promise.all(ids.map((id) => getDuel(id).catch(() => null)));
+    return duels.flatMap((d) => (d && !d.resolved ? [Number(BigInt(d.close_at) / 1_000_000n)] : []));
   }
 
   /** Every `everyS` seconds pair the idle enclave agents. ponytail: pairs every idle verified agent whether or
@@ -313,7 +346,7 @@ export class Arena {
         .finally(() => (this.pairingRun = null));
     }, everyS * 1000).unref();
     console.log(
-      `[arena] pairing idle enclave agents every ${everyS}s into ${DUEL_SECONDS}s duels (min bond ${PAIR_MIN_BOND} yocto, ${PAIR_EXCLUDE.size} excluded)`,
+      `[arena] pairing idle enclave agents every ${everyS}s into ${DUEL_SECONDS}s+ duels closing ${PAIR_STAGGER_S}s apart (min bond ${PAIR_MIN_BOND} yocto, ${PAIR_EXCLUDE.size} excluded)`,
     );
   }
 

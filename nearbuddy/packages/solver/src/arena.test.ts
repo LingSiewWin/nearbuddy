@@ -13,8 +13,17 @@ const scratch = mkdtempSync(join(tmpdir(), "arena-test-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
 process.env.ARENA_HISTORY = join(scratch, "history.json");
 process.env.ARENA_SECRET ??= "route-test-secret"; // shared module cache: arena.routes.test.ts reads it back from the module
-const { Arena, fillRecipient, mandateOpen, meetsFloor, outputToken, pairIdle, quoteAmount, tokenAllowed } =
-  await import("./arena.ts");
+const {
+  Arena,
+  fillRecipient,
+  mandateOpen,
+  meetsFloor,
+  outputToken,
+  pairIdle,
+  quoteAmount,
+  staggerClose,
+  tokenAllowed,
+} = await import("./arena.ts");
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 const NOW = 1_700_000_000_000_000_000n;
@@ -472,7 +481,35 @@ test("route: GET /agent_duel returns the agent's open duel from get_agent, decod
   assert.deepEqual([miss.registered, miss.duel_id], [false, null]);
   assert.equal((await arena.route("GET", "/agent_duel?pk=", ""))!.code, 400);
   assert.deepEqual(seen, ["a+b=", "zzzz"]);
-  assert.deepEqual((await arena.route("GET", "/pairing", ""))!.body, { every_s: 0, next_at: 0, last: [] });
+  assert.deepEqual((await arena.route("GET", "/pairing", ""))!.body, {
+    every_s: 0,
+    next_at: 0,
+    stagger_s: 60,
+    last: [],
+  });
+});
+
+test("staggerClose keeps every close a gap from the running ones and never shortens a duel", () => {
+  const S = 1000;
+  // nothing running: exactly now + duel length
+  assert.equal(staggerClose(0, 330, 60), 330 * S);
+  // a running duel closing 20 s after the floor: pushed one gap past it
+  assert.equal(staggerClose(0, 330, 60, [350 * S]), 410 * S);
+  // one closing a full gap before the floor, or a full gap after it: untouched
+  assert.equal(staggerClose(0, 330, 60, [270 * S, 390 * S]), 330 * S);
+  // a run of closes one gap apart (order given does not matter): lands after the last
+  assert.equal(staggerClose(0, 330, 60, [450 * S, 330 * S, 390 * S]), 510 * S);
+  // a hole two gaps wide between running closes is used
+  assert.equal(staggerClose(0, 330, 60, [300 * S, 420 * S]), 360 * S);
+  // gap 0: the stagger is off
+  assert.equal(staggerClose(0, 330, 0, [330 * S]), 330 * S);
+  // one tick of n pairs: every close at least a gap from the others, the first at the floor
+  const taken: number[] = [];
+  for (let i = 0; i < 5; i++) taken.push(staggerClose(0, 330, 60, taken));
+  assert.deepEqual(
+    taken,
+    [330, 390, 450, 510, 570].map((x) => x * S),
+  );
 });
 
 test("pairIdle leaves excluded agents (the operator's own runner pair) alone", () => {

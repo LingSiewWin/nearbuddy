@@ -21,7 +21,7 @@ import {
   teeText,
   ZERO_PROOF,
 } from "../../protocol/src/intent.ts";
-import { agent, config, configV14, configV16 } from "./arena.fixture.ts";
+import { agent, config, configV14, configV16, duel } from "./arena.fixture.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "arena-routes-"));
 process.env.ARENA_PAYLOADS = join(scratch, "payloads.json");
@@ -760,6 +760,35 @@ test("deploy 14: settle passes fills through untouched (no stub credit)", async 
     calls.map((c) => c.methodName),
     ["settle_follow"],
   );
+});
+
+test("pairOnce staggers the closes of one tick's duels around the duels already running", async () => {
+  const { calls, account } = fakeSolver(() => String(30 + calls.length));
+  const t0 = Date.now();
+  const running = String(BigInt(t0 + 340_000) * 1_000_000n); // the runner's own pair closes 10 s after the floor
+  const read: string[] = [];
+  const arena = new Arena(account, "s.testnet", {
+    config: async () => configV14({ oracle_deposit: "100", require_consent: false }),
+    leaderboard: async () => [
+      ...["P1", "P2", "P3", "P4", "P5", "P6"].map((pk) => agent(pk, { bond: "1" })),
+      agent("R1", { bond: "1", in_duel: "9" }),
+      agent("R2", { bond: "1", in_duel: "9" }),
+      agent("X", { bond: "1", in_duel: "8" }), // a duel that cannot be read is left out
+    ],
+    getDuel: async (id) => {
+      read.push(id);
+      if (id === "8") throw new Error("rpc down");
+      return duel({ id, close_at: running });
+    },
+  });
+  const opened = await withRpc({ get_config: () => ({ oracle_deposit: "100" }) }, () => arena.pairOnce());
+  assert.deepEqual(opened, ["31", "32", "33"]);
+  assert.deepEqual(read.sort(), ["8", "9"]);
+  const closes = calls.map((c) => Number(BigInt(String(c.args.close_at)) / 1_000_000n));
+  const all = [...closes, t0 + 340_000].sort((x, y) => x - y);
+  for (let i = 1; i < all.length; i++) assert.ok(all[i]! - all[i - 1]! >= 60_000, `closes ${all} under a gap apart`);
+  for (const c of closes) assert.ok(c >= t0 + 330_000, "no duel shorter than DUEL_SECONDS");
+  assert.ok(Math.max(...closes) - t0 < 330_000 + 4 * 60_000, "no duel longer than its place in the queue needs");
 });
 
 test("pairOnce reads the leaderboard paged {from: 0, limit: 100}", async () => {
