@@ -9,6 +9,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { type Flip, replay, type Saboteur } from "../api/flips";
+import { isVoid } from "../eras";
 import type { Arm } from "../lib/abi/arena";
 import { COMMANDS, complete, injectLine, parse, type Target } from "../lib/cmd";
 import { adapterFor, claimable, claimCall, type Direction, MAX_HEADLINE, Offline, utf8Bytes } from "../lib/inject";
@@ -570,17 +571,17 @@ export default function Term() {
             w={P}
             sel={pane === 1 && sel[1] === i}
             onClick={() => run(`agent ${name}`)}
-            label={`${name}: fooled ${m.fooled} of ${m.tested} tested attacks, ${pct(m.tested ? m.fooled / m.tested : 0)}. Open its record.`}
+            label={`${name}: ${m.tested ? `fooled ${m.fooled} of ${m.tested} tested attacks, ${pct(m.fooled / m.tested)}` : "no tested attack yet"}. Open its record.`}
             cells={[
               { t: `${i + 1}  `, c: "num" },
               { t: col(name, nameW), c: "hi" },
               " ",
               { t: `${m.fooled}/${m.tested}`.padStart(6), k: `board:${m.model}` },
               " ",
-              {
-                t: pct(m.tested ? m.fooled / m.tested : 0).padStart(4),
-                c: m.fooled / m.tested > 0.5 ? "loss" : "win",
-              },
+              // an untested model has no rate: "0%" in the win colour would claim it was never fooled
+              m.tested
+                ? { t: pct(m.fooled / m.tested).padStart(4), c: m.fooled / m.tested > 0.5 ? "loss" : "win" }
+                : { t: "-".padStart(4), c: "dim", title: "no tested attack yet" },
             ]}
           />
         );
@@ -593,6 +594,8 @@ export default function Term() {
 
   // ---- pane 2: the live (or pinned) duel
   const openPx = duel?.open_price ? Number(duel.open_price) / 1e8 : null;
+  // void_duel writes both prices 0: the oracle never answered and the duel was never played
+  const voided = !!duel?.resolved && isVoid(duel.outcome);
   const closePx = duel?.outcome?.close_price ? Number(duel.outcome.close_price) / 1e8 : null;
   const spotPx = duel?.resolved ? closePx : spot ? Number(spot.price) : null;
   const move = openPx && spotPx ? ((spotPx / openPx - 1) * 1e4).toFixed(1) : null;
@@ -604,7 +607,9 @@ export default function Term() {
     const proven = !!it?.proof_hash && it.proof_hash !== ZERO;
     // open: the call's profit at the live price; resolved: the contract's own score
     const pnl = duel.resolved
-      ? ((t === "A" ? duel.outcome?.pnl_a : duel.outcome?.pnl_b) ?? null)
+      ? voided
+        ? null
+        : ((t === "A" ? duel.outcome?.pnl_a : duel.outcome?.pnl_b) ?? null)
       : open
         ? livePnl(it, openPx, spotPx)
         : null;
@@ -643,11 +648,13 @@ export default function Term() {
   const state = !duel
     ? ""
     : duel.resolved
-      ? duel.outcome
-        ? duel.outcome.winner
-          ? `resolved · ${duel.outcome.winner === duel.a ? "A" : "B"} won`
-          : "resolved · tie"
-        : "resolved"
+      ? voided
+        ? "void: no oracle price, never scored"
+        : duel.outcome
+          ? duel.outcome.winner
+            ? `resolved · ${duel.outcome.winner === duel.a ? "A" : "B"} won`
+            : "resolved · tie"
+          : "resolved"
       : left
         ? `closes in ${left}`
         : "closed · waiting for the oracle";
@@ -738,9 +745,11 @@ export default function Term() {
             cells={[
               { t: duel.symbol === "wrap.near" ? "NEAR/USD" : duel.symbol, c: "hi" },
               { t: "  open ", c: "dim" },
-              openPx ? openPx.toFixed(4) : { t: "oracle pending", c: "dim" },
+              openPx ? openPx.toFixed(4) : { t: voided ? "void: no oracle price" : "oracle pending", c: "dim" },
               { t: duel.resolved ? "  close " : "  now ", c: "dim" },
-              spotPx ? spotPx.toFixed(4) : { t: duel.resolved ? "oracle pending" : "reading", c: "dim" },
+              spotPx
+                ? spotPx.toFixed(4)
+                : { t: voided ? "void: no oracle price" : duel.resolved ? "oracle pending" : "reading", c: "dim" },
               move ? { t: `  ${Number(move) >= 0 ? "+" : ""}${move} bps`, c: Number(move) >= 0 ? "win" : "loss" } : "",
             ]}
           />

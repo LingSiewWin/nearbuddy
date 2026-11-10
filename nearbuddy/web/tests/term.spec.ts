@@ -53,6 +53,7 @@ const board = {
   models: [
     { model: "z-ai/glm-5.3-flash", attacks: 27, tested: 22, fooled: 5, against_tested: 17, against_fooled: 0 },
     { model: "Qwen/Qwen3.8-27B", attacks: 29, tested: 22, fooled: 20, against_tested: 9, against_fooled: 7 },
+    { model: "deepseek-ai/DeepSeek-V9-new", attacks: 0, tested: 0, fooled: 0, against_tested: 0, against_fooled: 0 },
   ],
   recent: [
     {
@@ -140,6 +141,10 @@ test.describe("desktop 1280", () => {
     await expect(pane(page, 1)).toContainText("5/22");
     await expect(pane(page, 1)).toContainText("23%");
     await expect(pane(page, 1)).not.toContainText("range"); // no statistics word on the board
+    // a model nobody has tested has no rate, not "0%" in the win colour
+    const fresh = pane(page, 1).getByRole("button", { name: /DeepSeek-V9-new: no tested attack yet/ });
+    await expect(fresh).toContainText("0/0");
+    await expect(fresh).not.toContainText("0%");
     await expect(pane(page, 2)).toContainText("#480");
     // open 3.7000, live 3.7111: +30 bps of price; A long 50 % = +15.0, B short 50 % = -15.0, labelled display only
     await expect(pane(page, 2).getByRole("button", { name: /target side A/ })).toContainText("+15.0 bps");
@@ -279,13 +284,37 @@ test.describe("no duel live", () => {
     await expect(pane(page, 4)).toContainText("first attack 0.100 NEAR");
     await expect(pane(page, 4)).toContainText("drafting is free");
     await expect(page.getByLabel("your fake headline")).toBeEnabled();
-    // nothing on the page reads "-" or "no ... duel"
-    const text = await page.locator("main").innerText();
+    // the duel and inject panes never read "-" or "no ... duel" (an untested model's rate on the board is "-" on purpose)
+    const text = `${await pane(page, 2).innerText()}\n${await pane(page, 4).innerText()}`;
     expect(text).not.toMatch(/(^|\s)-(\s|$)/m);
     expect(text).not.toMatch(/no (open|live) duel/);
     await pane(page, 2).getByRole("button", { name: /watch duel 4/ }).click();
     await expect(page.locator("#cmdline")).toHaveValue(/^duel 4(77|58)$/);
     await shot(page, "term-replay-390");
+  });
+});
+
+test.describe("void duel", () => {
+  test.use({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
+
+  test("a duel the oracle never priced reads void, not a tie or a pending price", async ({ page }) => {
+    const v = {
+      ...duel("Short"),
+      id: "470",
+      resolved: true,
+      open_price: null,
+      close_at: NS(now - 3_600_000),
+      outcome: { open_price: "0", close_price: "0", pnl_a: 0, pnl_b: 0, winner: null, slashed: "0", injections: 0 },
+    };
+    await stub(page, () => arena("Short", true));
+    await page.route("**/api/duel?id=470", (r) => r.fulfill({ json: { duel: v, a: null, b: null } }));
+    await page.goto("/");
+    const cmd = page.locator("#cmdline");
+    await cmd.fill("duel 470");
+    await cmd.press("Enter");
+    await expect(pane(page, 2)).toContainText("void: no oracle price, never scored");
+    await expect(pane(page, 2)).not.toContainText("tie");
+    await expect(pane(page, 2)).not.toContainText("oracle pending");
   });
 });
 
