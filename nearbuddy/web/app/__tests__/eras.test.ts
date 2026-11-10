@@ -3,6 +3,7 @@
 // checked end to end without RPC. Run: `cd web && bun test app`.
 import { afterAll, describe, expect, mock, setSystemTime, test } from "bun:test";
 import {
+  alphaScope,
   eraSplit,
   isOracleEra,
   isVoid,
@@ -283,4 +284,11 @@ describe("routes", () => {
     expect(calls.filter((c) => c.startsWith("leaderboard:"))).toEqual(["leaderboard:0", "leaderboard:100"]); // stops: no new agents
     fake.extra = [];
   });
+});
+
+test("alphaScope: the legend names the era the page ranks by, and who scored the rest", () => {
+  expect(alphaScope(true, 257)).toBe("duels 257+, scored by the TEE oracle");
+  // an incomplete split ranks by lifetime: the legend must say the operator key scored duels 0-256
+  expect(alphaScope(false, 257)).toBe("all scored duels (0-256: operator key, 257+: TEE oracle)");
+  expect(alphaScope(false, 0)).toBe("all scored duels (TEE oracle)");
 });

@@ -12,6 +12,15 @@ export const pageEraFrom = () => oracleEraFrom(process.env.NEXT_PUBLIC_NEAR_NETW
 
 export const isOracleEra = (id: string | number) => Number(id) >= ORACLE_ERA_FROM;
 
+/** What a legend says alpha sums: the oracle era when the page ranks by it (`byEra`), else every scored duel with who
+ *  scored which (the operator key before `from`, the TEE oracle from it). */
+export const alphaScope = (byEra: boolean, from: number) =>
+  byEra
+    ? `duels ${from}+, scored by the TEE oracle`
+    : from > 0
+      ? `all scored duels (0-${from - 1}: operator key, ${from}+: TEE oracle)`
+      : "all scored duels (TEE oracle)";
+
 /** Ids of every oracle-era duel that exists, newest first. */
 export const oracleIds = (nextDuel: number) =>
   Array.from({ length: Math.max(0, nextDuel - ORACLE_ERA_FROM) }, (_, i) => String(nextDuel - 1 - i));

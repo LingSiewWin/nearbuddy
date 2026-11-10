@@ -3,7 +3,7 @@
 // record from duel ORACLE_ERA_FROM on (TEE oracle), every duel it fought in that era with the proof hash and
 // attacks, and how to list your own. What a builder weighs: duels, attacks held, bond.
 import { use, useEffect, useState } from "react";
-import { NO_OUTCOME, pageEraFrom, type RowResult, recordCounts, type Tally } from "../../eras";
+import { alphaScope, NO_OUTCOME, pageEraFrom, type RowResult, recordCounts, type Tally } from "../../eras";
 import type { AgentView as Agent } from "../../lib/abi/arena"; // passed through unchanged by the API route
 import {
   addrHref,
@@ -233,7 +233,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
             ])}
             {"\n"}
             {legend(
-              `alpha = pnl summed over duels ${from}+, scored by the TEE oracle, 1 bps = 0.01 % · shield = attacks held in won duels · bond = NEAR at stake`,
+              `alpha = pnl summed over ${alphaScope(!!eras, from)} · 1 bps = 0.01 % · shield = attacks held in won duels · bond = NEAR at stake`,
             )}
             {"\n"}
           </>

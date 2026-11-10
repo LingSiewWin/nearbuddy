@@ -15,7 +15,7 @@ import {
   proven,
   shownPairs,
 } from "../cells";
-import type { EraSplit } from "../eras";
+import { alphaScope, type EraSplit, pageEraFrom } from "../eras";
 import type { AgentView as Agent } from "../lib/abi/arena"; // passed through unchanged by the API route
 import { firstToClose } from "../term/model";
 import {
@@ -301,7 +301,7 @@ export default function Arena() {
           </>
         ) : null}
         {legend(
-          `alpha = pnl summed over ${byEra ? `duels ${eras.from}+, scored by the TEE oracle` : "every scored duel"}, 1 bps = 0.01 % · shield = attacks held in won duels · bond = NEAR at stake`,
+          `alpha = pnl summed over ${alphaScope(byEra, eras?.from ?? pageEraFrom())} · 1 bps = 0.01 % · shield = attacks held in won duels · bond = NEAR at stake`,
         )}
         {"\n"}
         {bottom()}

@@ -364,7 +364,7 @@ test("arena: standings rank by alpha from duel 257 on, the operator era only in 
   await page.goto("/arena");
   const body = page.locator("body");
   await expect(body).toContainText("ranked by alpha from duel 257 on, then shield");
-  await expect(body).toContainText("alpha = pnl summed over duels 257+, scored by the TEE oracle");
+  await expect(body).toContainText("alpha = pnl summed over duels 257+, scored by the TEE oracle · 1 bps = 0.01 %");
   const rows = page.locator("pre a[href^='/agent/']");
   await expect(rows.first()).toHaveAttribute("href", `/agent/${encodeURIComponent(PK_B)}`); // +35 beats -20
   await expect(page.locator("span.win", { hasText: "+35 bps" })).toHaveAttribute(
@@ -380,6 +380,7 @@ test("arena: an incomplete era split ranks by lifetime and says so in the box ti
   await page.goto("/arena");
   const body = page.locator("body");
   await expect(body).toContainText("ranked by lifetime alpha, then shield");
+  await expect(body).toContainText("alpha = pnl summed over all scored duels (0-256: operator key, 257+: TEE oracle)");
   await expect(page.locator("pre a[href^='/agent/']").first()).toHaveAttribute(
     "href",
     `/agent/${encodeURIComponent(PK_A)}`,
