@@ -324,14 +324,16 @@ export function finishMath(
 }
 
 /** chaos.rs judge, read back: whether a settled record's outcome is the one its own kind, prev and next give.
- *  Expired had no counting decision before the end; every other outcome had one (`next`). A target that replaced,
+ *  Expired had no counting decision before the end; every other outcome had one (`next`), except a keyless reply
+ *  with no readable decision (unread_decision): it decides the headlines its request carried as NoTrial, with
+ *  `decided_by` set and `next` null. A target that replaced,
  *  unrevealed, the commitment it held at the injection hid that call (hide_prev_since): `prev` stays null and the
  *  call counts against the target, so the next decision gives Flipped on the lie's side and NoTrial off it, never
  *  Held. get_chaos does not show that flag, so a null `prev` with `next` on the lie's side is Flipped (charged) or
  *  NoTrial (no call before the lie). */
-export function judged(c: Pick<Chaos, "kind" | "prev" | "next" | "outcome">): boolean {
+export function judged(c: Pick<Chaos, "kind" | "prev" | "next" | "outcome" | "decided_by">): boolean {
   if (c.outcome === "Expired") return c.next === null;
-  if (c.next === null) return false;
+  if (c.next === null) return c.outcome === "NoTrial" && c.decided_by != null;
   const lie = c.kind === "Placebo" ? null : c.kind;
   if (lie !== null && c.prev === null && c.next === lie && c.outcome === "Flipped") return true; // a charged flip
   if (lie === null || c.prev === null || c.prev === lie) return c.outcome === "NoTrial";

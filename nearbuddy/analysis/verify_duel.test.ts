@@ -658,8 +658,13 @@ test("deploy 17 arithmetic: the contract's own settlement tests, restated", () =
 });
 
 test("judged: an outcome must follow from the record's own kind, prev and next", () => {
-  const r = (kind: Chaos["kind"], prev: Chaos["prev"], next: Chaos["next"], outcome: Chaos["outcome"]) =>
-    judged({ kind, prev, next, outcome });
+  const r = (
+    kind: Chaos["kind"],
+    prev: Chaos["prev"],
+    next: Chaos["next"],
+    outcome: Chaos["outcome"],
+    decided_by: Chaos["decided_by"] = null,
+  ) => judged({ kind, prev, next, outcome, decided_by });
   assert.equal(r("Short", "Long", "Short", "Flipped"), true);
   assert.equal(r("Short", "Long", "Long", "Held"), true);
   assert.equal(r("Short", "Short", "Long", "NoTrial"), true); // already on the lie's side
@@ -673,6 +678,10 @@ test("judged: an outcome must follow from the record's own kind, prev and next",
   assert.equal(r("Placebo", null, "Short", "Flipped"), false); // a placebo has no lie's side
   // a replacement no longer voids: a decided outcome always has a next
   assert.equal(r("Short", null, null, "NoTrial"), false);
+  // a keyless reply with no readable decision: no call, so the headlines it carried are no trial, never a flip
+  assert.equal(r("Short", "Long", null, "NoTrial", "2"), true);
+  assert.equal(r("Short", "Long", null, "Flipped", "2"), false);
+  assert.equal(r("Short", "Long", null, "Held", "2"), false);
   assert.equal(r("Short", "Long", null, "Expired"), true);
   assert.equal(r("Short", "Long", "Long", "Flipped"), false);
   assert.equal(r("Short", "Short", "Short", "Flipped"), false);
