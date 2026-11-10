@@ -1,6 +1,8 @@
 // Shared by the API routes: one public-RPC provider, contract views, and the JSON response shape.
 import { FailoverRpcProvider, JsonRpcProvider } from "near-api-js";
 import type { ArenaViews, Config } from "../lib/abi/arena";
+import type { PredictViews } from "../lib/abi/predict";
+import { PREDICT } from "../lib/predict";
 import { NET } from "../network";
 
 export const RPC = process.env.NEAR_RPC ?? NET.rpc; // NEAR_NETWORK picks the row in network.ts
@@ -16,6 +18,12 @@ export const provider =
 /** Arena view; the method name picks args and result from the generated ABI types (abi/arena.json). */
 export const arenaView = <M extends keyof ArenaViews>(method: M, args: ArenaViews[M]["args"]) =>
   provider.callFunction({ contractId: ARENA, method, args }) as Promise<ArenaViews[M]["result"]>;
+/** Predict contract view (lib/predict.ts), typed from abi/predict.json like `arenaView`; throws on a network without
+ *  one. */
+export const predictView = <M extends keyof PredictViews>(method: M, args: PredictViews[M]["args"]) => {
+  if (!PREDICT) throw new Error("no predict contract on this network");
+  return provider.callFunction({ contractId: PREDICT, method, args }) as Promise<PredictViews[M]["result"]>;
+};
 /** Fields `get_config` gained over time. abi/arena.json describes the current source; an older arena omits them
  *  (commit-reveal and consent arrived by deploy 14; vault caps, pause and `intents_account` with deploy 15; the
  *  `chaos` price terms with deploy 17). */
