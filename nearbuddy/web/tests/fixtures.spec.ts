@@ -167,24 +167,19 @@ const shot = async (page: Page, name: string, from?: string, lines = 0) => {
   await page.screenshot({ path, fullPage: true, clip: { x: 0, y: t.y - 8, width: w, height: t.height * lines + 16 } });
 };
 
-test("arena: commit-reveal word and the execution box from solver quality", async ({ page }) => {
+test("arena: commit-reveal word; standings and duels only, no follower, solver or execution boxes", async ({
+  page,
+}) => {
   await stub(page, "arena", arena(false));
   await page.goto("/arena");
   await expect(page.locator("pre.wrap").first()).toContainText("commit-reveal on · pairing: consent required");
-  const exec = page.locator(box("execution"));
-  await expect(exec).toBeVisible();
+  await expect(page.locator(box("standings"))).toBeVisible();
+  await expect(page.locator(box("duels"))).toBeVisible();
+  for (const name of ["followers", "solver", "execution"]) await expect(page.locator(box(name))).toHaveCount(0);
   const body = page.locator("body");
-  await expect(body).toContainText("every follower in a tick gets one price (batched RFQ)");
-  await expect(body).toContainText("quotes alice.testnet: 0.250 wNEAR←0.6409 USDC"); // Long; share, not the 2.1782 batch
-  await expect(body).toContainText("quotes carol.testnet: 0.500 wNEAR←1.2818 USDC"); // older solver fallback
-  await expect(body).toContainText("buy     0.500 wNEAR ←     1.2818 USDC"); // nonce 41 fills carry side Long
-  await expect(body).toContainText("sell    0.250 wNEAR →     0.6395 USDC"); // nonce 40: no side, read as Short
-  await expect(page.locator('span[title="Long: bought wNEAR, paid USDC"]')).toHaveCount(3);
-  await expect(page.locator("span.win", { hasText: "+1.4 bps" })).toHaveCount(3);
-  await expect(page.locator("span.loss", { hasText: "-0.8 bps" })).toHaveCount(2);
-  await expect(page.locator('span.dim[title="not priced against the oracle mid"]')).toHaveCount(1); // null bps row
+  await expect(body).not.toContainText("clearinghouse");
+  await expect(body).not.toContainText("tamper test");
   await shot(page, "arena-top");
-  await shot(page, "arena-box5", "execution", 13);
 });
 
 test("arena: deploy 13 data still renders standings, commit-reveal off, solver offline", async ({ page }) => {
@@ -194,7 +189,6 @@ test("arena: deploy 13 data still renders standings, commit-reveal off, solver o
   await expect(page.locator("pre.wrap").first()).not.toContainText("pairing:");
   await expect(page.locator("pre a[href^='/agent/']").first()).toBeVisible();
   await expect(page.locator("span.ok", { hasText: "enclave" }).first()).toBeVisible(); // verified column
-  await expect(page.locator("body")).toContainText("solver offline: no execution data");
 });
 
 test("duel: commit-reveal row and the no-reveal forfeit marker", async ({ page }) => {
@@ -365,58 +359,27 @@ test("duel: open tx outside the scanned window falls back to today's require_con
   await expect(page.locator("body")).toContainText("A commit         no commit seen");
 });
 
-test("agent: execution summary for this agent's followers", async ({ page }) => {
-  await stub(page, "agent", {
-    at: now,
-    rpc: "https://fixture.rpc",
-    contract: "arena.nearbuddy-solver.testnet",
-    scanned: 1,
-    indexed: true,
-    next_duel: 412,
-    slash_bps: 1000,
-    min_chaos_deposit: "10000000000000000000000",
-    agent: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
-    followers: [
-      ["alice.testnet", mandate],
-      ["bob.testnet", mandate],
-    ],
-    duels: [],
-    execution: quality.filter((q) => q.follower !== "carol.testnet"),
-  });
-  await page.goto(`/agent/${encodeURIComponent(PK_A)}`);
-  const body = page.locator("body");
-  await expect(body).toContainText("alice.testnet  3 fills  avg +0.3 bps vs oracle mid  best +1.4  worst -0.8"); // null row counted, not averaged
-  await expect(body).toContainText("bob.testnet  2 fills  avg +0.3 bps vs oracle mid  best +1.4  worst -0.8");
-  await expect(body).not.toContainText("carol.testnet");
-  await shot(page, "agent");
-});
-
-test("arena: standings rank by alpha from duel 257 on, lifetime one click away", async ({ page }) => {
+test("arena: standings rank by alpha from duel 257 on, the operator era only in the hover", async ({ page }) => {
   await stub(page, "arena", arena(false));
   await page.goto("/arena");
   const body = page.locator("body");
   await expect(body).toContainText("ranked by alpha from duel 257 on, then shield");
-  await expect(body).toContainText("alpha from duel 257 on (TEE oracle), 257 operator-scored duels excluded · show lifetime");
+  await expect(body).toContainText("alpha = pnl summed over duels 257+, scored by the TEE oracle");
   const rows = page.locator("pre a[href^='/agent/']");
   await expect(rows.first()).toHaveAttribute("href", `/agent/${encodeURIComponent(PK_B)}`); // +35 beats -20
   await expect(page.locator("span.win", { hasText: "+35 bps" })).toHaveAttribute(
     "title",
     "duels 257+ +35 bps · operator era -95 bps · lifetime -60 bps",
   );
-  await page.getByRole("button", { name: "show lifetime" }).click();
-  await expect(body).toContainText("ranked by lifetime alpha, then shield");
-  await expect(body).toContainText("lifetime alpha, incl. 257 operator-scored duels (#0-256)");
-  await expect(rows.first()).toHaveAttribute("href", `/agent/${encodeURIComponent(PK_A)}`); // +140 lifetime
-  await expect(page.locator("span.win", { hasText: "+140 bps" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "show lifetime" })).toHaveCount(0);
   await shot(page, "arena-eras");
 });
 
-test("arena: an incomplete era split ranks by lifetime and says so in the note row", async ({ page }) => {
+test("arena: an incomplete era split ranks by lifetime and says so in the box title", async ({ page }) => {
   await stub(page, "arena", { ...arena(false), eras: { ...eras, complete: false, unread: 3 } });
   await page.goto("/arena");
   const body = page.locator("body");
   await expect(body).toContainText("ranked by lifetime alpha, then shield");
-  await expect(body).toContainText("era split incomplete (3 oracle-era duels unread, retrying): lifetime alpha");
   await expect(page.locator("pre a[href^='/agent/']").first()).toHaveAttribute(
     "href",
     `/agent/${encodeURIComponent(PK_A)}`,
@@ -427,12 +390,12 @@ test("arena: an incomplete era split ranks by lifetime and says so in the note r
 test("arena: a mainnet arena (oracle era from duel 0) shows no operator era", async ({ page }) => {
   await stub(page, "arena", { ...arena(false), eras: { ...eras, from: 0, operator_duels: 0 } });
   await page.goto("/arena");
-  await expect(page.locator("body")).toContainText("every duel on this arena was scored by the TEE oracle");
+  await expect(page.locator("body")).not.toContainText("operator");
   await expect(page.locator("body")).toContainText("ranked by lifetime alpha, then shield");
   await expect(page.getByRole("button", { name: "show lifetime" })).toHaveCount(0);
 });
 
-test("agent: record from duel 257 on, operator era behind a toggle", async ({ page }) => {
+test("agent: record from duel 257 on; no operator era, followers or execution", async ({ page }) => {
   const row = (id: string, result: string, pnl: number) => ({
     id,
     opponent: PK_B,
@@ -480,20 +443,12 @@ test("agent: record from duel 257 on, operator era behind a toggle", async ({ pa
   );
   await page.goto(`/agent/${encodeURIComponent(PK_A)}`);
   const body = page.locator("body");
-  await expect(body).toContainText(
-    "alpha from duel 257 on (TEE oracle) -20 bps · operator era (#0-256, 257 duels) excluded: +160 bps of the lifetime alpha · lifetime +140 bps",
-  );
+  await expect(body).toContainText("alpha from duel 257 on (TEE oracle) -20 bps");
   await expect(body).toContainText("oracle-scored, duels 257+ · 2 duels");
   await expect(body).toContainText("1 win  0 tie  1 loss   net -20 bps");
   await expect(page.getByRole("link", { name: "#300" })).toBeVisible();
-  await page.getByRole("button", { name: "show operator era (#0-256, excluded above)" }).click();
-  await expect(body).toContainText("operator era (#0-256, 257 duels, 2 of them this agent's) excluded: +160 bps of the lifetime alpha");
-  await expect(body).toContainText("operator-scored, duels 0-256 · 2 duels");
-  await expect(body).toContainText("2 win  0 tie  0 loss   net +160 bps");
-  await expect(page.getByRole("link", { name: "#201" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "#300" })).toHaveCount(0);
-  await page.getByRole("button", { name: "back to the oracle era" }).click();
-  await expect(page.getByRole("link", { name: "#300" })).toBeVisible();
+  for (const gone of ["operator era", "show operator era", "followers", "execution"])
+    await expect(body).not.toContainText(gone);
   await shot(page, "agent-eras");
 });
 
@@ -585,7 +540,7 @@ test("agent: a resolved duel without an outcome is labelled, not open, and stays
     attacks: 0,
     attacks_on_me: null,
   });
-  const body = (era: string) => ({
+  await stub(page, "agent", {
     at: now,
     rpc: "https://fixture.rpc",
     contract: "arena.nearbuddy-solver.testnet",
@@ -593,27 +548,18 @@ test("agent: a resolved duel without an outcome is labelled, not open, and stays
     slash_bps: 1000,
     min_chaos_deposit: "10000000000000000000000",
     agent: agent(PK_A, "stub/deterministic", -10),
-    followers: [],
-    execution: null,
-    era,
-    scanned: era === "operator" ? 257 : 155,
+    era: "oracle",
+    scanned: 155,
     eras: {
       from: 257,
       complete: true,
       unread: 0,
-      oracle: tallyOf(0, 0, 0, 0),
-      operator: { alpha_bps: -10, duels: 257, mine: era === "operator" ? 2 : null },
+      oracle: tallyOf(0, 1, 0, 0),
+      operator: { alpha_bps: -10, duels: 257, mine: null },
     },
-    duels: era === "operator" ? [row("22", "tie", 0), row("7", "no_outcome", null)] : [],
+    duels: [row("22", "tie", 0), row("7", "no_outcome", null)],
   });
-  await page.route("**/api/agent**", (r) =>
-    r.fulfill({
-      json: body(r.request().url().includes("era=operator") ? "operator" : "oracle"),
-      headers: { "cache-control": "no-store" },
-    }),
-  );
   await page.goto(`/agent/${encodeURIComponent(PK_A)}`);
-  await page.getByRole("button", { name: /show operator era/ }).click();
   const page_ = page.locator("body");
   await expect(page_).toContainText("0 win  1 tie  0 loss   net +0 bps");
   await expect(page_).toContainText("1 resolved (no outcome recorded): pre-migration duels, not scored");
@@ -654,10 +600,9 @@ test("arena: a second duel pair gets one row per pair in the duels box; a single
     "href",
     `/agent/${encodeURIComponent(PK_G)}`,
   );
-  // one stub rule for standings and pairs: "redteam/stub" agents are hidden too, and "show all" brings both back
-  await expect(body).toContainText("2 stub agents hidden (no model, no proof) · show all");
-  await page.getByRole("button", { name: /show all/ }).click();
-  await expect(body).toContainText("pair 3           stub vs stub  #355-#359 · 2 of last 40");
+  // one fixture rule for standings and pairs: "redteam/..." agents never show, and there is no toggle to bring them back
+  await expect(body).not.toContainText("redteam");
+  await expect(page.getByRole("button", { name: /show all/ })).toHaveCount(0);
   const one = arena(false);
   Object.assign(one.stats, { pairs: [{ a: PK_A, b: PK_B, first: 319, last: 357, n: 40 }] });
   await stub(page, "arena", one);
@@ -850,25 +795,4 @@ test("follower: a scan that stopped before the first follow shows a warning row"
   await expect(warn).toHaveText("older fills not scanned: arena txs read back to 11-06 14:05 UTC only (1200 txs)");
   await expect(page.locator("span.warn", { hasText: /^warning$/ })).toBeVisible(); // the row's label
   await expect(page.locator("body")).not.toContainText("read back to its first follow");
-});
-
-test("agent: each follower links to its follower page", async ({ page }) => {
-  await stub(page, "agent", {
-    at: now,
-    rpc: "https://fixture.rpc",
-    contract: "arena.nearbuddy-solver.testnet",
-    scanned: 1,
-    next_duel: 412,
-    slash_bps: 1000,
-    min_chaos_deposit: "10000000000000000000000",
-    agent: agent(PK_A, "deepseek-ai/DeepSeek-V3.1", 140),
-    followers: [["nearbuddy-follower2.testnet", mandate]],
-    duels: [],
-    execution: null,
-  });
-  await page.goto(`/agent/${encodeURIComponent(PK_A)}`);
-  await expect(page.getByRole("link", { name: "nearbuddy-follower2.testnet" })).toHaveAttribute(
-    "href",
-    "/follower/nearbuddy-follower2.testnet",
-  );
 });

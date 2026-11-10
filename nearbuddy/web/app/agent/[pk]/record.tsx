@@ -1,9 +1,8 @@
 "use client";
 // One agent's public record, btop-style: who it is and whether its intents are enclave-verified, the
-// record from duel ORACLE_ERA_FROM on (TEE oracle; the operator-key era one click away), every duel it fought
-// in that era with the proof hash and attacks, and how to list your own.
+// record from duel ORACLE_ERA_FROM on (TEE oracle), every duel it fought in that era with the proof hash and
+// attacks, and how to list your own. What a builder weighs: duels, attacks held, bond.
 import { use, useEffect, useState } from "react";
-import { age, type Fill, followerQuality, sbps, vsCell } from "../../cells";
 import { NO_OUTCOME, pageEraFrom, type RowResult, recordCounts, type Tally } from "../../eras";
 import type { AgentView as Agent } from "../../lib/abi/arena"; // passed through unchanged by the API route
 import {
@@ -13,7 +12,6 @@ import {
   boxTitle,
   bps,
   duelHref,
-  followerHref,
   getJson,
   legend,
   meter,
@@ -29,7 +27,6 @@ import {
   ZERO,
 } from "../../tui";
 
-type Mandate = { allowance: string; spent: string; per_tx_cap: string; expires_at: string; revoked: boolean };
 type DuelRow = {
   id: string;
   opponent: string;
@@ -58,9 +55,7 @@ type Rec = {
   slash_bps?: number;
   min_chaos_deposit?: string;
   agent: Agent | null;
-  followers: [string, Mandate][];
   duels: DuelRow[];
-  execution?: Fill[] | null; // fills of this agent's followers; absent when the solver is offline
   era?: "oracle" | "operator";
   eras?: {
     from: number;
@@ -70,7 +65,6 @@ type Rec = {
     operator: { alpha_bps: number | null; duels: number; mine: number | null };
   };
 };
-type Era = "oracle" | "operator";
 
 const glyph = { win: "█", tie: "▄", loss: "▁", open: "▒", void: "·", no_outcome: "?" } as const;
 // a void and a duel without an outcome were never scored
@@ -84,13 +78,11 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const pk = decodeURIComponent(raw);
   const [r, setR] = useState<Rec | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [era, setEra] = useState<Era>("oracle");
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       try {
-        const q = era === "operator" ? "&era=operator" : "";
-        const j = await getJson<Rec>(`/api/agent?pk=${encodeURIComponent(pk)}${q}`);
+        const j = await getJson<Rec>(`/api/agent?pk=${encodeURIComponent(pk)}`);
         if (alive) {
           setR(j);
           setErr(null);
@@ -105,11 +97,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
       alive = false;
       clearInterval(id);
     };
-  }, [pk, era]);
-  const pick = (e: Era) => {
-    setR(null); // the other era's rows are a different list: show loading, not a mix
-    setEra(e);
-  };
+  }, [pk]);
 
   const a = r?.agent ?? null;
   const allEras = r?.eras ?? null;
@@ -120,9 +108,6 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const hasOperator = from > 0; // a mainnet arena is oracle-scored from duel 0
   // headline alpha: the oracle era when the route split it, else the contract's lifetime figure
   const alpha = eras ? eras.oracle.alpha_bps : (a?.alpha_bps ?? 0);
-  const opAlpha = eras?.operator.alpha_bps;
-  const opDuels = eras?.operator.duels;
-  const opMine = eras?.operator.mine;
   const duels = r?.duels ?? [];
   const done = duels.filter((d) => d.resolved);
   const { wins, losses, ties, voids, unscored, scored, attacked, survived } = recordCounts(duels);
@@ -135,17 +120,13 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
       ? { t: "ENCLAVE-VERIFIED", c: "ok" }
       : { t: "UNVERIFIED TIER", c: "unv" }
     : { t: "", c: "" };
-  const quality = followerQuality(
-    r?.execution,
-    (r?.followers ?? []).map(([w]) => w),
-  );
   const contract = r?.contract ?? NET.arena;
   const slashPct = r?.slash_bps != null ? `${r.slash_bps / 100} %` : "slash_bps";
   const attackCost = r?.min_chaos_deposit ? `${near(r.min_chaos_deposit, 1)} NEAR` : "the minimum deposit";
   const scope = !r
     ? ""
     : r.eras
-      ? `scanned ${r.scanned} ${r.era === "operator" ? "operator" : "oracle"}-era duels`
+      ? `scanned ${r.scanned} oracle-era duels`
       : r.indexed
         ? `indexed duels: ${r.scanned} (index started at deploy 10)`
         : `scanned last ${r.scanned} duels`;
@@ -206,14 +187,6 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
             {unreadDuels != null ? (
               <span className="warn"> · era split incomplete ({unreadDuels} oracle-era duels unread, retrying)</span>
             ) : null}
-            {eras && hasOperator ? (
-              <span className="dim">
-                {" "}
-                · operator era (#0-{from - 1}, {opDuels} duels{opMine != null ? `, ${opMine} of them this agent's` : ""}
-                ) excluded: {opAlpha != null ? `${bps(opAlpha)} bps` : "-"} of the lifetime alpha · lifetime{" "}
-                {bps(a.alpha_bps)} bps
-              </span>
-            ) : null}
             <span className="dim">
               , shield {a.shield} · {scope}
             </span>
@@ -259,36 +232,8 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
                 : { t: "idle", c: "dim" },
             ])}
             {"\n"}
-            {r?.followers.length ? (
-              r.followers.map(([who, m], i) => (
-                <span key={who}>
-                  {rowx(i ? "" : "followers", [
-                    { t: who, href: followerHref(who), title: `follower page: vault, mandates, fills` },
-                    `  cap ${near(m.per_tx_cap)}  spent ${near(m.spent)}/${near(m.allowance)} NEAR`,
-                    m.revoked ? { t: "  REVOKED", c: "loss" } : "",
-                  ])}
-                  {"\n"}
-                </span>
-              ))
-            ) : (
-              <>
-                {rowx("followers", [{ t: "none", c: "dim" }])}
-                {"\n"}
-              </>
-            )}
-            {quality.map((q, i) => (
-              <span key={q.follower}>
-                {rowx(i ? "" : "execution", [
-                  { t: q.follower, href: followerHref(q.follower), title: "follower page" },
-                  `  ${q.n} fill${q.n === 1 ? "" : "s"}  avg `,
-                  vsCell(q.avg),
-                  ` vs oracle mid  best ${sbps(q.best)}  worst ${sbps(q.worst)}  last ${age(q.last, Date.now())} ago`,
-                ])}
-                {"\n"}
-              </span>
-            ))}
             {legend(
-              `alpha = pnl summed over duels ${from}+, scored by the TEE oracle${hasOperator ? ` (0-${from - 1}: operator key)` : ""}, 1 bps = 0.01 % · shield = attacks survived in won duels · bond = NEAR at stake${quality.length ? " · execution = solver fills vs the TEE oracle mid, + better for the follower" : ""}`,
+              `alpha = pnl summed over duels ${from}+, scored by the TEE oracle, 1 bps = 0.01 % · shield = attacks held in won duels · bond = NEAR at stake`,
             )}
             {"\n"}
           </>
@@ -301,29 +246,8 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
         {bottom()}
         {"\n\n"}
 
-        {boxTitle(
-          2,
-          "record",
-          `${era === "oracle" ? `oracle-scored, duels ${from}+` : `operator-scored, duels 0-${from - 1}`} · ${duels.length} duels`,
-        )}
+        {boxTitle(2, "record", `oracle-scored, duels ${from}+ · ${duels.length} duels`)}
         {"\n"}
-        {hasOperator ? (
-          <>
-            {rowx("era", [
-              era === "oracle"
-                ? { t: `TEE oracle, duels ${from}+`, c: "ok" }
-                : { t: `operator key, duels 0-${from - 1}`, c: "unv" },
-              { t: "   ", c: "dim" },
-              era === "oracle"
-                ? {
-                    t: `show operator era (#0-${from - 1}, excluded above)`,
-                    onClick: () => pick("operator"),
-                  }
-                : { t: "back to the oracle era", onClick: () => pick("oracle") },
-            ])}
-            {"\n"}
-          </>
-        ) : null}
         {rowx("verified", [
           ...meter([[verified, "ok"]], duels.length),
           `  ${verified}/${duels.length} duels enclave-signed`,

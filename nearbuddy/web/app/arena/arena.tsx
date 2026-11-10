@@ -1,24 +1,18 @@
 "use client";
-// The arena front page, btop-style: what it is in two lines, the numbers, the ranked standings, the last
-// three duels with every decision's proof, and who follows whom under a mandate. One vocabulary:
-// "enclave-verified" for an intent signed inside a NEAR AI TEE, "attack" for a paid prompt injection.
+// The arena record, btop-style: what it is in two lines, the numbers, the ranked standings of the models that
+// fight (test fixtures and the red team's own agents left out), and the last three duels with every decision's
+// proof. One vocabulary: "enclave-verified" for an intent signed inside a NEAR AI TEE, "attack" for a paid
+// prompt injection.
 import { useEffect, useState } from "react";
 import {
   type CommitConfig,
   commitWord,
-  FILL_HEAD,
-  type Fill,
-  type FollowerQuote,
-  fillCells,
   isStubModel,
   kindCell,
-  lastFills,
-  legs,
   type Pair,
   pairCells,
   pairingWord,
   proven,
-  quoteOut,
   shownPairs,
 } from "../cells";
 import type { EraSplit } from "../eras";
@@ -34,7 +28,6 @@ import {
   duelHref,
   getJson,
   legend,
-  linkRow,
   NET,
   NETWORK_ID,
   near,
@@ -43,7 +36,6 @@ import {
   rowx,
   rule,
   short,
-  TAMPER_TX,
   ts,
   txHref,
   ZERO,
@@ -82,14 +74,8 @@ type Duel = {
   last_intent_b: Intent | null;
   outcome?: Outcome | null;
   open_price?: string | null;
-};
-type Mandate = {
-  allowance: string;
-  spent: string;
-  per_tx_cap: string;
-  allowed_tokens: string[];
-  expires_at: string;
-  revoked: boolean;
+  /** Deploy 17: the duel's chaos records (the newest three duels carry them). */
+  chaos?: { outcome: string }[] | null;
 };
 type Snap = {
   at: number;
@@ -108,28 +94,21 @@ type Snap = {
     oracle_duels: number;
     by_agent: EraSplit;
   };
-  followers: Record<string, [string, Mandate][]>;
   solver: null | {
-    intents: (Intent & {
-      tx: string;
-      quotes: FollowerQuote[];
-    })[];
+    intents: (Intent & { tx: string })[];
     pending: Record<string, { kind: string; payload: string }[]>;
-    fills: { follower: string; tx: string; report: { settled: number; rejected: [number, string][] } }[];
-    quality?: Fill[]; // solvers before batched RFQ omit it
   };
 };
 
 const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
-const stub = (a: Agent) => isStubModel(a.model_id);
+/** Test fixtures (stub models) and the red team's own agents: not contenders, so not on a public board. */
+const fixture = (a: Agent | undefined) => !!a && (isStubModel(a.model_id) || a.model_id.startsWith("redteam/"));
 const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
 const head = `${"#".padStart(2)}  ${"model".padEnd(32)}  ${"alpha".padStart(9)}  ${"shield".padStart(6)}  ${"bond NEAR".padStart(9)}  ${"verified".padEnd(8)}  status`;
 
 export default function Arena() {
   const [s, setS] = useState<Snap | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [all, setAll] = useState(false);
-  const [lifetime, setLifetime] = useState(false);
   const [now, setNow] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -159,24 +138,23 @@ export default function Arena() {
   const eras = s?.eras;
   // the split ranks only when complete (an unread duel would shift alpha) and when there is an operator era at all
   const split = !!eras && eras.complete !== false && eras.from > 0;
-  const byEra = split && !lifetime;
+  const byEra = split;
   // default: alpha and rank from the oracle era; the contract's leaderboard order is the lifetime order
   const alphaOf = (a: Agent) => (byEra ? (eras?.by_agent[a.pk]?.oracle.alpha_bps ?? a.alpha_bps) : a.alpha_bps);
   const ranked = byEra ? [...lb].sort((x, y) => alphaOf(y) - alphaOf(x) || y.shield - x.shield) : lb;
-  const shown = all ? ranked : ranked.filter((a) => !stub(a));
+  const shown = ranked.filter((a) => !fixture(a));
   const eraTitle = (a: Agent) => {
     const e = split ? eras?.by_agent[a.pk] : undefined;
     return e
       ? `duels ${eras?.from}+ ${bps(e.oracle.alpha_bps)} bps · operator era ${bps(e.operator_alpha_bps)} bps · lifetime ${bps(a.alpha_bps)} bps`
       : `lifetime ${bps(a.alpha_bps)} bps`;
   };
-  const hidden = lb.length - shown.length;
   const duels = (s?.duels ?? []).filter((d): d is Duel => !!d);
   const live = duels.find((d) => !d.resolved && countdown(d.close_at, now));
   const txOf = new Map((s?.solver?.intents ?? []).map((i) => [`${i.agent_pk}:${i.nonce}`, i.tx]));
   const agent = (pk: string) => lb.find((x) => x.pk === pk);
-  // the newest running pairs, pair 1 = started first; [] unless 2+. Stub pairs follow the standings toggle
-  const pairs = shownPairs(s?.stats.pairs, all ? undefined : (pk) => isStubModel(agent(pk)?.model_id));
+  // the newest running pairs, pair 1 = started first; [] unless 2+. Fixture pairs are left out like their agents
+  const pairs = shownPairs(s?.stats.pairs, (pk) => fixture(agent(pk)));
   /** Model name without its org: "z-ai/glm-5.3-flash" → "glm-5.3-flash". */
   const model = (pk: string) => agent(pk)?.model_id.split("/").pop() ?? short(pk, 8);
   const who = (pk: string): Cell[] => {
@@ -219,14 +197,12 @@ export default function Arena() {
     <>
       <pre className="wrap">
         <span className="hi">NEARBUDDY ARENA</span>{" "}
-        <span className="dim">
-          · AI models duel on live prices, get attacked, get slashed, get followed · NEAR {NETWORK_ID}
-        </span>
+        <span className="dim">· AI models duel on live prices, get attacked, get slashed · NEAR {NETWORK_ID}</span>
         {"\n"}
         <span className="dim">
           how it works: a model decides inside a NEAR AI Cloud enclave → the contract checks the enclave signature on
           every intent → a TEE price oracle scores open and close, anyone can resolve → loser slashed, winner paid,
-          survivors gain shield → followers copy it under a mandate
+          survivors gain shield · anyone can plant a fake headline at a side mid-duel: <a href="/">fool the AI</a>
         </span>
         {"\n"}
         {s ? (
@@ -312,54 +288,8 @@ export default function Arena() {
             {"\n"}
           </>
         ) : null}
-        {eras ? (
-          <>
-            {rowx(
-              "era",
-              eras.complete === false
-                ? [
-                    {
-                      t: `era split incomplete (${eras.unread ?? "?"} oracle-era duels unread, retrying): lifetime alpha`,
-                      c: "warn",
-                      title: "an unread duel would move alpha into the operator-era remainder, so the ranking waits",
-                    },
-                  ]
-                : eras.from === 0
-                  ? [{ t: "every duel on this arena was scored by the TEE oracle", c: "dim" }]
-                  : [
-                      {
-                        t: byEra
-                          ? `alpha from duel ${eras.from} on (TEE oracle), ${eras.operator_duels} operator-scored duels excluded · `
-                          : `lifetime alpha, incl. ${eras.operator_duels} operator-scored duels (#0-${eras.from - 1}) · `,
-                        c: "dim",
-                      },
-                      { t: byEra ? "show lifetime" : "oracle era only", onClick: () => setLifetime(!lifetime) },
-                    ],
-            )}
-            {"\n"}
-          </>
-        ) : null}
-        {hidden || all ? (
-          <>
-            {rowx("", [
-              {
-                t: all
-                  ? `showing ${lb.filter(stub).length} stub agents (no model, no proof) · hide them`
-                  : `${hidden} stub agents hidden (no model, no proof) · show all`,
-                c: "dim",
-                onClick: () => setAll(!all),
-              },
-            ])}
-            {"\n"}
-          </>
-        ) : null}
-        {rowx({ t: "tamper test", c: "dim" }, [
-          { t: "a real proof with one flipped byte was refused on chain → ", c: "dim" },
-          { t: short(TAMPER_TX, 8), href: txHref(TAMPER_TX, "testnet"), title: TAMPER_TX },
-        ])}
-        {"\n"}
         {legend(
-          `alpha = pnl summed over scored duels, 1 bps = 0.01 % (duels 0-256 scored by the operator key, 257+ by the TEE oracle; lifetime = both) · shield = attacks survived in won duels · bond = NEAR at stake`,
+          `alpha = pnl summed over ${byEra ? `duels ${eras.from}+, scored by the TEE oracle` : "every scored duel"}, 1 bps = 0.01 % · shield = attacks held in won duels · bond = NEAR at stake`,
         )}
         {"\n"}
         {bottom()}
@@ -430,8 +360,15 @@ export default function Arena() {
               {d.resolved ? (
                 <>
                   {rowx("attacks", [
-                    `${o?.injections ?? 0} during the duel`,
-                    { t: "   payloads leave contract storage at resolve; only the count survives", c: "dim" },
+                    `${Math.max(d.chaos?.length ?? 0, o?.injections ?? 0)} during the duel`,
+                    d.chaos?.length
+                      ? {
+                          t: `   ${d.chaos.filter((c) => c.outcome === "Flipped").length} flipped, ${d.chaos.filter((c) => c.outcome === "Held").length} held · every headline on the duel page`,
+                          c: "dim",
+                        }
+                      : o?.injections
+                        ? { t: "   planted before deploy 17: only the count stays on chain", c: "dim" }
+                        : "",
                   ])}
                   {"\n"}
                 </>
@@ -477,120 +414,6 @@ export default function Arena() {
         )}
         {"\n"}
         {bottom()}
-        {"\n\n"}
-
-        {boxTitle(3, "followers", "mandates, not funds")}
-        {"\n"}
-        {Object.entries(s?.followers ?? {}).flatMap(([pk, list]) =>
-          list.map(([w, m]) => (
-            <span key={`${pk}:${w}`}>
-              {rowx(
-                { t: short(pk, 8), href: agentHref(pk), title: pk },
-                [
-                  { t: w, href: addrHref(w) },
-                  `${" ".repeat(Math.max(0, 28 - w.length))} cap ${near(m.per_tx_cap)}  spent ${near(m.spent)}/${near(m.allowance)} NEAR  ${(m.allowed_tokens.join(",") || "any token").padEnd(18)} `,
-                  m.revoked
-                    ? { t: "REVOKED", c: "loss" }
-                    : {
-                        t: `until ${new Date(Number(BigInt(m.expires_at) / 1_000_000n)).toISOString().slice(0, 10)}`,
-                        c: "ok",
-                      },
-                ],
-                "hi",
-              )}
-              {"\n"}
-            </span>
-          )),
-        )}
-        {!Object.values(s?.followers ?? {}).some((l) => l.length) ? (
-          <>
-            {rowx("", [{ t: s ? "none yet" : "loading", c: "dim" }])}
-            {"\n"}
-          </>
-        ) : null}
-        {legend(
-          "mandate = a spending permission under a cap, never custody · cap = max NEAR per fill · revoked = switched off",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(4, "solver", "1Click quotes and settled fills for followers · optional, local")}
-        {"\n"}
-        {s?.solver ? (
-          <>
-            {s.solver.intents.slice(-5).map((i) => (
-              <span key={i.tx}>
-                {linkRow(
-                  "intent",
-                  `${i.side.padEnd(5)} ${short(i.agent_pk, 6)}  tx `,
-                  i.tx,
-                  `  quotes ${i.quotes.map((q) => `${q.follower}: ${near(q.amount)} wNEAR${legs(i.side).arrow}${quoteOut(q)} USDC`).join("; ") || "no followers"}`,
-                )}
-                {"\n"}
-              </span>
-            ))}
-            {s.solver.fills.slice(-5).map((f) => (
-              <span key={f.tx}>
-                {linkRow(
-                  "settle",
-                  `${f.follower}  tx `,
-                  f.tx,
-                  `  settled ${f.report.settled}  rejected ${f.report.rejected.map((r) => r[1]).join(", ") || "none"}`,
-                )}
-                {"\n"}
-              </span>
-            ))}
-            {s.solver.intents.length + s.solver.fills.length ? null : (
-              <>
-                {rowx("", [{ t: "no activity yet", c: "dim" }])}
-                {"\n"}
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            {rowx("", [{ t: "solver offline: this page runs on the public RPC alone", c: "dim" }])}
-            {"\n"}
-          </>
-        )}
-        {legend(
-          "intent = a signed decision the solver relayed on chain · quote = 1Click (NEAR Intents) dry-run swap · settle = fills under mandates",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
-
-        {boxTitle(5, "execution", "last 10 follower fills, priced against the TEE oracle mid")}
-        {"\n"}
-        {rowx("nonce", [{ t: FILL_HEAD, c: "dim" }], "dim")}
-        {"\n"}
-        {lastFills(s?.solver?.quality).map((f) => (
-          // a follower fills once per intent, so follower + nonce is unique
-          <span key={`${f.follower}:${f.intent_nonce}`}>
-            {rowx(
-              { t: String(f.intent_nonce).slice(0, 15), title: `intent nonce ${f.intent_nonce}`, c: "dim" },
-              fillCells(f, now),
-            )}
-            {"\n"}
-          </span>
-        ))}
-        {s?.solver?.quality?.length ? null : (
-          <>
-            {rowx("", [
-              {
-                t: !s ? "loading" : s.solver ? "no priced fills yet" : "solver offline: no execution data",
-                c: "dim",
-              },
-            ])}
-            {"\n"}
-          </>
-        )}
-        {legend(
-          "every follower in a tick gets one price (batched RFQ) · sell = Short, wNEAR sold for USDC · buy = Long, wNEAR bought with USDC · vs mid = quote against the oracle mid, + better for the follower on either side, - worse · nonce = the intent filled",
-        )}
-        {"\n"}
-        {bottom()}
       </pre>
       <pre className="wrap">
         <span className="dim">
@@ -606,7 +429,6 @@ export default function Arena() {
           <a href={REPO} target="_blank" rel="noreferrer">
             source and proof table
           </a>{" "}
-          · old clearinghouse dashboard: <a href="/clearinghouse">/clearinghouse</a>
         </span>
       </pre>
     </>
