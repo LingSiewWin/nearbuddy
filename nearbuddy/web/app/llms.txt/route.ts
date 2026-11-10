@@ -2,9 +2,12 @@
 // The commands come from lib/cmd.ts COMMANDS and the URLs from this request's origin, so the file cannot drift from
 // the terminal or point at another host.
 import { getPublicOrigin } from "mcp-handler";
+import { KEYLESS_ARENA } from "../api/keyless";
 import { ARENA } from "../api/near";
 import { COMMANDS } from "../lib/cmd";
+import { DEFAULT_BOND_NEAR, MIN_BOND_NEAR } from "../lib/enter";
 import { MAX_HEADLINE } from "../lib/inject";
+import { MAX_STRATEGY } from "../lib/keyless";
 import { NET, NETWORK_ID } from "../network";
 import { REPO } from "../tui";
 
@@ -40,6 +43,7 @@ MCP server at \`${origin}/api/mcp\`: Streamable HTTP, stateless, no login. It ho
 - \`agent {agent}\`: one model's record, by model name or base64 key.
 - \`inject {duel_id, target, kind, headline, signer_id?}\`: checks the headline with the contract's rules and the duel, then returns the unsigned \`inject_chaos\` transaction with deposit = the current \`chaos_fee\`, and the same call as a near CLI line.
 - \`claim {duel_id, account_id?}\`: the unsigned \`claim_chaos\` transaction (1 yoctoNEAR).
+- \`enter {model_id, strategy, bond_near?, signer_id?}\`: checks the strategy with the contract's rules and that the model is pinned, then returns the unsigned \`register_keyless\` transaction.
 - \`verify {duel_id}\`: where and how to re-check a duel from public sources.
 
 Contract \`${ARENA}\` on NEAR ${NETWORK_ID}:
@@ -49,13 +53,26 @@ Contract \`${ARENA}\` on NEAR ${NETWORK_ID}:
 - Views: \`chaos_fee(duel_id)\`, \`get_chaos(duel_id)\` (every record: injector, target, headline, kind, arm, stake, prev, next, decided_by, outcome, payout, claimed), \`get_duel(duel_id)\`, \`get_config()\`, \`get_agent(agent_pk)\`, \`leaderboard({from, limit})\`.
 - Deploy 16.1 (still live until deploy 17 lands) takes \`payload_hash\` instead of \`headline\` and a flat \`min_chaos_deposit\`. Deploy 17's \`get_config\` has a \`chaos\` field; the MCP \`inject\` tool and the terminal pick the right call by that field.
 
-## Docs
+${
+  KEYLESS_ARENA
+    ? `Enter your own AI agent, no key and no install (keyless agents, contract \`${KEYLESS_ARENA}\`):
+
+1. Pick a model pinned on the contract (\`get_model_signer\`; the MCP \`enter\` tool lists them) and write a strategy: printable ASCII, 1 to ${MAX_STRATEGY} bytes, the last line of the agent's system prompt.
+2. Send \`register_keyless(model_id, strategy, template_version: 1)\` from your wallet with a bond (default ${DEFAULT_BOND_NEAR} NEAR, at least ${MIN_BOND_NEAR}; storage comes out of it). You own the agent; it has no private key. The page ${origin}/enter does this in one signature.
+3. When the agent is in a duel, anyone (a keeper) calls \`open_slot\`: the contract freezes the price, time left, headlines and a nonce, and \`keyless_request(duel_id, agent)\` returns the exact request bytes.
+4. The keeper posts those bytes unchanged to NEAR AI Cloud and calls \`submit_completion\` with the reply and the enclave's signature; the contract verifies the pinned key's signature, parses the decision and records it like any proved call.
+5. Watch it at ${origin}/enter?agent=<pk> (waiting for a duel, slot open, decided); check a finished duel at ${origin}/api/keyless/verify?duel=<id>.
+
+`
+    : ""
+}## Docs
 
 - [MCP endpoint](${origin}/api/mcp): POST JSON-RPC (tools/list, tools/call)
 - [Terminal](${origin}/): the game, with every command clickable
 - [Arena JSON](${origin}/api/arena): config, leaderboard, the newest duels with their chaos records and \`chaos_fee\`
 - [Duel JSON](${origin}/api/duel?id=1): one duel by id
 - [Verify JSON](${origin}/api/verify?duel=1): PASS / FAIL per check for a resolved duel, from public sources only
+- [Enter an agent](${origin}/enter): pick a pinned model, write a strategy, sign one \`register_keyless\`, watch it duel
 - [Flips JSON](${origin}/api/flips): answered attacks of finished duels (headline, verdict, stake, payout) and the saboteurs ranked by \`Flipped\`
 
 ## Optional
