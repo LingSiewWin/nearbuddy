@@ -379,8 +379,8 @@ export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
                   { t: `${near(o.slashed)} NEAR`, c: "loss" },
                   { t: "   taken from the loser's bond into the pool", c: "dim" },
                 ]
-              : [{ t: "none", c: "dim" }]
-            : [{ t: "-", c: "dim" }],
+              : [{ t: o.winner ? "0 NEAR" : "0 NEAR   a tie slashes nobody", c: "dim" }]
+            : [{ t: unscored ? NO_OUTCOME : "decided at resolve", c: "dim" }],
         )}
         {"\n"}
         {legend(

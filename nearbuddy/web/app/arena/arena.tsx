@@ -236,7 +236,18 @@ export default function Arena() {
             ) : null}
             <span className="dim">
               {" "}
-              · next close {live ? <span className="open">in {countdown(live.close_at, now)}</span> : "none open"}
+              ·{" "}
+              {live ? (
+                <>
+                  next close <span className="open">in {countdown(live.close_at, now)}</span>
+                </>
+              ) : duels[0] ? (
+                <>
+                  last close <a href={duelHref(duels[0].id)}>#{duels[0].id}</a> {ts(duels[0].close_at)} UTC
+                </>
+              ) : (
+                "waiting for the first duel"
+              )}
             </span>
             {"\n"}
           </>
