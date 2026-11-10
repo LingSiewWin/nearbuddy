@@ -163,6 +163,12 @@ test("wrapUnits: lines of at most the width, no unit split, nothing lost", () =>
   for (const l of wrapUnits(shownUnits("ab\u{e0041}cd"), 3))
     expect(l.join("").length <= 3 || l.length === 1).toBe(true);
   expect(wrapUnits([], 10)).toEqual([[]]);
+  // words move whole to the next line when the line has a space; the trailing space stays, nothing is dropped
+  const words = shownUnits("priced in USD. Each turn you commit");
+  const w = wrapUnits(words, 12);
+  expect(w.map((l) => l.join(""))).toEqual(["priced in ", "USD. Each ", "turn you ", "commit"]);
+  expect(w.flat()).toEqual(words);
+  expect(wrapUnits(shownUnits("abcdefghij"), 4).map((l) => l.join(""))).toEqual(["abcd", "efgh", "ij"]);
 });
 
 test("enteredAgent: the new agent's id comes from the register_keyless result, nothing else", () => {

@@ -185,16 +185,19 @@ export function shownUnits(s: string): string[] {
   );
 }
 
-/** `units` packed into lines of at most `width` characters, never splitting a unit (a longer one gets its own line). */
+/** `units` packed into lines of at most `width` characters, breaking after the line's last space when it has one and
+ *  never splitting a unit (a longer one gets its own line). Nothing is dropped: the lines joined are `units`. */
 export function wrapUnits(units: string[], width: number): string[][] {
   const lines: string[][] = [];
   let cur: string[] = [];
   let n = 0;
   for (const u of units) {
     if (cur.length && n + u.length > width) {
+      const space = cur.lastIndexOf(" ");
+      const carry = space >= 0 && space < cur.length - 1 ? cur.splice(space + 1) : [];
       lines.push(cur);
-      cur = [];
-      n = 0;
+      cur = carry;
+      n = carry.reduce((k, c) => k + c.length, 0);
     }
     cur.push(u);
     n += u.length;
