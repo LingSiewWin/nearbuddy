@@ -1,10 +1,10 @@
 # nearbuddy-predict
 
-Free predictions on the arena. A spectator calls, before the answer is public, whether the model is fooled by a planted
+No-stake predictions on the arena. A spectator calls, before the answer is public, whether the model is fooled by a planted
 headline (`Flipped` or `Held`, one market per chaos injection) or who wins a duel (`A`, `B` or `Tie`, one market per duel).
 There is no stake: each call attaches a 0.0041 NEAR storage deposit that `claim` pays back once the call is scored. The
-first claim keeps back the storage of the caller's board row (up to 0.00141 NEAR), once. Right calls climb a public
-board ranked by right minus wrong, so random guessing does not climb it.
+first claim keeps back the storage of the caller's board row (up to 0.00141 NEAR), once, and gas applies. Right calls
+climb a public board ranked by right minus wrong, so random guessing does not climb it.
 
 The arena is only read through its views. It is never written.
 
