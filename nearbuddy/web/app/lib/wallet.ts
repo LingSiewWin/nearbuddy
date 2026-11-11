@@ -70,6 +70,12 @@ export async function onChange(cb: (account: string | null) => void): Promise<()
 
 /** Signs and sends one function call with the connected wallet; resolves with the transaction hash. */
 export async function send(call: Call): Promise<string> {
+  return (await sendFor(call)).hash;
+}
+
+/** `send`, also resolving with what the call returned: the outcome's `SuccessValue` read as JSON, undefined when the
+ *  wallet handed back none (or the method returns nothing). */
+export async function sendFor(call: Call): Promise<{ hash: string; value: unknown }> {
   const wallet = await (await get()).wallet();
   const out = await wallet.signAndSendTransaction({
     receiverId: call.receiverId,
@@ -84,7 +90,18 @@ export async function send(call: Call): Promise<string> {
   if (!hash) throw new Error("the wallet returned no transaction hash");
   const why = refusal(out);
   if (why) throw new Error(`the contract refused it (${why}) · tx ${hash.slice(0, 10)}…`);
-  return hash;
+  return { hash, value: returned(out) };
+}
+
+/** A successful outcome's return value (`status.SuccessValue`, base64 JSON), or undefined without one. */
+export function returned(out: unknown): unknown {
+  const v = ((out ?? {}) as { status?: { SuccessValue?: unknown } }).status?.SuccessValue;
+  if (typeof v !== "string" || !v) return undefined;
+  try {
+    return JSON.parse(atob(v));
+  } catch {
+    return undefined;
+  }
 }
 
 type Outcome = { status?: unknown; receipts_outcome?: { outcome?: { status?: unknown } }[] };

@@ -1,4 +1,4 @@
-// What GET /api/predict?duel= serves, built from plain view answers so bun test covers it without an RPC: every free
+// What GET /api/predict?duel= serves, built from plain view answers so bun test covers it without an RPC: every
 // prediction market of one duel (lib/predict.ts), each with whether the predict contract would take a call now. The
 // test is the contract's own `still_open` (predict/src/lib.rs), run on the arena's views:
 // - the duel market takes calls until the duel's midpoint, and never once now + duel_lock >= close_at;

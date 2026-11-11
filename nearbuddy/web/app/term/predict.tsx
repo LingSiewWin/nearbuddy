@@ -1,4 +1,4 @@
-// Free predictions as lines inside the terminal's panes (term.tsx): one market's picks as buttons with the crowd's
+// No-stake predictions as lines inside the terminal's panes (term.tsx): one market's picks as buttons with the crowd's
 // split, who can steer it and the viewer's own call; and the predictions the viewer holds, with the settle and claim
 // that pay their deposits back. The page reads GET /api/predict and owns the wallet: a button hands its pick to the
 // page, which types the `predict` command it stands for and signs that.
@@ -55,7 +55,7 @@ export function Calls({
             t: `[${t}]`,
             c: "hi",
             onClick: () => onPick(p),
-            label: `predict ${SAYS[p]}, free${m.total ? `, ${pct.get(p)}% say so` : ""}${connected ? "" : "; connects a NEAR wallet first"}`,
+            label: `predict ${SAYS[p]}, no stake${m.total ? `, ${pct.get(p)}% say so` : ""}${connected ? "" : "; connects a NEAR wallet first"}`,
           }
         : { t: me?.pick === p ? `▸${t}` : ` ${t}`, c: me?.pick === p || m.outcome === p ? "hi" : "dim" },
       " ",

@@ -27,7 +27,7 @@ export const COMMANDS = [
     name: "predict",
     args: "<duel> [attack] <A|B|fooled|holds>",
     fill: "predict ",
-    what: "free: say who wins a duel, or whether an attack fools its model; the deposit comes back",
+    what: "no stake: say who wins a duel, or whether an attack fools its model; deposit back once scored",
   },
   {
     name: "inject",

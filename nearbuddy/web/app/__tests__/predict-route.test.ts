@@ -3,7 +3,8 @@
 import { afterAll, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { marketsOf } from "../api/predict";
 import type { Chaos, ChaosOpen, Duel } from "../lib/abi/arena";
-import type { MarketView } from "../lib/abi/predict";
+import type { MarketView, PredictionView } from "../lib/abi/predict";
+import { claimDue } from "../lib/predict";
 
 const S = 1_000_000_000n; // ns per second
 const T0 = Date.UTC(2026, 10, 11, 3);
@@ -134,6 +135,10 @@ const views: Record<string, (args: Record<string, unknown>) => unknown> = {
   get_predictions: ({ account }) => [
     { duel_id: "480", index: null, pick: "A", at: "1", verdict: account === "right.testnet" ? "Right" : null },
   ],
+  get_stats: ({ account }) =>
+    account === "right.testnet"
+      ? { count: 1, right: 1, streak: 1, best: 1, storage_owed: "1410000000000000000000" }
+      : null,
 };
 const asked: string[] = [];
 const view = async (method: string, args: Record<string, unknown>) => {
@@ -194,12 +199,16 @@ describe("GET /api/predict", () => {
     expect(asked.filter((m) => m === "chaos_open")).toHaveLength(1); // a missing view is not asked again soon
   });
 
-  test("an account: the calls it holds", async () => {
+  test("an account: the calls it holds and the board row its next claim keeps back", async () => {
     const r = await get("account=right.testnet");
     expect(r.status).toBe(200);
-    expect(((await r.json()) as { held: unknown[] }).held).toEqual([
-      { duel_id: "480", index: null, pick: "A", at: "1", verdict: "Right" },
-    ]);
+    const j = (await r.json()) as { held: PredictionView[]; owed: string };
+    expect(j.held).toEqual([{ duel_id: "480", index: null, pick: "A", at: "1", verdict: "Right" }]);
+    expect(j.owed).toBe("1410000000000000000000");
+    // what claim would send: one 0.0041 NEAR deposit less the 0.00141 NEAR row
+    expect(claimDue(j.held, j.owed)).toBe(2_690_000_000_000_000_000_000n);
+    // no row yet (no non-void verdict): nothing owed
+    expect(((await (await get("account=none.testnet")).json()) as { owed: string }).owed).toBe("0");
   });
 
   test("an RPC failure with no earlier body is a 502, not a guess", async () => {

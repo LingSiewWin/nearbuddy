@@ -3,11 +3,11 @@
 // replay of answered attacks, 3 tail of attacks, 4 inject, 5 saboteurs), a vim-style status line and a command line.
 // Everything is clickable, and every click types the command it stands for, so a newcomer learns the keyboard path by
 // using the mouse. The live duel and the inject box come first: something resolves within a minute (a duel's close,
-// or the next replayed verdict) and a headline can be drafted for free at once. Free predictions sit next to what they
-// are about and before anything paid: who wins the shown duel, and whether each pending attack fools its model (pane 2
-// and the tail). Data: /api/arena (15 s), /api/board (dataset snapshot), /api/spot (2 s while visible), /api/flips
-// (60 s), /api/duel for a pinned duel, /api/predict (5 s per duel with something to predict, 10 s for the account's
-// predictions). Wallet: NEAR Connect (lib/wallet), loaded on first use.
+// or the next replayed verdict) and a headline can be drafted for free at once. No-stake predictions sit next to what
+// they are about and before anything paid: who wins the shown duel, and whether each pending attack fools its model
+// (pane 2 and the tail). Data: /api/arena (15 s), /api/board (dataset snapshot), /api/spot (2 s while visible),
+// /api/flips (60 s), /api/duel for a pinned duel, /api/predict (5 s per duel with something to predict, 10 s for the
+// account's predictions). Wallet: NEAR Connect (lib/wallet), loaded on first use.
 import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { type Flip, replay, type Saboteur } from "../api/flips";
@@ -82,7 +82,7 @@ const GLOSSARY: [string, string][] = [
   ["arm", "how your headline arrives: cue (as written) or clean (BREAKING and named sources removed)"],
   [
     "predict",
-    `free: say who wins or whether an attack fools its model; the ${predict.DEPOSIT_NEAR} NEAR deposit comes back`,
+    `no stake: say who wins or whether an attack fools its model; ${predict.DEPOSIT_NEAR} NEAR ${predict.TERMS}`,
   ],
 ];
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -245,10 +245,11 @@ export default function Term() {
     };
   }, []);
   /** The account's predictions; `fresh` skips the CDN's copy (right after a send). */
-  const loadHeld = (who: string, fresh = false) =>
-    getJson<{ held: PredictionView[] }>(
+  const loadMine = (who: string, fresh = false) =>
+    getJson<{ held: PredictionView[]; owed?: string }>(
       `/api/predict?account=${encodeURIComponent(who)}${fresh ? `&t=${Date.now()}` : ""}`,
-    ).then((j) => j.held);
+    );
+  const loadHeld = (who: string, fresh = false) => loadMine(who, fresh).then((j) => j.held);
   // biome-ignore lint/correctness/useExhaustiveDependencies: loadHeld only builds a URL
   useEffect(() => {
     if (!account || !predict.PREDICT) return setHeld(null);
@@ -473,7 +474,7 @@ export default function Term() {
     );
     if (!who) return say("no wallet connected: nothing was signed", "warn");
     setBusy(
-      `sign in your wallet: ${where}, ${predict.SAYS[p]} · free, ${predict.DEPOSIT_NEAR} NEAR deposit back once scored`,
+      `sign in your wallet: ${where}, ${predict.SAYS[p]} · no stake, ${predict.DEPOSIT_NEAR} NEAR ${predict.TERMS}`,
     );
     try {
       const tx = await predict.send(predict.predictCall(id, index, p));
@@ -510,15 +511,23 @@ export default function Term() {
   async function claimPredictionsOnce() {
     if (!predict.PREDICT) return say(`predictions are not deployed on ${NETWORK_ID}`, "warn");
     if (!account) return say("connect the wallet that made the predictions first: type connect", "warn");
-    const due = (held ?? []).filter((x) => x.verdict).length;
+    // fresh views: what claim would send, should the wallet hand back no return value
+    const now = await loadMine(account, true).catch(() => null);
+    const due = (now?.held ?? held ?? []).filter((x) => x.verdict).length;
     if (!due)
       return say("nothing to claim yet: a prediction's deposit comes back once it is scored (settle <duel>)", "warn");
-    setBusy(`sign in your wallet: claim ${due} prediction deposit${due > 1 ? "s" : ""} back`);
+    const deposits = `${due} prediction deposit${due > 1 ? "s" : ""}`;
+    setBusy(`sign in your wallet: claim ${deposits} back`);
     try {
-      const tx = await predict.send(predict.claimCall());
+      const { tx, amount } = await predict.claim(now?.owed ? predict.claimDue(now.held, now.owed) : null);
       const h = await loadHeld(account, true).catch(() => null);
       if (h) setHeld(h);
-      say(`claimed ${due} prediction deposit${due > 1 ? "s" : ""} back: tx ${short(tx, 10)}`, "ok");
+      const kept = amount === null ? 0n : BigInt(due) * BigInt(predict.DEPOSIT) - amount;
+      const got =
+        amount === null
+          ? "amount not reported by the wallet"
+          : `${near(amount.toString(), 5)} NEAR returned${kept > 0n ? `, ${near(kept.toString(), 5)} NEAR kept once for your board row` : ""}`;
+      say(`claimed ${deposits} back: ${got} · tx ${short(tx, 10)}`, "ok");
     } catch (e) {
       say(e instanceof Error ? e.message : String(e), "bad");
     }
@@ -954,12 +963,12 @@ export default function Term() {
               cells={callCells(t)}
             />
           ))}
-          {/* free before paid: who wins, under the two calls it is about and above the pot and the attacks */}
-          {calls(duel.id, null, "who wins? free", true)}
-          {predict.PREDICT && !account && marketOf(duel.id, null)?.open ? (
+          {/* no stake before paid: who wins, under the two calls it is about and above the pot and the attacks */}
+          {calls(duel.id, null, "who wins? no stake", true)}
+          {predict.PREDICT && marketOf(duel.id, null)?.open ? (
             <Note
               w={P}
-              text={`a click connects a NEAR wallet to sign a ${predict.DEPOSIT_NEAR} NEAR deposit you claim back once scored`}
+              text={`${account ? "" : "a click connects a NEAR wallet · "}${predict.DEPOSIT_NEAR} NEAR ${predict.TERMS}`}
             />
           ) : null}
           <Line w={P} cells={[""]} />

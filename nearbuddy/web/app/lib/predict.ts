@@ -1,4 +1,4 @@
-// Free predictions on the arena (predict/ contract): will the model be fooled (`Flipped` / `Held`, per chaos
+// No-stake predictions on the arena (predict/ contract): will the model be fooled (`Flipped` / `Held`, per chaos
 // injection), and who wins the duel (`A` / `B` / `Tie`). No stake: `predict` attaches a storage deposit that `claim`
 // pays back once the call is scored (the first claim keeps back the caller's board row, at most 0.00141 NEAR, once).
 // The page reads the views through GET /api/predict (api/predict.ts), typed from abi/predict.json; calls are signed by
@@ -38,6 +38,20 @@ export const predictCall = (duel_id: string, index: number | null, pick: Pick) =
 export const settleCall = (duel_id: string) => call("settle", { duel_id }, GAS_SETTLE, "0");
 /** `claim`: pays the signer back the deposits of all its scored calls. */
 export const claimCall = () => call("claim", {}, GAS_CLAIM, "0");
+/** What the page says a prediction costs: there is no stake, but the deposit is not quite all refunded. */
+export const TERMS = "deposit back once scored, less up to 0.0014 NEAR once for your board row; gas applies";
+
+/** What `claim` would send now, from the views: every scored deposit, less the board row's storage still owed
+ *  (`get_stats(account).storage_owed`, kept back by the first claim only). */
+export const claimDue = (held: PredictionView[], owed: string) =>
+  BigInt(held.filter((p) => p.verdict).length) * BigInt(DEPOSIT) - BigInt(owed);
+
+/** Signs `claim`; resolves with the tx hash and the yoctoNEAR it sent back: the amount `claim` returns, read off the
+ *  outcome, else `fromView` (claimDue before signing) when the wallet hands back no return value. */
+export async function claim(fromView: bigint | null): Promise<{ tx: string; amount: bigint | null }> {
+  const { hash, value } = await wallet.sendFor(claimCall());
+  return { tx: hash, amount: typeof value === "string" && /^\d+$/.test(value) ? BigInt(value) : fromView };
+}
 
 /** Signs one predict call with the connected wallet; resolves with the tx hash. A call the arena shows closed is
  *  refunded in the callback, not refused, so read `get_predictions` afterwards to see whether it landed. */

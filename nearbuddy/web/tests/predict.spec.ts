@@ -1,4 +1,4 @@
-// Free predictions on the terminal at / against fixture data: /api/* is stubbed in the browser, and a fixture wallet is
+// No-stake predictions on the terminal at / against fixture data: /api/* is stubbed in the browser, and a fixture wallet is
 // injected the way a browser-extension wallet announces itself to NEAR Connect (`near-wallet-injected`), so the page's
 // own wallet code runs and the test reads the exact transaction the page asks it to sign. Covers every state: no
 // wallet (the click connects first), an open market with its crowd split, a closed market, a settled one right and
@@ -107,7 +107,8 @@ async function stub(page: Page, markets: () => Market[], held: () => Held = () =
   await page.route("**/api/predict?**", (r) => {
     const q = new URL(r.request().url()).searchParams;
     if (q.get("duel") === "480") return r.fulfill({ json: { at: Date.now(), duel_id: "480", markets: markets() } });
-    if (q.get("account") === ME) return r.fulfill({ json: { at: Date.now(), account: ME, held: held() } });
+    if (q.get("account") === ME)
+      return r.fulfill({ json: { at: Date.now(), account: ME, held: held(), owed: "1410000000000000000000" } });
     return r.fulfill({ status: 400, json: { error: `unexpected ${q}` } });
   });
   // NEAR Connect's wallet list: none, so the fixture wallet is the only one offered
@@ -120,7 +121,8 @@ declare global {
   }
 }
 /** A wallet announced the way an extension wallet does; it records what it is asked to sign and answers with a
- *  successful outcome. `connected`: a previous visit selected it, so the page finds the account without a click. */
+ *  successful outcome (a claim returns 2 deposits less the 0.00141 NEAR board row, as the contract would). `connected`:
+ *  a previous visit selected it, so the page finds the account without a click. */
 async function fixtureWallet(page: Page, connected: boolean) {
   await page.addInitScript(
     ([account, connected]) => {
@@ -150,7 +152,9 @@ async function fixtureWallet(page: Page, connected: boolean) {
         getAccounts: async () => accounts(),
         signAndSendTransaction: async (p: { receiverId: string; actions: unknown[] }) => {
           window.__sent.push({ receiverId: p.receiverId, actions: p.actions });
-          return { transaction: { hash: "FixtureTx11111111111111111111111111111111111" }, status: { SuccessValue: "" }, receipts_outcome: [] };
+          const claim = (p.actions[0] as { params?: { methodName?: string } }).params?.methodName === "claim";
+          const SuccessValue = claim ? btoa(JSON.stringify("6790000000000000000000")) : "";
+          return { transaction: { hash: "FixtureTx11111111111111111111111111111111111" }, status: { SuccessValue }, receipts_outcome: [] };
         },
       };
       if (connected) localStorage.setItem("selected-wallet", "fixture-wallet");
@@ -186,24 +190,26 @@ test.describe("desktop 1280", () => {
     await stub(page, () => OPEN, () => held);
     await fixtureWallet(page, false);
     await page.goto("/");
-    const duelCalls = pane(page, 2).getByRole("button", { name: /^predict (A|B) wins, free/ });
+    const duelCalls = pane(page, 2).getByRole("button", { name: /^predict (A|B) wins, no stake/ });
     await expect(duelCalls).toHaveText(["[A 71%]", "[B 29%]"]);
-    await expect(duelCalls.first()).toHaveAccessibleName("predict A wins, free, 71% say so; connects a NEAR wallet first");
-    await expect(pane(page, 2)).toContainText("who wins? free");
+    await expect(duelCalls.first()).toHaveAccessibleName("predict A wins, no stake, 71% say so; connects a NEAR wallet first");
+    await expect(pane(page, 2)).toContainText("who wins? no stake");
     const p2 = words(page, 2);
     await expect.poll(p2).toContain("71% say A wins");
-    await expect.poll(p2).toContain("a click connects a NEAR wallet to sign a 0.0041 NEAR deposit you claim back once scored");
+    await expect.poll(p2).toContain(
+      "a click connects a NEAR wallet · 0.0041 NEAR deposit back once scored, less up to 0.0014 NEAR once for your board row; gas applies",
+    );
     // a duel market is never blind, and the deployed arena's chaos markets close at the reveal: both say so
     await expect.poll(p2).toContain("whoever drives either agent can steer this: it picks which replies get signed");
     await expect.poll(p2).toContain("closes at the reveal: whoever runs the agent knows the answer first");
     // the pending attack, in pane 2 and in the tail; the decided one has no buttons
     for (const n of [2, 3])
-      await expect(pane(page, n).getByRole("button", { name: /^predict it will (be fooled|hold), free/ })).toHaveText([
+      await expect(pane(page, n).getByRole("button", { name: /^predict it will (be fooled|hold), no stake/ })).toHaveText([
         "[fooled 60%]",
         "[holds 40%]",
       ]);
     await expect(pane(page, 2).getByRole("button", { name: /^predict/ })).toHaveCount(4);
-    // free before paid: who wins sits above the next attack's price and the inject buttons
+    // no stake before paid: who wins sits above the next attack's price and the inject buttons
     const freeY = (await duelCalls.first().boundingBox())!.y;
     expect(freeY).toBeLessThan((await pane(page, 2).getByText("next attack").boundingBox())!.y);
     expect(freeY).toBeLessThan((await pane(page, 2).getByRole("button", { name: "[inject A]" }).boundingBox())!.y);
@@ -248,7 +254,7 @@ test.describe("desktop 1280", () => {
     ]);
     await fixtureWallet(page, false);
     await page.goto("/");
-    await expect(pane(page, 2)).toContainText("who wins? free  A 71%  B 29% · closed");
+    await expect(pane(page, 2)).toContainText("who wins? no stake  A 71%  B 29% · closed");
     await expect(pane(page, 2)).toContainText("71% say A wins");
     await expect(page.getByRole("button", { name: /^predict/ })).toHaveCount(0);
     await expect(pane(page, 2)).not.toContainText("a click connects a NEAR wallet");
@@ -292,7 +298,9 @@ test.describe("desktop 1280", () => {
     await shot(page, "predict-settled-1280");
     await mine.getByRole("button", { name: "claim the deposits of your 2 scored predictions" }).click();
     await expect(page.locator("#cmdline")).toHaveValue("claim predictions");
-    await expect(page.locator(".status")).toContainText("claimed 2 prediction deposits back: tx FixtureTx1");
+    await expect(page.locator(".status")).toContainText(
+      "claimed 2 prediction deposits back: 0.00679 NEAR returned, 0.00141 NEAR kept once for your board row · tx FixtureTx1",
+    );
     await mine.getByRole("button", { name: "score the predictions on duel 478" }).click();
     await expect(page.locator(".status")).toContainText("settled the predictions on duel #478");
     const sent = await page.evaluate(() => window.__sent.map((s) => [s.receiverId, (s.actions[0] as { params: unknown }).params]));
@@ -306,11 +314,11 @@ test.describe("desktop 1280", () => {
 test.describe("phone 390", () => {
   test.use({ viewport: { width: 390, height: 844 }, colorScheme: "dark", hasTouch: true });
 
-  test("the free prediction is in the first screen, every line fits, no sideways scroll", async ({ page }) => {
+  test("the no-stake prediction is in the first screen, every line fits, no sideways scroll", async ({ page }) => {
     await stub(page, () => OPEN);
     await fixtureWallet(page, false);
     await page.goto("/");
-    const first = pane(page, 2).getByRole("button", { name: /^predict A wins, free/ });
+    const first = pane(page, 2).getByRole("button", { name: /^predict A wins, no stake/ });
     await expect(first).toBeVisible();
     expect((await first.boundingBox())!.y + 20).toBeLessThan(844);
     await expect.poll(words(page, 2)).toContain("closes at the reveal: whoever runs the agent knows the answer first");

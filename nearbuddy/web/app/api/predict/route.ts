@@ -1,6 +1,7 @@
-// GET /api/predict?duel=<id>: every free prediction market of one duel with its crowd split and whether it takes a
-// call now (api/predict.ts). GET /api/predict?account=<account>: the calls that account holds, open or scored and not
-// yet claimed. The terminal reads these instead of the RPC.
+// GET /api/predict?duel=<id>: every prediction market of one duel with its crowd split and whether it takes a call now
+// (api/predict.ts). GET /api/predict?account=<account>: the calls that account holds, open or scored and not yet
+// claimed, and `owed`, the board row's storage its next claim keeps back (get_stats; "0" once kept). The terminal
+// reads these instead of the RPC.
 // Every tab on the live duel asks for the same URL, so the CDN keeps each body 3 s (stale-while-revalidate 10 s). A
 // duel's body is also kept 3 s in this process and built once at a time, and its last good body beats a 502 while the
 // RPC is throttled. An account's body is built per request: only that account's tab asks for it.
@@ -32,8 +33,11 @@ export async function GET(req: Request) {
   if ((duel === null) === (account === null)) return bad("ask for one duel=<id> or one account=<account>");
   if (account !== null) {
     try {
-      const held = await predictView("get_predictions", { account });
-      return json(jsonBody({ at: Date.now(), account, held }), 200, EDGE);
+      const [held, stats] = await Promise.all([
+        predictView("get_predictions", { account }),
+        predictView("get_stats", { account }),
+      ]);
+      return json(jsonBody({ at: Date.now(), account, held, owed: stats?.storage_owed ?? "0" }), 200, EDGE);
     } catch (e) {
       return failed(e);
     }
