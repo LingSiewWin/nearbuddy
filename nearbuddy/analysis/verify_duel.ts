@@ -20,7 +20,13 @@ import {
   teeText,
   verify,
 } from "../packages/protocol/src/intent.ts";
-import { type KeylessInputs, keylessRequest, parseDecision, SLOT_TTL_NS } from "../packages/protocol/src/keyless.ts";
+import {
+  FULL_SIZE_BPS,
+  type KeylessInputs,
+  keylessRequest,
+  parseDecision,
+  SLOT_TTL_NS,
+} from "../packages/protocol/src/keyless.ts";
 import { NET, NETWORK_ID } from "../packages/protocol/src/network.ts";
 
 // ---------------------------------------------------------------- the evidence (all public)
@@ -1048,11 +1054,15 @@ export function keylessDecisions(
   for (const c of subs) {
     const h = heads.get(String(c.args.seq)) ?? 0;
     let got: { side: "Long" | "Short"; size_bps: number } | null = null;
+    let stated = FULL_SIZE_BPS;
     try {
-      got = parseDecision(b64.dec(String(c.args.response)), h !== 0);
+      const res = b64.dec(String(c.args.response));
+      got = parseDecision(res, h !== 0);
+      stated = parseDecision(res, false)?.size_bps ?? FULL_SIZE_BPS;
     } catch {}
+    // a hold under a headline: max(capped, min(size in force, stated)); the cap never shrinks it, a stated cut does
     if (got && h !== 0 && cur && cur.side === got.side)
-      got = { ...got, size_bps: Math.max(got.size_bps, cur.size_bps) };
+      got = { ...got, size_bps: Math.max(got.size_bps, Math.min(cur.size_bps, stated)) };
     out.set(String(c.args.seq), got);
     if (got) cur = got;
   }

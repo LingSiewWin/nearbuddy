@@ -749,8 +749,8 @@ test("keyless duel: every line passes, and a forged strategy, reveal or pin fail
   );
 });
 
-// Re-audit 2026-11-11. N1: a hold under a headline keeps the size of the agent's call before it, so the recorded
-// size can exceed the reply's capped size. V1: an unread signer pin makes the evidence incomplete. V2: a NoTrial with
+// Re-audit 2026-11-11. N1: a hold under a headline keeps the size of the agent's call before it unless the reply
+// states a cut (re-audit 2, L1), so the recorded size can exceed the reply's capped size. V1: an unread signer pin makes the evidence incomplete. V2: a NoTrial with
 // no call must point at a submitted reply that reads as no decision.
 test("keyless re-audit: held size, unread pin incomplete, unread NoTrial backed by its reply", () => {
   const e = load("keyless_v2_0");
@@ -759,10 +759,17 @@ test("keyless re-audit: held size, unread pin incomplete, unread NoTrial backed 
     receipts(x, "submit_completion").find((y) => args(y).agent === b && args(y).seq === "2")!;
   const reply = (content: string) =>
     b64.enc(new TextEncoder().encode(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })));
-  // N1: B held Long under the headline but asked for 100 bps; the contract keeps the 500 bps in force
-  const held = structuredClone(e);
-  setArgs(slot2(held), { ...args(slot2(held)), response: reply('{"direction":"long","size_bps":100}') });
-  assert.deepEqual(result(checkDuel(held), "keyless B decision"), ["PASS"]);
+  // N1 + L1 (re-audit 2): B held Long 500 under the headline but stated 100 bps; a hold keeps
+  // max(capped, min(size in force, stated)), so the cut stands and a recorded 500 (the old ratchet) fails
+  const cut = structuredClone(e);
+  setArgs(slot2(cut), { ...args(slot2(cut)), response: reply('{"direction":"long","size_bps":100}') });
+  assert.deepEqual(result(checkDuel(cut), "keyless B decision"), ["FAIL"]);
+  cut.now.duel!.last_intent_b!.size_bps = 100;
+  assert.deepEqual(result(checkDuel(cut), "keyless B decision"), ["PASS"]);
+  // ...and a raise under the headline stops at the cap: 9000 stated reads as max(1000, min(500, 9000)) = 1000
+  setArgs(slot2(cut), { ...args(slot2(cut)), response: reply('{"direction":"long","size_bps":9000}') });
+  cut.now.duel!.last_intent_b!.size_bps = 1000;
+  assert.deepEqual(result(checkDuel(cut), "keyless B decision"), ["PASS"]);
   // V1
   const v1 = structuredClone(e);
   v1.model_signers = {};
