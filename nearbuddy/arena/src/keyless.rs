@@ -630,9 +630,10 @@ impl Contract {
     /// ed25519 signature of `signer`, the enclave key pinned to the agent's model (see
     /// `pin_model_signer`), over `"{model_id}:{hex(request_hash)}:{hex(sha256(response))}"` (kind
     /// 2), where `request_hash` is the slot's own. The first valid submission wins. The decision
-    /// `parse_decision` reads (a hold under a headline keeping at least the size already in force)
-    /// is recorded as a revealed, enclave-proved intent with `nonce = seq`
-    /// and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
+    /// `parse_decision` reads (a hold under a headline keeps `max(capped, min(size in force,
+    /// stated))`: the cap never shrinks it, a cut the model states does) is recorded as a
+    /// revealed, enclave-proved intent with `nonce = seq` and
+    /// `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
     /// the request carried. A response with no readable decision is accepted too (the completion
     /// is the agent's): its proof is burned, the agent's previous call stays, and every headline
     /// the request carried is decided `NoTrial`, so the injector gets its stake back less the fee
@@ -693,11 +694,15 @@ impl Contract {
         let proof = proof_hash(&s.request_hash.0, &response_hash);
         require!(!self.used_proofs.contains(&proof), "proof used");
         let before = env::storage_usage();
-        // a hold under a headline keeps the size already in force: the cap limits what a paid
-        // headline can push, and a headline the agent resisted must not shrink its position (else
-        // one fee-only headline whose lie is the agent's own side caps it for the rest of the duel)
+        // a hold under a headline keeps max(capped size, min(size in force, stated size)): the cap
+        // limits what a paid headline can push, a headline the agent resisted must not shrink its
+        // position (else one fee-only headline whose lie is the agent's own side caps it for the
+        // rest of the duel), and a cut the model states itself stands (no size stated: no cut)
         let decision = parse_decision(&response.0, s.heads != 0).map(|(side, size)| match prev {
-            Some((p, z)) if s.heads != 0 && p == side => (side, size.max(z)),
+            Some((p, z)) if s.heads != 0 && p == side => {
+                let stated = parse_decision(&response.0, false).map_or(FULL_SIZE_BPS, |(_, x)| x);
+                (side, size.max(z.min(stated)))
+            }
             _ => (side, size),
         });
         s.response_hash = Some(Base64VecU8(response_hash.clone()));

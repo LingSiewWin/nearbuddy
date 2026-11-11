@@ -1601,9 +1601,10 @@ class ArenaCall(Protocol):
     # ed25519 signature of `signer`, the enclave key pinned to the agent's model (see
     # `pin_model_signer`), over `"{model_id}:{hex(request_hash)}:{hex(sha256(response))}"` (kind
     # 2), where `request_hash` is the slot's own. The first valid submission wins. The decision
-    # `parse_decision` reads (a hold under a headline keeping at least the size already in force)
-    # is recorded as a revealed, enclave-proved intent with `nonce = seq`
-    # and `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
+    # `parse_decision` reads (a hold under a headline keeps `max(capped, min(size in force,
+    # stated))`: the cap never shrinks it, a cut the model states does) is recorded as a
+    # revealed, enclave-proved intent with `nonce = seq` and
+    # `proof_hash = sha256(request_hash || sha256(response))`, made after exactly the headlines
     # the request carried. A response with no readable decision is accepted too (the completion
     # is the agent's): its proof is burned, the agent's previous call stays, and every headline
     # the request carried is decided `NoTrial`, so the injector gets its stake back less the fee

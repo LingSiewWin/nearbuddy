@@ -1550,6 +1550,68 @@ fn reaudit_n1_a_hold_under_a_headline_keeps_its_size() {
     assert_eq!((li.side, li.size_bps), (Side::Short, UNVERIFIED_CAP_BPS));
 }
 
+/// Re-audit 2, L1 (ported from its `r2_n1_a_model_cannot_cut_its_size_under_a_headline`): the N1
+/// hold kept `max(capped, size in force)`, so once a headline arrived a model could never cut its
+/// size; an enclave-signed "long 100" was recorded (and scored, and slashed) as the earlier 5000.
+/// A hold now keeps `max(capped, min(size in force, stated))`: a hold stating no size keeps the
+/// size in force (N1 still holds), a stated cut stands, and a hold never pushes past the cap.
+#[test]
+fn reaudit2_l1_a_model_can_cut_its_size_under_a_headline() {
+    let (mut c, d, a, _bb, tee) = deployed(NOW + 600 * SEC);
+    decide(
+        &mut c,
+        &tee,
+        d,
+        &a,
+        r#"{"direction":"long","size_bps":5000}"#,
+        NOW + SEC,
+    );
+    let steps = [
+        (
+            r#"{"direction":"long"}"#,
+            5000,
+            "no size stated: the size in force",
+        ),
+        (
+            r#"{"direction":"long","size_bps":3000}"#,
+            3000,
+            "a cut above the cap stands",
+        ),
+        (
+            r#"{"direction":"long","size_bps":100}"#,
+            100,
+            "a cut below the cap stands",
+        ),
+        (
+            r#"{"direction":"long","size_bps":9000}"#,
+            UNVERIFIED_CAP_BPS,
+            "a raise stops at the cap",
+        ),
+    ];
+    for (i, (reply, want, why)) in steps.into_iter().enumerate() {
+        let at = NOW + (2 + 2 * i as u64) * SEC;
+        // any headline forces a slot; a Short lie at a Long agent is a real bet
+        let kind = if i % 2 == 0 {
+            ChaosKind::Short
+        } else {
+            ChaosKind::Long
+        };
+        plant_as(
+            &mut c,
+            SPECTATOR,
+            d,
+            &a,
+            kind,
+            "Validators upgrade on schedule",
+            at,
+        );
+        let s = decide(&mut c, &tee, d, &a, reply, at + SEC);
+        let li = c.get_duel(U64(d)).unwrap().last_intent_a.unwrap();
+        assert_eq!((li.side, li.size_bps), (Side::Long, want), "{why}");
+        assert_eq!((s.side, s.size_bps), (Some(Side::Long), want), "{why}");
+    }
+}
+
 /// N2: a headline used to replace an open, unfilled slot at once, so whoever previewed its public
 /// reply (a hold) could void it with a fee-only headline and have the bet re-judged. Now the
 /// unfilled slot stands until its TTL and the previewed hold lands.
