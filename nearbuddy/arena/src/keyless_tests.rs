@@ -1796,6 +1796,58 @@ fn reaudit_n6_more_lookalikes_and_invisibles_are_refused() {
     assert!(c.get_chaos(U64(d)).is_empty());
 }
 
+/// Re-audit 2, L2: five more `<`/`>` look-alike pairs and the Khmer inherent vowels are refused at
+/// injection. The request builder keeps the old check, so a headline stored before the upgrade
+/// still rebuilds its slot's request.
+#[test]
+fn reaudit2_l2_more_lookalikes_and_khmer_vowels_are_refused_at_injection() {
+    let (mut c, d, a, _bb, tee) = deployed(NOW + 600 * SEC);
+    decide(&mut c, &tee, d, &a, LONG, NOW + SEC);
+    let bracket = "headline lookalike bracket";
+    let hidden = "headline hidden character";
+    let cases = [
+        ("double angle U+300A/B", "\u{300A}input\u{300B}", bracket),
+        ("very much less U+22D8/9", "\u{22D8}input\u{22D9}", bracket),
+        ("triple nested U+2AF7/8", "\u{2AF7}input\u{2AF8}", bracket),
+        (
+            "vertical double angle U+FE3D/E",
+            "\u{FE3D}input\u{FE3E}",
+            bracket,
+        ),
+        (
+            "slanted or-equal U+2A7D/E",
+            "\u{2A7D}input\u{2A7E}",
+            bracket,
+        ),
+        (
+            "Khmer inherent AQ U+17B4",
+            "Validators\u{17B4} upgrade",
+            hidden,
+        ),
+        (
+            "Khmer inherent AA U+17B5",
+            "Validators\u{17B5} upgrade",
+            hidden,
+        ),
+    ];
+    for (name, text, err) in cases {
+        let msg = refused(|| {
+            plant_as(
+                &mut c,
+                SPECTATOR,
+                d,
+                &a,
+                ChaosKind::Short,
+                text,
+                NOW + 2 * SEC,
+            );
+        });
+        assert!(msg.contains(err), "{name}: {msg}");
+        crate::chaos::check_headline(text); // the request builder's check: unchanged
+    }
+    assert!(c.get_chaos(U64(d)).is_empty());
+}
+
 /// N8: a stranger's consented duel on an asset the oracle never prices used to freeze every signer
 /// pin for up to two days. Only duels with a keyless side freeze them now, and only the owner can
 /// open those.
