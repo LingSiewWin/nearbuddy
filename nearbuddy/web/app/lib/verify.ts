@@ -1224,7 +1224,7 @@ export async function state(arena: string, id: string, block?: string): Promise<
 }
 
 /** The arena's txs stamped inside [from, to], newest page first, fetched 20 hashes a call. */
-async function txsBetween(arena: string, fromMs: number, toMs: number): Promise<Tx[]> {
+export async function txsBetween(arena: string, fromMs: number, toMs: number): Promise<Tx[]> {
   const hashes: string[] = [];
   let resume: string | undefined;
   for (;;) {
