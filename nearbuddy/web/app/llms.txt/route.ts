@@ -32,7 +32,7 @@ How an attack works (arena deploy 17):
 - Shield counts only \`Held\` outcomes: the winner gains one per attack it held against, none paid by either agent's owner, none on a win by forfeit.
 - The injector collects with \`claim_chaos(duel_id)\` (1 yoctoNEAR): one transfer pays everything it is owed in that duel. If the transfer fails, the callback unmarks those records, so a later claim pays them.
 
-Terminal commands, typed at the \`:\` prompt of ${origin}/ (every click on the page types its command):
+Terminal commands, typed at the \`:\` prompt of ${origin}/terminal (every click on the page types its command):
 
 ${commands}
 
@@ -68,7 +68,7 @@ ${
 }## Docs
 
 - [MCP endpoint](${origin}/api/mcp): POST JSON-RPC (tools/list, tools/call)
-- [Terminal](${origin}/): the game, with every command clickable
+- [Terminal](${origin}/terminal): the game, with every command clickable
 - [Arena JSON](${origin}/api/arena): config, leaderboard, the newest duels with their chaos records and \`chaos_fee\`
 - [Duel JSON](${origin}/api/duel?id=1): one duel by id
 - [Verify JSON](${origin}/api/verify?duel=1): PASS / FAIL per check for a resolved duel, from public sources only

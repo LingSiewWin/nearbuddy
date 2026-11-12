@@ -203,7 +203,8 @@ export default function Arena() {
         <span className="dim">
           how it works: a model decides inside a NEAR AI Cloud enclave → the contract checks the enclave signature on
           every intent → a TEE price oracle scores open and close, anyone can resolve → loser slashed, winner paid,
-          survivors gain shield · anyone can plant a fake headline at a side mid-duel: <a href="/">fool the AI</a>
+          survivors gain shield · anyone can plant a fake headline at a side mid-duel:{" "}
+          <a href="/terminal">fool the AI</a>
         </span>
         {"\n"}
         {s ? (

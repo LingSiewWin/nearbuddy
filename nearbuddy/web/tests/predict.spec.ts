@@ -189,7 +189,7 @@ test.describe("desktop 1280", () => {
     let held: Held = [];
     await stub(page, () => OPEN, () => held);
     await fixtureWallet(page, false);
-    await page.goto("/");
+    await page.goto("/terminal");
     const duelCalls = pane(page, 2).getByRole("button", { name: /^predict (A|B) wins, no stake/ });
     await expect(duelCalls).toHaveText(["[A 71%]", "[B 29%]"]);
     await expect(duelCalls.first()).toHaveAccessibleName("predict A wins, no stake, 71% say so; connects a NEAR wallet first");
@@ -253,7 +253,7 @@ test.describe("desktop 1280", () => {
       market(1, [3, 2], { open: false, open_until_reveal: true }),
     ]);
     await fixtureWallet(page, false);
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 2)).toContainText("who wins? no stake  A 71%  B 29% · closed");
     await expect(pane(page, 2)).toContainText("71% say A wins");
     await expect(page.getByRole("button", { name: /^predict/ })).toHaveCount(0);
@@ -280,7 +280,7 @@ test.describe("desktop 1280", () => {
       ],
     );
     await fixtureWallet(page, true);
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(page.locator("header")).toContainText(ME);
     const mine = pane(page, 2);
     await expect(mine).toContainText("your predictions");
@@ -317,7 +317,7 @@ test.describe("phone 390", () => {
   test("the no-stake prediction is in the first screen, every line fits, no sideways scroll", async ({ page }) => {
     await stub(page, () => OPEN);
     await fixtureWallet(page, false);
-    await page.goto("/");
+    await page.goto("/terminal");
     const first = pane(page, 2).getByRole("button", { name: /^predict A wins, no stake/ });
     await expect(first).toBeVisible();
     expect((await first.boundingBox())!.y + 20).toBeLessThan(844);

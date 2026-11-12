@@ -23,7 +23,7 @@ const nextConfig: NextConfig = {
   partialPrefetching: true,
   reactCompiler: true,
   env: { NEXT_PUBLIC_NEAR_NETWORK: network },
-  // "/" is the Fool-the-AI terminal; the full record stays at /arena
+  // "/" is the league home, "/terminal" the Fool-the-AI terminal; the full record stays at /arena
   async headers() {
     return [{ source: "/:path*", headers: SECURITY_HEADERS }];
   },

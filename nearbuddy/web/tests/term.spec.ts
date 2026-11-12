@@ -137,7 +137,7 @@ test.describe("desktop 1280", () => {
 
   test("five panes from the API: board, live duel with live P&L, tail, inject, saboteurs", async ({ page }) => {
     await stub(page, () => arena("Short", true));
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(page).toHaveTitle("Fool the AI · NearBuddy");
     await expect(pane(page, 1).getByRole("heading")).toContainText("hardest to fool");
     await expect(pane(page, 1)).toContainText("glm-5.3-flash");
@@ -177,7 +177,7 @@ test.describe("desktop 1280", () => {
 
   test("palette: empty prompt is the menu, a click types its command, Tab completes, Up recalls", async ({ page }) => {
     await stub(page, () => arena("Short", true));
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 2)).toContainText("#480");
     await page.keyboard.press(":");
     const cmd = page.locator("#cmdline");
@@ -212,7 +212,7 @@ test.describe("desktop 1280", () => {
   test("keys: 1-4 focus panes, j/k move, Enter on a board row types `agent <model>` and opens it", async ({ page }) => {
     await stub(page, () => arena("Short", true));
     await page.route("**/api/agent**", (r) => r.fulfill({ status: 502, json: { error: "fixture" } }));
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 1)).toContainText("glm-5.3-flash");
     await page.keyboard.press("1");
     await expect(page.locator(".status")).toContainText("1:board");
@@ -233,7 +233,7 @@ test.describe("desktop 1280", () => {
       relayed++;
       return r.fulfill({ status: 503, json: { error: "solver offline", offline: true } });
     });
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 4)).toContainText("solver offline: attacks are paused");
     await pane(page, 2).getByRole("button", { name: "target side B with a headline" }).click();
     await expect(page.locator("#cmdline")).toHaveValue('inject 480 B ""');
@@ -250,7 +250,7 @@ test.describe("desktop 1280", () => {
     await page.clock.install();
     let side: "Short" | "Long" = "Short";
     await stub(page, () => arena(side, true));
-    await page.goto("/");
+    await page.goto("/terminal");
     const b = pane(page, 2).getByRole("button", { name: "target side B with a headline" });
     await expect(b).toContainText("SHORT");
     await expect(pane(page, 2).locator(".flash")).toHaveCount(0);
@@ -271,7 +271,7 @@ test.describe("no duel live", () => {
     await page.clock.install();
     const done = { ...duel("Short"), id: "479", resolved: true, close_at: NS(now - 600_000) };
     await stub(page, () => ({ ...arena17(), duels: [done] })); // deploy 17: no solver needed to plant
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 2).getByRole("heading")).toContainText("replay");
     await expect(page.locator("header")).toContainText("replay #477");
     await expect(pane(page, 2)).toContainText("Rumor confirmed by two sources");
@@ -305,7 +305,7 @@ test.describe("prices the duel does not settle on", () => {
     await page.route("**/api/spot", (r) =>
       r.fulfill({ json: { symbol: "NEAR/USD", price: "3.7111", source: "coinbase", at: Date.now() - 60_000 } }),
     );
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 2)).toContainText("closes in");
     await expect(pane(page, 2)).toContainText("now reading");
     await expect(pane(page, 2)).not.toContainText("+15.0 bps");
@@ -315,7 +315,7 @@ test.describe("prices the duel does not settle on", () => {
   test("a duel closed and waiting for the oracle shows no live move", async ({ page }) => {
     const closed = { ...duel("Short"), close_at: NS(Date.now() - 60_000) };
     await stub(page, () => ({ ...arena("Short", true), duels: [closed] }));
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 2)).toContainText("closed · waiting for the oracle");
     await expect(pane(page, 2)).toContainText("close oracle pending");
     await expect(pane(page, 2)).not.toContainText("bps");
@@ -336,7 +336,7 @@ test.describe("void duel", () => {
     };
     await stub(page, () => arena("Short", true));
     await page.route("**/api/duel?id=470", (r) => r.fulfill({ json: { duel: v, a: null, b: null } }));
-    await page.goto("/");
+    await page.goto("/terminal");
     const cmd = page.locator("#cmdline");
     await cmd.fill("duel 470");
     await cmd.press("Enter");
@@ -354,7 +354,7 @@ test.describe("chain unreadable", () => {
     await page.route("**/api/flips", (r) =>
       r.fulfill({ json: { ...flips, flips: [], saboteurs: [], scanned: null, chain_error: "FailoverRpcError: 429" } }),
     );
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 5)).toContainText("chain unreadable");
     await expect(pane(page, 5)).not.toContainText("be first");
   });
@@ -367,7 +367,7 @@ test.describe("phone 390", () => {
     page,
   }) => {
     await stub(page, () => arena("Short", true));
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 1)).toContainText("glm-5.3-flash");
     const xs = await page.$$eval(".box", (b) => b.map((x) => Math.round(x.getBoundingClientRect().x)));
     expect(new Set(xs).size).toBe(1); // stacked, one column
@@ -445,7 +445,7 @@ test.describe("deploy 17", () => {
       relayed++;
       return r.fulfill({ status: 410, json: { error: "off" } });
     });
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 2)).toContainText("next attack 0.156 NEAR");
     await expect(pane(page, 2)).toContainText("attacks 2");
     await expect(pane(page, 2)).toContainText("FOOLED");
@@ -480,7 +480,7 @@ test.describe("deploy 17", () => {
   }) => {
     await stub(page, arena17);
     await page.route("**/api/duel?id=479", (r) => r.fulfill({ json: { duel: arena17().duels[1], a: null, b: null } }));
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 2)).toContainText("#480");
     const cmd = page.locator("#cmdline");
     await cmd.fill("claim 479");
@@ -498,7 +498,7 @@ test.describe("deploy 17 phone 390", () => {
 
   test("records and the push row fit one column with no sideways scroll", async ({ page }) => {
     await stub(page, arena17);
-    await page.goto("/");
+    await page.goto("/terminal");
     await expect(pane(page, 2)).toContainText("FOOLED");
     await expect(pane(page, 4)).toContainText("push");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

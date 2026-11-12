@@ -36,7 +36,7 @@ async function Planted({ params, searchParams }: Props) {
   const p = c.planted;
   return (
     <pre className="wrap">
-      <a href="/" className="dim">
+      <a href="/terminal" className="dim">
         ← fool the AI
       </a>
       {"\n\n"}

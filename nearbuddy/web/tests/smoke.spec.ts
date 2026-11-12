@@ -4,9 +4,9 @@ import { expect, test } from "@playwright/test";
 
 const box = (name: string) => `pre span.hi:text-is("${name}")`;
 
-test("/ is the Fool-the-AI terminal: the board from the dataset, the duel pane from the contract", async ({ page }) => {
-  await page.goto("/");
-  await expect(page).toHaveURL(/\/$/);
+test("/terminal is the Fool-the-AI terminal: the board from the dataset, the duel pane from the contract", async ({ page }) => {
+  await page.goto("/terminal");
+  await expect(page).toHaveURL(/\/terminal$/);
   await expect(page).toHaveTitle("Fool the AI · NearBuddy");
   for (const n of [1, 2, 3, 4]) await expect(page.locator(`#pane-${n}`)).toBeVisible();
   await expect(page.locator("#pane-1")).toContainText(/\d+\/\d+/); // fooled / tested from /api/board

@@ -640,7 +640,7 @@ export default function Enter({ contract }: { contract: string | null }) {
           {account ? ` ${account} ` : " connect wallet "}
         </button>
         <span className="grow" />
-        <a className="barbtn" href="/" style={{ color: "inherit" }}>
+        <a className="barbtn" href="/terminal" style={{ color: "inherit" }}>
           {" fool the AI "}
         </a>
       </header>
