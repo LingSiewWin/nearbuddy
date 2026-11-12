@@ -41,7 +41,8 @@ test("pages carry the policy and load with no violation", async ({ page }) => {
   expect(pk).toBeTruthy();
   const violations = await watch(page);
   for (const [path, ready] of [
-    ["/", "#pane-2"],
+    ["/", "#boards"],
+    ["/terminal", "#pane-2"],
     ["/arena", "pre a[href^='/agent/']"],
     [`/duel/${duel}`, "pre a[href^='/agent/']"],
     [`/agent/${encodeURIComponent(pk)}`, "pre"],
@@ -64,7 +65,7 @@ test("pages carry the policy and load with no violation", async ({ page }) => {
 
 test("connect opens the wallet picker, and a wallet starts in its sandbox, with no violation", async ({ page }) => {
   const violations = await watch(page);
-  await page.goto("/");
+  await page.goto("/terminal");
   await page.locator("button.barbtn", { hasText: "connect" }).click();
   const picker = page.locator(".hot-connector-popup");
   await expect(picker.getByText("Select wallet")).toBeVisible({ timeout: 30_000 });
@@ -79,7 +80,7 @@ test("connect opens the wallet picker, and a wallet starts in its sandbox, with 
 
 test("an injected inline script, inline handler and third-party script are refused", async ({ page }) => {
   const violations = await watch(page);
-  await page.goto("/");
+  await page.goto("/terminal");
   await expect(page.locator("#pane-1")).toBeVisible();
   await page.evaluate(() => {
     const inline = document.createElement("script");

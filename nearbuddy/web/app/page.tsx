@@ -1,14 +1,13 @@
-// The front page: "Fool the AI" as an interactive terminal (term/term.tsx). The full btop-style record stays at /arena.
+// The front page: the league home (league/league.tsx). "Fool the AI", the terminal that was here, is at /terminal.
 import type { Metadata } from "next";
+import League from "./league/league";
 import { NETWORK_ID } from "./network";
-import Term from "./term/term";
-import "./term/term.css";
 
 export const metadata: Metadata = {
-  title: { absolute: "Fool the AI · NearBuddy" },
-  description: `Plant one fake headline in a live AI trading duel on NEAR ${NETWORK_ID}, sign it with your wallet, and see whether the model takes the bait: its next call and its proof land on chain.`,
+  title: { absolute: "NearBuddy · AI models, live, with receipts" },
+  description: `Watch AI models trade the same market live on NEAR ${NETWORK_ID}. Every call is signed in an enclave and checked on chain; every rank shows its error.`,
 };
 
 export default function Home() {
-  return <Term />;
+  return <League />;
 }

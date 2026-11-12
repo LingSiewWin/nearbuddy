@@ -1,0 +1,171 @@
+/* The league home. Every rule sits under .league: production merges client CSS into shared chunks. Colours come from
+   the tokens in globals.css, so it follows the terminal's dark and light themes. */
+.league {
+  display: grid;
+  gap: 0.9em;
+  max-width: 76em;
+  margin: 0 auto;
+  line-height: 1.35;
+}
+.league h1,
+.league h2 {
+  font: inherit;
+  margin: 0;
+}
+.league h1 {
+  color: var(--hi);
+}
+.league .panel {
+  border: 1px solid var(--dim);
+  padding: 0.6em 0.8em;
+  min-width: 0;
+}
+.league .panel > h2 {
+  color: var(--hi);
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+  margin-bottom: 0.4em;
+}
+.league .panel > h2 span {
+  color: var(--dim);
+}
+
+/* ticker: one line moving right to left; still for a reader who asked for less motion */
+.league .ticker {
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0.35em 0;
+}
+.league .ticker .run {
+  display: inline-block;
+  padding-left: 100%;
+  animation: league-run 40s linear infinite;
+}
+.league .ticker:hover .run {
+  animation-play-state: paused;
+}
+@keyframes league-run {
+  to {
+    transform: translateX(-100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .league .ticker {
+    white-space: normal;
+  }
+  .league .ticker .run {
+    animation: none;
+    padding-left: 0.8em;
+  }
+}
+
+/* the stage and the feed beside it, the feed as tall as the stage */
+.league .live {
+  display: grid;
+  grid-template-columns: 2.4fr 1fr;
+  gap: 0.9em;
+  align-items: stretch;
+}
+.league .stage svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0.3em 0;
+}
+.league .stage svg text {
+  fill: var(--dim);
+  font-size: 11px;
+}
+.league .sides {
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+}
+.league .sides b {
+  font-size: 1.5em;
+}
+.league .rope {
+  position: relative;
+  height: 0.9em;
+  border: 1px solid var(--dim);
+  margin: 0.4em 0;
+}
+.league .rope i {
+  position: absolute;
+  top: -0.3em;
+  bottom: -0.3em;
+  width: 3px;
+  margin-left: -1px;
+  background: var(--hi);
+  transition: left 0.5s linear;
+}
+.league .feed {
+  display: flex;
+  flex-direction: column;
+}
+.league .feed ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 0;
+  min-height: 12em;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  overflow-wrap: anywhere;
+}
+.league .feed li.model {
+  border-left: 2px solid var(--dim);
+  padding-left: 0.5em;
+}
+.league .tag {
+  border: 1px solid currentColor;
+  padding: 0 0.3em;
+  font-size: 0.85em;
+}
+
+.league .boards .cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 36em), 1fr));
+  gap: 0.8em 1.5em;
+}
+.league table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.league td,
+.league th {
+  text-align: left;
+  font-weight: inherit;
+  padding: 0.1em 0.7em 0.1em 0;
+  white-space: nowrap;
+}
+.league th {
+  color: var(--dim);
+}
+.league td.who {
+  max-width: 17ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.league .boards .cols > div {
+  min-width: 0;
+  overflow-x: auto;
+}
+.league tr.thin td {
+  color: var(--dim);
+}
+.league footer {
+  color: var(--dim);
+  display: flex;
+  gap: 1.5em;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .league .live {
+    grid-template-columns: 1fr;
+  }
+}
