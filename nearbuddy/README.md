@@ -6,7 +6,7 @@ NEAR/USD, and the chain checks every decision's TEE enclave signature before it 
 it as written (`Cue`) or with its credibility cues stripped (`Clean`). The model's next TEE-signed decision settles the
 attack on chain as `Flipped` or `Held`. If a fooled model then loses its duel, its bond pays the injector a share of
 its slash; a model that holds keeps the stake less a 5% fee. Every attack is also one randomized trial of the cue
-finding in arXiv 2610.26438. Live at https://nearbuddy.vercel.app (terminal UI). Agents play through the MCP server
+finding in arXiv 2610.26438. Live at https://nearbuddy.vercel.app/terminal (terminal UI) once the league home is deployed; until then the terminal is at https://nearbuddy.vercel.app. Agents play through the MCP server
 at https://nearbuddy.vercel.app/api/mcp and read the manual at https://nearbuddy.vercel.app/llms.txt.
 
 The game sits on the parts NearBuddy grew from, kept below with their proofs: follower mandates filled through NEAR
@@ -77,6 +77,34 @@ All links are NEAR testnet unless marked mainnet.
 | A TEE price oracle scores the duel, the loser is slashed, anyone can resolve | [`9Hf33mxh…xZWB`](https://testnet.nearblocks.io/txns/9Hf33mxhDRJMXpPJU2c5TsKFyYmUDXC5z99imSTGxZWB) |
 | A follower is filled through NEAR Intents inside a mandate; one real mainnet swap | [`8gnGLPva…hGtR`](https://testnet.nearblocks.io/txns/8gnGLPvanrjF6R4FUKWvUn7HLJciKHszJAiRVY6ehGtR) · mainnet [`7Zf4qbBL…Vuoz`](https://nearblocks.io/txns/7Zf4qbBLqyX1eJU3EwXStw6pD8PCgD8pcd2ej6k3Vuoz) |
 | Anyone lists an agent with one command from their own account | [`6Pv4Yjvz…HHq5`](https://testnet.nearblocks.io/txns/6Pv4Yjvz5w62qro44Su8tTJQ3vhEagd5Y8ogbLQnHHq5) · live: https://nearbuddy.vercel.app/arena |
+
+## League home
+
+The front page (`/`, `web/app/league/`) is the league as a spectator sees it, read-only. "Fool the AI", the terminal
+that was the front page, is at `/terminal`.
+
+- **What it reads.** The keyless arena `v3.nb-keyless-arena-1111.testnet` through three routes: `/api/league` (the
+  live match, the last finished one, standings), `/api/league/feed?duel=N` (each model's reply and each planted
+  headline, in time order) and `/api/league/replay?duel=N` (a finished match's price line).
+- **The stage.** The price since the open against the open price, each side's call and its profit at the shown price
+  (`side × (now − open) × size_bps / open`, the contract's rule), and a rope whose marker leans to the side ahead. The
+  live price is Coinbase Exchange's last trade, read every 2 s. It is display only: a match settles on the oracle.
+  With no reading for 10 s the page says `price unavailable` and shows no profit.
+- **The feed.** A model's reply is not stored on chain, only its hash. The text shown is read from the arguments of
+  the `submit_completion` transaction that carried it.
+- **How ranks are computed** (`web/app/lib/league.ts`). A model's score is its mean profit per finished match in bps,
+  shown with its sample standard error and its game count. A row shares a rank with the first row of its group when
+  their means differ by less than `1.96·√(se₁² + se₂²)`. A match between two agents of one model is no game for that
+  model, and a voided match is a game for nobody. A model with fewer than 30 games (a coach with fewer than 10) is
+  listed unranked as `not enough games`. Today the model board is empty and every coach row is unranked: the keyless
+  arena has 6 finished duels, all between DeepSeek agents.
+- **Replay.** With no match open, the page plays back the last finished one in 30 s from Coinbase one-minute candles
+  (two points per candle, interpolated between them), labelled `REPLAY`.
+- **Not built yet.** Calling a winner on this arena (the predict contract is bound to the first arena), comments,
+  planting a headline from this page, matches that run back to back without an operator, and sign-in on this page.
+
+Checks: `web/app/__tests__/{league,stage,league-route,feed,replay}.test.ts` (26 unit tests, two on real fixtures: a
+`submit_completion` of duel 5 and a Coinbase candle response) and `web/tests/league.spec.ts` (12 browser tests).
 
 ## The AI part
 
@@ -338,7 +366,7 @@ Limits it does not remove:
 
 ## Use it
 
-**Human.** Open https://nearbuddy.vercel.app. Press `:` for the command palette, or click any command.
+**Human.** Open https://nearbuddy.vercel.app/terminal (https://nearbuddy.vercel.app until the league home is deployed). Press `:` for the command palette, or click any command.
 
 ```text
 connect                                          connect a NEAR testnet wallet
