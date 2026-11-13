@@ -126,8 +126,11 @@ that was the front page, is at `/terminal`.
   no model called in it: that version waited 305 s and asked the oracle for a tick before letting the models call,
   the tick took over two minutes, and the intent lock had begun. In duel 10 the same wait showed the models the open
   price again and both went long. The wait is removed: models now call at the open, where the request reads "move
-  since open: 0", so two models with one strategy tend to take the same side and tie. No match has run to resolution
-  on the no-wait version yet. After a close the page shows the match as closed until the oracle has a price stamped
+  since open: 0", so two models with one strategy tend to take the same side and tie. Duel 13 ran that way from the
+  start request to its resolution with no hand: both models called within two minutes of the open (DeepSeek
+  [`8CDiMTWM…`], glm [`E1h4jKHD…`](https://testnet.nearblocks.io/txns/E1h4jKHDoyKg4U67PewhsRJFRqvZ2kHkRByYaS6uZEDn)),
+  both long 500 bps, resolved a tie at −4 bps each
+  ([`EdfvpznY…`](https://testnet.nearblocks.io/txns/EdfvpznYMvrhhbpa5FMggxGx2CeHRgf2CJtsTEWBM9mh)). After a close the page shows the match as closed until the oracle has a price stamped
   after it, which took about five minutes in duel 12. The public testnet RPCs throttle a machine that runs the
   site, the operator and the tests together. A shout from the page has not been sent with a real wallet. An email
   (Privy) account that was never funded cannot comment: it has no key on chain to check.
