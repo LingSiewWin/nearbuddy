@@ -395,3 +395,13 @@ logged $3.09 (`--cap 4.60`).
     uv run --locked python replay.py windows
     uv run --locked python replay.py run --cap 4.60
     uv run --locked python replay.py report
+
+### Replay deviations
+
+1. **Reply allowance raised from 600 to 2400 tokens, for every model and both variants (before the main run).** A
+   pilot of 36 calls on the first 2 snapshots ($0.018, kept locally as `results/replay_pilot.jsonl` (results are published gzipped; this file is not in the repo), not counted) had every
+   enclave signature verify, but under variant B DeepSeek and Qwen ended 12 of 12 calls at `finish_reason: length`
+   with no answer, and GLM 1 of 6: they reason through the 60 prices and run out. Under A no call was cut off. The
+   main run uses 2400 for A as well, so the two variants differ only in the brief. Consequence: these are not the
+   live duelists' exact request bytes (those keep 600), and a call costs more. Revised spend estimate: about $1.2
+   (worst case $0.003 a call), still under the $1.50 cap.

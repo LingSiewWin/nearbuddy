@@ -35,6 +35,9 @@ OUT = HERE / "results" / "replay.jsonl"
 VARIANTS = ("A", "B")
 REPEATS = 3
 PROFILE = "naive"
+# Reply allowance for every model and both variants. The runner's 600 is not enough once the brief carries 60 prices:
+# in the pilot DeepSeek and Qwen spent all of it reasoning and gave no answer (README, "Replay deviations").
+MAX_TOKENS = 2400
 
 Row = dict[str, Any]
 Frac = tuple[int, int]
@@ -192,7 +195,7 @@ def run(cap: float, workers: int, models: list[str], limit: int | None) -> None:
         }
     todo = [j for j in jobs(ids, models, list(VARIANTS), REPEATS) if j not in done]
     budget = harness.Budget(cap)
-    clients = {m: NearAiClient(ENV["NEAR_AI_API_KEY"], m) for m in models}
+    clients = {m: NearAiClient(ENV["NEAR_AI_API_KEY"], m, max_tokens=MAX_TOKENS) for m in models}
     lock = threading.Lock()
     print(f"{len(todo)} calls to make ({len(done)} done), spent ${budget.spent:.4f}, cap ${cap:.2f}")
 
