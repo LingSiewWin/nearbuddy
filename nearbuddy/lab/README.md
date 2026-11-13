@@ -350,3 +350,48 @@ cd nearbuddy/lab
 uv run --locked pytest
 uv run --locked python report.py        # prints the results table from results/
 ```
+
+## Replay: what input makes models differ (pre-registered 2026-11-13)
+
+This section was committed before the first paid call of the replay. Changes after that go under "Replay deviations".
+
+**Why.** In live keyless matches two models given one strategy and one number (the move since the open) take the
+same side and tie. In this lab's own baseline calls (no headline, 48 snapshots) each model follows the move 73-98% of
+the time and two models' majorities differ on 2-15% of snapshots (up to 29% under the naive prompt). Before the match
+format changes again, measure whether more input makes the models differ, and whether a difference is skill.
+
+**Design.** The 48 frozen snapshots, no headline, the live duelist's `naive` profile through `harness.call`, the three
+models of the first experiment, each asked 3 times under each variant (864 calls):
+
+| variant | market brief |
+|---|---|
+| A | the snapshot's brief as the runner writes it: the last price and the move since the open |
+| B | A, then one line: the one-minute closes of the hour before the brief, oldest first (`data/replay_windows.json`) |
+
+A third variant with one dated real headline, the same text to every model, is not run: no source of real headlines
+for the 48 timestamps has been chosen, and invented ones would test something else.
+
+**Counted.** Only calls whose enclave signature verifies and whose reply parses to a side. A model's call on a
+snapshot is the majority of its repeats; an even split or no call is left out. Outcomes are Coinbase one-minute
+closes 6 and 60 minutes after the brief; a snapshot whose price did not change is left out of that hit rate.
+
+**Measures, each with a Wilson 95% interval.** Per variant: each model's rate of following the move; each model's
+agreement with its own majority across repeats; each pair's disagreement rate and the pooled rate; each model's hit
+rate at 6 and 60 minutes. Baselines without a model: always long, and follow the move.
+
+**Decision rule, fixed now.** A variant is worth building into matches only if both hold:
+1. pooled pairwise disagreement is at least 0.30;
+2. at least one model's 6-minute hit rate has a lower interval bound above the follow-the-move baseline's hit rate.
+If neither variant passes, the conclusion is that one more hour of prices does not make these models differ in a
+scoreable way, and matches should rank resistance to false headlines, not direction calls.
+
+**Power, stated honestly.** With 48 snapshots a hit rate's interval is about ±0.14 wide. Rule 2 can only be met by a
+model that is right roughly 0.65 of the time or more against a baseline near 0.50. A smaller true edge will not show
+here; a null on rule 2 is "not detected at n = 48", not "no edge".
+
+**Spend.** Planned about $0.35 (the first experiment averaged $0.000314 per call); hard cap $1.50 above the lab's
+logged $3.09 (`--cap 4.60`).
+
+    uv run --locked python replay.py windows
+    uv run --locked python replay.py run --cap 4.60
+    uv run --locked python replay.py report
