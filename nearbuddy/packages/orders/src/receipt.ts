@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { TeeProof } from "../../protocol/src/intent.ts";
 import type { Decision } from "./intake.ts";
 
@@ -26,4 +28,12 @@ export interface Receipt {
   status: "delivered" | "refused" | "asked" | "failed";
   reason?: string;
   legsMs: Record<string, number>;
+}
+
+/** Writes `<dir>/<id>.json` and returns the path. A receipt never carries the voucher. */
+export function writeReceipt(dir: string, r: Receipt): string {
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${r.id}.json`);
+  writeFileSync(path, `${JSON.stringify(r, null, 2)}\n`);
+  return path;
 }
