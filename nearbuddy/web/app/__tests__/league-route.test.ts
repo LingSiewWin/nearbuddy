@@ -79,10 +79,12 @@ test("an empty arena has no match and empty boards", () => {
   expect(build([], new Map(), 0n, "testnet", "x")).toMatchObject({ live: null, last: null, models: [], coaches: [] });
 });
 
-test("a match past its close and not yet resolved is neither live nor last", () => {
-  const l = go([duel("8", {})], 2000n);
+test("a match past its close and not yet resolved is closing: neither live nor last", () => {
+  const l = go([duel("7", { resolved: true, outcome: outcome("pkA") }), duel("8", {})], 2000n);
   expect(l.live).toBeNull();
-  expect(l.last).toBeNull();
+  expect(l.last?.id).toBe("7");
+  expect(l.closing?.id).toBe("8");
+  expect(l.closing?.a.side).toBe("Long");
 });
 
 test("a voided match (no oracle price) is a game for nobody", () => {

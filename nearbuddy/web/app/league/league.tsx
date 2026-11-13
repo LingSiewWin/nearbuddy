@@ -86,9 +86,10 @@ export default function League() {
   // a match is live only until its close by this browser's clock: a stale league body must not keep it on stage
   const told = league?.live ?? null;
   const live = told && (now === 0 || now < ms(told.close_at)) ? told : null;
-  const shown = live ?? league?.last ?? null;
+  // past its close and not resolved yet: it stays on stage, closed, until the oracle answers
+  const closing = live ? null : (told ?? league?.closing ?? null);
+  const shown = live ?? closing ?? league?.last ?? null;
   const shownId = shown?.id ?? "";
-  const t0 = live ? ms(live.open_at) : 0;
 
   usePoll(
     () =>
@@ -134,7 +135,7 @@ export default function League() {
         .then((f) => f.duel === shownId && setLines(f.lines))
         .catch(() => {});
     },
-    live ? 3_000 : 30_000,
+    live || closing ? 3_000 : 30_000,
     `feed:${shownId}:${live ? "live" : "replay"}`,
   );
   // who the comment session is for, once; the chat box changes it on sign-in and sign-out
@@ -150,7 +151,7 @@ export default function League() {
         .then((c) => c.duel === shownId && setComments(c.comments))
         .catch(() => {});
     },
-    live ? 2_000 : 30_000,
+    live || closing ? 2_000 : 30_000,
     `comments:${shownId}:${live ? "live" : "replay"}:${session.available}`,
   );
   // a new match on the stage starts from an empty line and an empty feed
@@ -160,9 +161,9 @@ export default function League() {
     setLines([]);
     setComments([]);
     setReplay(null);
-  }, [shownId, !!live]);
+  }, [shownId]);
   useEffect(() => {
-    if (live || !shownId) return;
+    if (live || closing || !shownId) return;
     let alive = true;
     getJson<Replay>(`/api/league/replay?duel=${shownId}`)
       .then((r) => {
@@ -174,20 +175,20 @@ export default function League() {
     return () => {
       alive = false;
     };
-  }, [shownId, live]);
+  }, [shownId, live, closing]);
 
   const shouts = lines.flatMap((l) => (l.kind === "shout" ? [ms(l.at)] : []));
   let stage = null;
-  if (shown && live) {
+  if (shown && (live || closing)) {
     stage = (
       <Stage
         match={shown}
-        replay={false}
+        mode={live ? "live" : "closing"}
         samples={buf}
-        t0={t0}
-        t1={ms(live.close_at)}
+        t0={ms(shown.open_at)}
+        t1={ms(shown.close_at)}
         nowMs={now}
-        priced={fresh(buf, now)}
+        priced={!!live && fresh(buf, now)}
         shouts={shouts}
       />
     );
@@ -199,7 +200,7 @@ export default function League() {
     stage = (
       <Stage
         match={shown}
-        replay
+        mode="replay"
         samples={seen}
         t0={replay?.from ?? 0}
         t1={replay?.to ?? 1}

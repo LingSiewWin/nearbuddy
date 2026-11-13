@@ -29,6 +29,8 @@ export type League = {
   network: string;
   contract: string | null;
   live: Match | null;
+  /** The newest match past its close that the oracle has not resolved yet. */
+  closing: Match | null;
   last: Match | null;
   models: Row[];
   coaches: Row[];
@@ -81,6 +83,7 @@ export function build(
   // a voided match (no oracle price: open_price 0, both sides scored 0) is a game for nobody
   const played = done.filter((d) => d.outcome?.open_price !== "0");
   const live = newest(duels.filter((d) => !d.resolved && BigInt(d.close_at) > nowNs));
+  const closing = newest(duels.filter((d) => !d.resolved && BigInt(d.close_at) <= nowNs));
   const last = newest(done);
   const scored: Scored[] = played.map((d) => ({
     duel: d.id,
@@ -95,6 +98,7 @@ export function build(
     network,
     contract,
     live: live ? matchOf(live, agents) : null,
+    closing: closing ? matchOf(closing, agents) : null,
     last: last ? matchOf(last, agents) : null,
     models: modelRows(scored, agents),
     coaches: coachRows(scored, agents),

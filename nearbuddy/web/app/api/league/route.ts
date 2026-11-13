@@ -53,6 +53,7 @@ export async function GET() {
         network: NETWORK_ID,
         contract: null,
         live: null,
+        closing: null,
         last: null,
         models: [],
         coaches: [],

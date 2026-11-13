@@ -9,7 +9,6 @@ export type Operator = {
   busy?: boolean;
   phase?: string;
   duel?: string | null;
-  call_at?: number | null;
   close_at?: number | null;
   error?: string | null;
   models?: Model[];
@@ -26,16 +25,12 @@ function where(op: Operator, now: number): string {
   switch (op.phase) {
     case "opening":
       return "opening the match";
-    case "watching":
-      return op.call_at
-        ? `match #${op.duel}: the models watch the market; models call in ${clock(op.call_at - now)}`
-        : "";
     case "calling":
-      return `match #${op.duel}: the models are calling`;
+      return `match #${op.duel}: open; the models are calling`;
     case "racing":
-      return op.close_at ? `match #${op.duel}: racing, closes in ${clock(op.close_at - now)}` : "";
+      return op.close_at ? `match #${op.duel}: both models have called; closes in ${clock(op.close_at - now)}` : "";
     case "resolving":
-      return `match #${op.duel}: resolving on the oracle`;
+      return `match #${op.duel}: closed; waiting for the oracle's closing price, which can take a few minutes`;
     case "failed":
       return `the last start failed: ${op.error ?? "unknown"}`;
     default:
@@ -99,7 +94,7 @@ export function Start({
   return (
     <section id="start" className="panel start" aria-labelledby="start-h">
       <h2 id="start-h">
-        START A MATCH <span>a real match on NEAR testnet, about 8 minutes</span>
+        START A MATCH <span>a real match on NEAR testnet: about 6 minutes, then a few more for the oracle</span>
       </h2>
       <div className="pickers">
         {pickOne(a, setA, "First model")}

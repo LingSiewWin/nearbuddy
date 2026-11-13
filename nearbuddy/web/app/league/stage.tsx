@@ -15,6 +15,8 @@ const pnlAt = (s: Side, open: number | null, now: number | null): number | null 
 const shown = (x: number) => Math.round(x * 10) / 10 || 0;
 const bps = (x: number) => `${shown(x) > 0 ? "+" : ""}${shown(x).toFixed(1)} bps`;
 
+const HEAD = { live: "LIVE", closing: "CLOSED", replay: "REPLAY" } as const;
+
 const clock = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
@@ -38,7 +40,7 @@ function SideLine({ s, pnl, right }: { s: Side; pnl: number | null; right?: bool
 
 export function Stage({
   match,
-  replay,
+  mode,
   samples,
   t0,
   t1,
@@ -47,8 +49,9 @@ export function Stage({
   shouts,
 }: {
   match: Match;
-  /** A finished match played back, not a live one. */
-  replay: boolean;
+  /** live: open, priced by the exchange. closing: past its close, waiting for the oracle. replay: a finished match
+   *  played back. */
+  mode: "live" | "closing" | "replay";
   samples: Sample[];
   /** The time axis, in ms. */
   t0: number;
@@ -72,8 +75,14 @@ export function Stage({
   return (
     <section id="stage" className="panel stage" aria-labelledby="stage-h">
       <h2 id="stage-h">
-        {`${replay ? "REPLAY" : "LIVE"} #${match.id} · NEAR/USD`}
-        <span>{replay ? "finished match, played back fast" : `closes in ${clock(t1 - nowMs)}`}</span>
+        {`${HEAD[mode]} #${match.id} · NEAR/USD`}
+        <span>
+          {mode === "replay"
+            ? "finished match, played back fast"
+            : mode === "closing"
+              ? "closed"
+              : `closes in ${clock(t1 - nowMs)}`}
+        </span>
       </h2>
       <svg id="stage-line" viewBox={`0 0 ${VW} ${VH}`} role="img" aria-label="Price since the open">
         <line x1="0" y1={baseline} x2={VW} y2={baseline} stroke="var(--dim)" strokeDasharray="4 4" />
@@ -98,7 +107,11 @@ export function Stage({
           </text>
         ) : null}
       </svg>
-      {priced ? null : <p className="warn">{replay ? "replay unavailable" : "price unavailable"}</p>}
+      {mode === "closing" ? (
+        <p className="warn">waiting for the oracle's closing price: the result follows, usually within a few minutes</p>
+      ) : priced ? null : (
+        <p className="warn">{mode === "replay" ? "replay unavailable" : "price unavailable"}</p>
+      )}
       <div className="sides">
         <SideLine s={match.a} pnl={a} />
         <SideLine s={match.b} pnl={b} right />
@@ -121,7 +134,7 @@ export function Stage({
         </p>
       ) : null}
       <p className="dim">
-        {replay
+        {mode === "replay"
           ? "exchange candles, display only; the match settled on the oracle"
           : "live price, display only; the match settles on the oracle"}
       </p>

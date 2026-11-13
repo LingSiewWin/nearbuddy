@@ -29,6 +29,7 @@ const league = (over: Record<string, unknown>) => ({
   network: "testnet",
   contract: "arena.testnet",
   live: null,
+  closing: null,
   last: null,
   models: [],
   coaches: [],
@@ -93,14 +94,29 @@ test("a price that stops arriving goes stale, even when the server's clock runs 
   await expect(page.locator("#stage-line")).not.toContainText("3.4340");
 });
 
-test("a match past its close is not shown as live, whatever a stale league body says", async ({ page }) => {
+test("a match past its close is shown as closed and waiting for the oracle, never as live", async ({ page }) => {
   const m = liveMatch();
   await stub(page, "**/api/league", league({ live: { ...m, close_at: `${(Date.now() - 5_000) * 1_000_000}` } }));
   await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
   await stub(page, "**/api/spot", { price: "3.4340", at: Date.now() });
   await page.goto("/");
-  await expect(page.locator("#stage")).toContainText("no match yet");
+  await expect(page.locator("#stage")).toContainText("CLOSED #9");
+  await expect(page.locator("#stage")).toContainText("waiting for the oracle");
   await expect(page.locator("#stage")).not.toContainText("LIVE");
+  await expect(page.locator("#stage")).not.toContainText("bps"); // no profit keeps moving after the close
+  await expect(page.locator("#shout")).toContainText("shouts open when a match is live");
+});
+
+test("a closing match the arena reports is on stage until it resolves, not a replay of an older one", async ({
+  page,
+}) => {
+  const m = liveMatch();
+  const closing = { ...m, close_at: `${(Date.now() - 60_000) * 1_000_000}` };
+  await stub(page, "**/api/league", league({ closing }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await page.goto("/");
+  await expect(page.locator("#stage")).toContainText("CLOSED #9");
+  await expect(page.locator("#stage")).not.toContainText("REPLAY");
 });
 
 test("a side that has not called yet is waiting, and there is no rope", async ({ page }) => {
@@ -193,8 +209,6 @@ const operator = (over: Record<string, unknown>) => ({
   a: null,
   b: null,
   open_at: null,
-  call_at: null,
-  tick_at: null,
   close_at: null,
   error: null,
   models: [
@@ -231,17 +245,15 @@ test("the start panel lists the operator's models and posts the two chosen", asy
   await expect(page.locator("#start button")).toBeDisabled();
 });
 
-test("while a match is being watched the panel says when the models call, and cannot start another", async ({
-  page,
-}) => {
+test("while the operator runs a match the panel says where it is, and cannot start another", async ({ page }) => {
   await stub(page, "**/api/league", league({}));
   await stub(
     page,
     "**/api/league/start",
-    operator({ busy: true, phase: "watching", duel: "9", open_at: Date.now(), call_at: Date.now() + 125_000 }),
+    operator({ busy: true, phase: "racing", duel: "9", open_at: Date.now(), close_at: Date.now() + 125_000 }),
   );
   await page.goto("/");
-  await expect(page.locator("#start")).toContainText(/models call in 02:0\d/);
+  await expect(page.locator("#start")).toContainText(/match #9: both models have called; closes in 02:0\d/);
   await expect(page.locator("#start button")).toBeDisabled();
 });
 
