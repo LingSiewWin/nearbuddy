@@ -123,6 +123,13 @@ const argsOf = (over: object = {}) => ({
   ...over,
 });
 type Status = Record<string, unknown>;
+const REUSE_FAILURE: Status = {
+  Failure: {
+    ActionError: {
+      kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: this decision was already used" } },
+    },
+  },
+};
 const call = (
   gate: string,
   pred: string,
@@ -501,26 +508,12 @@ test("a legitimate receipt of every exit path of the flow has no FAIL", async ()
     chain(nearTx(), baseRc(), PAYER, unpaid),
   );
   assert.ok(l.some((x) => x.line.startsWith("SKIP")));
-  // the gate refused to reuse a decision an earlier order spent
-  await clean(
+  // the gate refused to reuse a decision an earlier sign_payment spent: no FAIL, but no vouching either
+  const reuse = await clean(
     { ...base, status: "refused", baseTx: undefined as never },
-    chain(
-      nearTx({
-        payment: {
-          Failure: {
-            ActionError: {
-              kind: {
-                FunctionCallError: { ExecutionError: "Smart contract panicked: this decision was already used" },
-              },
-            },
-          },
-        },
-      }),
-      baseRc(),
-      PAYER,
-      { used: true, auth: false },
-    ),
+    chain(nearTx({ payment: REUSE_FAILURE }), baseRc(), PAYER, { used: true, auth: false }),
   );
+  assert.ok(reuse.find((x) => x.check === "decision-used")?.line.startsWith("SKIP"));
   // failed after a decision, before paying; and after signing but before settling; and after settling
   await clean(
     { ...base, status: "failed", near: {}, baseTx: undefined as never, reason: "invoice price above the limit" },
@@ -810,4 +803,48 @@ test("the footer counts SKIP lines and says what an unpaid receipt left unverifi
   assert.match(f, /does not prove delivery/);
   assert.match(f, /This receipt is asked: only the recorded transactions and two on-chain reads/);
   assert.ok(!footer(await lines(base, chain()), "delivered").includes("This receipt is"));
+});
+
+const REUSE_SKIP =
+  "the gate refused a reuse; the decision was spent by a sign_payment not recorded here (possibly this same order); whether that payment settled is not verified";
+
+test("a refused reuse is a SKIP with fixed wording on decision-used, never a PASS", async () => {
+  const r = { ...base, status: "refused" as const, baseTx: undefined as never };
+  const l = await lines(r, chain(nearTx({ payment: REUSE_FAILURE }), baseRc(), PAYER, { used: true, auth: false }));
+  const d = l.filter((x) => x.check === "decision-used");
+  assert.equal(d.length, 1);
+  const dl = d[0]?.line ?? "";
+  assert.ok(d[0]?.ok);
+  assert.ok(dl.startsWith("SKIP") && dl.endsWith(REUSE_SKIP), dl);
+  assert.ok(!l.some((x) => x.check === "decision-used" && x.line.startsWith("PASS")));
+  assert.match(
+    l.find((x) => x.check === "authorization-state")?.line ?? "",
+    /^PASS.*covers only the refused call's nonce/,
+  );
+  const f = footer(l, "refused");
+  assert.match(f, /does not show whether the decision's original payment settled/);
+  assert.match(f, /\d+ SKIP/);
+});
+
+test("the reuse attack: N1 paid and settled, the receipt points at a failed reuse call with N2", async () => {
+  // The first payment (proof P, nonce N1) settled on Base. The operator then called sign_payment again with P and a
+  // fresh nonce N2; the gate refused it. The receipt says refused and records only the second call.
+  const N2 = `0x${"0c".repeat(32)}`;
+  const tx = nearTx({ args: argsOf({ nonce: N2 }), payment: REUSE_FAILURE });
+  const authorizationUsed = async (_a: string, nonce: string) => nonce === NONCE; // only N1 was executed
+  for (const status of ["refused", "failed"] as const) {
+    const r = { ...base, status, baseTx: undefined as never };
+    const c: ChainReads = { ...chain(tx, baseRc(), PAYER, { used: true }), authorizationUsed };
+    const l = await lines(r, c);
+    assert.ok(!l.some((x) => x.check === "decision-used" && x.line.startsWith("PASS")), status);
+    assert.ok(l.find((x) => x.check === "decision-used")?.line.startsWith("SKIP"), status);
+    assert.match(l.find((x) => x.check === "authorization-state")?.line ?? "", /covers only the refused call's nonce/);
+    assert.match(footer(l, status), /does not show whether the decision's original payment settled/);
+  }
+});
+
+test("the gate has consumed the decision and the receipt records no sign_payment call at all still fails", async () => {
+  const r = { ...base, status: "refused" as const, ...noPay };
+  const l = await lines(r, chain(nearTx(), baseRc(), PAYER, { used: true }));
+  assert.ok(!l.find((x) => x.check === "decision-used")?.ok);
 });

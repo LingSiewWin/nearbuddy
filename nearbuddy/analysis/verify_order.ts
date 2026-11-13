@@ -234,7 +234,10 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
       (k) => typeof proofObj[k] === "string" && proofObj[k] !== "" && spDecision[k] === proofObj[k],
     );
     const signedProof = !!spCall?.ok && carriesProof;
-    // A failed sign_payment of this proof whose text says the decision was already used: an earlier order paid with it.
+    // A failed sign_payment of this proof whose text says the decision was already used: some earlier sign_payment spent
+    // it, and that call is NOT in this receipt (it may be this very order's payment, recorded nowhere). The receipt can
+    // vouch for nothing about it. ponytail: to close the gap, find that original `payment_signed` event on the gate by
+    // its request_hash and response_hash (the gate's account history) and check its nonce with authorizationState.
     const refusedReuse = !!spCall && !spCall.ok && carriesProof && failText(spCall.status).includes("already used");
 
     // Allowed combinations of status, decision and payment. `refused` with a buy decision is the contract's refusal
@@ -352,7 +355,9 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
       if (used) {
         if (signedProof) return "decision consumed by the recorded payment";
         if (refusedReuse)
-          return "decision consumed by an earlier order: the recorded sign_payment was refused as already used";
+          return {
+            skip: "the gate refused a reuse; the decision was spent by a sign_payment not recorded here (possibly this same order); whether that payment settled is not verified",
+          };
         throw new Error("the gate has consumed this decision but the receipt shows no payment");
       }
       need(
@@ -446,15 +451,18 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
           need(executed, "the receipt is delivered, but the authorization was not executed on Base");
           return "authorization executed on Base";
         }
+        const scope = refusedReuse
+          ? " (covers only the refused call's nonce, not the payment that spent the decision)"
+          : "";
         if (executed) {
           need(
             baseHash && r.status === "failed",
             `this authorization was executed on Base, but the receipt is ${r.status} and records ${baseHash ? "a Base tx" : "no Base tx"}`,
           );
-          return "authorization executed on Base, as the recorded Base tx says";
+          return `authorization executed on Base, as the recorded Base tx says${scope}`;
         }
         need(!baseHash, "the receipt records a Base tx, but its authorization was not executed on Base");
-        return "authorization not executed on Base";
+        return `authorization not executed on Base${scope}`;
       });
     } else {
       await run("authorization-state", () => ({
@@ -611,6 +619,10 @@ export function footer(lines: Line[], status: unknown): string {
   if (status !== "delivered")
     out.push(
       `This receipt is ${String(status)}: only the recorded transactions and two on-chain reads (the gate consumed the decision, USDC executed the authorization) were checked, so an order that completed outside them is not excluded.${skip ? ` Every SKIP line above names something that was not verified (${skip}).` : ""}`,
+    );
+  if (lines.some((l) => l.check === "decision-used" && l.line.startsWith("SKIP")))
+    out.push(
+      "This receipt does not show whether the decision's original payment settled: the gate refused a reuse, and the call that spent the decision is not recorded in it.",
     );
   return out.join("\n");
 }
