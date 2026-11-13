@@ -105,8 +105,15 @@ that was the front page, is at `/terminal`.
   pinned models and it opens a real match of about 6 minutes between an idle agent of each, has the keeper fill the
   two slots at once, and resolves after the close. One match at a time. The site holds no key: its
   route forwards to the operator with a shared secret. Without `OPERATOR_URL` the panel is not shown.
+- **Guest account** (`web/app/league/account.tsx`, `web/app/lib/guest*.ts`, `web/app/api/guest/route.ts`). Testnet
+  only. "play as guest" makes an ed25519 key in the browser, and the site asks NEAR's public testnet faucet service
+  (the one behind the NEAR CLI's `create-account sponsor-by-faucet-service`) to create `nb-guest-<10 chars>.testnet`
+  with that public key and testnet NEAR. The private key never leaves the browser (`localStorage`); "leave" deletes
+  it after a confirmation. The guest then signs comments' sign-in and shouts with that key, with no wallet window.
+  The route allows 3 accounts per address and 60 site-wide per hour.
 - **Shout** (`web/app/league/shout.tsx`). The arena's paid `inject_chaos`, signed by the visitor's wallet, from the
-  box under the feed. The price shown is the contract's `chaos_fee` for the live match.
+  box under the feed. The price shown is the contract's `chaos_fee` for the live match. The box stays closed while
+  a match has no opening price.
 - **Comments** (`web/app/league/chat.tsx`, `web/app/api/comments.ts`). Free, off chain, for people only: a comment
   never enters a model's request. Signing in is one NEP-413 message signed by the wallet (no transaction), checked
   with `near-api-js/nep413` against the account's full-access keys; the session is an HttpOnly cookie. Stored in
@@ -121,6 +128,12 @@ that was the front page, is at `/terminal`.
   was sent by hand ([`8EmBNXJj…`](https://testnet.nearblocks.io/txns/8EmBNXJj4CJXFKSQjR1XYqMk9Jys76UtQTGTjnL34rMH)
   failed with `no price` while the OutLayer oracle was down; a later call resolved it: Qwen won, DeepSeek −6 bps). A
   comment was posted and read back through the routes with a session signed by a testnet account's key.
+- **Guest proved on testnet, 2026-11-13**, in a browser with nothing stubbed: the account
+  `nb-guest-ut778rx9rp.testnet` was created in about 6 s
+  ([`3kXgqUWt…`](https://testnet.nearblocks.io/txns/3kXgqUWtU1cLVHVisyMLJDGNuBejRcW6WWfTz3Y3T59Q)), signed in to
+  comments by itself, started duel 14 from the page and planted a 0.1 NEAR headline with its own key
+  ([`AYn9E7rv…`](https://testnet.nearblocks.io/txns/AYn9E7rv329Gyzhfa93k6jvJobAxM6jSW2YaujjTeSwz)), the first shout
+  sent from the page. Another guest posted a comment on duel 13 that the comments route reads back.
 - **Known limits.** Duel 12 ran from the start request to its resolution with no hand
   (`open_duel` [`5HRi6VvH…`](https://testnet.nearblocks.io/txns/5HRi6VvHnguawCz2FrTy2HtzdRA1gPzY2XD5MPPFppbH)), but
   no model called in it: that version waited 305 s and asked the oracle for a tick before letting the models call,
@@ -132,15 +145,19 @@ that was the front page, is at `/terminal`.
   both long 500 bps, resolved a tie at −4 bps each
   ([`EdfvpznY…`](https://testnet.nearblocks.io/txns/EdfvpznYMvrhhbpa5FMggxGx2CeHRgf2CJtsTEWBM9mh)). After a close the page shows the match as closed until the oracle has a price stamped
   after it, which took about five minutes in duel 12. The public testnet RPCs throttle a machine that runs the
-  site, the operator and the tests together. A shout from the page has not been sent with a real wallet. An email
+  site, the operator and the tests together. In duel 14 the oracle returned no opening price: `open_duel` took two
+  minutes to answer, no model could call, and the guest's shout went into a match that never ran (the page showed
+  the shout box then; it no longer does without an opening price). A guest key lives in one browser's storage:
+  clearing site data loses the account, and there is no export yet. Run locally under `next start`, comment sign-in
+  works at `localhost` and is refused at `127.0.0.1`, because the route reads the host from the request URL. An email
   (Privy) account that was never funded cannot comment: it has no key on chain to check.
 - **Not built yet.** Calling a winner on this arena (the predict contract is bound to the first arena), a hosted
   operator, moderation of comments, and email sign-in on this page.
 
-Checks: `web/app/__tests__/{league,stage,league-route,feed,replay,comments}.test.ts` (33 unit tests; real fixtures: a
+Checks: `web/app/__tests__/{league,stage,league-route,feed,replay,comments,guest}.test.ts` (38 unit tests; real fixtures: a
 `submit_completion` of duel 5, a Coinbase candle response, and logins signed with real ed25519 keys),
 `packages/keeper/src/{operator,serve}.test.ts` (21 tests against a fake chain and clock) and
-`web/tests/league.spec.ts` (24 browser tests).
+`web/tests/league.spec.ts` (27 browser tests).
 
 ## The AI part
 
