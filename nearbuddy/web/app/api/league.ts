@@ -83,7 +83,9 @@ export function build(
   // a voided match (no oracle price: open_price 0, both sides scored 0) is a game for nobody
   const played = done.filter((d) => d.outcome?.open_price !== "0");
   const live = newest(duels.filter((d) => !d.resolved && BigInt(d.close_at) > nowNs));
-  const closing = newest(duels.filter((d) => !d.resolved && BigInt(d.close_at) <= nowNs));
+  // closed without an opening price: the contract resolves no such duel (it is voided a day later), so it is not shown
+  // as waiting for the oracle
+  const closing = newest(duels.filter((d) => !d.resolved && BigInt(d.close_at) <= nowNs && d.open_price !== null));
   const last = newest(done);
   const scored: Scored[] = played.map((d) => ({
     duel: d.id,

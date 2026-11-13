@@ -87,6 +87,12 @@ test("a match past its close and not yet resolved is closing: neither live nor l
   expect(l.closing?.a.side).toBe("Long");
 });
 
+test("a closed match that never got an opening price is not closing: no oracle answer can finish it", () => {
+  const l = go([duel("7", { resolved: true, outcome: outcome("pkA") }), duel("8", { open_price: null })], 2000n);
+  expect(l.closing).toBeNull();
+  expect(l.last?.id).toBe("7");
+});
+
 test("a voided match (no oracle price) is a game for nobody", () => {
   const voided = { ...outcome(null), open_price: "0", close_price: "0", pnl_a: 0, pnl_b: 0 };
   const l = go([duel("7", { resolved: true, outcome: voided })]);
