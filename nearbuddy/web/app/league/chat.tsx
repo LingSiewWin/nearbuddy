@@ -1,8 +1,9 @@
 // The chat box under the feed: free comments from signed-in visitors on the shown match. Signing in asks the wallet
 // to sign one NEP-413 message (not a transaction, no cost); the server answers with a session cookie. A comment is
 // for people: it never reaches a model (a paid shout does, through the contract).
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type Comment, clean, loginMessage, MAX_COMMENT, newNonce } from "../lib/comments";
+import { recall } from "../lib/guest";
 import * as wallet from "../lib/wallet";
 
 export type Session = { available: boolean; account: string | null };
@@ -14,16 +15,29 @@ export function Chat({
   session,
   onSession,
   onPosted,
+  account,
 }: {
   /** The shown match, or "" with none. */
   duel: string;
   session: Session;
   onSession: (s: Session) => void;
+  /** The account signed in on the page, or null. */
+  account: string | null;
   onPosted: (c: Comment) => void;
 }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // A guest signs with a key in this browser, so opening its chat session needs no click and no wallet window:
+  // done once per guest account. A wallet account signs in when its owner asks, since that opens the wallet.
+  const tried = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the guest account or the session changes
+  useEffect(() => {
+    if (!session.available || session.account || !account || tried.current === account) return;
+    if (recall()?.accountId !== account) return;
+    tried.current = account;
+    signIn();
+  }, [account, session.available, session.account]);
   if (!session.available || !duel) return null;
 
   const fail = (e: unknown) => setNote(String(e instanceof Error ? e.message : e).slice(0, 200));

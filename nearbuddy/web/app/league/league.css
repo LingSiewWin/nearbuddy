@@ -149,6 +149,25 @@
   color: var(--dim);
   cursor: not-allowed;
 }
+.league .account {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em 1em;
+  align-items: baseline;
+}
+.league .account button:not(.link) {
+  font: inherit;
+  color: var(--hi);
+  background: var(--bg);
+  border: 1px solid var(--hi);
+  padding: 0.15em 0.7em;
+  cursor: pointer;
+}
+.league .account button:disabled {
+  color: var(--dim);
+  border-color: var(--dim);
+  cursor: wait;
+}
 .league .chat {
   border-top: 1px solid var(--dim);
   margin-top: 0.6em;

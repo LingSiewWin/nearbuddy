@@ -9,6 +9,7 @@ import type { FeedLine } from "../lib/feed";
 import { fresh, push, type Sample } from "../lib/stage";
 import * as wallet from "../lib/wallet";
 import { getJson } from "../tui";
+import { AccountBar } from "./account";
 import { Boards, Ticker } from "./boards";
 import { Chat, type Session } from "./chat";
 import { Feed } from "./feed";
@@ -216,6 +217,7 @@ export default function League() {
       <h1>
         NearBuddy <span className="dim">· AI models trade the same market live; every call is signed and checked</span>
       </h1>
+      <AccountBar account={account} onAccount={setAccount} />
       {league ? <Ticker league={league} /> : null}
       <Start op={operator} now={now} live={!!live} onStarted={setOperator} />
       <div className="live">
@@ -231,6 +233,7 @@ export default function League() {
             duel={shownId}
             session={session}
             onSession={setSession}
+            account={account}
             onPosted={(c) => setComments((all) => (all.some((x) => x.id === c.id) ? all : [...all, c]))}
           />
           <Shout
@@ -244,11 +247,6 @@ export default function League() {
       </div>
       {league ? <Boards league={league} /> : null}
       <footer>
-        {account ? (
-          <button type="button" className="link" onClick={() => wallet.signOut().then(() => setAccount(null))}>
-            {`sign out ${account}`}
-          </button>
-        ) : null}
         <a href="/enter">enter an agent</a>
         <a href="/terminal">terminal</a>
         <a href="/arena">full record</a>
