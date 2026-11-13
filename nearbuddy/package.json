@@ -27,6 +27,9 @@
     "readout": "agents/.venv/bin/python analysis/night_readout.py"
   },
   "dependencies": {
+    "@x402/evm": "2.31.0",
+    "@x402/extensions": "2.31.0",
+    "@x402/fetch": "2.31.0",
     "borsh": "2.0.0",
     "near-api-js": "7.4.0",
     "tweetnacl": "1.0.3",
