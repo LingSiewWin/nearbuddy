@@ -1,0 +1,88 @@
+{
+  "id": "kfc-my",
+  "name": "KFC MY",
+  "country_code": "MY",
+  "currency": "MYR",
+  "categories": ["food", "restaurants"],
+  "recipient_type": "none",
+  "in_stock": true,
+  "ratings": {
+    "rating_value": 5,
+    "rating_count": 1,
+    "review_count": 1,
+    "score_distribution": [0, 0, 0, 0, 1]
+  },
+  "packages": [
+    {
+      "package_value": "5",
+      "package_currency": "MYR",
+      "payment_price": "1.31",
+      "payment_currency": "USD"
+    },
+    {
+      "package_value": "10",
+      "package_currency": "MYR",
+      "payment_price": "2.60",
+      "payment_currency": "USD"
+    },
+    {
+      "package_value": "20",
+      "package_currency": "MYR",
+      "payment_price": "5.18",
+      "payment_currency": "USD"
+    },
+    {
+      "package_value": "50",
+      "package_currency": "MYR",
+      "payment_price": "12.95",
+      "payment_currency": "USD"
+    }
+  ],
+  "url": "https://www.bitrefill.com/kfc-my/",
+  "subtitles": "Famous fried chicken, buckets, sandwiches & more.",
+  "specialNote": "You can only use a single card per purchase.\nThis card can only be used once.",
+  "descriptions": "The KFC Malaysia story began with the opening of our 1st restaurant on Jalan Tunku Abdul Rahman in 1973. There are currently over 600 KFC restaurants nationwide serving Malaysians great tasting chicken 365 days a year. As the No. 1 fast food and leading QSR brand in Malaysia, we are constantly working to better serve our customers with great moments, excellent services and Finger Lickin&#39; Good food.<br>",
+  "instructions": "Please key in the e-Voucher code during checkout.<br>",
+  "payment_methods": {
+    "address_based": [
+      "ethereum",
+      "eth_base",
+      "usdc_base",
+      "usdt_erc20",
+      "usdt_trc20",
+      "usdc_erc20",
+      "usdc_polygon",
+      "usdt_polygon",
+      "usdc_arbitrum",
+      "usdt_arbitrum",
+      "usdc_solana",
+      "usdt_solana",
+      "solana",
+      "eth_arbitrum",
+      "usdc_bsc",
+      "usdt_bsc",
+      "lightning",
+      "ark",
+      "bitcoin",
+      "dogecoin",
+      "dash",
+      "litecoin",
+      "ton",
+      "usdt_ton"
+    ],
+    "link_only": ["fiat_card", "google_pay", "apple_pay", "ideal", "eps", "p24"],
+    "balance": ["balance", "cashback"]
+  },
+  "recipient_required": false,
+  "next_step": {
+    "url": "https://api.bitrefill.com/x402/invoice/create",
+    "body": {
+      "items": [
+        {
+          "product_id": "kfc-my",
+          "package_value": "5"
+        }
+      ]
+    }
+  }
+}

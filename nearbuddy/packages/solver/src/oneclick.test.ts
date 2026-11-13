@@ -169,6 +169,34 @@ test("executeSwap throws on a final non-SUCCESS status and names the deposit tx"
   }
 });
 
+test("executeSwap reports the deposit tx as soon as it is sent, before a failing step", async () => {
+  const { executeSwap } = await import("./oneclick.ts");
+  const restore = fakeOneClick("8c66beef".padEnd(64, "0"), ["SUCCESS"]);
+  const events: string[] = [];
+  const ok = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (String(url).endsWith("/v0/deposit/submit")) {
+      events.push("submit");
+      throw new Error("1click is down");
+    }
+    return ok(url, init);
+  }) as typeof fetch;
+  const account = {
+    accountId: "someone.near",
+    provider: { callFunction: async () => null },
+    signAndSendTransaction: async () => ({ transaction: { hash: "TX5" } }),
+  } as unknown as Parameters<typeof executeSwap>[0];
+  try {
+    await assert.rejects(
+      executeSwap(account, 10n ** 23n, undefined, undefined, (h) => events.push(`deposit:${h}`)),
+      /1click is down/,
+    );
+    assert.deepEqual(events, ["deposit:TX5", "submit"]);
+  } finally {
+    restore();
+  }
+});
+
 test("executeSwap refuses a quote without a deposit address before sending anything", async () => {
   const { executeSwap } = await import("./oneclick.ts");
   const real = globalThis.fetch;

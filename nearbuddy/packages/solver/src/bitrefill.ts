@@ -1,32 +1,19 @@
 // Bitrefill x402 client: buy a gift card or voucher with USDC on Base, no account and no API key.
 // Routes and field names from https://api.bitrefill.com/openapi.json ("Bitrefill x402" 1.0.0, read 2026-11-13).
 // A free sign-in-with-x session token removes the per-call micro-fees; only `payInvoice` moves money.
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { ExactEvmScheme } from "@x402/evm";
 import { createSIWxPayload, encodeSIWxHeader } from "@x402/extensions/sign-in-with-x";
 import { decodePaymentResponseHeader, wrapFetchWithPaymentFromConfig } from "@x402/fetch";
 import { createPublicClient, erc20Abi, http } from "viem";
-import { generatePrivateKey, type PrivateKeyAccount, privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 
 const API = process.env.BITREFILL_X402_URL ?? "https://api.bitrefill.com/x402";
 const BASE = "eip155:8453";
 export const USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
-/** Whoever holds the USDC on Base: a local key (`loadPayer`) or the paygate contract (`gateSigner`). */
+/** Whoever holds the USDC on Base: the paygate contract (`gateSigner`). */
 export type Payer = { readonly address: `0x${string}` } & Parameters<typeof createSIWxPayload>[1] &
   ConstructorParameters<typeof ExactEvmScheme>[0];
-
-/** The EVM key that holds USDC on Base and signs the payment. Created on first use, mode 0600, never printed. */
-export function loadPayer(path: string): PrivateKeyAccount {
-  if (!existsSync(path)) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, generatePrivateKey(), { mode: 0o600 });
-    chmodSync(path, 0o600);
-  }
-  return privateKeyToAccount(readFileSync(path, "utf8").trim() as `0x${string}`);
-}
 
 export function usdcBalance(owner: `0x${string}`): Promise<bigint> {
   const client = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC) });
@@ -52,6 +39,24 @@ export async function connect(payer: Payer): Promise<string> {
   const body = await json(await fetch(url, { method: "POST", headers: { "SIGN-IN-WITH-X": header } }), "connect");
   if (typeof body.token !== "string") throw new Error("bitrefill connect: no token in the response");
   return body.token;
+}
+
+/** Search gift cards by text in one country (ISO alpha-2, e.g. "MY"). Free with a session token. */
+export async function searchGiftCards(token: string, q: string, country: string): Promise<unknown> {
+  const query = new URLSearchParams({ q, country });
+  return json(
+    await fetch(`${API}/gift-cards/search?${query}`, { headers: { "X-Access-Token": token } }),
+    "gift-cards/search",
+  );
+}
+
+/** One product with its packages, by slug. Free with a session token. */
+export async function productDetail(token: string, slug: string): Promise<unknown> {
+  const query = new URLSearchParams({ slug });
+  return json(
+    await fetch(`${API}/products/detail?${query}`, { headers: { "X-Access-Token": token } }),
+    "products/detail",
+  );
 }
 
 export interface Invoice {
