@@ -87,6 +87,7 @@ jobs:
             nearbuddy/intents-stub
             nearbuddy/contract
             nearbuddy/predict
+            nearbuddy/paygate
       # same checks as scripts/check-all.sh rs-* / stub-tests / vault-tests; --locked fails on a stale Cargo.lock
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
@@ -101,6 +102,9 @@ jobs:
       # free predictions on the arena's chaos and duel outcomes
       - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib
         working-directory: nearbuddy/predict
+      # spend gate: Chain Signatures payment key behind a policy
+      - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib
+        working-directory: nearbuddy/paygate
       - name: cache cargo-near
         id: cargo-near
         uses: actions/cache@v4
@@ -117,11 +121,13 @@ jobs:
       - run: cargo near abi && diff -u ../abi/arena.json target/near/nearbuddy_arena_abi.json
       # gen.ts types an Option field as always present (`T | null`) because serde writes None as null;
       # skip_serializing_if would drop the key instead, and the ABI schema cannot show that
-      - run: "! grep -rn skip_serializing_if src ../contract/src ../predict/src"
+      - run: "! grep -rn skip_serializing_if src ../contract/src ../predict/src ../paygate/src"
       - run: cargo near abi && diff -u ../abi/vault.json target/near/nearbuddy_vault_abi.json
         working-directory: nearbuddy/contract
       - run: cargo near abi && diff -u ../abi/predict.json target/near/nearbuddy_predict_abi.json
         working-directory: nearbuddy/predict
+      - run: cargo near abi && diff -u ../abi/paygate.json target/near/nearbuddy_paygate_abi.json
+        working-directory: nearbuddy/paygate
 
   # Playwright smoke over the built pages. Reads the live testnet arena contract through the public RPC,
   # so it needs the network but no secrets. Not required by the other jobs.

@@ -8,6 +8,7 @@ const ONECLICK_URL = process.env.ONECLICK_URL ?? "https://1click.chaindefuser.co
 const ONECLICK_JWT = process.env.ONECLICK_JWT;
 export const WNEAR = "nep141:wrap.near";
 export const USDC_NEAR = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+export const USDC_BASE = "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near"; // from GET /v0/tokens
 
 export interface QuoteRequest {
   dry: boolean;
@@ -149,6 +150,18 @@ export function sellNearForUsdcOnChain(amountYocto: bigint, account: string): Qu
   };
 }
 
+/** Buy exactly `usdcOut` (6 decimals) of USDC on Base for `recipient`, paid in wNEAR from `account` on NEAR.
+ *  EXACT_OUTPUT: 1Click names the wNEAR to deposit (`quote.amountIn`); unused input is refunded to `account`. */
+export function buyUsdcOnBase(usdcOut: bigint, account: string, recipient: string): QuoteRequest {
+  return {
+    ...sellNearForUsdcOnChain(0n, account),
+    swapType: "EXACT_OUTPUT",
+    destinationAsset: USDC_BASE,
+    amount: usdcOut.toString(),
+    recipient,
+  };
+}
+
 export interface SwapResult {
   quote: Quote;
   wrapTx: string;
@@ -161,15 +174,20 @@ export interface SwapResult {
 
 const STORAGE = 1_250_000_000_000_000_000_000n; // wrap.near storage_balance_bounds.min
 
+/** Without `req`: sell exactly `amountYocto` wNEAR for USDC on NEAR. With `req` (an EXACT_OUTPUT request such as
+ *  `buyUsdcOnBase`): deposit the wNEAR the quote asks for, and refuse a quote that asks for more than `amountYocto`. */
 export async function executeSwap(
   account: Account,
   amountYocto: bigint,
   log: (s: string) => void = () => {},
+  req?: QuoteRequest,
 ): Promise<SwapResult> {
   const t0 = Date.now();
-  const q = await quote(sellNearForUsdcOnChain(amountYocto, account.accountId));
+  const q = await quote(req ?? sellNearForUsdcOnChain(amountYocto, account.accountId));
   const dep = q.quote.depositAddress;
   if (!dep) throw new Error("quote has no depositAddress (dry?)");
+  const amount = req ? BigInt(q.quote.amountIn) : amountYocto;
+  if (amount > amountYocto) throw new Error(`quote asks for ${amount} yocto wNEAR, above the ${amountYocto} ceiling`);
   const t1 = Date.now();
   log(
     `quote ${q.quote.amountInFormatted} wNEAR -> ${q.quote.amountOutFormatted} USDC, deposit to ${dep}, deadline ${q.quote.deadline} (${t1 - t0} ms)`,
@@ -188,13 +206,13 @@ export async function executeSwap(
   const acts = [
     ...(registered ? [] : [actions.functionCall("storage_deposit", {}, teraToGas("10"), STORAGE)]),
     actions.functionCall("storage_deposit", { account_id: dep }, teraToGas("10"), STORAGE),
-    actions.functionCall("near_deposit", {}, teraToGas("10"), amountYocto),
-    actions.functionCall("ft_transfer", { receiver_id: dep, amount: amountYocto.toString() }, teraToGas("30"), 1n),
+    actions.functionCall("near_deposit", {}, teraToGas("10"), amount),
+    actions.functionCall("ft_transfer", { receiver_id: dep, amount: amount.toString() }, teraToGas("30"), 1n),
   ];
   const xfer = await account.signAndSendTransaction({ receiverId: "wrap.near", actions: acts });
   const t2 = Date.now();
   log(
-    `wrapped and transferred ${amountYocto} yocto to the deposit address in one tx: ${xfer.transaction.hash} (${t2 - t1} ms)`,
+    `wrapped and transferred ${amount} yocto to the deposit address in one tx: ${xfer.transaction.hash} (${t2 - t1} ms)`,
   );
   await submitDeposit(xfer.transaction.hash, dep);
   let st = await status(dep);

@@ -16,6 +16,7 @@
     "guarantor": "bun packages/demo/src/guarantor.ts",
     "arena-demo": "bun packages/demo/src/arena.ts",
     "real-swap": "bun packages/demo/src/swap.ts",
+    "order": "bun packages/demo/src/order.ts",
     "spectator": "bun packages/demo/src/spectator.ts",
     "join": "bun packages/demo/src/join.ts",
     "status": "scripts/arena-status.sh",
@@ -27,6 +28,9 @@
     "readout": "agents/.venv/bin/python analysis/night_readout.py"
   },
   "dependencies": {
+    "@x402/evm": "2.31.0",
+    "@x402/extensions": "2.31.0",
+    "@x402/fetch": "2.31.0",
     "borsh": "2.0.0",
     "near-api-js": "7.4.0",
     "tweetnacl": "1.0.3",

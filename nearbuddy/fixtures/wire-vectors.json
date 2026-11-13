@@ -265,5 +265,28 @@
     "_": "Signer hex may carry a 0x prefix; it decodes to the same bytes.",
     "in": "0x236f5a6b91dd47dc3b7b36e43d4eb531a042ffb8f8fbf3a1555b78cef4fdda4c",
     "bytes_hex": "236f5a6b91dd47dc3b7b36e43d4eb531a042ffb8f8fbf3a1555b78cef4fdda4c"
+  },
+  "payment": {
+    "_": "EIP-3009 transferWithAuthorization as EIP-712 typed data: what paygate (Rust) signs through Chain Signatures and what an x402 exact payment carries. digest_hex computed with viem hashTypedData.",
+    "domain": {
+      "name": "USD Coin",
+      "version": "2",
+      "chainId": 8453,
+      "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    },
+    "message": {
+      "from": "0x1a10a02f13144a60a775b6969c01dfDdD3BB4595",
+      "to": "0x480CD46E6faDe651a0437DeaddA53D5c8e7D846A",
+      "value": "1310000",
+      "validAfter": "0",
+      "validBefore": "1794567890",
+      "nonce": "0x0303030303030303030303030303030303030303030303030303030303030303"
+    },
+    "digest_hex": "0xf0cc2b520881cb51374b840d160fc09887e0489ba07ce195b5fb594cf7c6af39"
+  },
+  "login": {
+    "_": "EIP-191 personal_sign digest of a sign-in message (SIWE layout), as paygate signs it for sign_login. digest_hex computed with viem hashMessage.",
+    "message": "api.bitrefill.com wants you to sign in with your Ethereum account:\n0x8639AC20d22dA43e8138871BE36228757245F9a4\n\nSign in to Bitrefill.\n\nURI: https://api.bitrefill.com/x402/connect\nVersion: 1\nChain ID: 8453\nNonce: e1f63ae7fc0628e31bd564a068fd3dde\nIssued At: 2026-11-13T09:18:50.253Z",
+    "digest_hex": "0xc2fa1d5abcb4559436e9554cfedeba55ddd4db6ac04aef694055926239b52334"
   }
 }

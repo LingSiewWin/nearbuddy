@@ -21,6 +21,44 @@ that verifies those signatures with `ed25519_verify` and draws each attack's arm
 follower fills. Wallet sign-in with `@hot-labs/near-connect` (`web/app/lib/wallet.ts`). Chain Signatures MPC for the
 card guarantor (`contract/`).
 
+## Buy real goods with any token (2026-11-13)
+
+One command, no human signature: a NEAR account pays in NEAR, NEAR Intents (1Click) settles USDC on Base, and a
+Base address whose key nobody holds pays a Bitrefill invoice over x402 for a real KFC Malaysia RM5 voucher. The key is
+derived by NEAR Chain Signatures for the `paygate` contract, which builds the EIP-3009 payment digest itself and signs
+it only inside the owner's policy (per-payment cap, allowance, payees, expiry). The agent holds a function-call
+access key that can call two methods on that contract and nothing else.
+
+**Do X, see Y** (mainnet money: about 0.38 NEAR per run; needs `ONECLICK_ACCOUNT` and the keys described in
+`packages/demo/src/order.ts`):
+
+```sh
+NEAR_NETWORK=testnet PAYGATE=nearbuddy-paygate.testnet PAYGATE_AGENT=nearbuddy-paygate-agent.testnet bun run order
+# -> "status": "complete", a NEAR deposit tx, a paygate signature tx and a Base payment tx; 91 s on 2026-11-13
+NEAR_NETWORK=testnet PAYGATE=nearbuddy-paygate.testnet PAYGATE_AGENT=nearbuddy-paygate-agent.testnet bun run order kfc-my 50
+# -> "refused": "... the payment is above the per-payment cap", exit 3, no NEAR swapped
+```
+
+| Claim | Where to look |
+|---|---|
+| NEAR account deposits 0.38217 wNEAR to the 1Click address (mainnet) | https://nearblocks.io/txns/AfJkbeEJtiJKbx3jv4Y1N5nziYApRW9KFc3yWaGWGhcE |
+| The contract checks the policy and signs the payment | https://testnet.nearblocks.io/txns/4a9pn1CRxt4N6cxh6qsJA9FWevebDJJ58YCKNKfi9wPB |
+| 1.31 USDC leaves `0x8639AC20d22dA43e8138871BE36228757245F9a4` for Bitrefill (Base mainnet) | https://basescan.org/tx/0x85ac979eb91a4643e6b52c88346c6ad25252532e570fddf10e182af7816aa3dc |
+| Same agent, RM50 voucher (12.97 USDC, cap 1.5): refused on chain | https://testnet.nearblocks.io/txns/GuCG2nJpD2aLqBJn4XBWMw9ZJbGyw69BF1TwrNmpwrDd |
+| The contract address signs in to Bitrefill (allowed domain only) | https://testnet.nearblocks.io/txns/7cmiBL69uxWepR8tu1xQ86DV6eipdAssbdeH9Ya5WHrg |
+| Contract deployed, policy set | https://testnet.nearblocks.io/txns/562BFaujRnGnpKZ8C8gLsaBjviMPSP2pide1wcKzfhUH , https://testnet.nearblocks.io/txns/Fn3P8hXw78PkYWpewTHUBpqp98keBwXfX7EBnNWhbaEA |
+
+Code: `paygate/src/lib.rs` (contract, 17 unit tests), `packages/solver/src/paygate.ts` (x402 signer),
+`packages/solver/src/bitrefill.ts` (x402 client), `packages/solver/src/oneclick.ts` (`buyUsdcOnBase`),
+`packages/demo/src/order.ts`. The Rust and TypeScript tests read the same digests from `fixtures/wire-vectors.json`
+(`payment`, `login`).
+
+Limits, stated plainly. The contract runs on NEAR testnet and controls real USDC on Base; testnet MPC is weaker than
+mainnet. What is bought is a merchant voucher, not a delivered order. The buyer is a script: no model chooses the
+item. Nothing pays the user back if the merchant does not deliver. The voucher codes were not redeemed by us. The
+agent account still has the full-access key it was created with next to the function-call key. A signature that is
+never used still spends allowance. The contract has had no independent review.
+
 ## One decision, three signatures
 
 ```text
