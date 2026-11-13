@@ -28,7 +28,15 @@ test("pick refuses a model with no idle agent", () => {
 /** A chain whose duel 9 opens at once, gets its tick when asked (unless `noTick`), has both calls after the keeper's
  *  second round, and resolves when asked. Time is the fake clock's. */
 function world(
-  over: { failOpen?: boolean; noTick?: boolean; openDrops?: boolean; flakyRead?: boolean; staleOracle?: number } = {},
+  over: {
+    failOpen?: boolean;
+    noTick?: boolean;
+    openDrops?: boolean;
+    flakyRead?: boolean;
+    staleOracle?: number;
+    throttled?: string;
+    roundFails?: boolean;
+  } = {},
 ) {
   let now = 1_000_000;
   const calls: string[] = [];
@@ -39,7 +47,10 @@ function world(
   let threw = false;
   let resolves = 0;
   let close_at = 0n;
+  let throttles = 0;
   const view = (async (method: string) => {
+    // a throttled RPC: the named view fails twice, then answers
+    if (method === over.throttled && throttles++ < 2) throw new Error("Rate limits exceeded");
     if (method === "leaderboard") return AGENTS;
     if (method === "get_keyless") return { strategy: "s", template: 1, next_seq: "1" };
     if (method === "get_agent") return { in_duel: close_at ? "9" : null };
@@ -84,6 +95,10 @@ function world(
     chain: chain("keeper"),
     keeper: {
       round: async () => {
+        if (over.roundFails && rounds === 0 && !threw) {
+          threw = true;
+          throw new Error("Rate limits exceeded");
+        }
         rounds++;
         return 2;
       },
@@ -173,4 +188,20 @@ test("a stale oracle is waited out: resolve is asked again until the duel resolv
   await w.op.idle();
   assert.equal(w.op.status().phase, "done");
   assert.equal(w.calls.filter((c) => c === "keeper:resolve_duel").length, 9);
+});
+
+for (const method of ["leaderboard", "duel_lock", "get_tick"])
+  test(`a throttled ${method} read is retried and the match still plays out`, async () => {
+    const w = world({ throttled: method });
+    await w.op.start(DS, QW);
+    await w.op.idle();
+    assert.deepEqual([w.op.status().phase, w.op.status().error], ["done", null]);
+    assert.deepEqual(w.calls, ["owner:open_duel", "keeper:request_tick", "keeper:resolve_duel"]);
+  });
+
+test("a keeper round that fails on a throttled RPC is tried again", async () => {
+  const w = world({ roundFails: true });
+  await w.op.start(DS, QW);
+  await w.op.idle();
+  assert.deepEqual([w.op.status().phase, w.op.status().error], ["done", null]);
 });

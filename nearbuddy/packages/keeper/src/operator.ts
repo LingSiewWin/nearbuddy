@@ -3,7 +3,7 @@
 // request shows that move, has the keeper fill the two slots, and resolves the match after its close. One match at a
 // time. Everything it reads or sends goes through the injected chains, so the tests run it against a fake.
 import type { AgentView } from "../../protocol/src/abi/arena.ts";
-import type { Chain } from "./keeper.ts";
+import { type Chain, Stop } from "./keeper.ts";
 
 /** A match's length: time to watch the market, the models' calls, and a race to the close. */
 export const MATCH_S = 480;
@@ -81,6 +81,18 @@ export class Operator {
 
   constructor(private readonly d: Deps) {}
 
+  /** A read, retried through a throttled or flaky RPC: five tries, 2 s apart then doubling. */
+  private read: Chain["view"] = async (method, args) => {
+    for (let i = 0; ; i++) {
+      try {
+        return await this.d.chain.view(method, args);
+      } catch (e) {
+        if (i >= 4) throw e;
+        await this.d.sleep(2_000 * 2 ** i);
+      }
+    }
+  };
+
   status(): Status {
     return { ...this.s };
   }
@@ -94,11 +106,11 @@ export class Operator {
   async agents(): Promise<AgentView[]> {
     const all: AgentView[] = [];
     for (let from = 0; ; from += 100) {
-      const page = await this.d.chain.view("leaderboard", { from, limit: 100 });
+      const page = await this.read("leaderboard", { from, limit: 100 });
       all.push(...page);
       if (page.length < 100) break;
     }
-    const keyless = await Promise.all(all.map((a) => this.d.chain.view("get_keyless", { agent: a.pk })));
+    const keyless = await Promise.all(all.map((a) => this.read("get_keyless", { agent: a.pk })));
     return all.filter((_, i) => keyless[i] !== null);
   }
 
@@ -135,9 +147,9 @@ export class Operator {
   private async adopt(a: string, b: string, wait: boolean): Promise<string | null> {
     for (let i = 0; i < (wait ? 6 : 1); i++) {
       if (i) await this.d.sleep(POLL_MS);
-      const id = (await this.d.chain.view("get_agent", { agent_pk: a }).catch(() => null))?.in_duel;
+      const id = (await this.read("get_agent", { agent_pk: a }).catch(() => null))?.in_duel;
       if (!id) continue;
-      const d = await this.d.chain.view("get_duel", { duel_id: id }).catch(() => null);
+      const d = await this.read("get_duel", { duel_id: id }).catch(() => null);
       if (d && !d.resolved && d.a === a && d.b === b) return id;
     }
     return null;
@@ -175,15 +187,20 @@ export class Operator {
     const tick = await chain.call("request_tick", { duel_id }, ORACLE_DEPOSIT, ORACLE_TGAS).catch(() => null);
     if (tick) this.s = { ...this.s, txs: { ...this.s.txs, tick: tick.tx } };
     for (let waited = 0; waited < TICK_WAIT_S * 1000; waited += POLL_MS) {
-      if ((await chain.view("get_tick", { duel_id }).catch(() => null)) !== null) break;
+      if ((await this.read("get_tick", { duel_id }).catch(() => null)) !== null) break;
       await sleep(POLL_MS);
     }
     this.phase("calling", { tick_at });
-    const lockMs = Number(BigInt((await chain.view("duel_lock", { duel_id })) ?? "0") / 1_000_000n);
+    const lockMs = Number(BigInt((await this.read("duel_lock", { duel_id })) ?? "0") / 1_000_000n);
     while (nowMs() < close_at - lockMs) {
-      await keeper.round([a, b]);
+      // a round that dies on a throttled RPC is simply tried again; a keeper stop (budget, outage) ends the calls
+      const stop = await keeper.round([a, b]).then(
+        () => false,
+        (e) => e instanceof Stop,
+      );
+      if (stop) break;
       await sleep(POLL_MS);
-      const d = await chain.view("get_duel", { duel_id });
+      const d = await this.read("get_duel", { duel_id });
       if (d?.last_intent_a && d.last_intent_b) break;
     }
     await keeper.settle().catch(() => {}); // a keeper stop (budget, outage) ends the calls, not the match
@@ -204,7 +221,7 @@ export class Operator {
         })
         .catch((e) => e as Error);
       for (let i = 0; i < 6; i++) {
-        if ((await chain.view("get_duel", { duel_id }).catch(() => null))?.resolved) {
+        if ((await this.read("get_duel", { duel_id }).catch(() => null))?.resolved) {
           this.phase("done", { busy: false });
           return;
         }
