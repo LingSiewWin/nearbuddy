@@ -418,6 +418,7 @@ const OUTPUTS = [
     ts: ["packages/protocol/src/abi/predict.ts", "web/app/lib/abi/predict.ts"],
     py: "agents/predict_types.py",
   },
+  { abi: "abi/paygate.json", prefix: "Paygate", ts: ["packages/protocol/src/abi/paygate.ts"] }, // web does not call it
 ];
 
 if (import.meta.main) {

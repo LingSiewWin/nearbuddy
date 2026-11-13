@@ -5,7 +5,7 @@
 # Needs cargo-near (same version as CI: CARGO_NEAR_VERSION in .github/workflows/ci.yml).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-for pair in arena:nearbuddy_arena:arena contract:nearbuddy_vault:vault predict:nearbuddy_predict:predict; do
+for pair in arena:nearbuddy_arena:arena contract:nearbuddy_vault:vault predict:nearbuddy_predict:predict paygate:nearbuddy_paygate:paygate; do
   IFS=: read -r crate lib out <<<"$pair"
   (cd "$crate" && cargo near abi >/dev/null)
   cp "$crate/target/near/${lib}_abi.json" "abi/$out.json"
