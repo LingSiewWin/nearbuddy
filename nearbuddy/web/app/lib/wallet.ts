@@ -4,6 +4,7 @@
 // connected creates none: `account` answers null and `onChange` waits until something else created it.
 import type { NearConnector } from "@hot-labs/near-connect";
 import { NETWORK_ID } from "../network";
+import { forget, recall } from "./guest";
 import type { Call } from "./inject";
 
 let connector: Promise<NearConnector> | null = null;
@@ -39,6 +40,8 @@ const remembered = () => {
 /** The signed-in account, or null; never opens a popup, and never loads the connector for a visitor who has not
  *  connected before. */
 export async function account(): Promise<string | null> {
+  const guest = recall();
+  if (guest) return guest.accountId; // a guest account in this browser comes first: it needs no wallet
   if (!connector && !remembered()) return null;
   try {
     const { accounts } = await (await get()).getConnectedWallet();
@@ -55,7 +58,19 @@ export async function signIn(): Promise<string | null> {
   return (await wallet.getAccounts())[0]?.accountId ?? null;
 }
 
+/** Makes a guest account (lib/guest.ts) and signs in as it; resolves with its account id. Testnet only. */
+export async function guestSignIn(): Promise<string> {
+  const id = await (await import("./guest-signer")).create();
+  for (const cb of listeners) cb(id);
+  return id;
+}
+
 export async function signOut(): Promise<void> {
+  if (recall()) {
+    forget(); // the key is gone with it: the page warns before calling this
+    for (const cb of listeners) cb(null);
+    return;
+  }
   await (await get()).disconnect();
 }
 
@@ -71,6 +86,8 @@ export async function onChange(cb: (account: string | null) => void): Promise<()
 /** Asks the connected wallet to sign a NEP-413 message: no transaction, nothing spent. Resolves with the account,
  *  its public key and the base64 signature. */
 export async function signMessage(p: { message: string; recipient: string; nonce: Uint8Array }) {
+  const guest = recall();
+  if (guest) return (await import("./guest-signer")).signMessage(guest, p);
   const wallet = await (await get()).wallet();
   return wallet.signMessage(p);
 }
@@ -83,16 +100,18 @@ export async function send(call: Call): Promise<string> {
 /** `send`, also resolving with what the call returned: the outcome's `SuccessValue` read as JSON, undefined when the
  *  wallet handed back none (or the method returns nothing). */
 export async function sendFor(call: Call): Promise<{ hash: string; value: unknown }> {
-  const wallet = await (await get()).wallet();
-  const out = await wallet.signAndSendTransaction({
-    receiverId: call.receiverId,
-    actions: [
-      {
-        type: "FunctionCall",
-        params: { methodName: call.methodName, args: call.args, gas: call.gas, deposit: call.deposit },
-      },
-    ],
-  });
+  const guest = recall();
+  const out = guest
+    ? await (await import("./guest-signer")).send(guest, call)
+    : await (await (await get()).wallet()).signAndSendTransaction({
+        receiverId: call.receiverId,
+        actions: [
+          {
+            type: "FunctionCall",
+            params: { methodName: call.methodName, args: call.args, gas: call.gas, deposit: call.deposit },
+          },
+        ],
+      });
   const hash = (out as { transaction?: { hash?: string } } | undefined)?.transaction?.hash;
   if (!hash) throw new Error("the wallet returned no transaction hash");
   const why = refusal(out);
