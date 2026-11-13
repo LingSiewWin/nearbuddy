@@ -54,6 +54,24 @@ export async function connect(payer: Payer): Promise<string> {
   return body.token;
 }
 
+/** Search gift cards by text in one country (ISO alpha-2, e.g. "MY"). Free with a session token. */
+export async function searchGiftCards(token: string, q: string, country: string): Promise<unknown> {
+  const query = new URLSearchParams({ q, country });
+  return json(
+    await fetch(`${API}/gift-cards/search?${query}`, { headers: { "X-Access-Token": token } }),
+    "gift-cards/search",
+  );
+}
+
+/** One product with its packages, by slug. Free with a session token. */
+export async function productDetail(token: string, slug: string): Promise<unknown> {
+  const query = new URLSearchParams({ slug });
+  return json(
+    await fetch(`${API}/products/detail?${query}`, { headers: { "X-Access-Token": token } }),
+    "products/detail",
+  );
+}
+
 export interface Invoice {
   invoice_id: string;
   /** Locked price in USDC base units (6 decimals). */
