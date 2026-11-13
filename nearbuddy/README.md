@@ -147,16 +147,19 @@ that was the front page, is at `/terminal`.
   after it, which took about five minutes in duel 12. The public testnet RPCs throttle a machine that runs the
   site, the operator and the tests together. In duel 14 the oracle returned no opening price: `open_duel` took two
   minutes to answer, no model could call, and the guest's shout went into a match that never ran (the page showed
-  the shout box then; it no longer does without an opening price). A guest key lives in one browser's storage:
+  the shout box then; it no longer does without an opening price). The contract refuses to resolve such a duel
+  (`no open price`) and voids it a day after its close, so the page no longer shows it as waiting for the oracle,
+  and the operator now asks the oracle again (`request_open_price`, every 30 s while the duel is open) and reports
+  the match as failed if no price comes. That retry has run against the fake chain only. A guest key lives in one browser's storage:
   clearing site data loses the account, and there is no export yet. Run locally under `next start`, comment sign-in
   works at `localhost` and is refused at `127.0.0.1`, because the route reads the host from the request URL. An email
   (Privy) account that was never funded cannot comment: it has no key on chain to check.
 - **Not built yet.** Calling a winner on this arena (the predict contract is bound to the first arena), a hosted
   operator, moderation of comments, and email sign-in on this page.
 
-Checks: `web/app/__tests__/{league,stage,league-route,feed,replay,comments,guest}.test.ts` (38 unit tests; real fixtures: a
+Checks: `web/app/__tests__/{league,stage,league-route,feed,replay,comments,guest}.test.ts` (39 unit tests; real fixtures: a
 `submit_completion` of duel 5, a Coinbase candle response, and logins signed with real ed25519 keys),
-`packages/keeper/src/{operator,serve}.test.ts` (21 tests against a fake chain and clock) and
+`packages/keeper/src/{operator,serve}.test.ts` (23 tests against a fake chain and clock) and
 `web/tests/league.spec.ts` (27 browser tests).
 
 ## The AI part
