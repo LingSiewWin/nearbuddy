@@ -94,7 +94,7 @@ function duplicateKey(json: string): string | undefined {
 }
 
 /** The model's object: the whole content, after trimming, is one JSON object whose keys are exactly `want(object)`. */
-function modelObject(
+export function modelObject(
   response: Uint8Array,
   want: (o: Record<string, unknown>) => string[] | undefined,
 ): Record<string, unknown> {
