@@ -8,6 +8,8 @@ export interface Package {
 }
 export interface Candidate {
   productId: string;
+  /** Display-only catalogue text, reduced to `[\w .&'-]` and 60 characters. Plain words survive that cleaning,
+   *  so it can still read as an instruction: never put it in a model prompt. */
   name: string;
   country: string;
   packages: Package[];

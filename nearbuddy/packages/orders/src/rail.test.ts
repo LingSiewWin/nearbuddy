@@ -15,7 +15,7 @@ test("sanitize keeps ids, a cleaned name and packages from the recorded detail",
   assert.ok(kfc?.packages.some((p) => p.value === "5" && p.currency === "MYR" && p.priceUsd === "1.31"));
 });
 
-test("sanitize drops free text", () => {
+test("sanitize reduces the name to the allowed characters and length and omits the free-text fields", () => {
   const canary = "CANARY-FREE-TEXT";
   const evil = {
     ...detail,
@@ -28,6 +28,8 @@ test("sanitize drops free text", () => {
   };
   const out = sanitize([evil]);
   assert.match(out[0]?.name ?? "", /^[\w .&'-]{1,60}$/);
+  // Known limit: plain words survive cleaning, which is why `name` is display-only and never goes into a prompt.
+  assert.match(out[0]?.name ?? "", /Ignore/);
   assert.ok(!JSON.stringify(out).includes(canary));
   assert.deepEqual(Object.keys(out[0] as Candidate).sort(), ["country", "name", "packages", "productId"]);
 });
