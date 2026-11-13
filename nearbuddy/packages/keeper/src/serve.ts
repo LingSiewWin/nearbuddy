@@ -18,11 +18,23 @@ const same = (a: string, b: string) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
-/** Each model some keyless agent runs, with whether one of its agents is idle now. */
+/** The last model list read per operator: a status poll must not fail because one chain read was throttled. */
+const lastModels = new WeakMap<Ops, { id: string; idle: boolean }[]>();
+
+/** Each model some keyless agent runs, with whether one of its agents is idle now; the last list read when the chain
+ *  cannot be read. */
 async function models(op: Ops): Promise<{ id: string; idle: boolean }[]> {
-  const by = new Map<string, boolean>();
-  for (const a of await op.agents()) by.set(a.model_id, (by.get(a.model_id) ?? false) || a.in_duel === null);
-  return [...by].map(([id, idle]) => ({ id, idle })).sort((x, y) => x.id.localeCompare(y.id));
+  try {
+    const by = new Map<string, boolean>();
+    for (const a of await op.agents()) by.set(a.model_id, (by.get(a.model_id) ?? false) || a.in_duel === null);
+    const list = [...by].map(([id, idle]) => ({ id, idle })).sort((x, y) => x.id.localeCompare(y.id));
+    lastModels.set(op, list);
+    return list;
+  } catch (e) {
+    const last = lastModels.get(op);
+    if (last) return last;
+    throw e;
+  }
 }
 
 export async function handle(op: Ops, secret: string, req: Req): Promise<Res> {

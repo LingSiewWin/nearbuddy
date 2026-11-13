@@ -101,3 +101,18 @@ test("a busy operator answers 409, and a model with no idle agent 409 with the r
 test("anything else is a 404", async () => {
   assert.equal((await handle(ops(), "s3", { method: "GET", path: "/", secret: undefined, body: "" })).status, 404);
 });
+
+test("GET /status still answers, with the last models it read, while the chain cannot be read", async () => {
+  let down = false;
+  const o = ops({
+    agents: async () => {
+      if (down) throw new Error("Rate limits exceeded");
+      return [agent("d1", DS, null)];
+    },
+  });
+  await handle(o, "s3", { method: "GET", path: "/status", secret: undefined, body: "" });
+  down = true;
+  const r = await handle(o, "s3", { method: "GET", path: "/status", secret: undefined, body: "" });
+  assert.equal(r.status, 200);
+  assert.deepEqual((r.body as { models: unknown }).models, [{ id: DS, idle: true }]);
+});
