@@ -102,8 +102,8 @@ that was the front page, is at `/terminal`.
   (two points per candle, interpolated between them), labelled `REPLAY`.
 - **Start a match** (`web/app/league/start.tsx`, `packages/keeper/src/operator.ts`). Where an operator service runs
   (`OPERATOR_SECRET=… bun run operator --account <keeper>`, bound to 127.0.0.1), the page shows a panel: pick two
-  pinned models and it opens a real match between an idle agent of each, waits 305 s, asks the oracle for a tick,
-  lets the keeper fill the two slots, and resolves after the close. One match at a time. The site holds no key: its
+  pinned models and it opens a real match of about 6 minutes between an idle agent of each, has the keeper fill the
+  two slots at once, and resolves after the close. One match at a time. The site holds no key: its
   route forwards to the operator with a shared secret. Without `OPERATOR_URL` the panel is not shown.
 - **Shout** (`web/app/league/shout.tsx`). The arena's paid `inject_chaos`, signed by the visitor's wallet, from the
   box under the feed. The price shown is the contract's `chaos_fee` for the live match.
@@ -121,19 +121,23 @@ that was the front page, is at `/terminal`.
   was sent by hand ([`8EmBNXJj…`](https://testnet.nearblocks.io/txns/8EmBNXJj4CJXFKSQjR1XYqMk9Jys76UtQTGTjnL34rMH)
   failed with `no price` while the OutLayer oracle was down; a later call resolved it: Qwen won, DeepSeek −6 bps). A
   comment was posted and read back through the routes with a session signed by a testnet account's key.
-- **Known limits.** No match has yet run from the start button to its resolution without a hand: duel 10 stopped at
-  a throttled RPC read (retries were added after it), duel 11 the same before its models called. Both models in
-  duel 10 read "unchanged from open" at the 305 s tick and went long, so the wait has not been shown to make them
-  disagree. The public testnet RPCs throttle a machine that runs the site, the operator and the tests together. A
-  shout from the page has not been sent with a real wallet. An email (Privy) account that was never funded cannot
-  comment: it has no key on chain to check.
+- **Known limits.** Duel 12 ran from the start request to its resolution with no hand
+  (`open_duel` [`5HRi6VvH…`](https://testnet.nearblocks.io/txns/5HRi6VvHnguawCz2FrTy2HtzdRA1gPzY2XD5MPPFppbH)), but
+  no model called in it: that version waited 305 s and asked the oracle for a tick before letting the models call,
+  the tick took over two minutes, and the intent lock had begun. In duel 10 the same wait showed the models the open
+  price again and both went long. The wait is removed: models now call at the open, where the request reads "move
+  since open: 0", so two models with one strategy tend to take the same side and tie. No match has run to resolution
+  on the no-wait version yet. After a close the page shows the match as closed until the oracle has a price stamped
+  after it, which took about five minutes in duel 12. The public testnet RPCs throttle a machine that runs the
+  site, the operator and the tests together. A shout from the page has not been sent with a real wallet. An email
+  (Privy) account that was never funded cannot comment: it has no key on chain to check.
 - **Not built yet.** Calling a winner on this arena (the predict contract is bound to the first arena), a hosted
   operator, moderation of comments, and email sign-in on this page.
 
 Checks: `web/app/__tests__/{league,stage,league-route,feed,replay,comments}.test.ts` (33 unit tests; real fixtures: a
 `submit_completion` of duel 5, a Coinbase candle response, and logins signed with real ed25519 keys),
-`packages/keeper/src/{operator,serve}.test.ts` (23 tests against a fake chain and clock) and
-`web/tests/league.spec.ts` (23 browser tests).
+`packages/keeper/src/{operator,serve}.test.ts` (21 tests against a fake chain and clock) and
+`web/tests/league.spec.ts` (24 browser tests).
 
 ## The AI part
 
