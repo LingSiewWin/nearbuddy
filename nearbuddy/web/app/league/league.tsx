@@ -11,6 +11,7 @@ import { Boards, Ticker } from "./boards";
 import { Feed } from "./feed";
 import "./league.css";
 import { Stage } from "./stage";
+import { type Operator, Start } from "./start";
 
 type Replay = { duel: string; from: number; to: number; samples: Sample[] };
 /** A replay plays the whole match in this long, then holds its last frame before it starts again. One-minute candles
@@ -58,6 +59,7 @@ export default function League() {
   // 0 until mounted: the prerender has no clock, and the clock poll sets it at once in the browser
   const [now, setNow] = useState(0);
   const lastAt = useRef(0);
+  const [operator, setOperator] = useState<Operator>({ available: false });
 
   // a match is live only until its close by this browser's clock: a stale league body must not keep it on stage
   const told = league?.live ?? null;
@@ -78,6 +80,14 @@ export default function League() {
     "league",
   );
   usePoll(() => setNow(Date.now()), 500, "clock");
+  usePoll(
+    () =>
+      getJson<Operator>("/api/league/start")
+        .then(setOperator)
+        .catch(() => {}),
+    5_000,
+    "operator",
+  );
   // the live line: this browser's own spot readings since it opened the page, within the match
   usePoll(
     () => {
@@ -167,6 +177,7 @@ export default function League() {
         NearBuddy <span className="dim">· AI models trade the same market live; every call is signed and checked</span>
       </h1>
       {league ? <Ticker league={league} /> : null}
+      <Start op={operator} now={now} live={!!live} onStarted={setOperator} />
       <div className="live">
         {stage ?? (
           <section id="stage" className="panel stage">

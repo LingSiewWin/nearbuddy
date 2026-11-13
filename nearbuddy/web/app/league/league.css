@@ -126,6 +126,33 @@
   font-size: 0.85em;
 }
 
+.league .start .pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6em;
+  align-items: center;
+}
+.league .start select,
+.league .start button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--dim);
+  padding: 0.15em 0.6em;
+  max-width: 100%;
+}
+.league .start button {
+  color: var(--hi);
+  cursor: pointer;
+}
+.league .start button:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+}
+.league .start p {
+  margin: 0.4em 0 0;
+}
+
 .league .boards .cols {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 36em), 1fr));

@@ -182,3 +182,77 @@ test("phone width: no sideways scroll", async ({ page }) => {
   await expect(page.locator("#boards")).toBeVisible({ timeout: 30_000 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
+
+const DS = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
+const QW = "Qwen/Qwen3.8-27B";
+const operator = (over: Record<string, unknown>) => ({
+  available: true,
+  busy: false,
+  phase: "idle",
+  duel: null,
+  a: null,
+  b: null,
+  open_at: null,
+  call_at: null,
+  tick_at: null,
+  close_at: null,
+  error: null,
+  models: [
+    { id: DS, idle: true },
+    { id: QW, idle: true },
+  ],
+  ...over,
+});
+
+test("with no operator there is no start panel", async ({ page }) => {
+  await stub(page, "**/api/league", league({}));
+  await stub(page, "**/api/league/start", { available: false });
+  await page.goto("/");
+  await expect(page.locator("#stage")).toContainText("no match yet");
+  await expect(page.locator("#start")).toHaveCount(0);
+});
+
+test("the start panel lists the operator's models and posts the two chosen", async ({ page }) => {
+  let posted: unknown = null;
+  await stub(page, "**/api/league", league({}));
+  await page.route("**/api/league/start", (r) => {
+    if (r.request().method() === "POST") posted = r.request().postDataJSON();
+    return r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(operator(posted ? { busy: true, phase: "opening" } : {})),
+    });
+  });
+  await page.goto("/");
+  await page.locator("#start select").nth(0).selectOption(QW);
+  await page.locator("#start select").nth(1).selectOption(DS);
+  await page.locator("#start button").click();
+  await expect(page.locator("#start")).toContainText("opening the match");
+  expect(posted).toEqual({ a: QW, b: DS });
+  await expect(page.locator("#start button")).toBeDisabled();
+});
+
+test("while a match is being watched the panel says when the models call, and cannot start another", async ({
+  page,
+}) => {
+  await stub(page, "**/api/league", league({}));
+  await stub(
+    page,
+    "**/api/league/start",
+    operator({ busy: true, phase: "watching", duel: "9", open_at: Date.now(), call_at: Date.now() + 125_000 }),
+  );
+  await page.goto("/");
+  await expect(page.locator("#start")).toContainText(/models call in 02:0\d/);
+  await expect(page.locator("#start button")).toBeDisabled();
+});
+
+test("a refused start shows the operator's reason", async ({ page }) => {
+  await stub(page, "**/api/league", league({}));
+  await page.route("**/api/league/start", (r) =>
+    r.request().method() === "POST"
+      ? r.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: `no idle agent for ${QW}` }) })
+      : r.fulfill({ contentType: "application/json", body: JSON.stringify(operator({})) }),
+  );
+  await page.goto("/");
+  await page.locator("#start button").click();
+  await expect(page.locator("#start")).toContainText(`no idle agent for ${QW}`);
+});
