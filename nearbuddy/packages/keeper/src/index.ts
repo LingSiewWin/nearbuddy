@@ -13,10 +13,11 @@
 // Exit: 0 done, 1 budget cap or a fatal error, 75 NEAR AI Cloud down (as runner.py --max-model-failures).
 import "../../protocol/src/env.ts";
 import { parseArgs } from "node:util";
-import { Account, JsonRpcProvider } from "near-api-js";
-import { ARENA, loadKey, sendFailover } from "../../protocol/src/chain.ts";
-import { NET, NETWORK_ID, networkFile } from "../../protocol/src/network.ts";
-import { type Chain, Keeper, Stop } from "./keeper.ts";
+import { Account } from "near-api-js";
+import { ARENA, loadKey } from "../../protocol/src/chain.ts";
+import { NETWORK_ID, networkFile } from "../../protocol/src/network.ts";
+import { Keeper, Stop } from "./keeper.ts";
+import { nearChain, RPCS, sleep, views } from "./near.ts";
 import { Budget, ModelError, NEAR_AI_BASE, NearAi, Outage } from "./nearai.ts";
 
 const { values: o } = parseArgs({
@@ -34,54 +35,6 @@ const { values: o } = parseArgs({
     health: { type: "boolean", default: false },
   },
 });
-
-// KEEPER_RPC (comma-separated) first, then NEAR_RPC and its fallback, else FastNEAR: the public drpc endpoint
-// rate-limits ("Public endpoint rate limit") during a duel's bursts of views
-const RPCS = process.env.KEEPER_RPC
-  ? process.env.KEEPER_RPC.split(",").filter(Boolean)
-  : process.env.NEAR_RPC
-    ? [process.env.NEAR_RPC, process.env.NEAR_RPC_FALLBACK].filter((u): u is string => !!u)
-    : [...new Set([NETWORK_ID === "testnet" ? "https://rpc.testnet.fastnear.com" : NET.rpc, NET.fallback, NET.rpc])];
-const providers = RPCS.map((url) => new JsonRpcProvider({ url }));
-// chain.ts sendFailover for reads too: it moves on only after a transport error (a 429 included) and logs nothing,
-// where near-api-js's FailoverRpcProvider prints every failed attempt's stack
-const views = sendFailover(providers);
-
-/** Reads go through `views`; calls are signed by the keeper account with arena.ts's retry rule: back off on a 429,
- *  never resend after a timeout (the transaction may have landed). */
-function nearChain(account: Account | null): Chain {
-  return {
-    view: async (method, args) =>
-      // the generated type of `method`'s result: a view answers JSON in exactly that shape
-      (await views.callFunction({ contractId: ARENA, method, args: args as Record<string, unknown> })) as never,
-    async call(method, args, deposit, tgas) {
-      if (!account) throw new Error("no keeper account");
-      let r!: Awaited<ReturnType<Account["callFunctionRaw"]>>;
-      for (let attempt = 0; ; attempt++) {
-        try {
-          r = await account.callFunctionRaw({
-            contractId: ARENA,
-            methodName: method,
-            args: args as Record<string, unknown>,
-            gas: BigInt(tgas) * 10n ** 12n,
-            deposit,
-          });
-          break;
-        } catch (e) {
-          if (attempt >= 4 || !/429|Rate limit/i.test(String(e))) throw e;
-          await sleep(1500 * 2 ** attempt);
-        }
-      }
-      const st = r.status as { SuccessValue?: string; Failure?: unknown };
-      if (st.SuccessValue === undefined)
-        throw new Error(`${method} failed: ${JSON.stringify(st.Failure ?? r.status).slice(0, 300)}`);
-      const raw = Buffer.from(st.SuccessValue, "base64").toString();
-      return { tx: r.transaction.hash, value: raw ? JSON.parse(raw) : null };
-    },
-    now: async () => BigInt((await views.viewBlock({ finality: "final" })).header.timestamp_nanosec),
-  };
-}
-const sleep = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms));
 
 const key = process.env.NEAR_AI_API_KEY?.trim();
 if (!key) {
