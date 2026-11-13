@@ -322,22 +322,30 @@ test("without a session the chat offers to sign in and has no input", async ({ p
   await expect(page.locator("#chat input")).toHaveCount(0);
 });
 
+const ME = "nb-guest-me00000000.testnet";
+/** The page's account is ME: a guest kept in this browser. The comment session must be for the account shown. */
+const signedIn = (page: Page) =>
+  page.addInitScript((accountId) => {
+    localStorage.setItem("nb:guest", JSON.stringify({ accountId, privateKey: "ed25519:unused" }));
+  }, ME);
+
 test("with a session a comment is posted for the shown match and appears", async ({ page }) => {
   let posted: unknown = null;
   await stub(page, "**/api/league", league({ live: liveMatch() }));
   await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
-  await stub(page, "**/api/league/session", { available: true, account: "me.testnet" });
+  await stub(page, "**/api/league/session", { available: true, account: ME });
   await page.route("**/api/league/comments*", (r) => {
     if (r.request().method() === "POST") {
       posted = r.request().postDataJSON();
-      return r.fulfill({ contentType: "application/json", body: JSON.stringify({ comment: comment("c9", Date.now(), "me.testnet", "glm again") }) });
+      return r.fulfill({ contentType: "application/json", body: JSON.stringify({ comment: comment("c9", Date.now(), ME, "glm again") }) });
     }
     return r.fulfill({ contentType: "application/json", body: JSON.stringify({ available: true, duel: "9", comments: [] }) });
   });
+  await signedIn(page);
   await page.goto("/");
   await page.locator("#chat input").fill("glm again");
   await page.locator("#chat input").press("Enter");
-  await expect(page.locator("#feed ol li", { hasText: "glm again" })).toContainText("me.testnet");
+  await expect(page.locator("#feed ol li", { hasText: "glm again" })).toContainText(ME);
   expect(posted).toEqual({ duel: "9", text: "glm again" });
   await expect(page.locator("#chat input")).toHaveValue("");
 });
@@ -345,12 +353,13 @@ test("with a session a comment is posted for the shown match and appears", async
 test("a refused comment shows the reason and keeps the text", async ({ page }) => {
   await stub(page, "**/api/league", league({ live: liveMatch() }));
   await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
-  await stub(page, "**/api/league/session", { available: true, account: "me.testnet" });
+  await stub(page, "**/api/league/session", { available: true, account: ME });
   await page.route("**/api/league/comments*", (r) =>
     r.request().method() === "POST"
       ? r.fulfill({ status: 429, contentType: "application/json", body: JSON.stringify({ error: "one comment every 5 seconds" }) })
       : r.fulfill({ contentType: "application/json", body: JSON.stringify({ available: true, duel: "9", comments: [] }) }),
   );
+  await signedIn(page);
   await page.goto("/");
   await page.locator("#chat input").fill("too fast");
   await page.locator("#chat input").press("Enter");
@@ -421,4 +430,23 @@ test("a match the oracle gave no opening price takes no shouts", async ({ page }
   await page.goto("/");
   await expect(page.locator("#shout")).toContainText("shouts open once the match has its opening price");
   await expect(page.locator("#shout input")).toHaveCount(0);
+});
+
+test("a chat session left over from another account is dropped: comments never go out under a name the page does not show", async ({
+  page,
+}) => {
+  let dropped = false;
+  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/league/comments*", { available: true, duel: "9", comments: [] });
+  await page.route("**/api/league/session", (r) => {
+    if (r.request().method() === "DELETE") dropped = true;
+    // the cookie still belongs to a guest this browser has left
+    const account = dropped ? null : "nb-guest-aaaaaaaaaa.testnet";
+    return r.fulfill({ contentType: "application/json", body: JSON.stringify({ available: true, account }) });
+  });
+  await page.goto("/");
+  await expect(page.locator("#chat button", { hasText: "sign in to comment" })).toBeVisible();
+  await expect(page.locator("#chat")).not.toContainText("nb-guest-aaaaaaaaaa.testnet");
+  expect(dropped).toBe(true);
 });

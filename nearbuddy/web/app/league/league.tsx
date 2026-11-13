@@ -66,13 +66,18 @@ export default function League() {
   const lastAt = useRef(0);
   const [operator, setOperator] = useState<Operator>({ available: false });
   const [account, setAccount] = useState<string | null>(null);
+  const [accountRead, setAccountRead] = useState(false); // false until the first read of who is signed in
   const [session, setSession] = useState<Session>({ available: false, account: null });
   const [comments, setComments] = useState<Comment[]>([]);
   // the wallet a previous visit connected, and sign-in or sign-out from another tab
   useEffect(() => {
     let alive = true;
     let off = () => {};
-    wallet.account().then((a) => alive && setAccount(a));
+    wallet.account().then((a) => {
+      if (!alive) return;
+      setAccount(a);
+      setAccountRead(true);
+    });
     wallet
       .onChange((a) => alive && setAccount(a))
       .then((f) => {
@@ -145,6 +150,14 @@ export default function League() {
       .then(setSession)
       .catch(() => {});
   }, []);
+  // The comment session is a cookie of its own and outlives the account that opened it (a guest who left, a wallet
+  // that was switched). One that is not for the account the page shows is dropped, so a comment never goes out under
+  // another name; the visitor signs in to comments again as who they are now.
+  useEffect(() => {
+    if (!accountRead || !session.account || session.account === account) return;
+    fetch("/api/league/session", { method: "DELETE" }).catch(() => {});
+    setSession({ available: true, account: null });
+  }, [accountRead, account, session.account]);
   usePoll(
     () => {
       if (!shownId || !session.available) return;
