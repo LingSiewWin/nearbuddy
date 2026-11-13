@@ -1,27 +1,26 @@
 // The operator runs one keyless match on request: it pairs an idle agent of each chosen model (open_duel, which only
-// the arena's owner may call), lets the market move before the models call, asks the oracle for a tick so their
-// request shows that move, has the keeper fill the two slots, and resolves the match after its close. One match at a
-// time. Everything it reads or sends goes through the injected chains, so the tests run it against a fake.
+// the arena's owner may call), has the keeper fill the two slots at once, and resolves the match after its close.
+// One match at a time. Everything it reads or sends goes through the injected chains, so the tests run it against a
+// fake.
+// The models call right at the open. An earlier version waited 305 s and asked the oracle for a tick first, so the
+// request would show a move: on testnet the tick showed the open price again (duel 10) and asking for it took so long
+// that the intent lock had started before a model was asked (duel 12, no call at all).
 import type { AgentView } from "../../protocol/src/abi/arena.ts";
 import { type Chain, Stop } from "./keeper.ts";
 
-/** A match's length: time to watch the market, the models' calls, and a race to the close. */
-export const MATCH_S = 480;
-/** How long after the open the tick is asked for. At the open a request reads "move since open: 0" and every model
- *  takes the same side; the oracle serves a cached price for 300 s, so an earlier tick shows no move either. */
-export const TICK_AFTER_S = 305;
-/** How long to wait for the tick's callback before letting the models call on the open price. */
-const TICK_WAIT_S = 40;
+/** A match's length: the arena's floor is 310 s from the block the open lands in, which can be a minute after it
+ *  was sent. */
+export const MATCH_S = 360;
 const POLL_MS = 5_000;
 /** resolve_duel is asked this many times, half a minute apart. */
 const RESOLVE_TRIES = 40;
 const NEAR = 10n ** 24n;
-/** Attached to open_duel, request_tick and resolve_duel: the oracle deposit plus storage; the excess comes back. */
+/** Attached to open_duel and resolve_duel: the oracle deposit plus storage; the excess comes back. */
 const ORACLE_DEPOSIT = NEAR / 20n;
 /** Gas for a call that ends in an oracle call and its callback. */
 const ORACLE_TGAS = 300;
 
-export type Phase = "idle" | "opening" | "watching" | "calling" | "racing" | "resolving" | "done" | "failed";
+export type Phase = "idle" | "opening" | "calling" | "racing" | "resolving" | "done" | "failed";
 export type Player = { pk: string; model: string };
 export type Status = {
   busy: boolean;
@@ -31,13 +30,10 @@ export type Status = {
   b: Player | null;
   /** ms since the epoch, by this machine's clock. */
   open_at: number | null;
-  /** When the models are due to call: the tick is asked for then. */
-  call_at: number | null;
-  tick_at: number | null;
   close_at: number | null;
   error: string | null;
   /** The transactions this match sent so far, by step. */
-  txs: { open?: string; tick?: string; resolve?: string };
+  txs: { open?: string; resolve?: string };
 };
 
 /** The first idle agent of model `a` and of model `b`, never the same agent twice. */
@@ -53,7 +49,7 @@ export function pick(agents: AgentView[], a: string, b: string): [string, string
 export interface Deps {
   /** Signs as the arena's owner: open_duel. */
   owner: Chain;
-  /** Signs as the keeper account: request_tick, resolve_duel; and every read. */
+  /** Signs as the keeper account: resolve_duel; and every read. */
   chain: Chain;
   keeper: { round(agents: string[]): Promise<number>; settle(): Promise<void> };
   sleep(ms: number): Promise<void>;
@@ -68,8 +64,6 @@ const IDLE: Status = {
   a: null,
   b: null,
   open_at: null,
-  call_at: null,
-  tick_at: null,
   close_at: null,
   error: null,
   txs: {},
@@ -173,24 +167,7 @@ export class Operator {
       if (!found) throw e;
       duel_id = found;
     }
-    this.phase("watching", {
-      duel: duel_id,
-      open_at,
-      close_at,
-      call_at: open_at + TICK_AFTER_S * 1000,
-      txs: open ? { open } : {},
-    });
-    await this.until(open_at + TICK_AFTER_S * 1000);
-
-    // a tick that fails or never lands is not fatal: the models then call on the open price
-    const tick_at = nowMs();
-    const tick = await chain.call("request_tick", { duel_id }, ORACLE_DEPOSIT, ORACLE_TGAS).catch(() => null);
-    if (tick) this.s = { ...this.s, txs: { ...this.s.txs, tick: tick.tx } };
-    for (let waited = 0; waited < TICK_WAIT_S * 1000; waited += POLL_MS) {
-      if ((await this.read("get_tick", { duel_id }).catch(() => null)) !== null) break;
-      await sleep(POLL_MS);
-    }
-    this.phase("calling", { tick_at });
+    this.phase("calling", { duel: duel_id, open_at, close_at, txs: open ? { open } : {} });
     const lockMs = Number(BigInt((await this.read("duel_lock", { duel_id })) ?? "0") / 1_000_000n);
     while (nowMs() < close_at - lockMs) {
       // a round that dies on a throttled RPC is simply tried again; a keeper stop (budget, outage) ends the calls

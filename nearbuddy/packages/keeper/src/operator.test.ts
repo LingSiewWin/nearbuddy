@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentView } from "../../protocol/src/abi/arena.ts";
 import type { Chain } from "./keeper.ts";
-import { MATCH_S, Operator, pick, TICK_AFTER_S } from "./operator.ts";
+import { MATCH_S, Operator, pick } from "./operator.ts";
 
 const DS = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
 const QW = "Qwen/Qwen3.8-27B";
@@ -113,7 +113,7 @@ function world(
   return { op, calls, phases, start: now, at: () => now };
 }
 
-test("a match runs opening, watching, calling, racing, resolving, done, with each chain call once", async () => {
+test("a match runs opening, calling, racing, resolving, done, with each chain call once", async () => {
   const w = world();
   const s = await w.op.start(DS, QW);
   assert.equal(s.busy, true);
@@ -125,21 +125,12 @@ test("a match runs opening, watching, calling, racing, resolving, done, with eac
     ],
   );
   await w.op.idle();
-  assert.deepEqual(w.phases, ["opening", "watching", "calling", "racing", "resolving", "done"]);
-  assert.deepEqual(w.calls, ["owner:open_duel", "keeper:request_tick", "keeper:resolve_duel"]);
+  assert.deepEqual(w.phases, ["opening", "calling", "racing", "resolving", "done"]);
+  assert.deepEqual(w.calls, ["owner:open_duel", "keeper:resolve_duel"]);
   const end = w.op.status();
   assert.deepEqual([end.busy, end.phase, end.duel, end.error], [false, "done", "9", null]);
-  assert.deepEqual(end.txs, { open: "t-open", tick: "t-request_tick", resolve: "t-resolve_duel" });
+  assert.deepEqual(end.txs, { open: "t-open", resolve: "t-resolve_duel" });
   assert.ok(w.at() - w.start >= MATCH_S * 1000); // it waited out the match
-});
-
-test("the tick is asked for TICK_AFTER_S after the open, never before", async () => {
-  const w = world();
-  await w.op.start(DS, QW);
-  await w.op.idle();
-  const s = w.op.status();
-  assert.ok((s.tick_at as number) - (s.open_at as number) >= TICK_AFTER_S * 1000);
-  assert.equal(s.close_at, (s.open_at as number) + MATCH_S * 1000);
 });
 
 test("a second start while a match runs is refused", async () => {
@@ -158,21 +149,13 @@ test("a failed open ends the match as failed and frees the operator", async () =
   assert.deepEqual(w.calls, ["owner:open_duel"]);
 });
 
-test("a tick that never lands does not stop the models from calling", async () => {
-  const w = world({ noTick: true });
-  await w.op.start(DS, QW);
-  await w.op.idle();
-  assert.ok(w.phases.includes("calling"));
-  assert.equal(w.op.status().phase, "done");
-});
-
 test("an open whose answer was lost is found on chain and played, never sent twice", async () => {
   const w = world({ openDrops: true });
   await w.op.start(DS, QW);
   await w.op.idle();
   const end = w.op.status();
   assert.deepEqual([end.phase, end.duel, end.error], ["done", "9", null]);
-  assert.deepEqual(w.calls, ["owner:open_duel", "keeper:request_tick", "keeper:resolve_duel"]);
+  assert.deepEqual(w.calls, ["owner:open_duel", "keeper:resolve_duel"]);
 });
 
 test("a read that fails while resolving is retried, not fatal", async () => {
@@ -190,13 +173,13 @@ test("a stale oracle is waited out: resolve is asked again until the duel resolv
   assert.equal(w.calls.filter((c) => c === "keeper:resolve_duel").length, 9);
 });
 
-for (const method of ["leaderboard", "duel_lock", "get_tick"])
+for (const method of ["leaderboard", "duel_lock"])
   test(`a throttled ${method} read is retried and the match still plays out`, async () => {
     const w = world({ throttled: method });
     await w.op.start(DS, QW);
     await w.op.idle();
     assert.deepEqual([w.op.status().phase, w.op.status().error], ["done", null]);
-    assert.deepEqual(w.calls, ["owner:open_duel", "keeper:request_tick", "keeper:resolve_duel"]);
+    assert.deepEqual(w.calls, ["owner:open_duel", "keeper:resolve_duel"]);
   });
 
 test("a keeper round that fails on a throttled RPC is tried again", async () => {
@@ -204,4 +187,14 @@ test("a keeper round that fails on a throttled RPC is tried again", async () => 
   await w.op.start(DS, QW);
   await w.op.idle();
   assert.deepEqual([w.op.status().phase, w.op.status().error], ["done", null]);
+});
+
+test("the models are asked to call as soon as the match is open, and the match is as long as planned", async () => {
+  const w = world();
+  await w.op.start(DS, QW);
+  await w.op.idle();
+  const s = w.op.status();
+  assert.equal(s.close_at, (s.open_at as number) + MATCH_S * 1000);
+  assert.ok(MATCH_S >= 330 && MATCH_S <= 420); // above the arena's 310 s floor with room for the open to land
+  assert.equal(w.phases[1], "calling");
 });

@@ -15,8 +15,6 @@ const idle: Status = {
   a: null,
   b: null,
   open_at: null,
-  call_at: null,
-  tick_at: null,
   close_at: null,
   error: null,
   txs: {},
