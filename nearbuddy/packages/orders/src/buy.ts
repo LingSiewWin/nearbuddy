@@ -2,7 +2,7 @@
 // payment inside the owner's policy, a NEAR account pays the shortfall in NEAR, NEAR Intents settles USDC on Base,
 // and the payer buys a Bitrefill voucher over x402. Mainnet money, real voucher.
 //   bun run buy "a KFC Malaysia RM5 voucher"
-// Env: NEAR_AI_API_KEY, ORDER_MODEL, ONECLICK_ACCOUNT (a funded mainnet account whose key is in
+// Env: NEAR_AI_API_KEY, ORDER_MODEL (default deepseek-ai/DeepSeek-V4.1-Flash-1017), ONECLICK_ACCOUNT (a funded mainnet account whose key is in
 // ~/.near-credentials/mainnet/), PAYGATE, PAYGATE_AGENT, PAYGATE_OWNER (testnet), ORDER_MAX_NEAR (default 1: the most
 // wNEAR one run may deposit). The agent's key is read from .secrets/paygate-agent.key.
 // ORDER_REPLAY=<receipt path> sends that receipt's recorded decision again instead of asking the model, to show the
@@ -80,12 +80,13 @@ const ceiling = BigInt(Math.round(Number(process.env.ORDER_MAX_NEAR ?? "1") * 1e
 
 const deps: OrderDeps = {
   ai: new NearAi(need("NEAR_AI_API_KEY")),
-  model: need("ORDER_MODEL"),
+  model: process.env.ORDER_MODEL ?? "deepseek-ai/DeepSeek-V4.1-Flash-1017",
   rails: [new BitrefillRail()],
   gate,
   owner,
   payer,
-  signer: (decision, onTx) => gateSigner(agent, gate, { owner, payer }, decision, console.log, onTx) as Payer,
+  signer: (decision, onTx, onRefused) =>
+    gateSigner(agent, gate, { owner, payer }, decision, console.log, onTx, onRefused) as Payer,
   gateView: {
     account: async (o) =>
       (await sendProvider.callFunction({

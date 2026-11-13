@@ -67,6 +67,18 @@ const account = (policy: Partial<Policy> | null = {}): GateAccount => ({
   storage_balance: "1000000000000000000000",
 });
 
+/** What the fake signer offers; the real `Payer` type hides it behind the x402 scheme. */
+type Signing = { signMessage(a: { message: string }): Promise<unknown>; signTypedData(a: object): Promise<unknown> };
+
+/** @x402/fetch catches the signer's error and throws a new one with only the text (no cause). */
+async function viaLibrary(f: () => Promise<unknown>): Promise<void> {
+  try {
+    await f();
+  } catch (e) {
+    throw new Error(`Failed to create payment payload: ${(e as Error).message}`);
+  }
+}
+
 function fixture(
   decision: object,
   o: {
@@ -77,6 +89,8 @@ function fixture(
     used?: boolean;
     swapFunds?: boolean;
     wait?: () => Promise<Delivery>;
+    /** The contract refuses this signature. The fake rail then wraps the error the way the payment library does. */
+    refuse?: { method: "sign_payment" | "sign_login"; reason: string; tx: string };
   } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "order-test-"));
@@ -86,14 +100,18 @@ function fixture(
   const price = o.price ?? 1_310_000n;
   const rail: Rail = {
     name: "fake",
-    open: async () => void seen.opened++,
+    open: async (payer) => {
+      seen.opened++;
+      await viaLibrary(() => (payer as unknown as Signing).signMessage({ message: "login" }));
+    },
     search: async () => candidates,
     invoice: async (): Promise<RailInvoice> => {
       seen.invoices++;
       return { rail: "fake", id: "inv-1", priceUsdc: price };
     },
-    pay: async () => {
+    pay: async (payer) => {
       seen.paid++;
+      await viaLibrary(() => (payer as unknown as Signing).signTypedData({}));
       if (o.payError) throw o.payError;
       return "0xBASETX";
     },
@@ -106,11 +124,17 @@ function fixture(
     gate: "gate.testnet",
     owner: "owner.testnet",
     payer: PAYER,
-    signer: (d, onTx) => {
+    signer: (d, onTx, onRefused) => {
       seen.signers.push(d !== undefined);
-      if (d) onTx("sign_payment", "PAYTX");
-      else onTx("sign_login", "LOGINTX");
-      return { address: PAYER } as unknown as Payer;
+      const method = d ? "sign_payment" : "sign_login";
+      const refuse = o.refuse?.method === method ? o.refuse : undefined;
+      if (!refuse) onTx(method, d ? "PAYTX" : "LOGINTX");
+      const sign = async () => {
+        if (!refuse) return "0xsig";
+        onRefused(method, refuse.tx, refuse.reason);
+        throw new GateRefused(refuse.reason, refuse.tx);
+      };
+      return { address: PAYER, signMessage: sign, signTypedData: sign } as unknown as Payer;
     },
     balance: async () => held,
     swap: async (out) => {
@@ -261,8 +285,8 @@ const cannotPay: [string, Parameters<typeof fixture>[1], RegExp][] = [
 ];
 for (const [name, opts, reason] of cannotPay)
   test(`${name}: refused on chain, nothing swapped`, async () => {
-    const payError = new Error("x402 failed", { cause: new GateRefused("refused by the contract", "REFUSEDTX") });
-    const { deps, seen } = fixture(BUY, { ...opts, payError });
+    const refuse = { method: "sign_payment", reason: "refused by the contract", tx: "REFUSEDTX" } as const;
+    const { deps, seen } = fixture(BUY, { ...opts, refuse });
     const r = await placeOrder("a KFC voucher", deps);
     assert.equal(r.status, "refused");
     assert.match(r.reason ?? "", reason);
@@ -373,4 +397,29 @@ test("a receipt that cannot be written is printed and returned", async () => {
   assert.match(out[0] ?? "", /receipt file could not be written/);
   assert.equal(JSON.parse(out[1] ?? "").id, r.id);
   assert.ok(!out.join("").includes("VOUCHER-CODE-12345"));
+});
+
+test("a payment refusal survives the payment library dropping the error's cause", async () => {
+  const refuse = {
+    method: "sign_payment",
+    reason: "the payment is above the per-payment cap",
+    tx: "REFUSEDTX",
+  } as const;
+  const { deps } = fixture(BUY, { refuse });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "refused");
+  assert.equal(r.near.payment, "REFUSEDTX");
+  assert.equal(r.near.login, "LOGINTX");
+  assert.match(r.reason ?? "", /paygate refused: the payment is above the per-payment cap \(NEAR tx REFUSEDTX\)/);
+});
+
+test("a sign-in refusal survives the payment library dropping the error's cause", async () => {
+  const refuse = { method: "sign_login", reason: "domain not in the policy", tx: "LOGINREFUSEDTX" } as const;
+  const { deps, seen } = fixture(BUY, { refuse });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "refused");
+  assert.equal(r.near.login, "LOGINREFUSEDTX");
+  assert.equal(r.near.payment, undefined);
+  assert.match(r.reason ?? "", /domain not in the policy/);
+  assert.deepEqual([seen.invoices, seen.swaps.length, seen.paid], [0, 0, 0]);
 });

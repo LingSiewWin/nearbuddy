@@ -37,6 +37,8 @@ export interface OrderDeps {
   signer(
     decision: { model: string; proof: TeeProof } | undefined,
     onTx: (method: "sign_payment" | "sign_login", nearTx: string) => void,
+    /** The contract refused: the refused transaction (when there is one) and its reason. */
+    onRefused: (method: "sign_payment" | "sign_login", nearTx: string | undefined, reason: string) => void,
   ): Payer;
   /** The gate's views. Read before any swap, so a policy that cannot pay never costs NEAR. */
   gateView: {
@@ -149,6 +151,12 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
   const onTx = (method: "sign_payment" | "sign_login", nearTx: string) => {
     r.near[method === "sign_login" ? "login" : "payment"] = nearTx;
   };
+  // The payment library rethrows its own error without the signer's, so the refusal is taken from this callback.
+  let refusedBy: GateRefused | undefined;
+  const onRefused = (method: "sign_payment" | "sign_login", nearTx: string | undefined, reason: string) => {
+    if (nearTx) r.near[method === "sign_login" ? "login" : "payment"] = nearTx;
+    refusedBy = new GateRefused(reason, nearTx);
+  };
   /** The payment settled: whatever fails after that must say where the voucher can still be fetched. */
   const paid = (what: string) => `paid; ${what}; the voucher can be fetched from ${r.rail} with invoice ${r.invoiceId}`;
 
@@ -162,7 +170,7 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
       const rail = pickRail(deps.rails, q.country);
       r.rail = rail.name;
       stage = "login";
-      await rail.open(deps.signer(undefined, onTx));
+      await rail.open(deps.signer(undefined, onTx, onRefused));
       stage = "other";
       return { rail, candidates: await rail.search(q.query, q.country) };
     });
@@ -231,9 +239,11 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
 
     stage = "pay";
     try {
-      r.baseTx = await leg("pay", () => rail.pay(deps.signer({ model: a.model, proof: a.proof }, onTx), invoice));
+      r.baseTx = await leg("pay", () =>
+        rail.pay(deps.signer({ model: a.model, proof: a.proof }, onTx, onRefused), invoice),
+      );
     } catch (e) {
-      if (precheck && !refusal(e) && r.near.payment)
+      if (precheck && !refusedBy && !refusal(e) && r.near.payment)
         return done(
           "failed",
           `pre-check disagreed with the contract; it signed although ${precheck}, so the decision and allowance were consumed without a swap: ${(e as Error).message}`,
@@ -252,13 +262,11 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
     }
     return delivery.delivered ? done("delivered") : done("failed", paid(`delivery ended ${delivery.status}`));
   } catch (e) {
-    const gate = refusal(e);
+    const gate = refusedBy ?? refusal(e);
     if (gate) {
       if (gate.nearTx && stage !== "other") r.near[stage === "pay" ? "payment" : "login"] = gate.nearTx;
       return refused(gate.message);
     }
-    const m = /paygate refused: [^\n]*/.exec(String((e as Error)?.message ?? e));
-    if (m) return refused(m[0]);
     const msg = String((e as Error)?.message ?? e);
     return done("failed", r.baseTx ? paid(msg) : msg);
   }

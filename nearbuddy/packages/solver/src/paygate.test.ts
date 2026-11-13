@@ -117,8 +117,11 @@ test("a contract panic surfaces as GateRefused with the transaction hash", async
     },
   } as unknown as Account;
   const payer = privateKeyToAccount(generatePrivateKey()).address;
+  const reported: [string, string | undefined, string][] = [];
   await assert.rejects(
-    gateSigner(agent, "gate.testnet", { owner, payer }, decision).signTypedData(typed(payer)),
+    gateSigner(agent, "gate.testnet", { owner, payer }, decision, undefined, undefined, (m, tx, why) =>
+      reported.push([m, tx, why]),
+    ).signTypedData(typed(payer)),
     (e: unknown) => {
       assert.ok(e instanceof GateRefused);
       assert.equal(e.nearTx, "REFUSEDTX");
@@ -126,6 +129,10 @@ test("a contract panic surfaces as GateRefused with the transaction hash", async
       return true;
     },
   );
+  // reported before the throw, so a caller does not depend on the error surviving the payment library
+  assert.equal(reported.length, 1);
+  assert.deepEqual(reported[0]?.slice(0, 2), ["sign_payment", "REFUSEDTX"]);
+  assert.match(reported[0]?.[2] ?? "", /above the per-payment cap/);
 });
 
 test("gateSigner sends owner and message to sign_login, with no decision", async () => {

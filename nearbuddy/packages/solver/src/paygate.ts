@@ -44,6 +44,10 @@ export function gateSigner(
   log: (s: string) => void = () => {},
   /** Called once per successful signature with the NEAR transaction that carried it. */
   onTx?: (method: "sign_payment" | "sign_login", nearTx: string) => void,
+  /** Called before `GateRefused` is thrown, with the refused transaction (when there is one) and the contract's reason.
+   *  The payment library catches the signer's error and rethrows its own text without the original, so a caller that
+   *  needs the evidence takes it from here, not from the error. */
+  onRefused?: (method: "sign_payment" | "sign_login", nearTx: string | undefined, reason: string) => void,
 ): GateSigner {
   const { owner, payer } = account;
   async function sign(
@@ -52,6 +56,10 @@ export function gateSigner(
     digest: Hex,
   ): Promise<Hex> {
     const t0 = Date.now();
+    const refuse = (reason: string, nearTx: string | undefined) => {
+      onRefused?.(methodName, nearTx, reason);
+      return new GateRefused(reason, nearTx);
+    };
     let result: Awaited<ReturnType<Account["callFunctionRaw"]>>;
     try {
       result = await agent.callFunctionRaw({ contractId, methodName, args, gas: teraToGas("300"), deposit: 0n });
@@ -60,14 +68,13 @@ export function gateSigner(
       // and the failed transaction stays on chain as the record of it.
       const hash = (e as { transactionResult?: { transaction?: { hash?: string } } }).transactionResult?.transaction
         ?.hash;
-      throw new GateRefused(((e as Error).message ?? String(e)).split("\n")[0]!.slice(0, 300), hash);
+      throw refuse(((e as Error).message ?? String(e)).split("\n")[0]!.slice(0, 300), hash);
     }
     const nearTx = result.transaction.hash;
     const status = result.status as { SuccessValue?: string; Failure?: unknown };
-    if (status.SuccessValue === undefined)
-      throw new GateRefused(JSON.stringify(status.Failure ?? status).slice(0, 300), nearTx);
+    if (status.SuccessValue === undefined) throw refuse(JSON.stringify(status.Failure ?? status).slice(0, 300), nearTx);
     const sig = JSON.parse(Buffer.from(status.SuccessValue, "base64").toString()) as MpcSignature | null;
-    if (!sig) throw new GateRefused("the MPC network did not sign", nearTx);
+    if (!sig) throw refuse("the MPC network did not sign", nearTx);
     const signature = {
       r: `0x${sig.big_r.affine_point.slice(2)}` as Hex,
       s: `0x${sig.s.scalar}` as Hex,
