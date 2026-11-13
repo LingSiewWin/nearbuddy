@@ -149,6 +149,41 @@
   color: var(--dim);
   cursor: not-allowed;
 }
+.league .chat {
+  border-top: 1px solid var(--dim);
+  margin-top: 0.6em;
+  padding-top: 0.5em;
+  font-size: 0.92em;
+}
+.league .chat form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+}
+.league .chat input {
+  flex: 1 1 8em;
+  min-width: 0;
+}
+.league .chat input,
+.league .chat button:not(.link) {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--dim);
+  padding: 0.15em 0.5em;
+}
+.league .chat button:not(.link) {
+  color: var(--hi);
+  cursor: pointer;
+}
+.league .chat button:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+}
+.league .chat p {
+  margin: 0.3em 0;
+  flex: 1 1 100%;
+}
 .league .shout {
   border-top: 1px solid var(--dim);
   margin-top: 0.6em;

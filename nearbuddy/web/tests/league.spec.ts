@@ -273,3 +273,85 @@ test("with no live match there is nothing to shout at", async ({ page }) => {
   await expect(page.locator("#shout")).toContainText("shouts open when a match is live");
   await expect(page.locator("#shout button")).toHaveCount(0);
 });
+
+const comment = (id: string, at: number, by: string, text: string) => ({ id, at, by, text });
+
+test("comments show in the feed in time order with the models' lines, as text", async ({ page }) => {
+  const t = Date.now() - 60_000;
+  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/spot", { price: "3.4340", at: Date.now() });
+  await stub(page, "**/api/league/session", { available: true, account: null });
+  await stub(page, "**/api/league/feed*", {
+    at: 0,
+    duel: "9",
+    lines: [{ kind: "model", at: `${(t + 10_000) * 1_000_000}`, model: "ModelA", side: "Long", size_bps: 1, text: "calling long", tx: "t1" }],
+  });
+  await stub(page, "**/api/league/comments*", {
+    available: true,
+    duel: "9",
+    comments: [
+      comment("c1", t, "early.testnet", "who opens first?"),
+      comment("c2", t + 20_000, "late.testnet", '<img src=x onerror="window.__pwned=1">'),
+    ],
+  });
+  await page.goto("/");
+  await expect(page.locator("#feed ol li")).toHaveText([/early\.testnet.*who opens first\?/, /ModelA.*calling long/, /late\.testnet.*<img src=x/]);
+  expect(await page.locator("#feed img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});
+
+test("without a session the chat offers to sign in and has no input", async ({ page }) => {
+  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/league/session", { available: true, account: null });
+  await stub(page, "**/api/league/comments*", { available: true, duel: "9", comments: [] });
+  await page.goto("/");
+  await expect(page.locator("#chat button")).toHaveText(/sign in to comment/);
+  await expect(page.locator("#chat input")).toHaveCount(0);
+});
+
+test("with a session a comment is posted for the shown match and appears", async ({ page }) => {
+  let posted: unknown = null;
+  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/league/session", { available: true, account: "me.testnet" });
+  await page.route("**/api/league/comments*", (r) => {
+    if (r.request().method() === "POST") {
+      posted = r.request().postDataJSON();
+      return r.fulfill({ contentType: "application/json", body: JSON.stringify({ comment: comment("c9", Date.now(), "me.testnet", "glm again") }) });
+    }
+    return r.fulfill({ contentType: "application/json", body: JSON.stringify({ available: true, duel: "9", comments: [] }) });
+  });
+  await page.goto("/");
+  await page.locator("#chat input").fill("glm again");
+  await page.locator("#chat input").press("Enter");
+  await expect(page.locator("#feed ol li", { hasText: "glm again" })).toContainText("me.testnet");
+  expect(posted).toEqual({ duel: "9", text: "glm again" });
+  await expect(page.locator("#chat input")).toHaveValue("");
+});
+
+test("a refused comment shows the reason and keeps the text", async ({ page }) => {
+  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/league/session", { available: true, account: "me.testnet" });
+  await page.route("**/api/league/comments*", (r) =>
+    r.request().method() === "POST"
+      ? r.fulfill({ status: 429, contentType: "application/json", body: JSON.stringify({ error: "one comment every 5 seconds" }) })
+      : r.fulfill({ contentType: "application/json", body: JSON.stringify({ available: true, duel: "9", comments: [] }) }),
+  );
+  await page.goto("/");
+  await page.locator("#chat input").fill("too fast");
+  await page.locator("#chat input").press("Enter");
+  await expect(page.locator("#chat")).toContainText("one comment every 5 seconds");
+  await expect(page.locator("#chat input")).toHaveValue("too fast");
+});
+
+test("where comments are not set up there is no chat box", async ({ page }) => {
+  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/league/session", { available: false, account: null });
+  await stub(page, "**/api/league/comments*", { available: false, duel: "9", comments: [] });
+  await page.goto("/");
+  await expect(page.locator("#shout")).toBeVisible();
+  await expect(page.locator("#chat")).toHaveCount(0);
+});

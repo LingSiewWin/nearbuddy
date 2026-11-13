@@ -68,6 +68,13 @@ export async function onChange(cb: (account: string | null) => void): Promise<()
   };
 }
 
+/** Asks the connected wallet to sign a NEP-413 message: no transaction, nothing spent. Resolves with the account,
+ *  its public key and the base64 signature. */
+export async function signMessage(p: { message: string; recipient: string; nonce: Uint8Array }) {
+  const wallet = await (await get()).wallet();
+  return wallet.signMessage(p);
+}
+
 /** Signs and sends one function call with the connected wallet; resolves with the transaction hash. */
 export async function send(call: Call): Promise<string> {
   return (await sendFor(call)).hash;

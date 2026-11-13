@@ -4,11 +4,13 @@
 // /api/spot (2 s, live only), /api/league/feed (3 s live, 30 s replay), /api/league/replay (once per finished match).
 import { useEffect, useRef, useState } from "react";
 import type { League as Body } from "../api/league";
+import type { Comment } from "../lib/comments";
 import type { FeedLine } from "../lib/feed";
 import { fresh, push, type Sample } from "../lib/stage";
 import * as wallet from "../lib/wallet";
 import { getJson } from "../tui";
 import { Boards, Ticker } from "./boards";
+import { Chat, type Session } from "./chat";
 import { Feed } from "./feed";
 import "./league.css";
 import { Shout } from "./shout";
@@ -63,6 +65,8 @@ export default function League() {
   const lastAt = useRef(0);
   const [operator, setOperator] = useState<Operator>({ available: false });
   const [account, setAccount] = useState<string | null>(null);
+  const [session, setSession] = useState<Session>({ available: false, account: null });
+  const [comments, setComments] = useState<Comment[]>([]);
   // the wallet a previous visit connected, and sign-in or sign-out from another tab
   useEffect(() => {
     let alive = true;
@@ -133,11 +137,28 @@ export default function League() {
     live ? 3_000 : 30_000,
     `feed:${shownId}:${live ? "live" : "replay"}`,
   );
+  // who the comment session is for, once; the chat box changes it on sign-in and sign-out
+  useEffect(() => {
+    getJson<Session>("/api/league/session")
+      .then(setSession)
+      .catch(() => {});
+  }, []);
+  usePoll(
+    () => {
+      if (!shownId || !session.available) return;
+      getJson<{ duel: string; comments: Comment[] }>(`/api/league/comments?duel=${shownId}`)
+        .then((c) => c.duel === shownId && setComments(c.comments))
+        .catch(() => {});
+    },
+    live ? 2_000 : 30_000,
+    `comments:${shownId}:${live ? "live" : "replay"}:${session.available}`,
+  );
   // a new match on the stage starts from an empty line and an empty feed
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the shown match changes
   useEffect(() => {
     setBuf([]);
     setLines([]);
+    setComments([]);
     setReplay(null);
   }, [shownId, !!live]);
   useEffect(() => {
@@ -204,7 +225,13 @@ export default function League() {
             </p>
           </section>
         )}
-        <Feed lines={lines}>
+        <Feed lines={lines} comments={comments}>
+          <Chat
+            duel={shownId}
+            session={session}
+            onSession={setSession}
+            onPosted={(c) => setComments((all) => (all.some((x) => x.id === c.id) ? all : [...all, c]))}
+          />
           <Shout
             live={live}
             contract={league?.contract ?? null}
