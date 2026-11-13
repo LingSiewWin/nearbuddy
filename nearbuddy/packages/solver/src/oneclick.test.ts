@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { type Quote, quote, sellNearForUsdc, sellNearForUsdcOnChain, USDC_NEAR, WNEAR } from "./oneclick.ts";
+import {
+  buyUsdcOnBase,
+  type Quote,
+  quote,
+  sellNearForUsdc,
+  sellNearForUsdcOnChain,
+  USDC_BASE,
+  USDC_NEAR,
+  WNEAR,
+} from "./oneclick.ts";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/oneclick-quote.json", import.meta.url), "utf8")) as Quote;
 
@@ -179,4 +188,16 @@ test("executeSwap refuses a quote without a deposit address before sending anyth
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test("buyUsdcOnBase asks for an exact USDC output on Base, paid and refunded on NEAR", () => {
+  const r = buyUsdcOnBase(1_310_000n, "agent.near", "0x9B06217E8855106784A03827872D304c61e4029B");
+  assert.equal(r.dry, false);
+  assert.equal(r.swapType, "EXACT_OUTPUT");
+  assert.equal(r.originAsset, WNEAR);
+  assert.equal(r.destinationAsset, USDC_BASE);
+  assert.equal(r.amount, "1310000");
+  assert.equal(r.recipient, "0x9B06217E8855106784A03827872D304c61e4029B");
+  assert.equal(r.refundTo, "agent.near");
+  assert.equal(r.depositType, "ORIGIN_CHAIN");
 });
