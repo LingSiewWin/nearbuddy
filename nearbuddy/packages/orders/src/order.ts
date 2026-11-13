@@ -77,27 +77,27 @@ function refusal(e: unknown): GateRefused | undefined {
   return undefined;
 }
 
-/** Why the contract would refuse this payment, read from its views; undefined when it should sign. */
+/** Why the contract would refuse this payment, read from its views; undefined when it should sign. `local`: there is
+ *  no account or policy for the contract to check against, so asking it would only fail on a missing record. */
 async function policyProblem(
   deps: OrderDeps,
   decision: { model: string; proof: TeeProof },
   price: bigint,
-): Promise<string | undefined> {
+): Promise<{ text: string; local?: true } | undefined> {
   const account = await deps.gateView.account(deps.owner);
-  if (!account) return `no paygate account is open for ${deps.owner}`;
+  if (!account) return { text: `no paygate account is open for ${deps.owner}`, local: true };
   const p = account.policy;
-  if (!p) return "policy does not cover the payment: the account has no policy";
-  if (BigInt(account.storage_balance) === 0n) return "the account's storage balance is zero";
+  if (!p) return { text: "policy does not cover the payment: the account has no policy", local: true };
+  const no = (text: string) => ({ text: `policy does not cover the payment: ${text}` });
+  if (BigInt(account.storage_balance) === 0n) return { text: "the account's storage balance is zero" };
   const now = (deps.nowSec ?? (() => Math.floor(Date.now() / 1000)))();
-  if (now >= Number(p.expires_at)) return `policy does not cover the payment: it expired at ${p.expires_at}`;
+  if (now >= Number(p.expires_at)) return no(`it expired at ${p.expires_at}`);
   if (price > BigInt(p.per_payment_cap))
-    return `policy does not cover the payment: ${usd(price)} is above the per-payment cap ${usd(BigInt(p.per_payment_cap))} USDC`;
-  if (price > BigInt(p.allowance))
-    return `policy does not cover the payment: ${usd(price)} is above the allowance ${usd(BigInt(p.allowance))} USDC`;
-  if (!p.models.includes(decision.model))
-    return `policy does not cover the payment: model ${decision.model} is not in the policy`;
+    return no(`${usd(price)} is above the per-payment cap ${usd(BigInt(p.per_payment_cap))} USDC`);
+  if (price > BigInt(p.allowance)) return no(`${usd(price)} is above the allowance ${usd(BigInt(p.allowance))} USDC`);
+  if (!p.models.includes(decision.model)) return no(`model ${decision.model} is not in the policy`);
   const hash = proofHash(b64.strict(decision.proof.request_hash), b64.strict(decision.proof.response_hash));
-  if (await deps.gateView.isDecisionUsed(hash)) return "this decision was already used";
+  if (await deps.gateView.isDecisionUsed(hash)) return { text: "this decision was already used" };
   return undefined;
 }
 
@@ -152,6 +152,9 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
   /** The payment settled: whatever fails after that must say where the voucher can still be fetched. */
   const paid = (what: string) => `paid; ${what}; the voucher can be fetched from ${r.rail} with invoice ${r.invoiceId}`;
 
+  /** Set when the views say the contract will refuse; the refusal text is then appended to it. */
+  let precheck: string | undefined;
+  const refused = (text: string) => done("refused", precheck ? `${precheck}; contract: ${text}` : text);
   let stage: "login" | "pay" | "other" = "other";
   try {
     const found = await leg("search", async () => {
@@ -206,14 +209,15 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
         `invoice price ${usd(invoice.priceUsdc)} is above the limit ${usd(decision.maxPriceUsdc)} USDC`,
       );
 
-    // The contract enforces its policy only inside sign_payment, after the swap. Read it first: when it cannot pay,
-    // nothing is swapped. A payer that already holds the price still asks the contract, so the refusal is on chain.
+    // The contract enforces its policy only inside sign_payment, after the swap. Read it first: when it will refuse,
+    // nothing is swapped, but the contract is still asked, so the refusal is on chain.
     const held = await deps.balance(deps.payer);
     const problem = await policyProblem(deps, a, invoice.priceUsdc);
-    if (problem && held < invoice.priceUsdc) return done("refused", problem);
+    if (problem?.local) return done("refused", problem.text);
+    precheck = problem?.text;
 
     // Buy only what the payer is short of; an earlier run can leave a few cents behind.
-    if (held < invoice.priceUsdc) {
+    if (held < invoice.priceUsdc && !problem) {
       const swap = await leg("swap", async () => {
         const s = await deps.swap(invoice.priceUsdc - held);
         for (let i = 0; i < 30 && (await deps.balance(deps.payer)) < invoice.priceUsdc; i++)
@@ -226,7 +230,16 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
     }
 
     stage = "pay";
-    r.baseTx = await leg("pay", () => rail.pay(deps.signer({ model: a.model, proof: a.proof }, onTx), invoice));
+    try {
+      r.baseTx = await leg("pay", () => rail.pay(deps.signer({ model: a.model, proof: a.proof }, onTx), invoice));
+    } catch (e) {
+      if (precheck && !refusal(e) && r.near.payment)
+        return done(
+          "failed",
+          `pre-check disagreed with the contract; it signed although ${precheck}, so the decision and allowance were consumed without a swap: ${(e as Error).message}`,
+        );
+      throw e;
+    }
     stage = "other";
     const delivery = await leg("wait", () => rail.wait(invoice, log));
     try {
@@ -242,10 +255,10 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
     const gate = refusal(e);
     if (gate) {
       if (gate.nearTx && stage !== "other") r.near[stage === "pay" ? "payment" : "login"] = gate.nearTx;
-      return done("refused", gate.message);
+      return refused(gate.message);
     }
     const m = /paygate refused: [^\n]*/.exec(String((e as Error)?.message ?? e));
-    if (m) return done("refused", m[0]);
+    if (m) return refused(m[0]);
     const msg = String((e as Error)?.message ?? e);
     return done("failed", r.baseTx ? paid(msg) : msg);
   }

@@ -246,7 +246,7 @@ test("a failure before any decision still leaves a receipt", async () => {
   assert.ok(existsSync(join(deps.ordersDir, `${r.id}.json`)));
 });
 
-/** Each case: the views say the contract will refuse, the payer is empty, so nothing may be swapped or paid. */
+/** Each case: the views say the contract will refuse. It is still asked once, so the refusal is on chain; nothing is swapped. */
 const cannotPay: [string, Parameters<typeof fixture>[1], RegExp][] = [
   [
     "price above the cap",
@@ -257,28 +257,54 @@ const cannotPay: [string, Parameters<typeof fixture>[1], RegExp][] = [
   ["expired policy", { account: account({ expires_at: String(NOW) }) }, /policy does not cover.*expired/],
   ["model not in the policy", { account: account({ models: ["other-model"] }) }, /policy does not cover.*model/],
   ["decision already used", { used: true }, /decision was already used/],
-  ["no account", { account: null }, /no paygate account/],
-  ["no policy", { account: account(null) }, /policy does not cover.*no policy/],
   ["zero storage balance", { account: { ...account(), storage_balance: "0" } }, /storage balance is zero/],
 ];
 for (const [name, opts, reason] of cannotPay)
-  test(`${name}: refused before any swap`, async () => {
+  test(`${name}: refused on chain, nothing swapped`, async () => {
+    const payError = new Error("x402 failed", { cause: new GateRefused("refused by the contract", "REFUSEDTX") });
+    const { deps, seen } = fixture(BUY, { ...opts, payError });
+    const r = await placeOrder("a KFC voucher", deps);
+    assert.equal(r.status, "refused");
+    assert.match(r.reason ?? "", reason);
+    assert.match(r.reason ?? "", /refused by the contract/);
+    assert.equal(r.near.payment, "REFUSEDTX");
+    assert.equal(seen.swaps.length, 0);
+    assert.equal(seen.paid, 1);
+  });
+
+for (const [name, opts, reason] of [
+  ["no account", { account: null }, /no paygate account/],
+  ["no policy", { account: account(null) }, /no policy/],
+] as const)
+  test(`${name}: refused locally, the contract is not asked`, async () => {
     const { deps, seen } = fixture(BUY, opts);
     const r = await placeOrder("a KFC voucher", deps);
     assert.equal(r.status, "refused");
     assert.match(r.reason ?? "", reason);
+    assert.equal(r.near.payment, undefined);
     assert.equal(seen.swaps.length, 0);
     assert.equal(seen.paid, 0);
-    assert.equal(r.near.payment, undefined);
   });
 
-test("a policy that cannot pay still asks the contract when the payer already holds the price, and never swaps", async () => {
-  const payError = new GateRefused("this decision was already used", "REFUSEDTX");
-  const { deps, seen } = fixture(BUY, { used: true, held: 2_000_000n, payError });
+test("a pre-check the contract disagrees with, and a payer that can pay, is a normal paid order", async () => {
+  const { deps, seen } = fixture(BUY, { used: true, held: 2_000_000n });
   const r = await placeOrder("a KFC voucher", deps);
-  assert.equal(r.status, "refused");
-  assert.equal(r.near.payment, "REFUSEDTX");
-  assert.equal(seen.paid, 1);
+  assert.equal(r.status, "delivered");
+  assert.equal(seen.swaps.length, 0);
+  assert.equal(r.near.payment, "PAYTX");
+});
+
+test("the contract signs against the pre-check and the payer is short: failed, decision consumed, no swap", async () => {
+  const { deps, seen } = fixture(BUY, {
+    used: true,
+    payError: new Error("insufficient funds for transfer"),
+  });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "failed");
+  assert.match(r.reason ?? "", /^pre-check disagreed with the contract; /);
+  assert.match(r.reason ?? "", /decision and allowance were consumed without a swap/);
+  assert.equal(r.near.payment, "PAYTX");
+  assert.equal(r.baseTx, undefined);
   assert.equal(seen.swaps.length, 0);
 });
 
