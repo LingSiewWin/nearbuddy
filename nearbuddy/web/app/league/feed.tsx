@@ -1,6 +1,6 @@
 // The feed beside the stage: what each model said and the paid shouts planted at it, newest at the bottom. Every
 // string here came from a model or a stranger: it is rendered as text, never as markup.
-import { useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import type { FeedLine } from "../lib/feed";
 
 const OUTCOME: Record<string, string> = {
@@ -11,7 +11,7 @@ const OUTCOME: Record<string, string> = {
   Expired: "expired",
 };
 
-export function Feed({ lines }: { lines: FeedLine[] }) {
+export function Feed({ lines, children }: { lines: FeedLine[]; children?: ReactNode }) {
   const list = useRef<HTMLOListElement>(null);
   const pinned = useRef(true);
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when a line arrives
@@ -48,6 +48,7 @@ export function Feed({ lines }: { lines: FeedLine[] }) {
           ),
         )}
       </ol>
+      {children}
     </section>
   );
 }

@@ -32,6 +32,8 @@ export type League = {
   last: Match | null;
   models: Row[];
   coaches: Row[];
+  /** The live match's next shout price in yoctoNEAR (the contract's chaos_fee); null with no live match. */
+  shout_fee: string | null;
 };
 
 /** How many of the newest duels the route reads. */
@@ -96,5 +98,6 @@ export function build(
     last: last ? matchOf(last, agents) : null,
     models: modelRows(scored, agents),
     coaches: coachRows(scored, agents),
+    shout_fee: null, // the route reads it: it changes with every paid shout
   };
 }

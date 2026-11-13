@@ -256,3 +256,20 @@ test("a refused start shows the operator's reason", async ({ page }) => {
   await page.locator("#start button").click();
   await expect(page.locator("#start")).toContainText(`no idle agent for ${QW}`);
 });
+
+test("with a live match and no wallet, the feed offers to connect one before a shout", async ({ page }) => {
+  await stub(page, "**/api/league", league({ live: liveMatch(), shout_fee: "100000000000000000000000" }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/spot", { price: "3.4340", at: Date.now() });
+  await page.goto("/");
+  await expect(page.locator("#shout")).toContainText("0.100 NEAR");
+  await expect(page.locator("#shout button")).toHaveText(/connect a wallet to shout/);
+  await expect(page.locator("#shout input")).toHaveCount(0);
+});
+
+test("with no live match there is nothing to shout at", async ({ page }) => {
+  await stub(page, "**/api/league", league({}));
+  await page.goto("/");
+  await expect(page.locator("#shout")).toContainText("shouts open when a match is live");
+  await expect(page.locator("#shout button")).toHaveCount(0);
+});

@@ -149,6 +149,50 @@
   color: var(--dim);
   cursor: not-allowed;
 }
+.league .shout {
+  border-top: 1px solid var(--dim);
+  margin-top: 0.6em;
+  padding-top: 0.5em;
+  font-size: 0.92em;
+}
+.league .shout form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+}
+.league .shout input {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.league .shout select,
+.league .shout input,
+.league .shout button,
+.league button.link {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--dim);
+  padding: 0.15em 0.5em;
+  max-width: 100%;
+}
+.league .shout button {
+  color: var(--hi);
+  cursor: pointer;
+}
+.league .shout button:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+}
+.league button.link {
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
+  color: inherit;
+}
+.league .shout p {
+  margin: 0.3em 0;
+}
 .league .start p {
   margin: 0.4em 0 0;
 }

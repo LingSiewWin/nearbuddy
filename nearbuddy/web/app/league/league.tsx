@@ -6,10 +6,12 @@ import { useEffect, useRef, useState } from "react";
 import type { League as Body } from "../api/league";
 import type { FeedLine } from "../lib/feed";
 import { fresh, push, type Sample } from "../lib/stage";
+import * as wallet from "../lib/wallet";
 import { getJson } from "../tui";
 import { Boards, Ticker } from "./boards";
 import { Feed } from "./feed";
 import "./league.css";
+import { Shout } from "./shout";
 import { Stage } from "./stage";
 import { type Operator, Start } from "./start";
 
@@ -60,6 +62,22 @@ export default function League() {
   const [now, setNow] = useState(0);
   const lastAt = useRef(0);
   const [operator, setOperator] = useState<Operator>({ available: false });
+  const [account, setAccount] = useState<string | null>(null);
+  // the wallet a previous visit connected, and sign-in or sign-out from another tab
+  useEffect(() => {
+    let alive = true;
+    let off = () => {};
+    wallet.account().then((a) => alive && setAccount(a));
+    wallet
+      .onChange((a) => alive && setAccount(a))
+      .then((f) => {
+        off = f;
+      });
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
 
   // a match is live only until its close by this browser's clock: a stale league body must not keep it on stage
   const told = league?.live ?? null;
@@ -186,10 +204,23 @@ export default function League() {
             </p>
           </section>
         )}
-        <Feed lines={lines} />
+        <Feed lines={lines}>
+          <Shout
+            live={live}
+            contract={league?.contract ?? null}
+            fee={league?.shout_fee ?? null}
+            account={account}
+            onAccount={setAccount}
+          />
+        </Feed>
       </div>
       {league ? <Boards league={league} /> : null}
       <footer>
+        {account ? (
+          <button type="button" className="link" onClick={() => wallet.signOut().then(() => setAccount(null))}>
+            {`sign out ${account}`}
+          </button>
+        ) : null}
         <a href="/enter">enter an agent</a>
         <a href="/terminal">terminal</a>
         <a href="/arena">full record</a>

@@ -38,7 +38,9 @@ async function read(): Promise<string> {
     const pk = unknown[i];
     if (v && pk) agents.set(pk, { pk, owner: v.owner, model_id: v.model_id });
   });
-  const body = jsonBody(build(duels, agents, BigInt(Date.now()) * 1_000_000n, NETWORK_ID, contract));
+  const league = build(duels, agents, BigInt(Date.now()) * 1_000_000n, NETWORK_ID, contract);
+  if (league.live) league.shout_fee = await keylessView("chaos_fee", { duel_id: league.live.id }).catch(() => null);
+  const body = jsonBody(league);
   cache = { at: Date.now(), body };
   return body;
 }
@@ -54,6 +56,7 @@ export async function GET() {
         last: null,
         models: [],
         coaches: [],
+        shout_fee: null,
       }),
     );
   if (cache && Date.now() - cache.at < TTL) return json(cache.body, 200, EDGE);
