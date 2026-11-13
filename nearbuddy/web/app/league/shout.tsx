@@ -33,6 +33,13 @@ export function Shout({
         <p className="dim">shouts open when a match is live</p>
       </div>
     );
+  // no opening price means the oracle has not answered and no model can call: a stake sent now buys nothing
+  if (!live.open_price)
+    return (
+      <div id="shout" className="shout">
+        <p className="dim">shouts open once the match has its opening price</p>
+      </div>
+    );
   const price = fee ? `${near(fee)} NEAR` : "price unread";
   const bad = text ? checkHeadline(text) : null;
 

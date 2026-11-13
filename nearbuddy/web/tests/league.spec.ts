@@ -367,3 +367,58 @@ test("where comments are not set up there is no chat box", async ({ page }) => {
   await expect(page.locator("#shout")).toBeVisible();
   await expect(page.locator("#chat")).toHaveCount(0);
 });
+
+test("play as guest makes an account with a key from this browser, signs in to chat with it, and can be left", async ({
+  page,
+}) => {
+  let asked: { accountId?: string; publicKey?: string } = {};
+  let login: { accountId?: string; publicKey?: string; signature?: string; nonce?: string } = {};
+  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/league/comments*", { available: true, duel: "9", comments: [] });
+  await page.route("**/api/guest", (r) => {
+    asked = r.request().postDataJSON();
+    return r.fulfill({ contentType: "application/json", body: JSON.stringify({ accountId: asked.accountId, balance: "1" }) });
+  });
+  await page.route("**/api/league/session", (r) => {
+    if (r.request().method() !== "POST")
+      return r.fulfill({ contentType: "application/json", body: JSON.stringify({ available: true, account: null }) });
+    login = r.request().postDataJSON();
+    return r.fulfill({ contentType: "application/json", body: JSON.stringify({ account: login.accountId }) });
+  });
+  await page.goto("/");
+  await page.locator("#account button", { hasText: "play as guest" }).click();
+  await expect(page.locator("#account")).toContainText(/guest nb-guest-[a-z0-9]{10}\.testnet/);
+  expect(asked.accountId).toMatch(/^nb-guest-[a-z0-9]{10}\.testnet$/);
+  expect(asked.publicKey).toMatch(/^ed25519:[1-9A-HJ-NP-Za-km-z]{43,44}$/);
+  expect(Object.keys(asked).sort()).toEqual(["accountId", "publicKey"]); // the private key is never sent
+  // the chat session is opened with the guest's own signature, with no second click
+  await expect(page.locator("#chat input")).toBeVisible();
+  expect(login.accountId).toBe(asked.accountId);
+  expect(login.publicKey).toBe(asked.publicKey);
+  expect(login.signature?.length).toBeGreaterThan(80);
+  // the shout box now signs as the guest
+  await expect(page.locator("#shout input")).toBeVisible();
+  // leaving drops the key from this browser
+  page.once("dialog", (d) => d.accept());
+  await page.locator("#account button", { hasText: "leave" }).click();
+  await expect(page.locator("#account button", { hasText: "play as guest" })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("nb:guest"))).toBeNull();
+});
+
+test("a refused guest account shows the reason and leaves the visitor signed out", async ({ page }) => {
+  await stub(page, "**/api/league", league({}));
+  await stub(page, "**/api/guest", { error: "too many guest accounts from here for now" }, 429);
+  await page.goto("/");
+  await page.locator("#account button", { hasText: "play as guest" }).click();
+  await expect(page.locator("#account")).toContainText("too many guest accounts from here for now");
+  await expect(page.locator("#account button", { hasText: "play as guest" })).toBeVisible();
+});
+
+test("a match the oracle gave no opening price takes no shouts", async ({ page }) => {
+  await stub(page, "**/api/league", league({ live: { ...liveMatch(), open_price: null } }));
+  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await page.goto("/");
+  await expect(page.locator("#shout")).toContainText("shouts open once the match has its opening price");
+  await expect(page.locator("#shout input")).toHaveCount(0);
+});
