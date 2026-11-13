@@ -4,6 +4,7 @@
 import type { Account } from "near-api-js";
 import { teraToGas } from "near-api-js";
 import { type Hex, hashMessage, hashTypedData, recoverAddress, serializeSignature } from "viem";
+import type { PaygateCalls } from "../../protocol/src/abi/paygate.ts";
 import type { TeeProof } from "../../protocol/src/intent.ts";
 
 export interface GateSigner {
@@ -50,9 +51,9 @@ export function gateSigner(
   onRefused?: (method: "sign_payment" | "sign_login", nearTx: string | undefined, reason: string) => void,
 ): GateSigner {
   const { owner, payer } = account;
-  async function sign(
-    methodName: "sign_payment" | "sign_login",
-    args: Record<string, string | TeeProof>,
+  async function sign<M extends "sign_payment" | "sign_login">(
+    methodName: M,
+    args: PaygateCalls[M]["args"],
     digest: Hex,
   ): Promise<Hex> {
     const t0 = Date.now();
@@ -75,6 +76,8 @@ export function gateSigner(
     if (status.SuccessValue === undefined) throw refuse(JSON.stringify(status.Failure ?? status).slice(0, 300), nearTx);
     const sig = JSON.parse(Buffer.from(status.SuccessValue, "base64").toString()) as MpcSignature | null;
     if (!sig) throw refuse("the MPC network did not sign", nearTx);
+    // The signature exists and the contract has spent the decision and allowance: report it before any check of ours.
+    onTx?.(methodName, nearTx);
     const signature = {
       r: `0x${sig.big_r.affine_point.slice(2)}` as Hex,
       s: `0x${sig.s.scalar}` as Hex,
@@ -87,7 +90,6 @@ export function gateSigner(
         `paygate signature recovers to ${signer}, expected ${payer}: client and contract disagree on the digest`,
       );
     log(`paygate ${methodName}: NEAR tx ${nearTx} (${Date.now() - t0} ms)`);
-    onTx?.(methodName, nearTx);
     return serializeSignature(signature);
   }
 

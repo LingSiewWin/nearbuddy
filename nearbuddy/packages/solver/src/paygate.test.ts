@@ -92,10 +92,15 @@ test("gateSigner rejects a signature over any other digest", async () => {
   const key = generatePrivateKey();
   const payer = privateKeyToAccount(key).address;
   const { agent } = fakeAgent(key, () => `0x${"11".repeat(32)}`);
+  const seen: [string, string][] = [];
   await assert.rejects(
-    gateSigner(agent, "gate.testnet", { owner, payer }, decision).signTypedData(typed(payer)),
+    gateSigner(agent, "gate.testnet", { owner, payer }, decision, undefined, (m, tx) =>
+      seen.push([m, tx]),
+    ).signTypedData(typed(payer)),
     /disagree on the digest/,
   );
+  // the contract did sign (decision and allowance are spent): the transaction is reported although our check failed
+  assert.deepEqual(seen, [["sign_payment", "NEARTX"]]);
 });
 
 test("gateSigner refuses to ask for anything but a payment from the payer", async () => {
