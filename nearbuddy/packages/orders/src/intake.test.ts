@@ -135,6 +135,34 @@ test("parseDecision refuses anything that is not exactly the schema", () => {
   for (const [name, r] of Object.entries(bad)) assert.throws(() => parseDecision(r, candidates), Error, name);
 });
 
+test("parseDecision refuses a repeated key, however it is spelled", () => {
+  const bad = [
+    '{"action":"buy","action":"refuse","reason":"x"}',
+    '{"action":"buy","product_id":"zzz","product_id":"kfc-my","package_value":"5","max_price_usdc":"1.40"}',
+    '{"action":"refuse","reason":"x","\\u0072eason":"y"}',
+    '{"action":"refuse","reason":"x" , "reason" \n : "y"}',
+  ];
+  for (const c of bad) assert.throws(() => parseDecision(reply(c), candidates), /repeats the key/, c);
+  assert.throws(() => parseSearch(reply('{"query":"KFC","country":"MY","query":"KFC"}')), /repeats the key/);
+});
+
+test("a key-like text inside a string value is not a duplicate key", () => {
+  const reason = 'he said "action": "buy", "reason": "x" and left';
+  assert.deepEqual(parseDecision(reply(JSON.stringify({ action: "refuse", reason })), candidates), {
+    action: "refuse",
+    reason,
+  });
+});
+
+test("parseDecision refuses actions that are prototype members, with the unknown-action error", () => {
+  for (const action of ["constructor", "__proto__", "toString", "hasOwnProperty"])
+    assert.throws(
+      () => parseDecision(reply(JSON.stringify({ action, reason: "x" })), candidates),
+      /unknown action/,
+      action,
+    );
+});
+
 test("parseSearch reads query and country", () => {
   assert.deepEqual(parseSearch(reply('{"query":"KFC","country":"MY"}')), { query: "KFC", country: "MY" });
 });

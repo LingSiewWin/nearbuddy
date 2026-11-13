@@ -62,6 +62,37 @@ export function decisionRequest(model: string, sentence: string, candidates: Can
   return request(model, DECISION_SYSTEM, { sentence, candidates: offered });
 }
 
+/** JSON.parse keeps the last of two equal keys, so the signed bytes would carry a value no parser reports. Walks
+ *  `json` (already valid JSON) and returns the first repeated key of any object in it, escapes decoded. A key-like
+ *  text inside a string value is not a key: only a string that follows `{` or `,` and precedes `:` is. */
+function duplicateKey(json: string): string | undefined {
+  const seen: Set<string>[] = [];
+  let prev = "";
+  for (let i = 0; i < json.length; i++) {
+    const c = json[i] as string;
+    if (c === '"') {
+      let j = i + 1;
+      while (json[j] !== '"') j += json[j] === "\\" ? 2 : 1;
+      const token = json.slice(i, j + 1);
+      i = j;
+      let k = j + 1;
+      while (json[k]?.trim() === "") k++;
+      if ((prev === "{" || prev === ",") && json[k] === ":" && seen.length) {
+        const key = JSON.parse(token) as string;
+        const set = seen[seen.length - 1] as Set<string>;
+        if (set.has(key)) return key;
+        set.add(key);
+      }
+      prev = '"';
+      continue;
+    }
+    if (c === "{") seen.push(new Set());
+    else if (c === "}") seen.pop();
+    if (c.trim()) prev = c;
+  }
+  return undefined;
+}
+
 /** The model's object: the whole content, after trimming, is one JSON object whose keys are exactly `want(object)`. */
 function modelObject(
   response: Uint8Array,
@@ -77,6 +108,8 @@ function modelObject(
     throw new Error("model content is not exactly one JSON object");
   }
   if (typeof obj !== "object" || obj === null || Array.isArray(obj)) throw new Error("model content is not an object");
+  const dup = duplicateKey(content);
+  if (dup !== undefined) throw new Error(`model object repeats the key ${JSON.stringify(dup)}`);
   const o = obj as Record<string, unknown>;
   const keys = want(o);
   if (!keys) throw new Error(`unknown action ${JSON.stringify(o.action)}`);
@@ -115,7 +148,9 @@ const DECISION_KEYS: Record<string, string[]> = {
 };
 
 export function parseDecision(response: Uint8Array, candidates: Candidate[]): Decision {
-  const o = modelObject(response, (x) => (typeof x.action === "string" ? DECISION_KEYS[x.action] : undefined));
+  const o = modelObject(response, (x) =>
+    typeof x.action === "string" && Object.hasOwn(DECISION_KEYS, x.action) ? DECISION_KEYS[x.action] : undefined,
+  );
   if (o.action === "refuse") return { action: "refuse", reason: str(o, "reason") };
   if (o.action === "ask") return { action: "ask", question: str(o, "question") };
   const productId = str(o, "product_id", 64);
