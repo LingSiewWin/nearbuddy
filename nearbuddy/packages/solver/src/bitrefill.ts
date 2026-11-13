@@ -1,32 +1,19 @@
 // Bitrefill x402 client: buy a gift card or voucher with USDC on Base, no account and no API key.
 // Routes and field names from https://api.bitrefill.com/openapi.json ("Bitrefill x402" 1.0.0, read 2026-11-13).
 // A free sign-in-with-x session token removes the per-call micro-fees; only `payInvoice` moves money.
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { ExactEvmScheme } from "@x402/evm";
 import { createSIWxPayload, encodeSIWxHeader } from "@x402/extensions/sign-in-with-x";
 import { decodePaymentResponseHeader, wrapFetchWithPaymentFromConfig } from "@x402/fetch";
 import { createPublicClient, erc20Abi, http } from "viem";
-import { generatePrivateKey, type PrivateKeyAccount, privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 
 const API = process.env.BITREFILL_X402_URL ?? "https://api.bitrefill.com/x402";
 const BASE = "eip155:8453";
 export const USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
-/** Whoever holds the USDC on Base: a local key (`loadPayer`) or the paygate contract (`gateSigner`). */
+/** Whoever holds the USDC on Base: the paygate contract (`gateSigner`). */
 export type Payer = { readonly address: `0x${string}` } & Parameters<typeof createSIWxPayload>[1] &
   ConstructorParameters<typeof ExactEvmScheme>[0];
-
-/** The EVM key that holds USDC on Base and signs the payment. Created on first use, mode 0600, never printed. */
-export function loadPayer(path: string): PrivateKeyAccount {
-  if (!existsSync(path)) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, generatePrivateKey(), { mode: 0o600 });
-    chmodSync(path, 0o600);
-  }
-  return privateKeyToAccount(readFileSync(path, "utf8").trim() as `0x${string}`);
-}
 
 export function usdcBalance(owner: `0x${string}`): Promise<bigint> {
   const client = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC) });
