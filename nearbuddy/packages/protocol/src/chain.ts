@@ -61,7 +61,7 @@ export function sendFailover(providers: Provider[]): Provider {
  *  with "Internal server error" while waiting; sends may use a different endpoint than views, and fall back to the
  *  second endpoint only on such transport errors. */
 const SEND_RPC = process.env.NEAR_SEND_RPC ?? RPC;
-const sendProvider = sendFailover(
+export const sendProvider = sendFailover(
   [...new Set([SEND_RPC, RPC_FALLBACK].filter(Boolean))].map((url) => new JsonRpcProvider({ url })),
 );
 
