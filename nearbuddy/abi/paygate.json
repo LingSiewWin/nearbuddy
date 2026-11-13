@@ -7,8 +7,53 @@
   "body": {
     "functions": [
       {
+        "name": "add_tee_signer",
+        "doc": " Admin only: accept decisions signed by this enclave key (32-byte ed25519). The admin takes it from the\n NEAR AI Cloud attestation report after verifying the report off chain.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signer",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
         "name": "contract_source_metadata",
         "kind": "view"
+      },
+      {
+        "name": "get_account",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "owner",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Account"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       {
         "name": "get_config",
@@ -21,19 +66,24 @@
         }
       },
       {
-        "name": "get_policy",
+        "name": "is_decision_used",
+        "doc": " Whether the decision with this `proof_hash` (sha256 of request hash ‖ response hash) has paid.",
         "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "proof_hash",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        },
         "result": {
           "serialization_type": "json",
           "type_schema": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/Policy"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "boolean"
           }
         }
       },
@@ -47,7 +97,7 @@
           "serialization_type": "json",
           "args": [
             {
-              "name": "owner",
+              "name": "admin",
               "type_schema": {
                 "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
                 "type": "string"
@@ -57,12 +107,6 @@
               "name": "mpc_contract",
               "type_schema": {
                 "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
-                "type": "string"
-              }
-            },
-            {
-              "name": "path",
-              "type_schema": {
                 "type": "string"
               }
             },
@@ -77,6 +121,7 @@
       },
       {
         "name": "on_signed",
+        "doc": " The MPC answer. On success logs `event` (the `payment_signed` event of a payment) and returns the\n signature; on failure gives `value` back to `owner`'s allowance, frees the decision and returns null.",
         "kind": "call",
         "modifiers": [
           "private"
@@ -85,9 +130,38 @@
           "serialization_type": "json",
           "args": [
             {
+              "name": "owner",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
               "name": "value",
               "type_schema": {
                 "type": "string"
+              }
+            },
+            {
+              "name": "proof_hash",
+              "type_schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/Base64VecU8"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "event",
+              "type_schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           ]
@@ -104,12 +178,38 @@
         }
       },
       {
+        "name": "open_account",
+        "doc": " Open the caller's account. The caller becomes its owner; its key is derived with the caller's account id\n as path, and `payer` is the address of that key. The deposit (at least 0.01 NEAR, all of it kept) pays\n for the account's storage.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "payer",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
         "name": "payment_digest_hex",
         "doc": " The EIP-712 digest `sign_payment` would sign for these fields, so a client can check its own encoding.",
         "kind": "view",
         "params": {
           "serialization_type": "json",
           "args": [
+            {
+              "name": "owner",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
             {
               "name": "to",
               "type_schema": {
@@ -150,8 +250,24 @@
         }
       },
       {
+        "name": "remove_tee_signer",
+        "doc": " Admin only: stop accepting decisions signed by this enclave key.",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "signer",
+              "type_schema": {
+                "$ref": "#/definitions/Base64VecU8"
+              }
+            }
+          ]
+        }
+      },
+      {
         "name": "revoke",
-        "doc": " Owner only: stop all signing.",
+        "doc": " Owner only: stop all signing for the caller's account.",
         "kind": "call"
       },
       {
@@ -172,11 +288,18 @@
       },
       {
         "name": "sign_login",
-        "doc": " Sign a sign-in message (EIP-191 `personal_sign`) as `payer`, so a shop can show the buyer its orders.\n Only a message that opens with the sign-in line of a domain in the policy is signed. Such a digest starts\n from the \"\\x19Ethereum Signed Message\" prefix, so it can never be a payment authorization (0x1901).",
+        "doc": " Sign a sign-in message (EIP-191 `personal_sign`) as `owner`'s payer, so a shop can show the buyer its\n orders. Only a message that opens with the sign-in line of a domain in the policy is signed. Such a digest\n starts from the \"\\x19Ethereum Signed Message\" prefix, so it can never be a payment authorization (0x1901).",
         "kind": "call",
         "params": {
           "serialization_type": "json",
           "args": [
+            {
+              "name": "owner",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
             {
               "name": "message",
               "type_schema": {
@@ -194,11 +317,18 @@
       },
       {
         "name": "sign_payment",
-        "doc": " Sign one EIP-3009 `transferWithAuthorization` from `payer` to `to`, if the policy allows it.\n Returns the MPC signature (`big_r`, `s`, `recovery_id`), or null when the MPC network did not sign,\n in which case the allowance is restored. A request outside the policy fails the transaction.",
+        "doc": " Sign one EIP-3009 `transferWithAuthorization` from `owner`'s payer to `to`, if `decision` is a fresh\n decision of a policy model signed by a listed enclave and the payment fits the policy.\n Returns the MPC signature (`big_r`, `s`, `recovery_id`), or null when the MPC network did not sign,\n in which case the allowance and the decision are restored. A request outside the policy fails the\n transaction.",
         "kind": "call",
         "params": {
           "serialization_type": "json",
           "args": [
+            {
+              "name": "owner",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
             {
               "name": "to",
               "type_schema": {
@@ -228,6 +358,18 @@
               "type_schema": {
                 "type": "string"
               }
+            },
+            {
+              "name": "model_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "decision",
+              "type_schema": {
+                "$ref": "#/definitions/TeeProof"
+              }
             }
           ]
         },
@@ -244,24 +386,51 @@
       "title": "String",
       "type": "string",
       "definitions": {
+        "Account": {
+          "type": "object",
+          "required": [
+            "payer"
+          ],
+          "properties": {
+            "payer": {
+              "description": "The address the owner's derived key controls (`from` of every payment), 20 bytes hex with 0x. The owner supplies it; a wrong address only makes the owner's own signatures invalid on chain.",
+              "type": "string"
+            },
+            "policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Policy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "Base64VecU8": {
+          "description": "Helper class to serialize/deserialize `Vec<u8>` to base64 string.\n\n# Example ```rust use near_sdk::{json_types::Base64VecU8, near};\n\n#[near(serializers=[json])] struct NewStruct { field: Base64VecU8, } ```",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          }
+        },
         "Config": {
           "type": "object",
           "required": [
+            "admin",
             "mpc_contract",
-            "owner",
-            "path",
             "token"
           ],
           "properties": {
+            "admin": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
             "mpc_contract": {
               "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
-              "type": "string"
-            },
-            "owner": {
-              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
-              "type": "string"
-            },
-            "path": {
               "type": "string"
             },
             "token": {
@@ -277,6 +446,7 @@
             "allowed_payees",
             "expires_at",
             "login_domains",
+            "models",
             "per_payment_cap"
           ],
           "properties": {
@@ -306,6 +476,13 @@
                 "type": "string"
               }
             },
+            "models": {
+              "description": "NEAR AI Cloud model ids whose enclave decisions may pay, e.g. \"deepseek-ai/DeepSeek-V4.1-Flash-1017\".",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "per_payment_cap": {
               "description": "Most token base units one payment may move.",
               "type": "string"
@@ -313,14 +490,64 @@
           }
         },
         "Promise": true,
+        "TeeProof": {
+          "description": "The NEAR AI Cloud signature record for one completion (same shape as the arena's `TeeProof`). The model's enclave signs the raw text `\"{model_id}:{request_hash_hex}:{response_hash_hex}\"` with ed25519. Only kind 2 (`provider_tee`, the model's own enclave) is accepted here.",
+          "type": "object",
+          "required": [
+            "kind",
+            "request_hash",
+            "response_hash",
+            "signature",
+            "signer"
+          ],
+          "properties": {
+            "kind": {
+              "description": "1 = gateway TEE, 2 = provider (model) TEE.",
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "request_hash": {
+              "description": "sha256 of the exact request body bytes.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "response_hash": {
+              "description": "sha256 of the exact response body bytes.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "signature": {
+              "description": "64-byte ed25519 signature over the text.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            },
+            "signer": {
+              "description": "32-byte ed25519 `signing_address` of the TEE.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                }
+              ]
+            }
+          }
+        },
         "Token": {
-          "description": "The EIP-712 domain of the token contract, and the address this contract's derived key controls.",
+          "description": "The EIP-712 domain of the token contract.",
           "type": "object",
           "required": [
             "address",
             "chain_id",
             "name",
-            "payer",
             "version"
           ],
           "properties": {
@@ -333,10 +560,6 @@
             },
             "name": {
               "description": "`name()` of the token as its EIP-712 domain uses it, e.g. \"USD Coin\".",
-              "type": "string"
-            },
-            "payer": {
-              "description": "The derived address that holds the tokens (`from` of every payment), 20 bytes hex with 0x.",
               "type": "string"
             },
             "version": {
