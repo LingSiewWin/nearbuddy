@@ -40,6 +40,8 @@ export interface OrderDeps {
     /** The contract refused: the refused transaction (when there is one) and its reason. */
     onRefused: (method: "sign_payment" | "sign_login", nearTx: string | undefined, reason: string) => void,
   ): Payer;
+  /** The NEAR account that calls the gate; the policy names the one agent allowed to. */
+  agentId: string;
   /** The gate's views. Read before any swap, so a policy that cannot pay never costs NEAR. */
   gateView: {
     account(owner: string): Promise<GateAccount | null>;
@@ -111,6 +113,7 @@ async function policyProblem(
   const p = account.policy;
   if (!p) return { text: "policy does not cover the payment: the account has no policy", local: true };
   const no = (text: string) => ({ text: `policy does not cover the payment: ${text}` });
+  if (p.agent !== deps.agentId) return no(`the policy names agent ${p.agent}, not ${deps.agentId}`);
   if (BigInt(account.storage_balance) === 0n) return { text: "the account's storage balance is zero" };
   const now = (deps.nowSec ?? (() => Math.floor(Date.now() / 1000)))();
   if (now >= Number(p.expires_at)) return no(`it expired at ${p.expires_at}`);
@@ -281,10 +284,12 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
         rail.pay(deps.signer({ model: a.model, proof: a.proof }, onTx, onRefused), invoice),
       );
     } catch (e) {
-      if (precheck && !refusedBy && !refusal(e) && r.near.payment)
+      if (!refusedBy && !refusal(e) && r.near.payment)
         return done(
           "failed",
-          `pre-check disagreed with the contract; it signed although ${precheck}, so the decision and allowance were consumed without a swap: ${(e as Error).message}`,
+          precheck
+            ? `pre-check disagreed with the contract; it signed although ${precheck}, so the decision and allowance were consumed without a swap: ${(e as Error).message}`
+            : `payment signed; settlement unknown; ${(e as Error).message}; the decision and allowance are spent, check invoice ${invoice.id} at ${r.rail} before paying again`,
         );
       throw e;
     }

@@ -8,6 +8,10 @@ export type BitrefillClient = Pick<
   "connect" | "searchGiftCards" | "productDetail" | "createInvoice" | "payInvoice" | "waitForInvoice"
 >;
 
+/** A voucher is something: `redemption_info` present but null, "", {} or [] is not one. */
+const hasVoucher = (v: unknown): boolean =>
+  v !== null && v !== undefined && v !== "" && !(typeof v === "object" && Object.keys(v).length === 0);
+
 export class BitrefillRail implements Rail {
   readonly name = "bitrefill";
   #token: string | undefined;
@@ -42,6 +46,6 @@ export class BitrefillRail implements Rail {
   async wait(invoice: RailInvoice, log?: (s: string) => void): Promise<Delivery> {
     const body = await this.client.waitForInvoice(this.#session(), invoice.id, log);
     const status = String(body.status);
-    return { status, delivered: status === "complete" && "redemption_info" in body, secret: body };
+    return { status, delivered: status === "complete" && hasVoucher(body.redemption_info), secret: body };
   }
 }

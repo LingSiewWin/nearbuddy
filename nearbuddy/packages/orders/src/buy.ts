@@ -85,6 +85,7 @@ const deps: OrderDeps = {
   gate,
   owner,
   payer,
+  agentId: agent.accountId,
   signer: (decision, onTx, onRefused) =>
     gateSigner(agent, gate, { owner, payer }, decision, console.log, onTx, onRefused) as Payer,
   gateView: {

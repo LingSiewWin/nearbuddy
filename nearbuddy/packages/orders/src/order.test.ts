@@ -124,6 +124,7 @@ function fixture(
     model: MODEL,
     rails: [rail],
     gate: "gate.testnet",
+    agentId: "agent.testnet",
     owner: "owner.testnet",
     payer: PAYER,
     signer: (d, onTx, onRefused) => {
@@ -347,6 +348,11 @@ const cannotPay: [string, Parameters<typeof fixture>[1], RegExp][] = [
   ["expired policy", { account: account({ expires_at: String(NOW) }) }, /policy does not cover.*expired/],
   ["model not in the policy", { account: account({ models: ["other-model"] }) }, /policy does not cover.*model/],
   ["decision already used", { used: true }, /decision was already used/],
+  [
+    "another account is the policy's agent",
+    { account: account({ agent: "other.testnet" }) },
+    /names agent other\.testnet/,
+  ],
   ["zero storage balance", { account: { ...account(), storage_balance: "0" } }, /storage balance is zero/],
 ];
 for (const [name, opts, reason] of cannotPay)
@@ -432,6 +438,16 @@ test("a wait that throws after payment says the order was paid", async () => {
   assert.match(r.reason ?? "", FETCH);
   assert.match(r.reason ?? "", /timed out/);
   assert.equal(r.baseTx, "0xBASETX");
+});
+
+test("a pay that throws after the contract signed says the settlement is unknown", async () => {
+  const { deps, seen } = fixture(BUY, { payError: new Error("facilitator timed out") });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "failed");
+  assert.match(r.reason ?? "", /^payment signed; settlement unknown; facilitator timed out.*invoice inv-1 at fake/);
+  assert.equal(r.near.payment, "PAYTX");
+  assert.equal(r.baseTx, undefined);
+  assert.equal(seen.paid, 1);
 });
 
 test("a delivery that is not complete says the order was paid", async () => {

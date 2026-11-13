@@ -103,12 +103,17 @@ test("BitrefillRail invoices, pays and waits through the client", async () => {
   assert.equal(d.status, "complete");
 });
 
-test("Delivery.delivered needs status complete and redemption_info", async () => {
+test("Delivery.delivered needs status complete and a non-empty redemption_info", async () => {
   const inv = { rail: "bitrefill", id: "i", priceUsdc: 1n };
   for (const [body, delivered] of [
     [{ status: "complete" }, false],
     [{ status: "failed", redemption_info: {} }, false],
-    [{ status: "complete", redemption_info: {} }, true],
+    [{ status: "complete", redemption_info: { code: "x" } }, true],
+    [{ status: "complete", redemption_info: "CODE-1" }, true],
+    [{ status: "complete", redemption_info: null }, false],
+    [{ status: "complete", redemption_info: "" }, false],
+    [{ status: "complete", redemption_info: {} }, false],
+    [{ status: "complete", redemption_info: [] }, false],
   ] as const) {
     const rail = new BitrefillRail({ ...fake([]), waitForInvoice: async () => body });
     await rail.open({} as Payer);
