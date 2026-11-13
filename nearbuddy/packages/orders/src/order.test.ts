@@ -259,6 +259,41 @@ test("a replay sends the recorded decision and asks the model nothing", async ()
   assert.deepEqual(r2.proof, r1.proof);
 });
 
+test("a replay whose listed price has dropped still reaches the contract, a fresh order with the same numbers does not", async () => {
+  // first decision: listed 1.32, limit 1.36 (the ceiling is 1.36)
+  const first = fixture({ ...BUY, max_price_usdc: "1.36" });
+  const at132 = [{ ...candidates[0]!, packages: [{ value: "5", currency: "MYR", priceUsd: "1.32" }] }];
+  first.deps.rails[0]!.search = async () => at132;
+  const r1 = await placeOrder("a KFC voucher", first.deps);
+  assert.equal(r1.status, "delivered");
+  // now the catalogue says 1.31: the ceiling is 1.35, below the recorded limit
+  const refuse = { method: "sign_payment", reason: "this decision was already used", tx: "REFUSEDTX" } as const;
+  const { deps, calls, seen } = fixture({ action: "refuse", reason: "must not be asked" }, { refuse, used: true });
+  const r2 = await placeOrder("a KFC voucher", {
+    ...deps,
+    replay: {
+      model: r1.model,
+      request: new Uint8Array(Buffer.from(r1.request_b64, "base64")),
+      response: new Uint8Array(Buffer.from(r1.response_b64, "base64")),
+      proof: r1.proof,
+      query: "kfc-my",
+      country: "MY",
+    },
+  });
+  assert.deepEqual(calls, []);
+  assert.equal(r2.status, "refused");
+  assert.equal(r2.near.payment, "REFUSEDTX");
+  assert.match(r2.reason ?? "", /decision was already used.*replay of a recorded decision/);
+  assert.equal(seen.paid, 1);
+  assert.equal(seen.swaps.length, 0);
+  // the same numbers in a fresh order fail on the ceiling
+  const fresh = fixture({ ...BUY, max_price_usdc: "1.36" });
+  const r3 = await placeOrder("a KFC voucher", fresh.deps);
+  assert.equal(r3.status, "failed");
+  assert.match(r3.reason ?? "", /limit is above the listed price/);
+  assert.equal(fresh.seen.invoices, 0);
+});
+
 test("a failure before any decision still leaves a receipt", async () => {
   const { deps } = fixture(BUY);
   deps.rails[0]!.search = async () => {

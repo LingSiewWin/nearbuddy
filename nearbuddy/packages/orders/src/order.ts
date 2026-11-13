@@ -138,6 +138,8 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
   const done = (status: Receipt["status"], reason?: string): Receipt => {
     r.status = status;
     if (reason !== undefined) r.reason = reason;
+    if (deps.replay)
+      r.reason = r.reason ? `${r.reason}; replay of a recorded decision` : "replay of a recorded decision";
     legsMs.total = Date.now() - t0;
     try {
       writeReceipt(deps.ordersDir, r);
@@ -202,7 +204,9 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
         .find((c) => c.productId === decision.productId)
         ?.packages.find((p) => p.value === decision.packageValue)?.priceUsd as string,
     );
-    if (decision.maxPriceUsdc > ceiling(listed))
+    // Skipped in a replay: this guards a fresh model answer against the candidates it was shown, and a recorded
+    // decision was checked against its own candidates when it was made; the catalogue price may have moved since.
+    if (!deps.replay && decision.maxPriceUsdc > ceiling(listed))
       return done(
         "failed",
         `the limit is above the listed price plus 3 percent: limit ${usd(decision.maxPriceUsdc)}, listed ${usd(listed)} USDC`,
