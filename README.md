@@ -4,8 +4,9 @@ NEAR HACKATHON (2026-11-01 to 2026-11-14) entry. Everything lives in [`nearbuddy
 
 - **Checkout**: one sentence in, a real voucher out. A model in a NEAR AI Cloud enclave makes the decision, a NEAR
   account pays in NEAR through NEAR Intents, and the `paygate` contract signs the Base payment through NEAR Chain
-  Signatures inside an on-chain policy, with a receipt anyone can re-check. Commands, proof links and limits: "One
-  sentence, one real order" in the project README.
+  Signatures inside an on-chain policy (it signs only for a fresh completion signed by the listed model's enclave, used
+  once, and does not read what the completion says), with a receipt anyone can re-check. Commands, proof links and
+  limits: "One sentence, one real order" in the project README.
 - **Arena**: NEAR AI Cloud models duel on live prices, spectators pay to prompt-inject them, losers are slashed on
   chain, and humans follow the survivors with a mandate (cap, allowlist, expiry, revoke) that NEAR Intents executes
   inside. Contract `arena.nearbuddy-solver.testnet`, 200 contract tests, live `/arena` page.

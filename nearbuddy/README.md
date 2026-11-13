@@ -27,8 +27,9 @@ You type one sentence, for example `buy me a RM5 KFC voucher`. A model running i
 picks one product from the live Bitrefill catalogue; the exact request and response bytes are kept with the enclave's
 signature. NEAR Intents (1Click) turns NEAR into the USDC that is missing on Base. The `paygate` contract, through NEAR
 Chain Signatures, signs the Base payment from an address whose key nobody holds, and only inside the owner's policy
-(cap, allowance, payees, expiry) and only for that one enclave decision. The agent holds a function-call access key that
-can call `sign_payment` and `sign_login` on that contract and nothing else. A real voucher comes back, and a receipt
+(cap, allowance, payees, expiry). It signs only when the call carries a fresh completion signed by the listed model's
+enclave, and each completion is used once; the contract does not read what the completion says. The agent holds a
+function-call access key that can call `sign_payment` and `sign_login` on that contract and nothing else. A real voucher comes back, and a receipt
 file lets anyone re-check the order from public data.
 
 **Do X, see Y.** The commands run from `nearbuddy/` with the same environment. The first command moves real money:
@@ -87,9 +88,10 @@ receipt needed one retry).
 
 From the receipt of the delivered order, in milliseconds: search 20465, decide 2565, invoice 632, swap 52924, pay 9347,
 wait for the voucher 15849; total 103206 (about 103 s; the legs add up to 101782, the rest is work between legs). The
-cost was 0.37139 NEAR for a 1.31 USDC voucher. The founder bought the same voucher by hand on Bitrefill's site the same
-morning: about 30 seconds and 1.31 USDC, with a person present. The agent took 103 seconds with nobody present. It is
-not faster; what it adds is that no person signs, and every step can be re-checked.
+cost was 0.37139 NEAR for a 1.31 USDC voucher. The founder's own observation of a manual purchase that morning: the
+code arrived under 30 seconds after paying 1.31 USDC, with a person present (Base tx
+`0x42c10cc9257ca191575a0f0259b84fe5d1668b4d203bcfbebf0fb0bb86736552`). The agent took 103 seconds with nobody present.
+It is not faster; what it adds is that no person signs, and every step can be re-checked.
 
 ### What the verifier proves, and what it does not
 
@@ -116,7 +118,7 @@ transaction, because there is no receipt store to compare with.
 | `packages/orders/src/intake.ts` | Sends the sentence to the enclave model, keeps the signed request and response bytes, refuses any output that is not the schema |
 | `packages/orders/src/rail.ts` | The `Rail` interface (search, invoice, pay, wait) and the output sanitiser |
 | `packages/orders/src/bitrefill-rail.ts` | The one rail: Bitrefill vouchers over x402 |
-| `packages/orders/src/order.ts` | The flow: decide, check the price limit, swap only the shortfall, sign through the contract, store the voucher; every exit writes a receipt |
+| `packages/orders/src/order.ts` | The flow: decide, check the price limit, read the contract's policy, swap only the shortfall, sign through the contract, store the voucher; every exit writes a receipt |
 | `packages/orders/src/buy.ts` | The `bun run buy` entry point: reads the env, wires the real services, replay hook `ORDER_REPLAY` |
 | `packages/orders/src/receipt.ts` | The `Receipt` type and the writer for `.orders/` |
 | `analysis/verify_order.ts` | The verifier above |
@@ -127,8 +129,16 @@ transaction, because there is no receipt store to compare with.
 - The contract runs on NEAR testnet and controls real USDC on Base; testnet MPC is weaker than mainnet.
 - What is bought is a merchant voucher, not a delivered order, and the voucher codes were not redeemed by us.
 - There is one payment route (Bitrefill) and in practice one user.
-- The contract checks that a listed enclave produced the decision and that it is used once, but it does not read what
-  the decision says; the policy (cap, allowance, payees, expiry) is what bounds a stolen agent key.
+- The contract checks that a listed enclave signed the completion and that it is used once, but it does not read what
+  the completion says. Anyone with a NEAR AI Cloud key can produce such completions, so the decision is an audit link
+  and the policy (cap, allowance, payees, expiry) is the spending bound; it also bounds a stolen agent key.
+- `ORDER_REPLAY` on a receipt whose decision was never used attempts a real purchase. It is bounded by the price
+  recorded in that receipt's own request (limit at most the recorded listed price plus 3 percent), not by today's
+  catalogue.
+- A stolen agent key can use up the owner's storage balance in the contract (each signature adds a used-decision entry)
+  and stop payments until the owner tops up.
+- No view lists the contract's enclave signers, so the signer set can be audited only from transaction history
+  (`add_tee_signer` calls).
 - The sentence is not signed by the user: whoever runs `buy` is trusted to pass the user's words.
 - Nothing pays the user back if the merchant does not deliver.
 - A failed signing still consumes the decision and the allowance.
