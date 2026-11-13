@@ -17,6 +17,7 @@ with a parsed side are counted.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import sys
 import threading
@@ -221,7 +222,10 @@ def run(cap: float, workers: int, models: list[str], limit: int | None) -> None:
 def report() -> None:
     from stats import wilson
 
-    rows = [json.loads(x) for x in OUT.read_text().splitlines()]
+    # the published copy is gzipped (results/replay.jsonl.gz); a run in progress writes the plain file
+    gz = OUT.with_suffix(".jsonl.gz")
+    text = OUT.read_text() if OUT.exists() else gzip.decompress(gz.read_bytes()).decode()
+    rows = [json.loads(x) for x in text.splitlines()]
     snaps = {s["id"]: s for s in json.loads((HERE / "data" / "snapshots.json").read_text())}
     wins = {w["id"]: w for w in json.loads(WINDOWS.read_text())}
 

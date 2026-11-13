@@ -405,3 +405,50 @@ logged $3.09 (`--cap 4.60`).
    main run uses 2400 for A as well, so the two variants differ only in the brief. Consequence: these are not the
    live duelists' exact request bytes (those keep 600), and a call costs more. Revised spend estimate: about $1.2
    (worst case $0.003 a call), still under the $1.50 cap.
+
+### Replay results (2026-11-13)
+
+864 calls, every enclave signature verified, 816 with a parsed side, $0.583. `uv run --locked python replay.py report`
+prints the tables below from `results/replay.jsonl.gz`. Intervals are Wilson 95%.
+
+| | variant A (move only) | variant B (plus 60 closes) |
+|---|---|---|
+| Pooled pairwise disagreement | 22/144 0.15 [0.10, 0.22] | 24/132 0.18 [0.13, 0.26] |
+| DeepSeek vs Qwen | 11/48 0.23 | 5/42 0.12 |
+| DeepSeek vs GLM | 11/48 0.23 | 12/48 0.25 |
+| Qwen vs GLM | 0/48 0.00 | 7/42 0.17 |
+| Follows the move: DeepSeek / Qwen / GLM | 0.77 / 1.00 / 1.00 | 0.75 / 0.90 / 0.71 |
+| Agrees with itself: DeepSeek / Qwen / GLM | 0.88 / 0.97 / 0.94 | 0.91 / 0.95 / 0.91 |
+| Right at 6 min: DeepSeek / Qwen / GLM | 0.44 / 0.38 / 0.38 | 0.50 / 0.40 / 0.42 |
+| Right at 60 min: DeepSeek / Qwen / GLM | 0.46 / 0.40 / 0.40 | 0.52 / 0.45 / 0.40 |
+
+Baselines on the same 48 snapshots: always long 0.50 at 6 min and 0.52 at 60 min; follow the move 0.38 and 0.40.
+
+**The decision rule, as registered.**
+1. Pooled disagreement at least 0.30: **not met** under A (0.15) or B (0.18). B's interval reaches 0.26.
+2. A model's 6-minute lower bound above the follow-the-move hit rate (0.38): **not met**. The best is DeepSeek under
+   B, 0.50 [0.36, 0.64].
+
+Neither variant passes. By the registered rule: an hour of one-minute closes does not make these three models differ
+in a scoreable way, and matches should rank resistance to false headlines, not direction calls.
+
+**What else the tables show.**
+- Under A, Qwen and GLM followed the move on 48 of 48 snapshots and never took different sides. The disagreement that
+  exists is DeepSeek against the other two.
+- More input changes behaviour without separating the models: GLM's follow rate fell from 1.00 to 0.71 and Qwen's to
+  0.90, yet pooled disagreement moved from 0.15 to 0.18, inside both intervals.
+- A model disagrees with its own majority on 3 to 12% of repeats. Cross-model disagreement of 15 to 18% is not far
+  above that noise floor.
+- The hit rates measure the pool, not the models. On these 48 snapshots following the move was right 0.38 of the
+  time, so the models that follow it score 0.38 to 0.42, and "always long" (0.50) matches or beats every model. No
+  model's interval excludes 0.50.
+
+**Limits.**
+- n = 48: a hit rate's interval is about ±0.14, so only a large edge could have shown. Rule 2's failure is "not
+  detected", as registered.
+- 3 repeats per cell; 5 would fix the noise floor better.
+- Variant B shows absolute prices, which a model could in principle recognise. The models' training cutoffs are
+  not published, so the snapshots (2026-11-03 on) are not known to be after them.
+- 48 calls gave no side: 41 ended at `finish_reason: length` even with 2400 tokens (37 of them Qwen under B, which
+  left Qwen without a majority on 6 snapshots), 7 stopped without a JSON answer. They are left out, as registered.
+- One prompt profile (`naive`), one strategy line, four assets over one week.
