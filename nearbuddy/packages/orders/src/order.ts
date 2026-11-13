@@ -79,6 +79,25 @@ function refusal(e: unknown): GateRefused | undefined {
   return undefined;
 }
 
+/** `price_usd` of one package in the candidates the recorded decision request carried (its user message is JSON). */
+function recordedPrice(request: Uint8Array, productId: string, packageValue: string): string | undefined {
+  try {
+    const body = JSON.parse(new TextDecoder().decode(request)) as { messages?: { role?: string; content?: string }[] };
+    const user = body.messages?.find((m) => m.role === "user")?.content;
+    const offered = (
+      JSON.parse(user ?? "") as {
+        candidates?: { product_id?: string; packages?: { value?: string; price_usd?: unknown }[] }[];
+      }
+    ).candidates;
+    const price = offered
+      ?.find((c) => c.product_id === productId)
+      ?.packages?.find((p) => p.value === packageValue)?.price_usd;
+    return typeof price === "string" && /^\d{1,9}(\.\d{1,9})?$/.test(price) ? price : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Why the contract would refuse this payment, read from its views; undefined when it should sign. `local`: there is
  *  no account or policy for the contract to check against, so asking it would only fail on a missing record. */
 async function policyProblem(
@@ -199,14 +218,16 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
     r.decision = { ...decision, maxPriceUsdc: decision.maxPriceUsdc.toString() } satisfies StoredDecision;
 
     // The limit is enforced here, not only by the prompt: the model's number may not exceed the listed price plus 3 percent.
-    const listed = units(
-      candidates
-        .find((c) => c.productId === decision.productId)
-        ?.packages.find((p) => p.value === decision.packageValue)?.priceUsd as string,
-    );
-    // Skipped in a replay: this guards a fresh model answer against the candidates it was shown, and a recorded
-    // decision was checked against its own candidates when it was made; the catalogue price may have moved since.
-    if (!deps.replay && decision.maxPriceUsdc > ceiling(listed))
+    // A replay is bounded by the price its own request listed, not by today's catalogue (it may have moved since the
+    // decision was made), and never left unbounded: a decision that failed this check was never used.
+    const listedText = deps.replay
+      ? recordedPrice(a.request, decision.productId, decision.packageValue)
+      : candidates
+          .find((c) => c.productId === decision.productId)
+          ?.packages.find((p) => p.value === decision.packageValue)?.priceUsd;
+    if (listedText === undefined) return done("failed", "the request lists no price for the chosen package");
+    const listed = units(listedText);
+    if (decision.maxPriceUsdc > ceiling(listed))
       return done(
         "failed",
         `the limit is above the listed price plus 3 percent: limit ${usd(decision.maxPriceUsdc)}, listed ${usd(listed)} USDC`,

@@ -294,6 +294,33 @@ test("a replay whose listed price has dropped still reaches the contract, a fres
   assert.equal(fresh.seen.invoices, 0);
 });
 
+test("a replay of a decision whose limit exceeds its own recorded price is bounded: no invoice, no swap, no payment", async () => {
+  // a fresh order fails at the ceiling (limit 9.99, listed 1.31): the decision was never used, its receipt is kept
+  const first = fixture({ ...BUY, max_price_usdc: "9.99" });
+  const r1 = await placeOrder("a KFC voucher", first.deps);
+  assert.equal(r1.status, "failed");
+  // the catalogue now lists a price high enough that the fresh ceiling alone would not stop it
+  const { deps, calls, seen } = fixture({ action: "refuse", reason: "must not be asked" });
+  deps.rails[0]!.search = async () => [
+    { ...candidates[0]!, packages: [{ value: "5", currency: "MYR", priceUsd: "9.50" }] },
+  ];
+  const r2 = await placeOrder("a KFC voucher", {
+    ...deps,
+    replay: {
+      model: r1.model,
+      request: new Uint8Array(Buffer.from(r1.request_b64, "base64")),
+      response: new Uint8Array(Buffer.from(r1.response_b64, "base64")),
+      proof: r1.proof,
+      query: "kfc-my",
+      country: "MY",
+    },
+  });
+  assert.deepEqual(calls, []);
+  assert.equal(r2.status, "failed");
+  assert.match(r2.reason ?? "", /limit is above the listed price/);
+  assert.deepEqual([seen.invoices, seen.swaps.length, seen.paid], [0, 0, 0]);
+});
+
 test("a failure before any decision still leaves a receipt", async () => {
   const { deps } = fixture(BUY);
   deps.rails[0]!.search = async () => {
