@@ -22,6 +22,7 @@
     "status": "scripts/arena-status.sh",
     "e2e": "bun e2e/run.ts",
     "verify-duel": "bun analysis/verify_duel.ts",
+    "verify-order": "bun analysis/verify_order.ts",
     "keeper": "bun packages/keeper/src/index.ts",
     "operator": "bun packages/keeper/src/operator-cli.ts",
     "gen:types": "bun packages/protocol/src/abi/gen.ts",
