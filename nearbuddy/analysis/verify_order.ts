@@ -18,11 +18,11 @@
 import "../packages/protocol/src/env.ts";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { keccak256, toBytes } from "viem";
+import { keccak256, toBytes, toFunctionSelector } from "viem";
 import { modelObject } from "../packages/orders/src/intake.ts";
 import type { Receipt } from "../packages/orders/src/receipt.ts";
 import { b64, hex } from "../packages/protocol/src/index.ts";
-import { teeText, verify } from "../packages/protocol/src/intent.ts";
+import { proofHash, teeText, verify } from "../packages/protocol/src/intent.ts";
 import { NET, NETWORK_ID } from "../packages/protocol/src/network.ts";
 import type { Tx } from "./verify_duel.ts";
 
@@ -41,6 +41,10 @@ export interface ChainReads {
   /** The gate's `get_account({ owner })` at the latest block: the account record, or null. */
   gateAccount(gate: string, owner: string): Promise<{ payer?: unknown } | null>;
   baseReceipt(hash: string): Promise<BaseReceipt | null>;
+  /** The gate's `is_decision_used({ proof_hash })`: has this decision (base64 sha256 of request hash and response hash) paid? */
+  decisionUsed(gate: string, proofHashB64: string): Promise<boolean>;
+  /** USDC on Base `authorizationState(authorizer, nonce)`: has this EIP-3009 authorization been executed (or cancelled)? */
+  authorizationUsed(authorizer: string, nonce: string): Promise<boolean>;
 }
 export type Line = { check: string; line: string; ok: boolean };
 
@@ -88,6 +92,38 @@ function requestSentence(request: Uint8Array): unknown {
   const o = json(user?.content as string);
   need(isObj(o), "user message is not a JSON object");
   return (o as Record<string, unknown>).sentence;
+}
+
+/** The strict schema of a decision, plus the rule that a buy names a product and package the request offered. */
+function validDecision(o: Record<string, unknown>, request: Uint8Array): void {
+  const text = (k: string, max: number) =>
+    need(
+      typeof o[k] === "string" && o[k] !== "" && (o[k] as string).length <= max,
+      `${k} is not a string of 1 to ${max} characters`,
+    );
+  if (o.action === "refuse") {
+    text("reason", 300);
+    return;
+  }
+  if (o.action === "ask") {
+    text("question", 300);
+    return;
+  }
+  need(o.action === "buy", "unknown action");
+  text("product_id", 64);
+  text("package_value", 16);
+  need(usdcUnits(o.max_price_usdc) > 0n, "max_price_usdc is zero");
+  const user = (json(dec(request)) as { messages?: { role?: string; content?: string }[] }).messages?.find(
+    (m) => m.role === "user",
+  );
+  const offered = (
+    json(user?.content as string) as { candidates?: { product_id?: string; packages?: { value?: string }[] }[] }
+  ).candidates;
+  need(
+    Array.isArray(offered) &&
+      offered.some((c) => c.product_id === o.product_id && c.packages?.some((p) => p.value === o.package_value)),
+    "the product and package were not offered in the request",
+  );
 }
 
 type Call = { method: string; args: string; predecessor: string; status: unknown; ok: boolean; logs: string[] };
@@ -173,6 +209,34 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
       return out;
     }
 
+    // The recorded payment tx, read once: it decides whether the signer is vouched for by the gate (a successful
+    // sign_payment on the pinned gate carrying this proof) and it yields the nonce for the Base authorization check.
+    let tx: Tx | undefined;
+    let txErr: string | undefined;
+    if (payHash) {
+      try {
+        tx = await chain.nearTx(payHash);
+      } catch (e) {
+        txErr = e instanceof Error ? e.message : String(e);
+      }
+    }
+    const spCalls = tx ? gateCalls(tx, expectedGate).filter((c) => c.method === "sign_payment") : [];
+    const spCall = spCalls.length === 1 ? (spCalls[0] as Call) : undefined;
+    let spArgs: Record<string, unknown> | undefined;
+    try {
+      spArgs = spCall ? argsOf(spCall) : undefined;
+    } catch {
+      spArgs = undefined;
+    }
+    const proofObj: Record<string, unknown> = isObj(r.proof) ? r.proof : {};
+    const spDecision = isObj(spArgs?.decision) ? (spArgs.decision as Record<string, unknown>) : {};
+    const carriesProof = (["request_hash", "response_hash", "signer", "signature"] as const).every(
+      (k) => typeof proofObj[k] === "string" && proofObj[k] !== "" && spDecision[k] === proofObj[k],
+    );
+    const signedProof = !!spCall?.ok && carriesProof;
+    // A failed sign_payment of this proof whose text says the decision was already used: an earlier order paid with it.
+    const refusedReuse = !!spCall && !spCall.ok && carriesProof && failText(spCall.status).includes("already used");
+
     // Allowed combinations of status, decision and payment. `refused` with a buy decision is the contract's refusal
     // (the sign_payment receipt failed, or the MPC network did not sign, or no transaction was recorded).
     const refusedByGate = r.status === "refused" && action === "buy";
@@ -218,14 +282,37 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
         verify(r.proof.signer, text, r.proof.signature),
         `no valid ed25519 signature over ${dec(text).slice(0, 40)}...`,
       );
-      return `signed by ${hex(b64.strict(r.proof.signer))} over model:req:resp (trusted because the gate accepted it)`;
+      const who = hex(b64.strict(r.proof.signer));
+      return signedProof
+        ? `signed by ${who} over model:req:resp (trusted: the pinned gate accepted it in a successful sign_payment)`
+        : `valid ed25519 signature by the stated key ${who} over model:req:resp (the key itself is not vouched for)`;
     });
+    if (!signedProof)
+      await run("signer-pinned", () => ({
+        skip: "the signer is not pinned by the gate (no successful sign_payment on it carries this proof)",
+      }));
 
     await run("decision", () => {
       // The flow keeps this placeholder when the model's output was not a valid decision (parseDecision threw): the
       // bytes are still hashed and signature-checked above.
-      if (r.status === "failed" && action === "refuse" && decision.reason === "no decision was reached")
+      if (r.status === "failed" && action === "refuse" && decision.reason === "no decision was reached") {
+        let valid = false;
+        try {
+          validDecision(
+            modelObject(response, (x) =>
+              typeof x.action === "string" && Object.hasOwn(DECISION_KEYS, x.action)
+                ? DECISION_KEYS[x.action]
+                : undefined,
+            ),
+            request,
+          );
+          valid = true;
+        } catch {
+          valid = false;
+        }
+        need(!valid, "the response is a valid decision, but the receipt says no decision was reached");
         return { skip: "no decision was reached (the model's output was not a valid decision)" };
+      }
       const o = modelObject(response, (x) =>
         typeof x.action === "string" && Object.hasOwn(DECISION_KEYS, x.action) ? DECISION_KEYS[x.action] : undefined,
       );
@@ -257,6 +344,24 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
       return "the request carries the receipt's sentence";
     });
 
+    // Did the gate consume this decision? The gate does not read the decision's content, so a proof of a refusal or a
+    // question can still pay: if the gate consumed it, the receipt must show the payment.
+    await run("decision-used", async () => {
+      const ph = proofHash(b64.strict(proofObj.request_hash), b64.strict(proofObj.response_hash));
+      const used = await chain.decisionUsed(expectedGate, ph);
+      if (used) {
+        if (signedProof) return "decision consumed by the recorded payment";
+        if (refusedReuse)
+          return "decision consumed by an earlier order: the recorded sign_payment was refused as already used";
+        throw new Error("the gate has consumed this decision but the receipt shows no payment");
+      }
+      need(
+        !signedProof,
+        "the receipt records a successful sign_payment with this proof, but the gate says the decision is unused",
+      );
+      return "decision unused on the gate";
+    });
+
     // ---- payment: the gate's account, the NEAR tx (it yields `to`, `value`, `nonce`), then the Base tx
     if (payHash || r.status === "delivered") {
       await run("payer", async () => {
@@ -273,7 +378,6 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
 
     let paid: { to: string; value: bigint; nonce: string } | undefined;
     let succeeded = false;
-    let tx: Tx | undefined;
     if (!payHash) {
       if (r.status === "delivered")
         await run("near-payment-tx", () => Promise.reject(new Error("delivered receipt has no NEAR payment tx")));
@@ -283,16 +387,16 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
         }));
     } else {
       await run("near-payment-tx", async () => {
-        tx = await chain.nearTx(payHash);
-        const calls = gateCalls(tx, expectedGate).filter((c) => c.method === "sign_payment");
-        need(calls.length === 1, `${calls.length} sign_payment calls on ${expectedGate} in the tx, want 1`);
-        const c = calls[0] as Call;
+        need(tx, `NEAR tx read failed: ${txErr}`);
+        need(spCalls.length === 1, `${spCalls.length} sign_payment calls on ${expectedGate} in the tx, want 1`);
+        const c = spCall as Call;
+        const cbTx = tx as Tx;
         succeeded = c.ok;
         if (refusedByGate) {
           if (!c.ok) return `the gate refused: ${failText(c.status)}`;
           // The other refusal the flow records: the call succeeded but the MPC network did not sign, so the callback
           // logged no payment_signed event.
-          const cbs = gateCalls(tx, expectedGate).filter(
+          const cbs = gateCalls(cbTx, expectedGate).filter(
             (x) => x.method === "on_signed" && x.predecessor === expectedGate,
           );
           const logged = cbs.flatMap((x) => x.logs);
@@ -326,6 +430,36 @@ export async function checkReceipt(r: Receipt, chain: ChainReads, expectedGate: 
           need(p[k] === r.proof[k], `decision.${k} differs from the receipt's proof`);
         return `arguments carry owner, model, the proof, to ${a.to}, value ${a.value}`;
       });
+    }
+
+    // Was this order's EIP-3009 authorization executed on Base? A signature can still appear on chain after the MPC call
+    // timed out, so a receipt without a payment must be shown to have none. The nonce comes from the recorded call.
+    if (payHash || r.status === "delivered") {
+      await run("authorization-state", async () => {
+        need(
+          spCall && typeof spArgs?.nonce === "string" && WORD.test(spArgs.nonce),
+          "no sign_payment nonce to look up",
+        );
+        need(typeof r.payer === "string" && ADDR.test(r.payer), "payer is not an address");
+        const executed = await chain.authorizationUsed(r.payer, String(spArgs?.nonce).toLowerCase());
+        if (r.status === "delivered") {
+          need(executed, "the receipt is delivered, but the authorization was not executed on Base");
+          return "authorization executed on Base";
+        }
+        if (executed) {
+          need(
+            baseHash && r.status === "failed",
+            `this authorization was executed on Base, but the receipt is ${r.status} and records ${baseHash ? "a Base tx" : "no Base tx"}`,
+          );
+          return "authorization executed on Base, as the recorded Base tx says";
+        }
+        need(!baseHash, "the receipt records a Base tx, but its authorization was not executed on Base");
+        return "authorization not executed on Base";
+      });
+    } else {
+      await run("authorization-state", () => ({
+        skip: "no sign_payment is recorded, so there is no nonce to look up (decision-used covers this)",
+      }));
     }
 
     const settled = r.status === "delivered" || (r.status === "failed" && succeeded);
@@ -467,7 +601,60 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   throw new Error(`${url} failed: ${last}`);
 }
 
+/** The line after the check lines: counts, and for a receipt that is not delivered, what was not verified. */
+export function footer(lines: Line[], status: unknown): string {
+  const fails = lines.filter((l) => !l.ok).length;
+  const pass = lines.filter((l) => l.line.startsWith("PASS")).length;
+  const skip = lines.filter((l) => l.line.startsWith("SKIP")).length;
+  const out = [`${fails ? `${fails} FAIL` : "no FAIL"} · ${pass} PASS · ${skip} SKIP`];
+  out.push("A PASS does not prove delivery of the goods or the invoice: neither is checked.");
+  if (status !== "delivered")
+    out.push(
+      `This receipt is ${String(status)}: only the recorded transactions and two on-chain reads (the gate consumed the decision, USDC executed the authorization) were checked, so an order that completed outside them is not excluded.${skip ? ` Every SKIP line above names something that was not verified (${skip}).` : ""}`,
+    );
+  return out.join("\n");
+}
+
+async function nearView(gate: string, method: string, args: object): Promise<unknown> {
+  const rpc =
+    process.env.VERIFY_RPC ??
+    (NETWORK_ID === "mainnet" ? "https://free.rpc.fastnear.com" : "https://test.rpc.fastnear.com");
+  const res = await post<{ result?: { result?: number[]; error?: string }; error?: unknown }>(rpc, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "query",
+    params: {
+      request_type: "call_function",
+      finality: "final",
+      account_id: gate,
+      method_name: method,
+      args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
+    },
+  });
+  if (res.error || !res.result?.result)
+    throw new Error(`${method} on ${gate}: ${JSON.stringify(res.error ?? res.result?.error)}`);
+  return json(Buffer.from(res.result.result).toString());
+}
+
 export const realReads: ChainReads = {
+  async decisionUsed(gate, proofHashB64) {
+    const v = await nearView(gate, "is_decision_used", { proof_hash: proofHashB64 });
+    if (typeof v !== "boolean") throw new Error(`is_decision_used returned ${JSON.stringify(v)}`);
+    return v;
+  },
+  async authorizationUsed(authorizer, nonce) {
+    const rpc = process.env.BASE_RPC ?? "https://mainnet.base.org";
+    const data = `${toFunctionSelector("authorizationState(address,bytes32)")}${pad(authorizer).slice(2)}${nonce.slice(2)}`;
+    const { result, error } = await post<{ result?: string; error?: unknown }>(rpc, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_call",
+      params: [{ to: BASE_USDC, data }, "latest"],
+    });
+    if (error || typeof result !== "string" || !WORD.test(result))
+      throw new Error(`authorizationState: ${JSON.stringify(error ?? result)}`);
+    return BigInt(result) !== 0n;
+  },
   async nearTx(hash) {
     const api = process.env.FASTNEAR_TX_API ?? NET.txApi;
     const { transactions } = await post<{ transactions: Tx[] }>(`${api}/transactions`, { tx_hashes: [hash] });
@@ -476,24 +663,7 @@ export const realReads: ChainReads = {
     return tx;
   },
   async gateAccount(gate, owner) {
-    const rpc =
-      process.env.VERIFY_RPC ??
-      (NETWORK_ID === "mainnet" ? "https://free.rpc.fastnear.com" : "https://test.rpc.fastnear.com");
-    const res = await post<{ result?: { result?: number[]; error?: string }; error?: unknown }>(rpc, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "query",
-      params: {
-        request_type: "call_function",
-        finality: "final",
-        account_id: gate,
-        method_name: "get_account",
-        args_base64: Buffer.from(JSON.stringify({ owner })).toString("base64"),
-      },
-    });
-    if (res.error || !res.result?.result)
-      throw new Error(`get_account on ${gate}: ${JSON.stringify(res.error ?? res.result?.error)}`);
-    return json(Buffer.from(res.result.result).toString()) as { payer?: unknown } | null;
+    return (await nearView(gate, "get_account", { owner })) as { payer?: unknown } | null;
   },
   async baseReceipt(hash) {
     const rpc = process.env.BASE_RPC ?? "https://mainnet.base.org";
@@ -517,12 +687,10 @@ if (import.meta.main) {
     console.error("usage: bun run verify-order <receipt.json> --gate <paygate account>   (or PAYGATE=<account>)");
     process.exit(2);
   }
-  const lines = await checkReceipt(JSON.parse(readFileSync(path, "utf8")) as Receipt, realReads, gate);
+  const receipt = JSON.parse(readFileSync(path, "utf8")) as Receipt;
+  const lines = await checkReceipt(receipt, realReads, gate);
   console.log(lines.map((l) => l.line).join("\n"));
+  console.log(`\n${footer(lines, receipt?.status)}`);
   const fails = lines.filter((l) => !l.ok).length;
-  console.log(
-    `\n${fails ? `${fails} FAIL` : "no FAIL"} · ${lines.filter((l) => l.line.startsWith("PASS")).length} PASS`,
-  );
-  console.log("A PASS does not prove delivery of the goods or the invoice: neither is checked.");
   process.exit(fails ? 1 : 0);
 }

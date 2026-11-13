@@ -9,7 +9,14 @@ import type { Receipt } from "../packages/orders/src/receipt.ts";
 import { b64, hex } from "../packages/protocol/src/index.ts";
 import { teeText } from "../packages/protocol/src/intent.ts";
 import type { Tx } from "./verify_duel.ts";
-import { AUTHORIZATION_USED, BASE_USDC, type BaseReceipt, type ChainReads, checkReceipt } from "./verify_order.ts";
+import {
+  AUTHORIZATION_USED,
+  BASE_USDC,
+  type BaseReceipt,
+  type ChainReads,
+  checkReceipt,
+  footer,
+} from "./verify_order.ts";
 
 const MODEL = "test-model";
 const GATE = "paygate.testnet";
@@ -28,7 +35,13 @@ const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const signer = b64.enc(new Uint8Array(Buffer.from(publicKey.export({ format: "jwk" }).x as string, "base64url")));
 
 const chat = (messages: object[]) => enc(JSON.stringify({ model: MODEL, messages }));
-const userMsg = (sentence = SENTENCE) => ({ role: "user", content: JSON.stringify({ sentence, candidates: [] }) });
+const CANDIDATES = [
+  { product_id: "kfc-my", country: "MY", packages: [{ value: "5", currency: "MYR", price_usd: "1.31" }] },
+];
+const userMsg = (sentence = SENTENCE) => ({
+  role: "user",
+  content: JSON.stringify({ sentence, candidates: CANDIDATES }),
+});
 const request = chat([{ role: "system", content: "decide" }, userMsg()]);
 const reply = (content: string | object) =>
   enc(
@@ -184,10 +197,28 @@ const baseRc = (
     },
   ],
 });
-const chain = (tx: Tx = nearTx(), rc: BaseReceipt | null = baseRc(), payer: string | null = PAYER): ChainReads => ({
+/** `used`: what the gate says of the decision; `auth`: what USDC says of the authorization; "throw": the read fails. */
+interface World {
+  used?: boolean | "throw";
+  auth?: boolean | "throw";
+}
+const chain = (
+  tx: Tx = nearTx(),
+  rc: BaseReceipt | null = baseRc(),
+  payer: string | null = PAYER,
+  w: World = {},
+): ChainReads => ({
   nearTx: async () => tx,
   gateAccount: async (_g, owner) => (owner === "alice.testnet" && payer ? { payer } : null),
   baseReceipt: async () => rc,
+  decisionUsed: async () => {
+    if (w.used === "throw") throw new Error("rpc down");
+    return w.used ?? true;
+  },
+  authorizationUsed: async () => {
+    if (w.auth === "throw") throw new Error("rpc down");
+    return w.auth ?? true;
+  },
 });
 
 const lines = (r: Receipt, c: ChainReads = chain(), gate = GATE) => checkReceipt(r, c, gate);
@@ -214,9 +245,11 @@ test("an untouched receipt passes every check, and prints the enclave signer", a
       "enclave-signature",
       "decision",
       "sentence",
+      "decision-used",
       "payer",
       "near-payment-tx",
       "near-payment-args",
+      "authorization-state",
       "near-payment-event",
       "amount",
       "base-transfer",
@@ -432,6 +465,7 @@ test("a legitimate receipt of every exit path of the flow has no FAIL", async ()
   const refuseReply = { action: "refuse", reason: "no match" };
   const askReply = { action: "ask", question: "which size?" };
   const stripped: Partial<Receipt> = { near: {}, baseTx: undefined as never };
+  const unpaid: World = { used: false, auth: false };
   // refused by the model (a login tx may be recorded)
   await clean(
     answered(
@@ -439,46 +473,87 @@ test("a legitimate receipt of every exit path of the flow has no FAIL", async ()
       { action: "refuse", reason: "no match" },
       { ...stripped, near: { login: "loginTx" }, status: "refused", reason: "no match" },
     ),
+    chain(nearTx(), baseRc(), PAYER, unpaid),
   );
   // asked
-  await clean(answered(askReply, { action: "ask", question: "which size?" }, { ...stripped, status: "asked" }));
-  // refused by the contract: the sign_payment receipt failed
   await clean(
-    { ...base, status: "refused", baseTx: undefined as never },
-    chain(nearTx({ payment: { Failure: { ActionError: { kind: "FunctionCallError" } } } })),
+    answered(askReply, { action: "ask", question: "which size?" }, { ...stripped, status: "asked" }),
+    chain(nearTx(), baseRc(), PAYER, unpaid),
   );
-  // refused by the contract: the MPC network did not sign (receipt succeeded, no event)
+  // refused by the contract: the sign_payment receipt failed (the decision stays unused)
   await clean(
     { ...base, status: "refused", baseTx: undefined as never },
-    chain(nearTx({ logs: ["the MPC network did not sign; the decision and the allowance stay spent"] })),
+    chain(nearTx({ payment: { Failure: { ActionError: { kind: "FunctionCallError" } } } }), baseRc(), PAYER, unpaid),
+  );
+  // refused by the contract: the MPC network did not sign (receipt succeeded, no event, decision spent, nothing executed)
+  await clean(
+    { ...base, status: "refused", baseTx: undefined as never },
+    chain(
+      nearTx({ logs: ["the MPC network did not sign; the decision and the allowance stay spent"] }),
+      baseRc(),
+      PAYER,
+      { used: true, auth: false },
+    ),
   );
   // refused by the contract before any transaction was recorded
-  const l = await clean({ ...base, status: "refused", near: {}, baseTx: undefined as never });
+  const l = await clean(
+    { ...base, status: "refused", near: {}, baseTx: undefined as never },
+    chain(nearTx(), baseRc(), PAYER, unpaid),
+  );
   assert.ok(l.some((x) => x.line.startsWith("SKIP")));
+  // the gate refused to reuse a decision an earlier order spent
+  await clean(
+    { ...base, status: "refused", baseTx: undefined as never },
+    chain(
+      nearTx({
+        payment: {
+          Failure: {
+            ActionError: {
+              kind: {
+                FunctionCallError: { ExecutionError: "Smart contract panicked: this decision was already used" },
+              },
+            },
+          },
+        },
+      }),
+      baseRc(),
+      PAYER,
+      { used: true, auth: false },
+    ),
+  );
   // failed after a decision, before paying; and after signing but before settling; and after settling
-  await clean({
-    ...base,
-    status: "failed",
-    near: {},
-    baseTx: undefined as never,
-    reason: "invoice price above the limit",
-  });
-  const unsettled = await clean({ ...base, status: "failed", baseTx: undefined as never });
+  await clean(
+    { ...base, status: "failed", near: {}, baseTx: undefined as never, reason: "invoice price above the limit" },
+    chain(nearTx(), baseRc(), PAYER, unpaid),
+  );
+  const unsettled = await clean(
+    { ...base, status: "failed", baseTx: undefined as never },
+    chain(nearTx(), baseRc(), PAYER, { used: true, auth: false }),
+  );
   assert.ok(unsettled.some((x) => x.check === "base-transfer" && x.line.startsWith("SKIP")));
   await clean({ ...base, status: "failed", reason: "delivery ended expired" });
   // failed after the gate refused, recorded as failed
-  await clean({ ...base, status: "failed", baseTx: undefined as never }, chain(nearTx({ payment: { Failure: {} } })));
+  await clean(
+    { ...base, status: "failed", baseTx: undefined as never },
+    chain(nearTx({ payment: { Failure: {} } }), baseRc(), PAYER, unpaid),
+  );
   // failed because the model's output was not a decision: the flow keeps the placeholder decision
-  const garbage = reply("not json at all");
-  const g = await clean({
-    ...base,
-    ...stripped,
-    status: "failed",
-    response_b64: b64.enc(garbage),
-    proof: proofFor(request, garbage),
-    decision: { action: "refuse", reason: "no decision was reached" },
-  });
-  assert.ok(g.some((x) => x.check === "decision" && x.line.startsWith("SKIP")));
+  const placeholder = { action: "refuse", reason: "no decision was reached" } as const;
+  for (const bad of [
+    "not json at all",
+    { ...BUY, product_id: "not-offered" },
+    { ...BUY, extra: 1 },
+    { action: "foo" },
+  ]) {
+    const g = await clean(
+      answered(bad, placeholder, { ...stripped, status: "failed" }),
+      chain(nearTx(), baseRc(), PAYER, unpaid),
+    );
+    assert.ok(
+      g.some((x) => x.check === "decision" && x.line.startsWith("SKIP")),
+      JSON.stringify(bad),
+    );
+  }
 });
 
 test("failed before a model decision prints one SKIP line and no FAIL", async () => {
@@ -585,7 +660,154 @@ test("a chain read that throws fails its line", async () => {
     baseReceipt: async () => {
       throw new Error("rpc down");
     },
+    decisionUsed: async () => {
+      throw new Error("rpc down");
+    },
+    authorizationUsed: async () => {
+      throw new Error("rpc down");
+    },
   };
   const f = await failed(base, c);
-  assert.ok(f.includes("payer") && f.includes("near-payment-tx"));
+  for (const check of ["payer", "decision-used", "near-payment-tx", "authorization-state", "base-transfer"])
+    assert.ok(f.includes(check), check);
+});
+
+// ---- an unpaid receipt must be shown unpaid
+
+const noPay: Partial<Receipt> = { near: {}, baseTx: undefined as never };
+const modelRefusal = answered(
+  { action: "refuse", reason: "no match" },
+  { action: "refuse", reason: "no match" },
+  { ...noPay, status: "refused" },
+);
+const modelQuestion = answered(
+  { action: "ask", question: "q?" },
+  { action: "ask", question: "q?" },
+  { ...noPay, status: "asked" },
+);
+const line = async (r: Receipt, c: ChainReads, check: string) => (await lines(r, c)).find((l) => l.check === check);
+
+test("decision-used, both directions: a decision the gate spent needs the recorded payment, an unspent one must not claim it", async () => {
+  // consumed and recorded: PASS with its own wording
+  assert.match((await line(base, chain(), "decision-used"))?.line ?? "", /^PASS.*consumed by the recorded payment/);
+  // unspent and recorded as signed: FAIL
+  assert.deepEqual(await failed(base, chain(nearTx(), baseRc(), PAYER, { used: false })), ["decision-used"]);
+  // unspent and unrecorded: PASS
+  assert.match(
+    (await line(modelQuestion, chain(nearTx(), baseRc(), PAYER, { used: false }), "decision-used"))?.line ?? "",
+    /^PASS.*decision unused on the gate/,
+  );
+  // spent and unrecorded: FAIL
+  assert.deepEqual(await failed(modelQuestion, chain(nearTx(), baseRc(), PAYER, { used: true })), ["decision-used"]);
+});
+
+test("a model refusal or question whose proof the gate already paid with fails", async () => {
+  for (const r of [modelRefusal, modelQuestion]) {
+    const l = await line(r, chain(nearTx(), baseRc(), PAYER, { used: true }), "decision-used");
+    assert.ok(l && !l.ok && l.line.includes("the gate has consumed this decision but the receipt shows no payment"));
+  }
+});
+
+test("a refused or failed buy with no recorded payment fails when the gate consumed the decision", async () => {
+  const refused = { ...base, status: "refused" as const, ...noPay };
+  const failedBuy = { ...base, status: "failed" as const, ...noPay };
+  assert.deepEqual(await failed(refused, chain(nearTx(), baseRc(), PAYER, { used: true })), ["decision-used"]);
+  assert.deepEqual(await failed(failedBuy, chain(nearTx(), baseRc(), PAYER, { used: true })), ["decision-used"]);
+  assert.deepEqual(await failed(refused, chain(nearTx(), baseRc(), PAYER, { used: false })), []);
+});
+
+test("the placeholder decision over a valid decision response fails", async () => {
+  const placeholder = { action: "refuse", reason: "no decision was reached" } as const;
+  const r = { ...base, ...noPay, status: "failed" as const, decision: placeholder };
+  const l = await lines(r, chain(nearTx(), baseRc(), PAYER, { used: false }));
+  assert.deepEqual(
+    l.filter((x) => !x.ok).map((x) => x.check),
+    ["decision"],
+  );
+  assert.match(l.find((x) => x.check === "decision")?.line ?? "", /valid decision/);
+});
+
+test("a signed payment without the event, executed on Base after the MPC call timed out, fails", async () => {
+  const noEvent = nearTx({ logs: ["the MPC network did not sign; the decision and the allowance stay spent"] });
+  const asRefused = { ...base, status: "refused" as const, baseTx: undefined as never };
+  const asFailed = { ...base, status: "failed" as const, baseTx: undefined as never };
+  for (const r of [asRefused, asFailed]) {
+    const l = await line(r, chain(noEvent, baseRc(), PAYER, { used: true, auth: true }), "authorization-state");
+    assert.ok(l && !l.ok && l.line.includes("this authorization was executed on Base"), r.status);
+    assert.match(
+      (await line(r, chain(noEvent, baseRc(), PAYER, { used: true, auth: false }), "authorization-state"))?.line ?? "",
+      /^PASS.*authorization not executed on Base/,
+    );
+  }
+});
+
+test("authorization-state on a non-delivered receipt: executed fails, not executed passes; delivered must be executed", async () => {
+  for (const status of ["refused", "failed"] as const) {
+    const r = { ...base, status, baseTx: undefined as never };
+    const tx = nearTx({ payment: { Failure: {} } });
+    assert.ok(
+      !(await line(r, chain(tx, baseRc(), PAYER, { used: false, auth: true }), "authorization-state"))?.ok,
+      status,
+    );
+    assert.ok(
+      (await line(r, chain(tx, baseRc(), PAYER, { used: false, auth: false }), "authorization-state"))?.ok,
+      status,
+    );
+  }
+  assert.ok((await line(base, chain(), "authorization-state"))?.line.includes("executed on Base"));
+  assert.deepEqual(await failed(base, chain(nearTx(), baseRc(), PAYER, { auth: false })), ["authorization-state"]);
+  // a recorded Base tx whose authorization was never executed
+  assert.ok(
+    (await failed({ ...base, status: "failed" }, chain(nearTx(), baseRc(), PAYER, { auth: false }))).includes(
+      "authorization-state",
+    ),
+  );
+});
+
+test("a read that fails is a FAIL on its own line, never a SKIP", async () => {
+  const d = await lines(base, chain(nearTx(), baseRc(), PAYER, { used: "throw" }));
+  assert.deepEqual(
+    d.filter((x) => !x.ok).map((x) => x.check),
+    ["decision-used"],
+  );
+  assert.match(d.find((x) => x.check === "decision-used")?.line ?? "", /^FAIL.*rpc down/);
+  const a = await lines(base, chain(nearTx(), baseRc(), PAYER, { auth: "throw" }));
+  assert.deepEqual(
+    a.filter((x) => !x.ok).map((x) => x.check),
+    ["authorization-state"],
+  );
+  assert.match(a.find((x) => x.check === "authorization-state")?.line ?? "", /^FAIL.*rpc down/);
+});
+
+test("the signer is trusted only when a successful sign_payment on the pinned gate carries the proof", async () => {
+  const trusted = await line(base, chain(), "enclave-signature");
+  assert.ok(trusted?.line.includes("trusted: the pinned gate accepted it"));
+  assert.ok(!(await lines(base, chain())).some((x) => x.check === "signer-pinned"));
+  // no sign_payment at all (a question): the signature is valid maths, the key is not vouched for, and a SKIP says so
+  const l = await lines(modelQuestion, chain(nearTx(), baseRc(), PAYER, { used: false }));
+  const sig = l.find((x) => x.check === "enclave-signature");
+  assert.ok(sig?.ok && !sig.line.includes("trusted") && sig.line.includes("not vouched for"));
+  assert.match(l.find((x) => x.check === "signer-pinned")?.line ?? "", /^SKIP.*not pinned by the gate/);
+  // a random key signs a receipt whose payment sits on another contract: valid signature, no trust
+  const key = generateKeyPairSync("ed25519");
+  const rogue = b64.enc(new Uint8Array(Buffer.from(key.publicKey.export({ format: "jwk" }).x as string, "base64url")));
+  const [a, b] = [sha(request), sha(response)];
+  const p = {
+    ...proof,
+    signer: rogue,
+    signature: b64.enc(new Uint8Array(sign(null, teeText(2, MODEL, a, b), key.privateKey))),
+  };
+  const forged = await lines({ ...base, proof: p }, chain(nearTx({ gate: EVIL })));
+  assert.ok(!forged.find((x) => x.check === "enclave-signature")?.line.includes("trusted"));
+  assert.match(forged.find((x) => x.check === "signer-pinned")?.line ?? "", /^SKIP/);
+  assert.ok(forged.some((x) => !x.ok));
+});
+
+test("the footer counts SKIP lines and says what an unpaid receipt left unverified", async () => {
+  const l = await lines(modelQuestion, chain(nearTx(), baseRc(), PAYER, { used: false }));
+  const f = footer(l, "asked");
+  assert.match(f, /no FAIL · \d+ PASS · 3 SKIP/);
+  assert.match(f, /does not prove delivery/);
+  assert.match(f, /This receipt is asked: only the recorded transactions and two on-chain reads/);
+  assert.ok(!footer(await lines(base, chain()), "delivered").includes("This receipt is"));
 });
