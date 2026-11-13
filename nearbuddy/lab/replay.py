@@ -178,6 +178,8 @@ def baselines(snaps: dict[str, Row], wins: dict[str, Row], horizon: str) -> dict
 # ---------- run ----------
 def run(cap: float, workers: int, models: list[str], limit: int | None) -> None:
     import harness  # the paid path: imported here so the tables above need no API key
+    from config import ENV
+    from nearai import NearAiClient
 
     snaps = {s["id"]: s for s in json.loads(harness.SNAPSHOTS.read_text())}
     wins = {w["id"]: w for w in json.loads(WINDOWS.read_text())}
@@ -190,7 +192,7 @@ def run(cap: float, workers: int, models: list[str], limit: int | None) -> None:
         }
     todo = [j for j in jobs(ids, models, list(VARIANTS), REPEATS) if j not in done]
     budget = harness.Budget(cap)
-    clients = {m: harness.NearAiClient(harness.ENV["NEAR_AI_API_KEY"], m) for m in models}
+    clients = {m: NearAiClient(ENV["NEAR_AI_API_KEY"], m) for m in models}
     lock = threading.Lock()
     print(f"{len(todo)} calls to make ({len(done)} done), spent ${budget.spent:.4f}, cap ${cap:.2f}")
 
@@ -205,9 +207,8 @@ def run(cap: float, workers: int, models: list[str], limit: int | None) -> None:
             return
         row = {"snapshot": sid, "model": model.split("/")[-1], "variant": variant, "repeat": rep, "profile": PROFILE}
         row |= {"brief": snap["brief"], **out}
-        with lock:
-            with OUT.open("a") as f:
-                f.write(json.dumps(row) + "\n")
+        with lock, OUT.open("a") as f:
+            f.write(json.dumps(row) + "\n")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(one, todo))
@@ -242,21 +243,21 @@ def report() -> None:
                     k[1] += 1
         for m in sorted(follow):
             print(f"follows the move      {m:28} {f(*follow[m])}")
-        for m, k in sorted(self_agreement(rows, v).items()):
-            print(f"agrees with itself    {m:28} {f(*k)}")
+        for m, frac in sorted(self_agreement(rows, v).items()):
+            print(f"agrees with itself    {m:28} {f(*frac)}")
         pairs = disagreement(rows, v)
-        for p, k in sorted(pairs.items()):
-            print(f"disagree              {' vs '.join(p):58} {f(*k)}")
-        tot = (sum(k[0] for k in pairs.values()), sum(k[1] for k in pairs.values()))
+        for pair, frac in sorted(pairs.items()):
+            print(f"disagree              {' vs '.join(pair):58} {f(*frac)}")
+        tot = (sum(x[0] for x in pairs.values()), sum(x[1] for x in pairs.values()))
         print(f"disagree, all pairs   {'':28} {f(*tot)}")
         for horizon in ("px_6m", "px_60m"):
-            for m, k in sorted(hit_rate(rows, v, wins, horizon).items()):
-                print(f"right at {horizon[3:]:4}         {m:28} {f(*k)}")
+            for m, frac in sorted(hit_rate(rows, v, wins, horizon).items()):
+                print(f"right at {horizon[3:]:4}         {m:28} {f(*frac)}")
         print()
     print("## Baselines (no model)")
     for horizon in ("px_6m", "px_60m"):
-        for name, k in baselines(snaps, wins, horizon).items():
-            print(f"right at {horizon[3:]:4}         {name:28} {f(*k)}")
+        for name, frac in baselines(snaps, wins, horizon).items():
+            print(f"right at {horizon[3:]:4}         {name:28} {f(*frac)}")
 
 
 def main() -> None:
