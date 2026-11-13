@@ -16,7 +16,7 @@ import "../../protocol/src/env.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { Account, JsonRpcProvider, type KeyPairString } from "near-api-js";
 import type { Hex } from "viem";
-import type { Config as GateConfig, Policy } from "../../protocol/src/abi/paygate.ts";
+import type { Account as GateAccount, Policy } from "../../protocol/src/abi/paygate.ts";
 import { loadKey, sendProvider } from "../../protocol/src/chain.ts";
 import { NETWORK_ID, NETWORKS } from "../../protocol/src/network.ts";
 import {
@@ -50,8 +50,15 @@ async function gatedPayer(gate: string): Promise<Payer> {
   const agentId = process.env.PAYGATE_AGENT;
   if (!agentId) throw new Error("set PAYGATE_AGENT to the account named in the paygate policy");
   const key = readFileSync(`${secrets}paygate-agent.key`, "utf8").trim() as KeyPairString;
-  const config = (await sendProvider.callFunction({ contractId: gate, method: "get_config", args: {} })) as GateConfig;
-  return gateSigner(new Account(agentId, sendProvider, key), gate, config.token.payer as Hex, console.log) as Payer;
+  const owner = process.env.PAYGATE_OWNER;
+  if (!owner) throw new Error("set PAYGATE_OWNER to the account that opened the paygate account");
+  const opened = (await sendProvider.callFunction({
+    contractId: gate,
+    method: "get_account",
+    args: { owner },
+  })) as GateAccount | null;
+  if (!opened) throw new Error(`no paygate account is open for ${owner}`);
+  return gateSigner(new Account(agentId, sendProvider, key), gate, opened.payer as Hex, console.log) as Payer;
 }
 const gate = process.env.PAYGATE;
 const payer = gate
