@@ -58,7 +58,13 @@ async function gatedPayer(gate: string): Promise<Payer> {
     args: { owner },
   })) as GateAccount | null;
   if (!opened) throw new Error(`no paygate account is open for ${owner}`);
-  return gateSigner(new Account(agentId, sendProvider, key), gate, opened.payer as Hex, console.log) as Payer;
+  return gateSigner(
+    new Account(agentId, sendProvider, key),
+    gate,
+    { owner, payer: opened.payer as Hex },
+    undefined,
+    console.log,
+  ) as Payer;
 }
 const gate = process.env.PAYGATE;
 const payer = gate

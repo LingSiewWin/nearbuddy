@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { Account } from "near-api-js";
 import { hashMessage, hashTypedData } from "viem";
 import { generatePrivateKey, privateKeyToAccount, sign } from "viem/accounts";
+import type { TeeProof } from "../../protocol/src/intent.ts";
 import { GateRefused, gateSigner } from "./paygate.ts";
 
 // Shared with paygate/src/lib.rs, which builds the same digests in the contract.
@@ -33,11 +34,23 @@ test("the payment and sign-in digests match the shared vectors", () => {
   assert.equal(hashMessage(W.login.message), W.login.digest_hex);
 });
 
+const owner = "alice.testnet";
+const decision = {
+  model: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  proof: {
+    kind: 2,
+    request_hash: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+    response_hash: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+    signer: "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+    signature: "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+  } satisfies TeeProof,
+};
+
 /** A stand-in for the contract plus the MPC network: signs whatever digest `digestOf(args)` names with `key`. */
-function fakeAgent(key: `0x${string}`, digestOf: (args: Record<string, string>) => `0x${string}`) {
-  const calls: { methodName: string; args: Record<string, string> }[] = [];
+function fakeAgent(key: `0x${string}`, digestOf: (args: Record<string, unknown>) => `0x${string}`) {
+  const calls: { methodName: string; args: Record<string, unknown> }[] = [];
   const agent = {
-    callFunctionRaw: async (p: { methodName: string; args: Record<string, string> }) => {
+    callFunctionRaw: async (p: { methodName: string; args: Record<string, unknown> }) => {
       calls.push(p);
       const s = await sign({ hash: digestOf(p.args), privateKey: key });
       const mpc = { big_r: { affine_point: `02${s.r.slice(2)}` }, s: { scalar: s.s.slice(2) }, recovery_id: s.yParity };
@@ -55,17 +68,20 @@ test("gateSigner sends the payment fields, not a hash, and returns a signature f
   const payer = privateKeyToAccount(key).address;
   const t = typed(payer);
   const { agent, calls } = fakeAgent(key, () => hashTypedData(t as Parameters<typeof hashTypedData>[0]));
-  const sig = await gateSigner(agent, "gate.testnet", payer).signTypedData(t);
+  const sig = await gateSigner(agent, "gate.testnet", { owner, payer }, decision).signTypedData(t);
   assert.equal(sig.length, 132);
   assert.deepEqual(calls[0], {
     contractId: "gate.testnet",
     methodName: "sign_payment",
     args: {
+      owner,
       to: W.payment.message.to,
       value: "1310000",
       valid_after: "0",
       valid_before: "1794567890",
       nonce: W.payment.message.nonce,
+      model_id: decision.model,
+      decision: decision.proof,
     },
     gas: calls[0] && (calls[0] as unknown as { gas: bigint }).gas,
     deposit: 0n,
@@ -76,14 +92,17 @@ test("gateSigner rejects a signature over any other digest", async () => {
   const key = generatePrivateKey();
   const payer = privateKeyToAccount(key).address;
   const { agent } = fakeAgent(key, () => `0x${"11".repeat(32)}`);
-  await assert.rejects(gateSigner(agent, "gate.testnet", payer).signTypedData(typed(payer)), /disagree on the digest/);
+  await assert.rejects(
+    gateSigner(agent, "gate.testnet", { owner, payer }, decision).signTypedData(typed(payer)),
+    /disagree on the digest/,
+  );
 });
 
 test("gateSigner refuses to ask for anything but a payment from the payer", async () => {
   const key = generatePrivateKey();
   const payer = privateKeyToAccount(key).address;
   const { agent, calls } = fakeAgent(key, () => `0x${"11".repeat(32)}`);
-  const gate = gateSigner(agent, "gate.testnet", payer);
+  const gate = gateSigner(agent, "gate.testnet", { owner, payer }, decision);
   assert.throws(() => gate.signTypedData({ ...typed(payer), primaryType: "Permit" }), /TransferWithAuthorization only/);
   assert.throws(() => gate.signTypedData(typed(W.payment.message.from)), /not from the paygate payer/);
   assert.equal(calls.length, 0);
@@ -98,10 +117,34 @@ test("a contract panic surfaces as GateRefused with the transaction hash", async
     },
   } as unknown as Account;
   const payer = privateKeyToAccount(generatePrivateKey()).address;
-  await assert.rejects(gateSigner(agent, "gate.testnet", payer).signTypedData(typed(payer)), (e: unknown) => {
-    assert.ok(e instanceof GateRefused);
-    assert.equal(e.nearTx, "REFUSEDTX");
-    assert.match(e.message, /above the per-payment cap/);
-    return true;
-  });
+  await assert.rejects(
+    gateSigner(agent, "gate.testnet", { owner, payer }, decision).signTypedData(typed(payer)),
+    (e: unknown) => {
+      assert.ok(e instanceof GateRefused);
+      assert.equal(e.nearTx, "REFUSEDTX");
+      assert.match(e.message, /above the per-payment cap/);
+      return true;
+    },
+  );
+});
+
+test("gateSigner sends owner and message to sign_login, with no decision", async () => {
+  const key = generatePrivateKey();
+  const payer = privateKeyToAccount(key).address;
+  const { agent, calls } = fakeAgent(key, () => hashMessage(W.login.message));
+  const sig = await gateSigner(agent, "gate.testnet", { owner, payer }).signMessage({ message: W.login.message });
+  assert.equal(sig.length, 132);
+  assert.equal(calls[0]?.methodName, "sign_login");
+  assert.deepEqual(calls[0]?.args, { owner, message: W.login.message });
+});
+
+test("a signer built without a decision refuses a payment and sends nothing", () => {
+  const key = generatePrivateKey();
+  const payer = privateKeyToAccount(key).address;
+  const { agent, calls } = fakeAgent(key, () => `0x${"11".repeat(32)}`);
+  assert.throws(
+    () => gateSigner(agent, "gate.testnet", { owner, payer }).signTypedData(typed(payer)),
+    /a payment needs a decision/,
+  );
+  assert.equal(calls.length, 0);
 });

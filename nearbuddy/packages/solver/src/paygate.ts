@@ -4,6 +4,7 @@
 import type { Account } from "near-api-js";
 import { teraToGas } from "near-api-js";
 import { type Hex, hashMessage, hashTypedData, recoverAddress, serializeSignature } from "viem";
+import type { TeeProof } from "../../protocol/src/intent.ts";
 
 export interface GateSigner {
   /** The EVM address the contract's derived key controls. It holds the stablecoin. */
@@ -38,10 +39,12 @@ interface MpcSignature {
 export function gateSigner(
   agent: Account,
   contractId: string,
-  payer: Hex,
+  account: { owner: string; payer: Hex },
+  decision?: { model: string; proof: TeeProof },
   log: (s: string) => void = () => {},
 ): GateSigner {
-  async function sign(methodName: string, args: Record<string, string>, digest: Hex): Promise<Hex> {
+  const { owner, payer } = account;
+  async function sign(methodName: string, args: Record<string, string | TeeProof>, digest: Hex): Promise<Hex> {
     const t0 = Date.now();
     let result: Awaited<ReturnType<Account["callFunctionRaw"]>>;
     try {
@@ -82,20 +85,24 @@ export function gateSigner(
       const m = typed.message as Record<string, string | bigint>;
       if (String(m.from).toLowerCase() !== payer.toLowerCase())
         throw new Error("the payment is not from the paygate payer");
+      if (!decision) throw new Error("a payment needs a decision");
       return sign(
         "sign_payment",
         {
+          owner,
           to: String(m.to),
           value: String(m.value),
           valid_after: String(m.validAfter),
           valid_before: String(m.validBefore),
           nonce: String(m.nonce),
+          model_id: decision.model,
+          decision: decision.proof,
         },
         hashTypedData(typed as Parameters<typeof hashTypedData>[0]),
       );
     },
     signMessage({ message }) {
-      return sign("sign_login", { message }, hashMessage(message));
+      return sign("sign_login", { owner, message }, hashMessage(message));
     },
   };
 }
