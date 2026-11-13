@@ -14,6 +14,8 @@ export const MATCH_S = 360;
 const POLL_MS = 5_000;
 /** resolve_duel is asked this many times, half a minute apart. */
 const RESOLVE_TRIES = 40;
+/** How often the oracle is asked again for an opening price that did not arrive with the open. */
+const ASK_PRICE_MS = 30_000;
 const NEAR = 10n ** 24n;
 /** Attached to open_duel and resolve_duel: the oracle deposit plus storage; the excess comes back. */
 const ORACLE_DEPOSIT = NEAR / 20n;
@@ -169,7 +171,20 @@ export class Operator {
     }
     this.phase("calling", { duel: duel_id, open_at, close_at, txs: open ? { open } : {} });
     const lockMs = Number(BigInt((await this.read("duel_lock", { duel_id })) ?? "0") / 1_000_000n);
+    let asked = 0;
+    let priced = false;
     while (nowMs() < close_at - lockMs) {
+      // The oracle can fail to answer the open. No model can call without an opening price and the contract never
+      // resolves such a duel (only void_duel, a day after the close), so it is asked again while the duel is open.
+      priced ||= (await this.read("get_duel", { duel_id }))?.open_price != null;
+      if (!priced) {
+        if (nowMs() - asked >= ASK_PRICE_MS) {
+          asked = nowMs();
+          await chain.call("request_open_price", { duel_id }, ORACLE_DEPOSIT, ORACLE_TGAS).catch(() => {});
+        }
+        await sleep(POLL_MS);
+        continue;
+      }
       // a round that dies on a throttled RPC is simply tried again; a keeper stop (budget, outage) ends the calls
       const stop = await keeper.round([a, b]).then(
         () => false,
@@ -182,6 +197,10 @@ export class Operator {
     }
     await keeper.settle().catch(() => {}); // a keeper stop (budget, outage) ends the calls, not the match
 
+    if (!priced && (await this.read("get_duel", { duel_id }))?.open_price == null)
+      throw new Error(
+        `duel ${duel_id} got no opening price from the oracle: no model called, and it can only be voided a day after its close`,
+      );
     this.phase("racing");
     await this.until(close_at + POLL_MS);
     this.phase("resolving");

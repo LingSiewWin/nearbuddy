@@ -36,6 +36,8 @@ function world(
     staleOracle?: number;
     throttled?: string;
     roundFails?: boolean;
+    /** How many times the oracle must be asked again before the duel has its opening price. */
+    noOpenPrice?: number;
   } = {},
 ) {
   let now = 1_000_000;
@@ -48,6 +50,7 @@ function world(
   let resolves = 0;
   let close_at = 0n;
   let throttles = 0;
+  let priceAsks = 0;
   const view = (async (method: string) => {
     // a throttled RPC: the named view fails twice, then answers
     if (method === over.throttled && throttles++ < 2) throw new Error("Rate limits exceeded");
@@ -66,7 +69,7 @@ function world(
         a: "d2",
         b: "q1",
         resolved,
-        open_price: "340000000",
+        open_price: priceAsks >= (over.noOpenPrice ?? 0) ? "340000000" : null,
         close_at: String(close_at),
         last_intent_a: rounds >= 2 ? { side: "Long" } : null,
         last_intent_b: rounds >= 2 ? { side: "Short" } : null,
@@ -85,6 +88,7 @@ function world(
         return { tx: "t-open", value: "9" };
       }
       if (method === "request_tick") ticked = true;
+      if (method === "request_open_price") priceAsks++;
       // a stale oracle answers "price before close": the call succeeds, the duel stays open
       if (method === "resolve_duel") resolved = ++resolves > (over.staleOracle ?? 0);
       return { tx: `t-${method}`, value: null };
@@ -197,4 +201,24 @@ test("the models are asked to call as soon as the match is open, and the match i
   assert.equal(s.close_at, (s.open_at as number) + MATCH_S * 1000);
   assert.ok(MATCH_S >= 330 && MATCH_S <= 420); // above the arena's 310 s floor with room for the open to land
   assert.equal(w.phases[1], "calling");
+});
+
+test("a duel opened without a price has the oracle asked again, then runs as usual", async () => {
+  const w = world({ noOpenPrice: 1 });
+  await w.op.start(DS, QW);
+  await w.op.idle();
+  assert.deepEqual(w.calls, ["owner:open_duel", "keeper:request_open_price", "keeper:resolve_duel"]);
+  assert.equal(w.op.status().phase, "done");
+});
+
+test("a duel that never gets its opening price fails with the reason and is not sent to resolve", async () => {
+  const w = world({ noOpenPrice: Number.POSITIVE_INFINITY });
+  await w.op.start(DS, QW);
+  await w.op.idle();
+  const end = w.op.status();
+  assert.deepEqual([end.busy, end.phase], [false, "failed"]);
+  assert.match(end.error ?? "", /duel 9 got no opening price/);
+  assert.ok(!w.calls.includes("keeper:resolve_duel"));
+  const asks = w.calls.filter((c) => c === "keeper:request_open_price").length;
+  assert.ok(asks > 1 && asks <= 12, `asked ${asks} times`);
 });
