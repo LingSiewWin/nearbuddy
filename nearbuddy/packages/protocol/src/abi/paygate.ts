@@ -4,6 +4,8 @@ export interface Account {
   /** The address the owner's derived key controls (`from` of every payment), 20 bytes hex with 0x. The owner supplies it; a wrong address only makes the owner's own signatures invalid on chain. */
   payer: string;
   policy: Policy | null;
+  /** yoctoNEAR the owner has deposited and not yet spent on storage. Every byte this account adds (the account, its policy, one used-decision entry per payment) is paid from it; bytes freed are credited back. */
+  storage_balance: string;
 }
 
 /** Base64 string on the wire (near-sdk's ABI reports Vec<u8>). */
@@ -106,20 +108,25 @@ export interface PaygateViews {
 
 export interface PaygateCalls {
   /**
-   * Admin only: accept decisions signed by this enclave key (32-byte ed25519). The admin takes it from the
-   *  NEAR AI Cloud attestation report after verifying the report off chain.
+   * Admin only, with exactly 1 yoctoNEAR (so a function-call key cannot do it): accept decisions signed by
+   *  this enclave key (32-byte ed25519). The admin takes it from the NEAR AI Cloud attestation report after
+   *  verifying the report off chain.
+   * modifiers: payable
    */
   add_tee_signer: { args: { signer: Base64VecU8 }; result: undefined };
   /** modifiers: init */
   new: { args: { admin: string; mpc_contract: string; token: Token }; result: undefined };
   /**
    * Open the caller's account. The caller becomes its owner; its key is derived with the caller's account id
-   *  as path, and `payer` is the address of that key. The deposit (at least 0.01 NEAR, all of it kept) pays
-   *  for the account's storage.
+   *  as path, and `payer` is the address of that key. The whole deposit (at least 0.01 NEAR) becomes the
+   *  owner's storage balance, and the account's own storage is paid from it.
    * modifiers: payable
    */
   open_account: { args: { payer: string }; result: undefined };
-  /** Admin only: stop accepting decisions signed by this enclave key. */
+  /**
+   * Admin only, with exactly 1 yoctoNEAR: stop accepting decisions signed by this enclave key.
+   * modifiers: payable
+   */
   remove_tee_signer: { args: { signer: Base64VecU8 }; result: undefined };
   /** Owner only: stop all signing for the caller's account. */
   revoke: { args: Record<string, never>; result: undefined };
@@ -127,16 +134,18 @@ export interface PaygateCalls {
   set_policy: { args: { policy: Policy }; result: undefined };
   /**
    * Sign a sign-in message (EIP-191 `personal_sign`) as `owner`'s payer, so a shop can show the buyer its
-   *  orders. Only a message that opens with the sign-in line of a domain in the policy is signed. Such a digest
-   *  starts from the "\x19Ethereum Signed Message" prefix, so it can never be a payment authorization (0x1901).
+   *  orders. Only a message that opens with the sign-in line of a domain in the policy, followed by the payer
+   *  address on its own line, is signed. Such a digest starts from the "\x19Ethereum Signed Message" prefix, so
+   *  it can never be a payment authorization (0x1901).
    */
   sign_login: { args: { owner: string; message: string }; result: unknown };
   /**
    * Sign one EIP-3009 `transferWithAuthorization` from `owner`'s payer to `to`, if `decision` is a fresh
    *  decision of a policy model signed by a listed enclave and the payment fits the policy.
-   *  Returns the MPC signature (`big_r`, `s`, `recovery_id`), or null when the MPC network did not sign,
-   *  in which case the allowance and the decision are restored. A request outside the policy fails the
-   *  transaction.
+   *  Returns the MPC signature (`big_r`, `s`, `recovery_id`), or null when the MPC network did not sign.
+   *  Once the checks pass the decision and the allowance are spent, even if signing then fails: a signature
+   *  can be published on chain after the MPC call timed out, so nothing is ever given back. The owner can set
+   *  a new policy to reset the allowance. A request outside the policy fails the transaction.
    */
   sign_payment: {
     args: {
@@ -151,4 +160,9 @@ export interface PaygateCalls {
     };
     result: unknown;
   };
+  /**
+   * Owner only: add the attached deposit to the caller's storage balance.
+   * modifiers: payable
+   */
+  top_up: { args: Record<string, never>; result: undefined };
 }
