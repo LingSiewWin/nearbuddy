@@ -40,7 +40,7 @@ test("decisionRequest is byte-stable", () => {
   const j = dec(a);
   assert.deepEqual(Object.keys(j), ["model", "temperature", "max_tokens", "messages"]);
   assert.equal(j.temperature, 0);
-  assert.equal(j.max_tokens, 200);
+  assert.equal(j.max_tokens, 400);
   assert.deepEqual(
     j.messages.map((m: { role: string }) => m.role),
     ["system", "user"],
