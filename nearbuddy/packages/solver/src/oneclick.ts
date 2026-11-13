@@ -181,6 +181,9 @@ export async function executeSwap(
   amountYocto: bigint,
   log: (s: string) => void = () => {},
   req?: QuoteRequest,
+  /** Called with the wrap-and-transfer transaction hash as soon as it is sent: from then on NEAR has left the
+   *  account, whatever the later steps do. */
+  onDeposit?: (depositTx: string) => void,
 ): Promise<SwapResult> {
   const t0 = Date.now();
   const q = await quote(req ?? sellNearForUsdcOnChain(amountYocto, account.accountId));
@@ -211,6 +214,7 @@ export async function executeSwap(
   ];
   const xfer = await account.signAndSendTransaction({ receiverId: "wrap.near", actions: acts });
   const t2 = Date.now();
+  onDeposit?.(xfer.transaction.hash);
   log(
     `wrapped and transferred ${amount} yocto to the deposit address in one tx: ${xfer.transaction.hash} (${t2 - t1} ms)`,
   );

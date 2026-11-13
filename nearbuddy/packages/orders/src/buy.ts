@@ -102,7 +102,7 @@ const deps: OrderDeps = {
       })) as boolean,
   },
   balance: usdcBalance,
-  swap: (out) => executeSwap(funding, ceiling, console.log, buyUsdcOnBase(out, fundingId, payer)),
+  swap: (out, onDeposit) => executeSwap(funding, ceiling, console.log, buyUsdcOnBase(out, fundingId, payer), onDeposit),
   secretsDir: `${root}.secrets`,
   ordersDir: `${root}.orders`,
   ...(replay && { replay }),

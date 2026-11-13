@@ -88,6 +88,8 @@ function fixture(
     account?: GateAccount | null;
     used?: boolean;
     swapFunds?: boolean;
+    /** The swap throws after it sent its deposit. */
+    swapError?: Error;
     wait?: () => Promise<Delivery>;
     /** The contract refuses this signature. The fake rail then wraps the error the way the payment library does. */
     refuse?: { method: "sign_payment" | "sign_login"; reason: string; tx: string };
@@ -137,8 +139,10 @@ function fixture(
       return { address: PAYER, signMessage: sign, signTypedData: sign } as unknown as Payer;
     },
     balance: async () => held,
-    swap: async (out) => {
+    swap: async (out, onDeposit) => {
       seen.swaps.push(out);
+      onDeposit("DEPOSITTX");
+      if (o.swapError) throw o.swapError;
       if (o.swapFunds !== false) held += out;
       return { depositTx: "DEPOSITTX" };
     },
@@ -398,8 +402,20 @@ test("a payer still short after the swap is not paid for", async () => {
   const { deps, seen } = fixture(BUY, { swapFunds: false });
   const r = await placeOrder("a KFC voucher", deps);
   assert.equal(r.status, "failed");
-  assert.match(r.reason ?? "", /swap did not fund the payer/);
+  assert.match(r.reason ?? "", /^deposited; .*swap did not fund the payer.*may still complete.*DEPOSITTX/);
   assert.equal(r.near.deposit, "DEPOSITTX");
+  assert.equal(seen.paid, 0);
+});
+
+test("a swap that throws after its deposit leaves the deposit hash on the receipt", async () => {
+  const { deps, seen } = fixture(BUY, { swapError: new Error("1click status unreachable") });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "failed");
+  assert.equal(r.near.deposit, "DEPOSITTX");
+  assert.match(
+    r.reason ?? "",
+    /^deposited; the swap failed \(1click status unreachable\).*may still complete.*DEPOSITTX/,
+  );
   assert.equal(seen.paid, 0);
 });
 

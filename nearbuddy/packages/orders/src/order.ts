@@ -49,8 +49,9 @@ export interface OrderDeps {
   /** Unix seconds; defaults to the clock. */
   nowSec?: () => number;
   balance(address: `0x${string}`): Promise<bigint>;
-  /** Buys `usdcOut` USDC base units onto the payer's address. */
-  swap(usdcOut: bigint): Promise<{ depositTx: string }>;
+  /** Buys `usdcOut` USDC base units onto the payer's address. `onDeposit` gets the NEAR transaction as soon as it is
+   *  sent: from then on NEAR has left the funding account, whatever happens next. */
+  swap(usdcOut: bigint, onDeposit: (depositTx: string) => void): Promise<{ depositTx: string }>;
   /** Vouchers: `order-<invoice>.json`, mode 0600. */
   secretsDir: string;
   /** Receipts: `<id>.json`. */
@@ -181,6 +182,10 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
   /** The payment settled: whatever fails after that must say where the voucher can still be fetched. */
   const paid = (what: string) => `paid; ${what}; the voucher can be fetched from ${r.rail} with invoice ${r.invoiceId}`;
 
+  /** NEAR left the funding account: whatever fails after that must say where to look. */
+  const deposited = (what: string) =>
+    `deposited; ${what}; the 1Click swap may still complete: look up the deposit tx ${r.near.deposit} (NEAR, funding account)`;
+
   /** Set when the views say the contract will refuse; the refusal text is then appended to it. */
   let precheck: string | undefined;
   const refused = (text: string) => done("refused", precheck ? `${precheck}; contract: ${text}` : text);
@@ -251,15 +256,23 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
 
     // Buy only what the payer is short of; an earlier run can leave a few cents behind.
     if (held < invoice.priceUsdc && !problem) {
-      const swap = await leg("swap", async () => {
-        const s = await deps.swap(invoice.priceUsdc - held);
-        for (let i = 0; i < 30 && (await deps.balance(deps.payer)) < invoice.priceUsdc; i++)
-          await new Promise((res) => setTimeout(res, deps.pollMs ?? 2_000));
-        return s;
-      });
-      r.near.deposit = swap.depositTx;
+      try {
+        await leg("swap", async () => {
+          await deps.swap(invoice.priceUsdc - held, (hash) => {
+            r.near.deposit = hash;
+          });
+          for (let i = 0; i < 30 && (await deps.balance(deps.payer)) < invoice.priceUsdc; i++)
+            await new Promise((res) => setTimeout(res, deps.pollMs ?? 2_000));
+        });
+      } catch (e) {
+        if (!r.near.deposit) throw e;
+        return done("failed", deposited(`the swap failed (${(e as Error).message})`));
+      }
       if ((await deps.balance(deps.payer)) < invoice.priceUsdc)
-        return done("failed", "the swap did not fund the payer: its USDC balance is still short, nothing was paid");
+        return done(
+          "failed",
+          deposited("the swap did not fund the payer: its USDC balance is still short, nothing was paid"),
+        );
     }
 
     stage = "pay";
