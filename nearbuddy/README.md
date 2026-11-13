@@ -160,7 +160,7 @@ that was the front page, is at `/terminal`.
 Checks: `web/app/__tests__/{league,stage,league-route,feed,replay,comments,guest}.test.ts` (39 unit tests; real fixtures: a
 `submit_completion` of duel 5, a Coinbase candle response, and logins signed with real ed25519 keys),
 `packages/keeper/src/{operator,serve}.test.ts` (23 tests against a fake chain and clock) and
-`web/tests/league.spec.ts` (27 browser tests).
+`web/tests/league.spec.ts` (28 browser tests).
 
 ## The AI part
 
