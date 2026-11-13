@@ -85,7 +85,21 @@ const deps: OrderDeps = {
   gate,
   owner,
   payer,
-  signer: (decision, log) => gateSigner(agent, gate, { owner, payer }, decision, log) as Payer,
+  signer: (decision, onTx) => gateSigner(agent, gate, { owner, payer }, decision, console.log, onTx) as Payer,
+  gateView: {
+    account: async (o) =>
+      (await sendProvider.callFunction({
+        contractId: gate,
+        method: "get_account",
+        args: { owner: o },
+      })) as GateAccount | null,
+    isDecisionUsed: async (proof_hash) =>
+      (await sendProvider.callFunction({
+        contractId: gate,
+        method: "is_decision_used",
+        args: { proof_hash },
+      })) as boolean,
+  },
   balance: usdcBalance,
   swap: (out) => executeSwap(funding, ceiling, console.log, buyUsdcOnBase(out, fundingId, payer)),
   secretsDir: `${root}.secrets`,

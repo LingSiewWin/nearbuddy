@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { NearAi } from "../../keeper/src/nearai.ts";
+import type { Account as GateAccount, Policy } from "../../protocol/src/abi/paygate.ts";
 import type { Payer } from "../../solver/src/bitrefill.ts";
 import { GateRefused } from "../../solver/src/paygate.ts";
 import { type OrderDeps, placeOrder } from "./order.ts";
@@ -50,7 +51,34 @@ function fakeAi(decision: object) {
   return { ai, calls };
 }
 
-function fixture(decision: object, o: { price?: bigint; held?: bigint; payError?: Error } = {}) {
+const POLICY: Policy = {
+  agent: "agent.testnet",
+  allowance: "3000000",
+  allowed_payees: [],
+  expires_at: "4102444800",
+  login_domains: [],
+  models: [MODEL],
+  per_payment_cap: "1500000",
+};
+const NOW = 1_800_000_000;
+const account = (policy: Partial<Policy> | null = {}): GateAccount => ({
+  payer: PAYER,
+  policy: policy && { ...POLICY, ...policy },
+  storage_balance: "1000000000000000000000",
+});
+
+function fixture(
+  decision: object,
+  o: {
+    price?: bigint;
+    held?: bigint;
+    payError?: Error;
+    account?: GateAccount | null;
+    used?: boolean;
+    swapFunds?: boolean;
+    wait?: () => Promise<Delivery>;
+  } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "order-test-"));
   const { ai, calls } = fakeAi(decision);
   let held = o.held ?? 0n;
@@ -69,7 +97,7 @@ function fixture(decision: object, o: { price?: bigint; held?: bigint; payError?
       if (o.payError) throw o.payError;
       return "0xBASETX";
     },
-    wait: async (): Promise<Delivery> => ({ status: "complete", delivered: true, secret: SECRET }),
+    wait: o.wait ?? (async (): Promise<Delivery> => ({ status: "complete", delivered: true, secret: SECRET })),
   };
   const deps: OrderDeps = {
     ai,
@@ -78,17 +106,23 @@ function fixture(decision: object, o: { price?: bigint; held?: bigint; payError?
     gate: "gate.testnet",
     owner: "owner.testnet",
     payer: PAYER,
-    signer: (d, log) => {
+    signer: (d, onTx) => {
       seen.signers.push(d !== undefined);
-      log(d ? "paygate sign_payment: NEAR tx PAYTX (3 ms)" : "paygate sign_login: NEAR tx LOGINTX (3 ms)");
+      if (d) onTx("sign_payment", "PAYTX");
+      else onTx("sign_login", "LOGINTX");
       return { address: PAYER } as unknown as Payer;
     },
     balance: async () => held,
     swap: async (out) => {
       seen.swaps.push(out);
-      held += out;
+      if (o.swapFunds !== false) held += out;
       return { depositTx: "DEPOSITTX" };
     },
+    gateView: {
+      account: async () => (o.account === undefined ? account() : o.account),
+      isDecisionUsed: async () => o.used ?? false,
+    },
+    nowSec: () => NOW,
     secretsDir: join(dir, ".secrets"),
     ordersDir: join(dir, ".orders"),
     pollMs: 0,
@@ -161,12 +195,14 @@ test("a payer that already holds the price swaps nothing", async () => {
 test("a refusal by the contract is recorded with its NEAR transaction", async () => {
   // x402 wraps the signer's error: the refusal is found in the cause chain
   const payError = new Error("payment failed", { cause: new GateRefused("policy: over the cap", "REFUSEDTX") });
-  const { deps } = fixture(BUY, { payError });
+  const { deps, seen } = fixture(BUY, { payError });
   const r = await placeOrder("a KFC voucher", deps);
   assert.equal(r.status, "refused");
   assert.equal(r.near.payment, "REFUSEDTX");
   assert.match(r.reason ?? "", /policy: over the cap/);
   assert.equal(r.baseTx, undefined);
+  // the views said the policy covers it, so the payer was funded before the contract refused
+  assert.deepEqual(seen.swaps, [1_310_000n]);
 });
 
 test("the voucher is written under the secrets directory and is absent from the receipt", async () => {
@@ -208,4 +244,107 @@ test("a failure before any decision still leaves a receipt", async () => {
   assert.equal(r.status, "failed");
   assert.match(r.reason ?? "", /rail down/);
   assert.ok(existsSync(join(deps.ordersDir, `${r.id}.json`)));
+});
+
+/** Each case: the views say the contract will refuse, the payer is empty, so nothing may be swapped or paid. */
+const cannotPay: [string, Parameters<typeof fixture>[1], RegExp][] = [
+  [
+    "price above the cap",
+    { price: 1_340_000n, account: account({ per_payment_cap: "1300000" }) },
+    /policy does not cover.*cap/,
+  ],
+  ["price above the allowance", { account: account({ allowance: "1000000" }) }, /policy does not cover.*allowance/],
+  ["expired policy", { account: account({ expires_at: String(NOW) }) }, /policy does not cover.*expired/],
+  ["model not in the policy", { account: account({ models: ["other-model"] }) }, /policy does not cover.*model/],
+  ["decision already used", { used: true }, /decision was already used/],
+  ["no account", { account: null }, /no paygate account/],
+  ["no policy", { account: account(null) }, /policy does not cover.*no policy/],
+  ["zero storage balance", { account: { ...account(), storage_balance: "0" } }, /storage balance is zero/],
+];
+for (const [name, opts, reason] of cannotPay)
+  test(`${name}: refused before any swap`, async () => {
+    const { deps, seen } = fixture(BUY, opts);
+    const r = await placeOrder("a KFC voucher", deps);
+    assert.equal(r.status, "refused");
+    assert.match(r.reason ?? "", reason);
+    assert.equal(seen.swaps.length, 0);
+    assert.equal(seen.paid, 0);
+    assert.equal(r.near.payment, undefined);
+  });
+
+test("a policy that cannot pay still asks the contract when the payer already holds the price, and never swaps", async () => {
+  const payError = new GateRefused("this decision was already used", "REFUSEDTX");
+  const { deps, seen } = fixture(BUY, { used: true, held: 2_000_000n, payError });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "refused");
+  assert.equal(r.near.payment, "REFUSEDTX");
+  assert.equal(seen.paid, 1);
+  assert.equal(seen.swaps.length, 0);
+});
+
+test("a payer still short after the swap is not paid for", async () => {
+  const { deps, seen } = fixture(BUY, { swapFunds: false });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "failed");
+  assert.match(r.reason ?? "", /swap did not fund the payer/);
+  assert.equal(r.near.deposit, "DEPOSITTX");
+  assert.equal(seen.paid, 0);
+});
+
+const FETCH = /^paid; .*voucher can be fetched from fake with invoice inv-1/;
+
+test("a wait that throws after payment says the order was paid", async () => {
+  const { deps } = fixture(BUY, {
+    wait: async () => {
+      throw new Error("timed out");
+    },
+  });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "failed");
+  assert.match(r.reason ?? "", FETCH);
+  assert.match(r.reason ?? "", /timed out/);
+  assert.equal(r.baseTx, "0xBASETX");
+});
+
+test("a delivery that is not complete says the order was paid", async () => {
+  const { deps } = fixture(BUY, { wait: async () => ({ status: "pending", delivered: false, secret: SECRET }) });
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "failed");
+  assert.match(r.reason ?? "", FETCH);
+  assert.match(r.reason ?? "", /delivery ended pending/);
+});
+
+test("a voucher file that cannot be written says the order was paid", async () => {
+  const { deps, dir } = fixture(BUY);
+  writeFileSync(join(dir, "blocker"), "x");
+  deps.secretsDir = join(dir, "blocker", ".secrets"); // a path under a file
+  const r = await placeOrder("a KFC voucher", deps);
+  assert.equal(r.status, "failed");
+  assert.match(r.reason ?? "", FETCH);
+  assert.match(r.reason ?? "", /could not be written/);
+});
+
+test("the secrets directory is created private", async () => {
+  const { deps, dir } = fixture(BUY);
+  await placeOrder("a KFC voucher", deps);
+  assert.equal(statSync(join(dir, ".secrets")).mode & 0o777, 0o700);
+});
+
+test("a receipt that cannot be written is printed and returned", async () => {
+  const { deps, dir } = fixture(BUY);
+  writeFileSync(join(dir, "blocker"), "x");
+  deps.ordersDir = join(dir, "blocker", ".orders");
+  const out: string[] = [];
+  const log = console.log;
+  console.log = (s: string) => void out.push(s);
+  let r: Awaited<ReturnType<typeof placeOrder>>;
+  try {
+    r = await placeOrder("a KFC voucher", deps);
+  } finally {
+    console.log = log;
+  }
+  assert.equal(r.status, "delivered");
+  assert.match(out[0] ?? "", /receipt file could not be written/);
+  assert.equal(JSON.parse(out[1] ?? "").id, r.id);
+  assert.ok(!out.join("").includes("VOUCHER-CODE-12345"));
 });

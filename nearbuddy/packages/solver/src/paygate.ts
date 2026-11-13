@@ -42,9 +42,15 @@ export function gateSigner(
   account: { owner: string; payer: Hex },
   decision?: { model: string; proof: TeeProof },
   log: (s: string) => void = () => {},
+  /** Called once per successful signature with the NEAR transaction that carried it. */
+  onTx?: (method: "sign_payment" | "sign_login", nearTx: string) => void,
 ): GateSigner {
   const { owner, payer } = account;
-  async function sign(methodName: string, args: Record<string, string | TeeProof>, digest: Hex): Promise<Hex> {
+  async function sign(
+    methodName: "sign_payment" | "sign_login",
+    args: Record<string, string | TeeProof>,
+    digest: Hex,
+  ): Promise<Hex> {
     const t0 = Date.now();
     let result: Awaited<ReturnType<Account["callFunctionRaw"]>>;
     try {
@@ -74,6 +80,7 @@ export function gateSigner(
         `paygate signature recovers to ${signer}, expected ${payer}: client and contract disagree on the digest`,
       );
     log(`paygate ${methodName}: NEAR tx ${nearTx} (${Date.now() - t0} ms)`);
+    onTx?.(methodName, nearTx);
     return serializeSignature(signature);
   }
 

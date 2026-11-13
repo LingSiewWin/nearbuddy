@@ -5,8 +5,9 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { NearAi } from "../../keeper/src/nearai.ts";
+import type { Account as GateAccount } from "../../protocol/src/abi/paygate.ts";
 import { b64 } from "../../protocol/src/index.ts";
-import type { TeeProof } from "../../protocol/src/intent.ts";
+import { proofHash, type TeeProof } from "../../protocol/src/intent.ts";
 import type { Payer } from "../../solver/src/bitrefill.ts";
 import { GateRefused } from "../../solver/src/paygate.ts";
 import { attest, decisionRequest, parseDecision, parseSearch, searchRequest } from "./intake.ts";
@@ -32,8 +33,19 @@ export interface OrderDeps {
   owner: string;
   /** The EVM address the gate's key controls. */
   payer: `0x${string}`;
-  /** A signer for the payer. No decision: sign-in only. With one: it can also sign a payment. `log` receives the signer's lines. */
-  signer(decision: { model: string; proof: TeeProof } | undefined, log: (s: string) => void): Payer;
+  /** A signer for the payer. No decision: sign-in only. With one: it can also sign a payment. `onTx` gets the NEAR transaction of each signature. */
+  signer(
+    decision: { model: string; proof: TeeProof } | undefined,
+    onTx: (method: "sign_payment" | "sign_login", nearTx: string) => void,
+  ): Payer;
+  /** The gate's views. Read before any swap, so a policy that cannot pay never costs NEAR. */
+  gateView: {
+    account(owner: string): Promise<GateAccount | null>;
+    /** `proofHash` is base64 of sha256(request hash and response hash). */
+    isDecisionUsed(proofHash: string): Promise<boolean>;
+  };
+  /** Unix seconds; defaults to the clock. */
+  nowSec?: () => number;
   balance(address: `0x${string}`): Promise<bigint>;
   /** Buys `usdcOut` USDC base units onto the payer's address. */
   swap(usdcOut: bigint): Promise<{ depositTx: string }>;
@@ -62,6 +74,30 @@ const NO_PROOF: TeeProof = { kind: 2, request_hash: "", response_hash: "", signe
 /** x402 wraps the signer's error; the contract's refusal is somewhere in the cause chain. */
 function refusal(e: unknown): GateRefused | undefined {
   for (let c = e; c; c = (c as { cause?: unknown }).cause) if (c instanceof GateRefused) return c;
+  return undefined;
+}
+
+/** Why the contract would refuse this payment, read from its views; undefined when it should sign. */
+async function policyProblem(
+  deps: OrderDeps,
+  decision: { model: string; proof: TeeProof },
+  price: bigint,
+): Promise<string | undefined> {
+  const account = await deps.gateView.account(deps.owner);
+  if (!account) return `no paygate account is open for ${deps.owner}`;
+  const p = account.policy;
+  if (!p) return "policy does not cover the payment: the account has no policy";
+  if (BigInt(account.storage_balance) === 0n) return "the account's storage balance is zero";
+  const now = (deps.nowSec ?? (() => Math.floor(Date.now() / 1000)))();
+  if (now >= Number(p.expires_at)) return `policy does not cover the payment: it expired at ${p.expires_at}`;
+  if (price > BigInt(p.per_payment_cap))
+    return `policy does not cover the payment: ${usd(price)} is above the per-payment cap ${usd(BigInt(p.per_payment_cap))} USDC`;
+  if (price > BigInt(p.allowance))
+    return `policy does not cover the payment: ${usd(price)} is above the allowance ${usd(BigInt(p.allowance))} USDC`;
+  if (!p.models.includes(decision.model))
+    return `policy does not cover the payment: model ${decision.model} is not in the policy`;
+  const hash = proofHash(b64.strict(decision.proof.request_hash), b64.strict(decision.proof.response_hash));
+  if (await deps.gateView.isDecisionUsed(hash)) return "this decision was already used";
   return undefined;
 }
 
@@ -101,15 +137,20 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
     r.status = status;
     if (reason !== undefined) r.reason = reason;
     legsMs.total = Date.now() - t0;
-    writeReceipt(deps.ordersDir, r);
+    try {
+      writeReceipt(deps.ordersDir, r);
+    } catch (e) {
+      // The order may have moved money: the receipt (it holds no secret) must still reach the operator.
+      console.log(`the receipt file could not be written (${(e as Error).message}); the receipt follows`);
+      console.log(JSON.stringify(r, null, 2));
+    }
     return r;
   };
-  // ponytail: the signer reports its NEAR transaction only through its log line; parse it. Return the hash from the signer if that line changes.
-  const capture = (s: string) => {
-    log(s);
-    const m = /^paygate (sign_login|sign_payment): NEAR tx (\S+)/.exec(s);
-    if (m) r.near[m[1] === "sign_login" ? "login" : "payment"] = m[2] as string;
+  const onTx = (method: "sign_payment" | "sign_login", nearTx: string) => {
+    r.near[method === "sign_login" ? "login" : "payment"] = nearTx;
   };
+  /** The payment settled: whatever fails after that must say where the voucher can still be fetched. */
+  const paid = (what: string) => `paid; ${what}; the voucher can be fetched from ${r.rail} with invoice ${r.invoiceId}`;
 
   let stage: "login" | "pay" | "other" = "other";
   try {
@@ -118,7 +159,7 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
       const rail = pickRail(deps.rails, q.country);
       r.rail = rail.name;
       stage = "login";
-      await rail.open(deps.signer(undefined, capture));
+      await rail.open(deps.signer(undefined, onTx));
       stage = "other";
       return { rail, candidates: await rail.search(q.query, q.country) };
     });
@@ -165,8 +206,13 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
         `invoice price ${usd(invoice.priceUsdc)} is above the limit ${usd(decision.maxPriceUsdc)} USDC`,
       );
 
-    // Buy only what the payer is short of; an earlier run can leave a few cents behind.
+    // The contract enforces its policy only inside sign_payment, after the swap. Read it first: when it cannot pay,
+    // nothing is swapped. A payer that already holds the price still asks the contract, so the refusal is on chain.
     const held = await deps.balance(deps.payer);
+    const problem = await policyProblem(deps, a, invoice.priceUsdc);
+    if (problem && held < invoice.priceUsdc) return done("refused", problem);
+
+    // Buy only what the payer is short of; an earlier run can leave a few cents behind.
     if (held < invoice.priceUsdc) {
       const swap = await leg("swap", async () => {
         const s = await deps.swap(invoice.priceUsdc - held);
@@ -176,18 +222,22 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
       });
       r.near.deposit = swap.depositTx;
       if ((await deps.balance(deps.payer)) < invoice.priceUsdc)
-        return done("failed", "the payer's USDC balance is still short after the swap");
+        return done("failed", "the swap did not fund the payer: its USDC balance is still short, nothing was paid");
     }
 
     stage = "pay";
-    r.baseTx = await leg("pay", () => rail.pay(deps.signer({ model: a.model, proof: a.proof }, capture), invoice));
+    r.baseTx = await leg("pay", () => rail.pay(deps.signer({ model: a.model, proof: a.proof }, onTx), invoice));
     stage = "other";
     const delivery = await leg("wait", () => rail.wait(invoice, log));
-    mkdirSync(deps.secretsDir, { recursive: true });
-    writeFileSync(join(deps.secretsDir, `order-${invoice.id}.json`), JSON.stringify(delivery.secret, null, 2), {
-      mode: 0o600,
-    });
-    return delivery.delivered ? done("delivered") : done("failed", `delivery ended ${delivery.status}`);
+    try {
+      mkdirSync(deps.secretsDir, { recursive: true, mode: 0o700 });
+      writeFileSync(join(deps.secretsDir, `order-${invoice.id}.json`), JSON.stringify(delivery.secret, null, 2), {
+        mode: 0o600,
+      });
+    } catch (e) {
+      return done("failed", paid(`the voucher file could not be written (${(e as Error).message})`));
+    }
+    return delivery.delivered ? done("delivered") : done("failed", paid(`delivery ended ${delivery.status}`));
   } catch (e) {
     const gate = refusal(e);
     if (gate) {
@@ -195,6 +245,8 @@ export async function placeOrder(sentence: string, deps: OrderDeps): Promise<Rec
       return done("refused", gate.message);
     }
     const m = /paygate refused: [^\n]*/.exec(String((e as Error)?.message ?? e));
-    return m ? done("refused", m[0]) : done("failed", String((e as Error)?.message ?? e));
+    if (m) return done("refused", m[0]);
+    const msg = String((e as Error)?.message ?? e);
+    return done("failed", r.baseTx ? paid(msg) : msg);
   }
 }

@@ -148,3 +148,22 @@ test("a signer built without a decision refuses a payment and sends nothing", ()
   );
   assert.equal(calls.length, 0);
 });
+
+test("onTx receives the method and the NEAR transaction of each successful signature", async () => {
+  const key = generatePrivateKey();
+  const payer = privateKeyToAccount(key).address;
+  const t = typed(payer);
+  const { agent } = fakeAgent(key, (args) =>
+    "message" in args ? hashMessage(W.login.message) : hashTypedData(t as Parameters<typeof hashTypedData>[0]),
+  );
+  const seen: [string, string][] = [];
+  const onTx = (method: string, tx: string) => void seen.push([method, tx]);
+  await gateSigner(agent, "gate.testnet", { owner, payer }, undefined, undefined, onTx).signMessage({
+    message: W.login.message,
+  });
+  await gateSigner(agent, "gate.testnet", { owner, payer }, decision, undefined, onTx).signTypedData(t);
+  assert.deepEqual(seen, [
+    ["sign_login", "NEARTX"],
+    ["sign_payment", "NEARTX"],
+  ]);
+});
