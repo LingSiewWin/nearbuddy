@@ -12,7 +12,6 @@ Pure data + engines for NearBuddy's ASCII arena. No React, no fetch.
 | `catalog.ts`                         | `board.json` rows → selectable `ModelSpec[]`                                |
 | `arena-types.ts`                     | Creature / tick / theme types                                               |
 | `shapes.ts` / `ramp.ts` / `noise.ts` | Silhouettes (`sampleReef` / prey / shark) + mosaic helpers                  |
-| `sdf.ts`                             | Legacy 2D SDF rasterizer (unwired; superseded by `gaussian3d`)              |
 
 ### Fauna population caps (homepage FPS)
 
