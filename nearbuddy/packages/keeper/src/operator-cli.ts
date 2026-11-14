@@ -1,4 +1,4 @@
-// Operator service: opens, plays and resolves one keyless match at a time on request (operator.ts), for the league
+// Operator service: opens, plays and resolves one keyless match at a time on request (operator.ts), for the arena
 // home's "start match" panel. It holds two keys, so it binds 127.0.0.1 only and POST /match needs OPERATOR_SECRET.
 //
 //   OPERATOR_SECRET=<random> bun run operator --account keeper.testnet
