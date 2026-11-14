@@ -66,3 +66,36 @@ skills-lock.json
 nearbuddy/arena/.github/
 .arena-nested-git-from-cargo-near-new/
 .vercel
+
+# Personal data (2026-11-14): receipts, mail, browser captures. Never in the repo.
+# Tests use made-up emails signed with a test key; real ones live in .secrets/.
+*.eml
+*.mbox
+*.msg
+*.har
+receipts/
+.orders/
+*cookies*.json
+storage-state*.json
+.auth/
+
+# Key material not already covered by *.pem / *.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*-keys/
+*-keys-*/
+
+# Screenshots and exports dropped in the repo root
+/*.png
+/*.jpg
+/*.jpeg
+/*.pdf
+Screenshot*
+Screen Shot*
+
+# Tool folders
+.agents/
+.gstack/
+.superpowers/
