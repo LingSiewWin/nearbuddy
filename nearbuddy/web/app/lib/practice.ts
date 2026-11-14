@@ -22,18 +22,25 @@ export const PRACTICE_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
 export const PRACTICE_MAX_TOKENS = 600;
 
 export const DEFENDERS: { id: Target; name: string; line: string }[] = [
-  { id: "naive", name: "Naive agent", line: "No warning at all. It reads your headline as market telemetry." },
+  {
+    id: "naive",
+    name: "Open telemetry",
+    line: "No warning at all. It reads your headline as market telemetry.",
+  },
   {
     id: "hardened",
-    name: "Hardened agent",
+    name: "Hardened prompt",
     line: "Told that telemetry may be an attack and to check it against the price.",
   },
   {
     id: "arena",
-    name: "Arena agent",
+    name: "Arena request",
     line: "The request the arena contract builds: your headline arrives labelled paid and unverified.",
   },
 ];
+
+/** Home Segmented only: drop hardened from the UI; the API id stays for /enter and tests. */
+export const HOME_DEFENDERS = DEFENDERS.filter((d) => d.id === "naive" || d.id === "arena");
 
 // The recorded moment: 11:16:59 UTC, 28 s before duel 575 closed. The price is the Coinbase candle of the replay's
 // price line then (3.3300); the open is the oracle price the duel opened at (3.32205): +23.9 bps, the largest move the

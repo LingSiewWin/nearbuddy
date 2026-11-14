@@ -2781,20 +2781,6 @@ table.board tbody th {
 .ocean-pill-sep {
   opacity: 0.35;
 }
-.ocean-pill button {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 3px;
-  cursor: pointer;
-  padding: 0;
-}
-.ocean-pill button:hover {
-  opacity: 0.85;
-}
 .ocean-dock {
   position: absolute;
   z-index: 4;

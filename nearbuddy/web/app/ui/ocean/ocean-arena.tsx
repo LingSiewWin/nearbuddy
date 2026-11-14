@@ -1,9 +1,10 @@
 "use client";
-// Hero battle surface: 3D Gaussian ASCII + theme toggle + 2-model dock + audit drawer.
-import { useCallback, useMemo, useState } from "react";
+// Hero battle surface: 3D Gaussian ASCII + 2-model dock + audit drawer.
+// Site light/dark lives in chrome ThemeToggle; this surface follows document data-theme.
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ArenaTheme, ModelAgentState, ModelSpec } from "../../assets/ocean/arena-types";
 import { catalogFromBoard } from "../../assets/ocean/catalog";
-import { ArenaSimulation, seedFromBoard, type BoardModelRow } from "../../assets/ocean/simulation";
+import { ArenaSimulation, type BoardModelRow, seedFromBoard } from "../../assets/ocean/simulation";
 import { useReducedMotion } from "../trace-view";
 import { AsciiOceanCanvas } from "./ascii-ocean-canvas";
 import { AuditDrawer } from "./audit-drawer";
@@ -22,6 +23,30 @@ function pickOpeningPair(catalog: ModelSpec[]): [ModelSpec, ModelSpec] | null {
   return [ranked[0]!, ranked[ranked.length - 1]!];
 }
 
+function readSiteTheme(): ArenaTheme {
+  const t = document.documentElement.dataset.theme;
+  if (t === "light" || t === "dark") return t;
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+/** Follow the site ThemeToggle (`data-theme` on <html>), not a separate hero control. */
+function useSiteTheme(): ArenaTheme {
+  const [theme, setTheme] = useState<ArenaTheme>("dark");
+  useEffect(() => {
+    const sync = () => setTheme(readSiteTheme());
+    sync();
+    const mo = new MutationObserver(sync);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    mq.addEventListener("change", sync);
+    return () => {
+      mo.disconnect();
+      mq.removeEventListener("change", sync);
+    };
+  }, []);
+  return theme;
+}
+
 export function OceanArena({ models, datasetRows = 0, className }: OceanArenaProps) {
   const catalog = useMemo(() => catalogFromBoard(models), [models]);
   const seeds = useMemo(() => seedFromBoard(models), [models]);
@@ -35,15 +60,14 @@ export function OceanArena({ models, datasetRows = 0, className }: OceanArenaPro
 
   const calm = useReducedMotion();
   const thinkSec = calm ? 0 : undefined;
-  const [theme, setTheme] = useState<ArenaTheme>("dark");
+  const theme = useSiteTheme();
   const [inspectedId, setInspectedId] = useState<string | null>(null);
   const [, setRev] = useState(0);
   const bump = useCallback(() => setRev((n) => n + 1), []);
 
   const left = simulation.creatures[0];
   const right = simulation.creatures[1];
-  const inspected =
-    simulation.creatures.find((c) => c.modelId === inspectedId) ?? null;
+  const inspected = simulation.creatures.find((c) => c.modelId === inspectedId) ?? null;
 
   const onSelect = (m: ModelAgentState | null) => {
     setInspectedId(m ? m.modelId : null);
@@ -65,24 +89,6 @@ export function OceanArena({ models, datasetRows = 0, className }: OceanArenaPro
         <span>
           <strong>{datasetRows.toLocaleString("en-US")}</strong> signed decisions on record
         </span>
-        <span className="ocean-pill-sep" aria-hidden>
-          |
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            simulation.triggerSimRound(undefined, 0, thinkSec);
-            bump();
-          }}
-        >
-          Sim round
-        </button>
-        <span className="ocean-pill-sep" aria-hidden>
-          |
-        </span>
-        <button type="button" onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}>
-          {theme === "dark" ? "Light grid" : "Abyssal dark"}
-        </button>
       </header>
 
       <AuditDrawer model={inspected} theme={theme} onClose={() => setInspectedId(null)} />

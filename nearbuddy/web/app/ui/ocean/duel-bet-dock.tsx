@@ -1,6 +1,6 @@
 "use client";
 // Frosted 2-model duel dock. Stake chips drive the local sim only — not on-chain payouts.
-import { useState, type FormEvent } from "react";
+import { type FormEvent, useState } from "react";
 import type { ArenaTheme, CreatureBody, ModelSpec } from "../../assets/ocean/arena-types";
 
 const TIER_LABELS: Record<string, string> = {
@@ -51,6 +51,7 @@ export function DuelBetDock({
     const heldPct = ((model.held / Math.max(1, model.tested)) * 100).toFixed(0);
     const odds = (1 / Math.max(0.08, model.poolShare)).toFixed(2);
     return (
+      // biome-ignore lint/a11y/useSemanticElements: the card holds a select, which a button element may not contain; it handles Enter and Space itself
       <div
         key={model.modelId}
         className={`ocean-dock-card${chosen ? " is-chosen" : ""}`}
@@ -115,7 +116,12 @@ export function DuelBetDock({
       <form className="ocean-dock-bet" onSubmit={submit}>
         <div className="ocean-dock-chips">
           {CHIPS.map((n) => (
-            <button key={n} type="button" className={stake === String(n) ? "is-on" : undefined} onClick={() => setStake(String(n))}>
+            <button
+              key={n}
+              type="button"
+              className={stake === String(n) ? "is-on" : undefined}
+              onClick={() => setStake(String(n))}
+            >
               {n}
             </button>
           ))}
@@ -124,15 +130,15 @@ export function DuelBetDock({
             min={1}
             value={stake}
             onChange={(e) => setStake(e.target.value)}
-            aria-label="Sim stake amount"
+            aria-label="Stake amount"
           />
         </div>
         <p className="ocean-dock-note">
-          Sim stake on <strong>{active.label}</strong> · pool weight {odds}× — kinematics only, not a NEAR payout.{" "}
+          Stake on <strong>{active.label}</strong> · pool weight {odds}× — kinematics only, not a NEAR payout.{" "}
           <a href="/enter">Enter a real agent</a> or <a href="/board">audit counts</a>.
         </p>
         <button type="submit" className="ocean-dock-go">
-          Run sim round
+          Run a round
         </button>
       </form>
     </div>

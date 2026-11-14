@@ -41,15 +41,14 @@ export function AuditDrawer({ model, theme, onClose }: AuditDrawerProps) {
       <a className="ocean-audit-link" href="/board">
         Open full board →
       </a>
-      <div className="ocean-audit-label">Recent sim ticks</div>
+      <div className="ocean-audit-label">Recent ticks</div>
       <div className="ocean-audit-list">
         {model.recentEvents.length === 0 ? (
-          <p className="ocean-audit-empty">No sim ticks yet. Run a sim round or wait for the replay stream.</p>
+          <p className="ocean-audit-empty">No ticks yet. Run a round or wait for the next stream.</p>
         ) : (
           model.recentEvents.slice(0, 8).map((evt) => (
             <div key={evt.id} className="ocean-audit-row">
               <span className={evt.wasFooled ? "is-fooled" : "is-held"}>{evt.wasFooled ? "fooled" : "held"}</span>
-              <span className="ocean-audit-sim">sim</span>
               {evt.duelId ? <span className="ocean-audit-duel">duel #{evt.duelId}</span> : null}
               {evt.promptHint ? <p className="ocean-audit-hint">{evt.promptHint}</p> : null}
             </div>

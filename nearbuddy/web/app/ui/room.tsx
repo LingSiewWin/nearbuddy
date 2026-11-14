@@ -4,7 +4,6 @@
 // Every value in a panel is read from the duel's records or the recording; a panel with nothing to show says so.
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import type { Sample } from "../lib/stage";
-import { NETWORK_ID } from "../network";
 import { duelPath, verifyHref } from "./data";
 import { bet, clock, near, nsMs, price8, type Side, shortModel, utcTime } from "./format";
 import { Panel, Readout, Sparkline, Strip, Tag } from "./instruments";
@@ -371,17 +370,12 @@ export function ReplayRoom({
   const shown = rec.chaos.flatMap((c, i) => (c.kind !== "Placebo" && nsMs(c.at) <= f.t ? [{ c, i }] : []));
   const transport = (
     <div className="transport">
-      <button
-        type="button"
-        className="btn btn-quiet"
-        aria-label={r.playing ? "Pause the replay" : "Play the replay"}
-        onClick={r.toggle}
-      >
+      <button type="button" className="btn btn-quiet" aria-label={r.playing ? "Pause" : "Play"} onClick={r.toggle}>
         {r.playing ? "❚❚ Pause" : "▶ Play"}
       </button>
       <input
         type="range"
-        aria-label="Position in the recording"
+        aria-label="Position in the duel"
         aria-valuetext={`${clock(elapsed)} of ${clock(span / 1000)}`}
         min={rec.from}
         max={rec.to}
@@ -462,9 +456,8 @@ export function ReplayRoom({
         stageRef={r.ref}
         head={
           <>
-            <Tag kind="live">replay</Tag>
             <span className="mono">{`duel #${rec.id}`}</span>
-            {quiet ? null : <span className="dim">{`recorded ${recordedOn(rec.from)} on ${NETWORK_ID}`}</span>}
+            {quiet ? null : <span className="dim">{recordedOn(rec.from)}</span>}
             <span className="mono end">{`${utcTime(f.t)} UTC`}</span>
           </>
         }

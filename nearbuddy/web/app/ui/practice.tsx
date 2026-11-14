@@ -1,14 +1,14 @@
 "use client";
-// The practice round on the home page: choose a defender, see what it is betting, type a fake headline to push it
+// Try a headline on the home page: choose a request shape, see what it is betting, type a fake headline to push it
 // the other way, and a real model answers in seconds (POST /api/practice). No chain, no money, no duel, and nothing is
 // counted anywhere but in this browser's session tally. It is drawn as a Trace like a duel's, inside a dashed frame
-// with a PRACTICE tag so it cannot be taken for the replay or a live duel. The wait is real: the hatched stretch
+// inside a dashed frame so it cannot be taken for a live duel. The wait is real: the hatched stretch
 // grows with the clock, 20 s across.
 import { useEffect, useRef, useState } from "react";
 import { checkHeadline, MAX_HEADLINE, utf8Bytes } from "../lib/inject";
 import {
   askLine,
-  DEFENDERS,
+  HOME_DEFENDERS,
   NOISE_SENTENCE,
   type PracticeBaseline,
   type PracticeCall,
@@ -114,8 +114,8 @@ function Signature({ round }: { round: PracticeRound }) {
           </p>
         ))}
         <p className="note">
-          The enclave signs the model id, the hash of the exact request and the hash of the exact reply. Practice
-          requests are not written to any chain.
+          The enclave signs the model id, the hash of the exact request and the hash of the exact reply. These requests
+          are not written to any chain.
         </p>
       </Details>
     </div>
@@ -188,7 +188,7 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
 
   const bad = checkHeadline(text);
   const over = utf8Bytes(text) - MAX_HEADLINE;
-  const defender = DEFENDERS.find((d) => d.id === target) ?? DEFENDERS[0];
+  const defender = HOME_DEFENDERS.find((d) => d.id === target) ?? HOME_DEFENDERS[0];
   const base = known && known !== "none" ? known : null;
   const push: Side | null = base ? (base.side === "Long" ? "Short" : "Long") : null;
 
@@ -222,7 +222,7 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
         setOff(true);
         setPhase({ at: "write" });
       } else if (j.code === "limited")
-        missed(`That is enough practice from here for now. The next round opens in ${clock(j.wait_s ?? 60)}.`, false);
+        missed(`That is enough from here for now. The next round opens in ${clock(j.wait_s ?? 60)}.`, false);
       else if (j.code === "bad_input") {
         setFieldError(headlineError(j.error ?? "", Math.max(0, over)));
         setPhase({ at: "write" });
@@ -250,10 +250,9 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
   );
 
   return (
-    <section id="practice" className="practice" aria-label="Practice round">
+    <section id="practice" className="practice" aria-label="Try a headline">
       <header className="practice-head">
-        <h2 className="t-label">{second ? "Or fool one right now" : "Fool a model now"}</h2>
-        <Tag kind="live">off chain</Tag>
+        <h2 className="t-label">{second ? "Or try a headline now" : "Try a headline now"}</h2>
         {tally.tries ? (
           <span className="practice-tally mono">{`You: ${tally.fooled} fooled of ${tally.tries} ${tally.tries === 1 ? "try" : "tries"}`}</span>
         ) : null}
@@ -262,9 +261,9 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
       <div className="practice-body">
         <div className="practice-form" ref={field}>
           <Segmented
-            label="Who to lie to"
+            label="Which request"
             value={target}
-            options={DEFENDERS.map((d) => ({ value: d.id, label: d.name }))}
+            options={HOME_DEFENDERS.map((d) => ({ value: d.id, label: d.name }))}
             onChange={(t) => {
               setTarget(t);
               if (phase.at !== "waiting") setPhase({ at: "write" });
@@ -273,7 +272,7 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
           />
           {off ? (
             <p className="practice-off" role="status">
-              Practice is switched off here: it needs the server's model key, and this server has none.
+              This try is switched off here: it needs the server's model key, and this server has none.
             </p>
           ) : base ? (
             <p className="practice-ask" role="status">
@@ -298,6 +297,12 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
               Reading what it is betting…
             </p>
           )}
+          {phase.at === "write" && target === "arena" && !off ? (
+            <p className="practice-ask note" role="status">
+              This is the arena&apos;s own request: your headline arrives labelled paid and unverified, so holds are
+              common.
+            </p>
+          ) : null}
           <Field
             label="Your fake headline"
             face="serif"
@@ -319,12 +324,12 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
             disabled={off || !!bad || !base}
             busy={waiting ? "Asking the model…" : null}
           >
-            Lie to it
+            Plant a headline
           </Button>
           {phase.at === "write" ? (
             <>
               <div className="practice-trace">
-                <Trace variant="mini" name={`Practice, ${defender?.name}`} input={input} time={noClock} />
+                <Trace variant="mini" name={defender?.name ?? "Open telemetry"} input={input} time={noClock} />
               </div>
               {push ? (
                 <Details label="Example headlines">
@@ -348,7 +353,7 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
               ) : null}
               <Details label="How this works">
                 <ul className="practice-who">
-                  {DEFENDERS.map((d) => (
+                  {HOME_DEFENDERS.map((d) => (
                     <li key={d.id}>
                       <b>{d.name}.</b> {d.line}
                     </li>
@@ -373,10 +378,9 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
             <blockquote className="hl">{`“${phase.headline}”`}</blockquote>
             <div className="practice-trace">
               <p className="stage-who">
-                <Tag kind="live">practice</Tag>
                 <span>{`${defender?.name} · ${shortModel(done?.round.model ?? "")}`.replace(/ · $/, "")}</span>
               </p>
-              <Trace variant="stage" name={`Practice, ${defender?.name}`} input={input} time={noClock} />
+              <Trace variant="stage" name={defender?.name ?? "Open telemetry"} input={input} time={noClock} />
             </div>
             {waiting ? (
               <p role="status">

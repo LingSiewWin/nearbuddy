@@ -11,16 +11,16 @@ import { useSite } from "./ui/chrome";
 import { type DuelRow, duelPath, type History, traceOf, useDuel, usePrice, verifyHref } from "./ui/data";
 import { bet, near, nsMs, shortModel } from "./ui/format";
 import { Chapters } from "./ui/hero";
-import { InteractiveGrid } from "./ui/interactive-grid";
 import { Panel, Readout, Strip, Tag } from "./ui/instruments";
+import { InteractiveGrid } from "./ui/interactive-grid";
 import { Button, Countdown, Details, LinkButton, StatusBar, useNow } from "./ui/kit";
 import { OceanArena } from "./ui/ocean";
 import { PracticePanel } from "./ui/practice";
-import { StackReveal } from "./ui/stack-reveal";
 import { RECORDED } from "./ui/replay";
 import { MachineQuote } from "./ui/result";
 import { BetTag, ChecksPanel, PricePanel, ReplayActions, ReplayRoom, Stage } from "./ui/room";
 import { isRunning } from "./ui/rows";
+import { StackReveal } from "./ui/stack-reveal";
 import { recordTrace, type TraceIn } from "./ui/trace";
 import { Trace } from "./ui/trace-view";
 import { pickLive } from "./ui/verdict";
@@ -222,7 +222,7 @@ export default function Home({ practice }: { practice: boolean }) {
             ),
           },
           {
-            title: shown && !replay ? "The live duel" : `Duel #${RECORDED.id}, replayed`,
+            title: shown && !replay ? "The live duel" : `Duel #${RECORDED.id}`,
             node: () =>
               shown && !replay ? (
                 <LiveRoom
