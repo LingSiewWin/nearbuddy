@@ -11,7 +11,7 @@ Each component keeps its own detail and its proof links:
 | Agents and defences | [`agents/README.md`](agents/README.md) | Prompt profiles, `cue_guard`, the fact-check judge, how to run your own agent |
 | Lab | [`lab/README.md`](lab/README.md), [`lab/market/`](lab/market/README.md), [`lab/look/`](lab/look/README.md), [`lab/reroll/`](lab/reroll/README.md), [`lab/live/`](lab/live/README.md) | Pre-registered experiments and their results |
 | Dataset | [`dataset/README.md`](dataset/README.md) | 2,799 decisions with request bytes, response bytes and enclave signatures |
-| Web | [`web/README.md`](web/README.md) | Routes, the hosted site, the earlier league page |
+| Web | [`web/README.md`](web/README.md) | Routes, the hosted site, the live match on `/arena` |
 | Prediction board | [`predict/README.md`](predict/README.md) | The no-stake prediction contract around duels |
 | Headline detectors | [`sentinel/README.md`](sentinel/README.md) | Rules, embeddings and an LLM judge compared |
 | First generation | [`contract/README.md`](contract/README.md) | The clearinghouse and card guarantor of 2026-11-05, superseded, with a known issue |

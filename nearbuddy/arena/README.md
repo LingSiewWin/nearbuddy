@@ -546,7 +546,7 @@ DUELS=8 TARGET=b bun run spectator           # one attack per new duel at the na
 bun run status                            # processes, chain config, newest duel, balances, batch state (--json, --watch)
 bun run readout -- --since 340 [--out r.md]  # morning readout: duels per pair, enclave and commit-reveal stats, attack splits, parse rate per cap, verify-duel
 (cd web && bun install --frozen-lockfile && bun test app)   # 229 web tests
-bun --cwd web run build && bun --cwd web run start -p 3011   # /arena reads the public RPC, no keys in the browser
+bun --cwd web run build && bun --cwd web run start   # /arena reads the public RPC, no keys in the browser
 bun run real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
 sh scripts/arena-up.sh 3 90               # or all at once: solver + web + three 90-second duels
 nohup scripts/night-loop.sh --until 0530 --rounds 10 --duel-seconds 330 --variants A,B,C --target a --payload-set train \

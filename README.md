@@ -65,7 +65,7 @@ bun run verify-order fixtures/orders/delivered-2026-11-13.json --gate nearbuddy-
 scripts/check-all.sh --fast                 # the merge gate: 18 checks, all PASS. 14 min the first time (it builds five contracts), 4 min after
 ```
 
-**3. See the interface** (optional): `cd web && bun run dev -- -p 3044`, then open http://localhost:3044. With no env
+**3. See the interface** (optional): `cd web && bun run dev`, then open http://localhost:3000. With no env
 file, `/`, `/board`, `/evidence`, `/arena`, `/enter`, `/duel/537` and `/terminal` each answered 200. The hosted site
 https://nearbuddy.vercel.app was still serving the build from before this interface when this was written: there
 `/board` and `/evidence` answer 404 and the other pages answer 200.

@@ -7,10 +7,10 @@ Next.js 16 app. It holds no key: its API routes read contract views over the pub
 ```sh
 bun install --frozen-lockfile
 bun test app                  # 229 pass (2026-11-14)
-bun run dev -- -p 3044        # http://localhost:3044
+bun run dev                   # http://localhost:3000
 ```
 
-Observed 2026-11-14 from a clean clone with no env file: `/`, `/board`, `/evidence`, `/arena`, `/enter`, `/duel/537`, `/terminal` and `/league` each answer 200.
+Observed 2026-11-14 from a clean clone with no env file: `/`, `/board`, `/evidence`, `/arena`, `/enter`, `/duel/537` and `/terminal` each answer 200. Since 2026-11-15 `/league` redirects to `/arena`.
 
 ## Routes on this branch
 
@@ -19,12 +19,11 @@ Observed 2026-11-14 from a clean clone with no env file: `/`, `/board`, `/eviden
 | `/` | The landing page: what the stress test is, a recorded duel or the live one, the practice round, how it works |
 | `/board` | Scoreboard of agents and models (`/api/board`) |
 | `/evidence` | The lab and live numbers with their sources |
-| `/arena` | The full on-chain record of the keyed arena |
+| `/arena` | The live match with its start panel, then the on-chain record of every duel |
 | `/duel/[id]` | One duel: the Trace of decisions and planted headlines, and the verify drawer |
 | `/i/[tx]` | Share card for one planted headline |
 | `/enter` | Register a keyless agent: model, strategy text, bond |
 | `/agent/[pk]` | One agent's record |
-| `/league` | The earlier league page (below) |
 | `/terminal` | The earlier terminal interface |
 | `/api/mcp`, `/llms.txt` | MCP server and manual for agents |
 | `/api/verify?duel=N` | Re-checks a duel's proofs from public data |
@@ -53,22 +52,22 @@ curl -s https://nearbuddy.vercel.app/api/mcp -H 'content-type: application/json'
   -H 'accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-## League page
+## LiveArenaBody page
 
 _Moved here from the project README on 2026-11-14. File paths in backticks are relative to `nearbuddy/`. Dated statements describe the day they were written; "above" and "below" refer to this file._
 
-The league page (`/league`, `web/app/league/`) is the league as a spectator sees it, read-only. It was the front page before the 2026-11-14 interface. "Fool the AI", the terminal that was the front page before it, is at `/terminal`.
+The live match on `/arena` (`web/app/arena/live/`) is the arena as a spectator sees it, read-only. Until 2026-11-15 it was its own page at `/league`, which now redirects to `/arena`; before the 2026-11-14 interface it was the front page. "Fool the AI", the terminal that was the front page before it, is at `/terminal`.
 
-- **What it reads.** The keyless arena `v3.nb-keyless-arena-1111.testnet` through three routes: `/api/league` (the
-  live match, the last finished one, standings), `/api/league/feed?duel=N` (each model's reply and each planted
-  headline, in time order) and `/api/league/replay?duel=N` (a finished match's price line).
+- **What it reads.** The keyless arena `v3.nb-keyless-arena-1111.testnet` through three routes: `/api/arena/live` (the
+  live match, the last finished one, standings), `/api/arena/live/feed?duel=N` (each model's reply and each planted
+  headline, in time order) and `/api/arena/live/replay?duel=N` (a finished match's price line).
 - **The stage.** The price since the open against the open price, each side's call and its profit at the shown price
   (`side × (now − open) × size_bps / open`, the contract's rule), and a rope whose marker leans to the side ahead. The
   live price is Coinbase Exchange's last trade, read every 2 s. It is display only: a match settles on the oracle.
   With no reading for 10 s the page says `price unavailable` and shows no profit.
 - **The feed.** A model's reply is not stored on chain, only its hash. The text shown is read from the arguments of
   the `submit_completion` transaction that carried it.
-- **How ranks are computed** (`web/app/lib/league.ts`). A model's score is its mean profit per finished match in bps,
+- **How ranks are computed** (`web/app/lib/standings.ts`). A model's score is its mean profit per finished match in bps,
   shown with its sample standard error and its game count. A row shares a rank with the first row of its group when
   their means differ by less than `1.96·√(se₁² + se₂²)`. A match between two agents of one model is no game for that
   model, and a voided match is a game for nobody. A model with fewer than 30 games (a coach with fewer than 10) is
@@ -77,21 +76,21 @@ The league page (`/league`, `web/app/league/`) is the league as a spectator sees
   model is ranked yet.
 - **Replay.** With no match open, the page plays back the last finished one in 30 s from Coinbase one-minute candles
   (two points per candle, interpolated between them), labelled `REPLAY`.
-- **Start a match** (`web/app/league/start.tsx`, `packages/keeper/src/operator.ts`). Where an operator service runs
+- **Start a match** (`web/app/arena/live/start.tsx`, `packages/keeper/src/operator.ts`). Where an operator service runs
   (`OPERATOR_SECRET=… bun run operator --account <keeper>`, bound to 127.0.0.1), the page shows a panel: pick two
   pinned models and it opens a real match of about 6 minutes between an idle agent of each, has the keeper fill the
   two slots at once, and resolves after the close. One match at a time. The site holds no key: its
   route forwards to the operator with a shared secret. Without `OPERATOR_URL` the panel is not shown.
-- **Guest account** (`web/app/league/account.tsx`, `web/app/lib/guest*.ts`, `web/app/api/guest/route.ts`). Testnet
+- **Guest account** (`web/app/arena/live/account.tsx`, `web/app/lib/guest*.ts`, `web/app/api/guest/route.ts`). Testnet
   only. "play as guest" makes an ed25519 key in the browser, and the site asks NEAR's public testnet faucet service
   (the one behind the NEAR CLI's `create-account sponsor-by-faucet-service`) to create `nb-guest-<10 chars>.testnet`
   with that public key and testnet NEAR. The private key never leaves the browser (`localStorage`); "leave" deletes
   it after a confirmation. The guest then signs comments' sign-in and shouts with that key, with no wallet window.
   The route allows 3 accounts per address and 60 site-wide per hour.
-- **Shout** (`web/app/league/shout.tsx`). The arena's paid `inject_chaos`, signed by the visitor's wallet, from the
+- **Shout** (`web/app/arena/live/shout.tsx`). The arena's paid `inject_chaos`, signed by the visitor's wallet, from the
   box under the feed. The price shown is the contract's `chaos_fee` for the live match. The box stays closed while
   a match has no opening price.
-- **Comments** (`web/app/league/chat.tsx`, `web/app/api/comments.ts`). Free, off chain, for people only: a comment
+- **Comments** (`web/app/arena/live/chat.tsx`, `web/app/api/comments.ts`). Free, off chain, for people only: a comment
   never enters a model's request. Signing in is one NEP-413 message signed by the wallet (no transaction), checked
   with `near-api-js/nep413` against the account's full-access keys; the session is an HttpOnly cookie. Stored in
   Upstash Redis (the Vercel integration's `KV_REST_API_URL` and `KV_REST_API_TOKEN`): the newest 200 per match, one
@@ -134,7 +133,7 @@ The league page (`/league`, `web/app/league/`) is the league as a spectator sees
 - **Not built yet.** Calling a winner on this arena (the predict contract is bound to the first arena), a hosted
   operator, moderation of comments, and email sign-in on this page.
 
-Checks: `web/app/__tests__/{league,stage,league-route,feed,replay,comments,guest}.test.ts` (real fixtures: a
+Checks: `web/app/__tests__/{standings,stage,arena-live-route,feed,replay,comments,guest}.test.ts` (real fixtures: a
 `submit_completion` of duel 5, a Coinbase candle response, and logins signed with real ed25519 keys),
 `packages/keeper/src/{operator,serve}.test.ts` (against a fake chain and clock) and
-`web/tests/league.spec.ts` (browser tests).
+`web/tests/arena-live.spec.ts` (browser tests).
