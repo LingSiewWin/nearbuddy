@@ -2076,3 +2076,113 @@ table.dense tr:hover th {
     min-height: 0;
   }
 }
+
+/* ---------------------------------------------------------------- decision field, scoreboard */
+.field-box {
+  position: relative;
+}
+.field canvas {
+  display: block;
+}
+.field-band {
+  position: absolute;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--s-3);
+  font: 400 11px / 18px var(--sans);
+  color: var(--dim);
+  pointer-events: none;
+}
+.field-band .mono {
+  color: var(--hi);
+}
+.field-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-4);
+  font: var(--t-small);
+  color: var(--dim);
+  margin-top: var(--s-3);
+}
+.field-key .k {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  background: var(--dim);
+}
+.field-key .k.dim {
+  opacity: 0.38;
+}
+.field-key .k.lit {
+  background: var(--live);
+  opacity: 0.55;
+}
+.field-key .k.new {
+  background: var(--live);
+}
+.field-key .k.held {
+  background: var(--hi);
+}
+.field-key .k.fooled {
+  background: var(--signal);
+}
+.field-key .k.none {
+  background: var(--rule);
+}
+.field-hover {
+  min-height: 1.4em;
+}
+table.board td.bar {
+  min-width: 160px;
+  width: 34%;
+}
+table.board {
+  border: 1px solid var(--rule);
+}
+table.board th,
+table.board td {
+  padding-left: var(--s-3);
+}
+.panel .t-title {
+  font-size: 16px;
+}
+.chart-bar,
+.chart-dot {
+  fill: var(--live);
+}
+.chart-hatch,
+.chart-interval {
+  stroke: var(--live);
+}
+table.board tbody th {
+  padding-left: var(--s-3);
+}
+@media (max-width: 599px) {
+  table.board thead {
+    display: none;
+  }
+  table.board tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 2px var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    border-top: 1px solid var(--rule);
+  }
+  table.board tr:first-child {
+    border-top: 0;
+  }
+  table.board td,
+  table.board tbody th {
+    border: 0;
+    padding: 0;
+  }
+  table.board td.bar,
+  table.board td.bar ~ td,
+  table.board tbody th:first-child,
+  table.board tbody th:first-child ~ td {
+    grid-column: 1 / -1;
+    width: auto;
+  }
+}
