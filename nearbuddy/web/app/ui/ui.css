@@ -139,7 +139,7 @@
     margin-right: var(--s-6);
   }
   .foot-cols {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
   }
 }
 

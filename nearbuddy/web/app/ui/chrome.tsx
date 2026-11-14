@@ -359,6 +359,16 @@ export function Chrome({ children }: { children: ReactNode }) {
                 </a>
                 {FOOT.project.map((l) => link(l.href, l.label))}
               </div>
+              <div>
+                <h2 className="t-label">Reach us</h2>
+                <a href="https://x.com/siewwwin" target="_blank" rel="noreferrer">
+                  X
+                </a>
+                <a href="https://www.linkedin.com/in/lingsiewwin" target="_blank" rel="noreferrer">
+                  LinkedIn
+                </a>
+                <a href="mailto:siewwwin@gmail.com">Email</a>
+              </div>
             </div>
             <div className="foot-line">
               <span>
