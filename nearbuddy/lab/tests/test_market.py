@@ -137,3 +137,11 @@ def test_shim_maps_each_arm_to_the_first_experiments_arm_with_its_own_brief() ->
     assert market.shim(r, "placebo")[1] == "baseline" and market.shim(r, "placebo")[0]["calls"] == {
         "baseline": {"brief": "b-placebo"}
     }
+
+
+def test_raised_reply_allowance_raises_the_duelists_worst_case_but_not_the_judges(tmp_path) -> None:
+    b = market.CallBudget(1.0, 10, tmp_path / "spend.jsonl", max_tokens=2400)
+    m = "Qwen/Qwen3.8-27B"
+    assert b.worst(m) == pytest.approx(2000 * 0.04e-6 + 2400 * 1.35e-6)
+    assert b.worst("z-ai/glm-5.3-flash") == harness.Budget.worst("z-ai/glm-5.3-flash")
+    assert market.CallBudget(1.0, 10, tmp_path / "s2.jsonl").worst(m) == harness.Budget.worst(m)

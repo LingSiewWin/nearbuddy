@@ -102,10 +102,17 @@ def arm_inputs(arm: str, t: Rec, brief: str, headline: str) -> tuple[str, str | 
 class CallBudget(Budget):
     """harness.Budget's dollar cap plus a cap on the number of calls, counted from the same log."""
 
-    def __init__(self, cap: float, max_calls: int, path: Path = SPEND) -> None:
+    def __init__(self, cap: float, max_calls: int, path: Path = SPEND, max_tokens: int | None = None) -> None:
         super().__init__(cap, path)
-        self.max_calls = max_calls
+        self.max_calls, self.max_tokens = max_calls, max_tokens
         self.calls = len(path.read_text().splitlines()) if path.exists() else 0
+
+    def worst(self, model: str) -> float:  # type: ignore[override]
+        """harness.Budget's worst case, with the raised reply allowance when one is set (the judge keeps its own)."""
+        if self.max_tokens is None or model == JUDGE_MODEL:
+            return Budget.worst(model)
+        pin, pout = harness.PRICE[model]
+        return harness.WORST_PROMPT_TOKENS * pin + self.max_tokens * pout
 
     def reserve(self, model: str) -> None:
         with self.lock:
@@ -136,6 +143,7 @@ def run_trial(
         "symbol": snap["symbol"],
         "brief": snap["brief"],
         "move_bps": snap["move_bps"],
+        "max_tokens": getattr(client, "_max_tokens", None),  # the duelist's reply allowance
         "cue_guard_version": CUE_GUARD_VERSION if prompt == HARDENED_V3 else None,
         "judge_prompt_version": JUDGE_PROMPT_VERSION if prompt == HARDENED_V3 else None,
         "calls": {},
@@ -163,16 +171,25 @@ def run_trial(
     return rec
 
 
-def run(phase: str, n: int, models: list[str], prompts: list[str], cap: float, max_calls: int, workers: int) -> None:
+def run(
+    phase: str,
+    n: int,
+    models: list[str],
+    prompts: list[str],
+    cap: float,
+    max_calls: int,
+    workers: int,
+    max_tokens: int | None = None,
+) -> None:
     snaps = {s["id"]: s for s in json.loads(harness.SNAPSHOTS.read_text())}
     attack, _ = harness.load_corpus()
     trials = trial_plan(phase, n, list(snaps), sorted({k[0] for k in attack}))
     out = RESULTS / f"{phase}.jsonl"
     RESULTS.mkdir(exist_ok=True)
     done = harness.done_trials(out)
-    budget = CallBudget(cap, max_calls)
+    budget = CallBudget(cap, max_calls, max_tokens=max_tokens)
     key = ENV["NEAR_AI_API_KEY"]
-    clients = {m: NearAiClient(key, m) for m in models}
+    clients = {m: NearAiClient(key, m, max_tokens=max_tokens) for m in models}
     judge = NearAiClient(key, JUDGE_MODEL) if HARDENED_V3 in prompts else None
     stop, write = threading.Event(), threading.Lock()
     jobs = [(t, m, pr) for t in trials for pr in prompts for m in models if (m, pr, t["trial"]) not in done]
@@ -441,11 +458,12 @@ def main() -> None:
     p.add_argument("--cap", type=float, default=CAP_USD)
     p.add_argument("--max-calls", type=int, default=MAX_CALLS)
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--max-tokens", type=int, default=None, help="duelist reply allowance; default: the runner's")
     a = p.parse_args()
     if a.cmd == "probe":
         probe(a.models.split(","), a.cap, a.max_calls)
     elif a.cmd == "run":
-        run(a.phase, a.n, a.models.split(","), a.prompts.split(","), a.cap, a.max_calls, a.workers)
+        run(a.phase, a.n, a.models.split(","), a.prompts.split(","), a.cap, a.max_calls, a.workers, a.max_tokens)
     elif a.cmd == "power":
         power(a.max_calls)
     else:

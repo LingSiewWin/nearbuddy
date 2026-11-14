@@ -150,4 +150,19 @@ signals (price, social), which this does not model.
 
 ## Deviations
 
-None yet.
+1. **This prereg lives in README.md, not PREREG.md.** The repo's `.gitignore` excludes every Markdown file except
+   README.md, so a separate PREREG.md could not be committed.
+2. **Reply allowance raised from the runner's 600 tokens to 2400 for both duelist models, in every arm and both
+   prompts (after the pilot, before any main-phase call).** In the pilot (260 calls at 600 tokens, all signatures
+   verified), Qwen3.8-27B ended many market-line calls at `finish_reason: length` with no answer: naive `honest` 6/10
+   and `placebo` 4/10; hardened-v3 `honest` 8/10 and `rigged` 10/10. The `headline` arm lost 0/10 and 1/10. DeepSeek lost
+   1 call. Losses that depend on the arm would bias the paired comparison, and Qwen's v3 `rigged` arm would have
+   no outcome at all. The lab's replay study made the same change for the same reason. The v3 judge
+   (`z-ai/glm-5.3-flash`) keeps its own 1600. Consequences: the main run's request bytes are not the live duelists'
+   bytes (`max_tokens` differs), and the pilot, run at 600, is not comparable with the main run. The pilot was already
+   excluded from the confirmatory analysis. The power rule stands, and N was already set by the call budget (below).
+3. **N.** `market.py power` on the pilot gives N_power = 240: in at least one cell per hypothesis the pilot showed no
+   effect in the hypothesised direction, so that cell was powered for the minimal effect (0.15 vs 0.05).
+   N_budget = (1200 - 262 calls used) // 26 = 36, so **N = 36 trials per cell**, as foreseen. At N = 36 the exact
+   McNemar test at alpha 0.0125 has 5% power for the minimal effect (0.15 vs 0.05), 71% for 0.25 vs 0, and 99% for
+   0.40 vs 0 (`stats.power_mcnemar`, 5000 simulations). Only large effects can show; a null here is "not detected".
