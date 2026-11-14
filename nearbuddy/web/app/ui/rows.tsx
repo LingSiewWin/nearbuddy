@@ -16,9 +16,17 @@ export function rowState(r: DuelRow, now: number): string {
 
 export const isRunning = (r: DuelRow, now: number) => !r.resolved && (!now || nsMs(r.close_at) > now);
 
-export function DuelRows({ rows, now }: { rows: DuelRow[]; now: number }) {
+export function DuelRows({
+  rows,
+  now,
+  wide,
+}: {
+  rows: DuelRow[];
+  now: number /** Desktop: one line a row, as a table. */;
+  wide?: boolean;
+}) {
   return (
-    <ul className="duel-rows">
+    <ul className={`duel-rows${wide ? " wide" : ""}`}>
       {rows.map((r) => (
         <li key={`${r.arena}:${r.id}`}>
           <a href={duelPath(r.id, r.arena)}>

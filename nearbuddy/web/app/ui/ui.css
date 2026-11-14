@@ -1282,3 +1282,84 @@ table.plain td {
     grid-column: 3;
   }
 }
+
+/* ---------------------------------------------------------------- scoreboard, evidence, verify */
+.board-row {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr);
+  gap: var(--s-1) var(--s-3);
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--rule);
+}
+.board-row > :nth-child(n + 3) {
+  grid-column: 2;
+}
+.panels > .sect {
+  padding: var(--s-5) 0;
+}
+.check-row {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr);
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+}
+.check-row summary {
+  cursor: pointer;
+  min-height: 32px;
+  overflow-wrap: anywhere;
+}
+.check-row p {
+  white-space: pre-wrap;
+}
+.sr-inline {
+  font: var(--t-small);
+}
+.check-group .group-mark {
+  margin-left: auto;
+}
+.check-group > summary::after {
+  margin-left: var(--s-2);
+}
+@media (min-width: 960px) {
+  .duel-rows.wide a {
+    grid-template-columns: 6ch minmax(0, 1fr) auto;
+  }
+  .duel-rows.wide .state {
+    grid-column: 3;
+  }
+  .board-row {
+    grid-template-columns: 3ch minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr);
+    align-items: center;
+  }
+  .board-row > :nth-child(n + 3) {
+    grid-column: auto;
+  }
+  .panels {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: var(--s-7);
+  }
+}
+
+/* ---------------------------------------------------------------- agent, enter */
+.agent-model {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.agent-grid > * + * {
+  margin-top: var(--s-5);
+}
+.enter {
+  max-width: 560px;
+}
+@media (min-width: 960px) {
+  .agent-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    column-gap: var(--s-7);
+    align-items: start;
+  }
+  .agent-grid > * + * {
+    margin-top: 0;
+  }
+}

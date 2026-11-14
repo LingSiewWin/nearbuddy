@@ -2,7 +2,7 @@
 // The frame every page of the Trace design sits in: header with navigation and the account control, footer with the
 // network, theme toggle and the Terminal link, the sign-in sheet, and the one polite live region status changes are
 // announced through. Wallet and guest accounts are lib/wallet.ts and lib/guest.ts, unchanged.
-import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react";
+import { createContext, type ReactNode, Suspense, useContext, useEffect, useRef, useState } from "react";
 import type { DuelList, DuelRow } from "../api/list/route";
 import { recall } from "../lib/guest";
 import * as wallet from "../lib/wallet";
@@ -11,6 +11,7 @@ import { addrHref, REPO } from "../tui";
 import { guestLabel, shortId } from "./format";
 import { Button, type Read, Sheet, StatusBar, useNow, useRead } from "./kit";
 import { pickLive } from "./verdict";
+import { VerifyDrawer } from "./verify";
 
 type Kind = "none" | "guest" | "wallet";
 type Site = {
@@ -403,6 +404,9 @@ export function Chrome({ children }: { children: ReactNode }) {
           ))}
         </ul>
       </Sheet>
+      <Suspense>
+        <VerifyDrawer />
+      </Suspense>
       <SignIn open={signingIn} onDone={done} />
       {account ? <AccountMenu open={menu} onClose={() => setMenu(false)} account={account} kind={kind} /> : null}
     </Ctx.Provider>
