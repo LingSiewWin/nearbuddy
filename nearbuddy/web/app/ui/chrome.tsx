@@ -8,12 +8,13 @@ import { recall } from "../lib/guest";
 import * as wallet from "../lib/wallet";
 import { NET, NETWORK_ID } from "../network";
 import { addrHref, REPO } from "../tui";
-import { guestLabel, shortId } from "./format";
 import { DoodleCrewFooter, type FooterColumn } from "./doodle-crew-footer";
-import { Button, type Read, Sheet, StatusBar, useNow, useRead } from "./kit";
+import { guestLabel, shortId } from "./format";
+import { Button, type Read, Sheet, useNow, useRead } from "./kit";
 import { FOOT, NAV } from "./nav";
 import { pickLive } from "./verdict";
 import { VerifyDrawer } from "./verify";
+import { WalletSignIn } from "./wallet-sign-in";
 
 type Kind = "none" | "guest" | "wallet";
 type Site = {
@@ -66,25 +67,39 @@ export function rememberHeadline(m: Mine) {
 
 type Theme = "light" | "dark";
 const THEME = "nb:theme";
-function ThemeToggle() {
+function readLiveTheme(): Theme {
+  const live = document.documentElement.dataset.theme;
+  if (live === "light" || live === "dark") return live;
+  try {
+    const stored = localStorage.getItem(THEME);
+    if (stored === "light" || stored === "dark") return stored;
+  } catch {}
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+function ThemeToggle({ className }: { className?: string } = {}) {
+  // null until mount so SSR markup stays stable; icon defaults to sun (offer light).
   const [theme, setTheme] = useState<Theme | null>(null);
   useEffect(() => {
-    try {
-      const t = localStorage.getItem(THEME);
-      if (t === "light" || t === "dark") {
-        document.documentElement.dataset.theme = t;
-        setTheme(t);
-      }
-    } catch {}
+    const apply = () => {
+      const t = readLiveTheme();
+      document.documentElement.dataset.theme = t;
+      setTheme(t);
+    };
+    apply();
+    const mo = new MutationObserver(() => setTheme(readLiveTheme()));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => mo.disconnect();
   }, []);
-  const shown = (): Theme => theme ?? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  const current: Theme = theme ?? "dark";
+  const toLight = current === "dark";
   return (
     <button
       type="button"
-      className="btn-link"
-      aria-label="Switch theme"
+      className={["theme-toggle", className].filter(Boolean).join(" ")}
+      aria-label={toLight ? "Switch to light theme" : "Switch to dark theme"}
+      title={toLight ? "Light" : "Dark"}
       onClick={() => {
-        const next: Theme = shown() === "light" ? "dark" : "light";
+        const next: Theme = current === "light" ? "dark" : "light";
         document.documentElement.dataset.theme = next;
         try {
           localStorage.setItem(THEME, next);
@@ -92,54 +107,23 @@ function ThemeToggle() {
         setTheme(next);
       }}
     >
-      ◐ theme
+      {toLight ? (
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" fill="currentColor" />
+          <g stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+            <path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.05 5.05l1.55 1.55M17.4 17.4l1.55 1.55M5.05 18.95l1.55-1.55M17.4 6.6l1.55-1.55" />
+          </g>
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M14.6 3.1a8.6 8.6 0 1 0 6.3 14.2A7.2 7.2 0 0 1 14.6 3.1Z" />
+        </svg>
+      )}
     </button>
   );
 }
 
-// ---------------------------------------------------------------- sign-in sheet and account menu
-
-function SignIn({ open, onDone }: { open: boolean; onDone: (account: string | null) => void }) {
-  const [busy, setBusy] = useState<"guest" | "wallet" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const run = async (which: "guest" | "wallet") => {
-    setBusy(which);
-    setError(null);
-    try {
-      const a = which === "guest" ? await wallet.guestSignIn() : await wallet.signIn();
-      if (a) onDone(a);
-    } catch {
-      if (which === "guest")
-        setError("Could not make a guest account. The test faucet did not answer. Try again, or connect a wallet.");
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <Sheet open={open} onClose={() => onDone(null)} title="Sign in" locked={busy === "guest"}>
-      {error ? <StatusBar kind="error">{error}</StatusBar> : null}
-      {/* guest accounts exist on testnet only: on mainnet the button is absent, not disabled */}
-      {NETWORK_ID === "testnet" ? (
-        <div className="choice">
-          <Button
-            variant="primary"
-            busy={busy === "guest" ? "Making your account…" : null}
-            onClick={() => run("guest")}
-          >
-            Play as guest
-          </Button>
-          <p className="t-small">No wallet needed. We make a temporary test account in this browser.</p>
-        </div>
-      ) : null}
-      <div className="choice">
-        <Button variant="quiet" disabled={busy !== null} onClick={() => run("wallet")} style={{ width: "100%" }}>
-          Connect a wallet
-        </Button>
-        <p className="t-small">Use your own NEAR account.</p>
-      </div>
-    </Sheet>
-  );
-}
+// ---------------------------------------------------------------- account menu (connect gate is WalletSignIn)
 
 function AccountMenu({
   open,
@@ -301,8 +285,11 @@ export function Chrome({ children }: { children: ReactNode }) {
       {kind === "guest" ? guestLabel(account) : <span className="mono">{shortId(account, 12, 8)}</span>}
     </button>
   ) : (
-    <button type="button" className="btn btn-quiet" onClick={() => site.signIn()}>
-      Sign in
+    <button type="button" className="btn-dcf btn-dcf-solid" onClick={() => site.signIn()}>
+      <svg className="btn-dcf-icon" viewBox="-16 -16 32 32" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M3 -14 L-8 2 L-1 2 L-4 14 L8 -3 L1 -3 Z" />
+      </svg>
+      <span>Connect wallet</span>
     </button>
   );
   const link = (href: string, label: string) => (
@@ -323,6 +310,7 @@ export function Chrome({ children }: { children: ReactNode }) {
             </nav>
             <div className="account">{control}</div>
             {cta}
+            <ThemeToggle />
             <button type="button" className="btn btn-quiet menu-button" aria-label="Menu" onClick={() => setNav(true)}>
               ☰
             </button>
@@ -340,10 +328,7 @@ export function Chrome({ children }: { children: ReactNode }) {
             [
               {
                 title: "Play",
-                links: [
-                  ...(live ? [{ label: "Live duel", href: path(live) }] : []),
-                  ...FOOT.play,
-                ],
+                links: [...(live ? [{ label: "Live duel", href: path(live) }] : []), ...FOOT.play],
               },
               {
                 title: "Proof",
@@ -429,7 +414,7 @@ export function Chrome({ children }: { children: ReactNode }) {
       <Suspense>
         <VerifyDrawer />
       </Suspense>
-      <SignIn open={signingIn} onDone={done} />
+      <WalletSignIn open={signingIn} onDone={done} />
       {account ? <AccountMenu open={menu} onClose={() => setMenu(false)} account={account} kind={kind} /> : null}
     </Ctx.Provider>
   );

@@ -69,6 +69,36 @@
   font-size: 14px;
   padding: 0 var(--s-3);
 }
+/* Site light/dark control: sun (go light) / moon (go dark). Lives in the header. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+.theme-toggle:hover {
+  color: var(--hi);
+  background: var(--btn-soft);
+}
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--proof);
+  outline-offset: 2px;
+}
+.site-footer .theme-toggle,
+.menu-foot .theme-toggle {
+  width: auto;
+  min-height: 44px;
+  padding: 0 var(--s-2);
+  gap: var(--s-1);
+}
 .menu-list a {
   display: flex;
   align-items: center;
@@ -1395,6 +1425,70 @@ table.plain td {
 .site-header .menu-button {
   min-width: 44px;
   min-height: 44px;
+}
+
+/* Header connect = same hard-shadow pill as doodle footer CTAs (words stay on the control). */
+.btn-dcf {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px 0 14px;
+  border-radius: 999px;
+  border: 2px solid var(--fg);
+  font-size: 13.5px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  box-shadow: 0 3px 0 var(--fg);
+  transition:
+    transform 0.18s cubic-bezier(0.3, 1.4, 0.5, 1),
+    box-shadow 0.18s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+.btn-dcf-solid {
+  background: var(--fg);
+  color: var(--bg);
+  box-shadow: 0 3px 0 var(--live);
+}
+.btn-dcf-solid .btn-dcf-icon {
+  color: var(--live);
+}
+.btn-dcf-outline {
+  background: var(--bg);
+  color: var(--fg);
+}
+.btn-dcf:hover {
+  transform: translateY(-2px) rotate(-1.2deg);
+  box-shadow: 0 5px 0 var(--fg);
+}
+.btn-dcf-solid:hover {
+  box-shadow: 0 5px 0 var(--live);
+}
+.btn-dcf:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 var(--fg);
+  transition-duration: 0.06s;
+}
+.btn-dcf-solid:active {
+  box-shadow: 0 1px 0 var(--live);
+}
+.btn-dcf-icon {
+  flex: none;
+  display: block;
+}
+.site-header .btn-dcf {
+  height: 36px;
+  font-size: 13px;
+  padding: 0 14px 0 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn-dcf {
+    transition: none;
+  }
+  .btn-dcf:hover,
+  .btn-dcf:active {
+    transform: none;
+  }
 }
 .btn {
   min-height: 44px;
@@ -3278,3 +3372,225 @@ table.board tbody th {
     opacity: 1;
   }
 }
+
+/* ---------------------------------------------------------------- Wallet connect gate (full-bleed) */
+dialog.wallet-gate {
+  inset: 0;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--bg, #06070f);
+  color: var(--fg, #f4f4f6);
+  overflow: auto;
+}
+dialog.wallet-gate::backdrop {
+  background: color-mix(in oklab, #06070f 88%, black);
+}
+dialog.wallet-gate[open] {
+  display: block;
+}
+.wallet-gate-frame {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.wallet-gate-form {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1.25rem;
+  padding: clamp(1.5rem, 4vw, 3.5rem);
+  max-width: 32rem;
+  width: 100%;
+  margin: 0 auto;
+}
+.wallet-gate-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.wallet-gate-close:hover {
+  background: color-mix(in oklab, var(--fg) 10%, transparent);
+}
+.wallet-gate-kicker {
+  margin: 0;
+  font: var(--t-mono, 600 12px / 1.2 ui-monospace, monospace);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted, color-mix(in oklab, var(--fg) 55%, transparent));
+}
+.wallet-gate-title {
+  margin: 0.35rem 0 0;
+  font: 600 clamp(1.75rem, 3.5vw, 2.75rem) / 1.15 var(--font-display, ui-sans-serif, system-ui, sans-serif);
+  letter-spacing: -0.03em;
+}
+.wallet-gate-lede {
+  margin: 0.5rem 0 0;
+  font: var(--t-body, 400 15px / 1.5 ui-sans-serif, system-ui, sans-serif);
+  color: var(--muted, color-mix(in oklab, var(--fg) 62%, transparent));
+  max-width: 36ch;
+}
+.wallet-gate-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.5rem;
+}
+.wallet-gate-primary,
+.wallet-gate-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 3.15rem;
+  padding: 0 1.25rem;
+  border-radius: 999px;
+  border: 0;
+  font:
+    650 15px / 1.2 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+.wallet-gate-primary {
+  background: #d6dcfa;
+  color: #3443b8;
+}
+.wallet-gate-primary:hover:not(:disabled) {
+  background: #b9c3f4;
+}
+.wallet-gate-secondary {
+  background: color-mix(in oklab, #6f8cff 18%, transparent);
+  color: var(--fg);
+  border: 1px solid color-mix(in oklab, #6f8cff 35%, transparent);
+}
+.wallet-gate-secondary:hover:not(:disabled) {
+  background: color-mix(in oklab, #6f8cff 28%, transparent);
+}
+.wallet-gate-primary:disabled,
+.wallet-gate-secondary:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.wallet-gate-mark {
+  flex: none;
+}
+.wallet-gate-hint {
+  margin: 0;
+  font:
+    400 13px / 1.4 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  color: var(--muted, color-mix(in oklab, var(--fg) 55%, transparent));
+}
+.wallet-gate-or {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.35rem 0;
+  color: var(--muted, color-mix(in oklab, var(--fg) 45%, transparent));
+  font:
+    400 12px / 1 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.wallet-gate-or::before,
+.wallet-gate-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in oklab, var(--fg) 14%, transparent);
+}
+.wallet-gate-hero {
+  position: relative;
+  padding: 1rem;
+  display: none;
+}
+@media (min-width: 860px) {
+  .wallet-gate-hero {
+    display: block;
+  }
+}
+.wallet-gate-hero-panel {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  height: calc(100dvh - 2rem);
+  border-radius: 1.25rem;
+  background: #06070f;
+  border: 1px solid color-mix(in oklab, #6f8cff 22%, transparent);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 2rem;
+  gap: 0.65rem;
+}
+.wallet-gate-hero-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image:
+    radial-gradient(circle at 20% 30%, color-mix(in oklab, #c6f432 18%, transparent), transparent 42%),
+    radial-gradient(circle at 80% 70%, color-mix(in oklab, #6f8cff 22%, transparent), transparent 45%),
+    linear-gradient(color-mix(in oklab, #f4f4f6 7%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, #f4f4f6 7%, transparent) 1px, transparent 1px);
+  background-size:
+    auto,
+    auto,
+    16px 16px,
+    16px 16px;
+  opacity: 0.95;
+}
+.wallet-gate-hero-line,
+.wallet-gate-hero-sub {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  max-width: 28ch;
+}
+.wallet-gate-hero-line {
+  font:
+    650 clamp(1.35rem, 2.2vw, 1.85rem) / 1.2 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  letter-spacing: -0.02em;
+}
+.wallet-gate-hero-sub {
+  font:
+    400 14px / 1.45 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  color: color-mix(in oklab, #f4f4f6 70%, transparent);
+}
+@media (max-width: 859px) {
+  .wallet-gate-frame {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wallet-gate-primary,
+  .wallet-gate-secondary {
+    transition: none;
+  }
+}
+
