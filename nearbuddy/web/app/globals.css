@@ -1,18 +1,25 @@
 :root {
   /* light-dark() follows the system setting; data-theme on <html> (footer toggle) overrides it */
   color-scheme: dark light;
-  --bg: light-dark(#f6f4ee, #0a0b0c);
-  --surface: light-dark(#ffffff, #101214);
-  --raised: light-dark(#fbfaf6, #171a1d);
-  --fg: light-dark(#16181a, #d6d3cc);
-  --hi: light-dark(#000000, #f3f0e9);
-  --dim: light-dark(#5c6166, #8b9096);
-  --rule: light-dark(#d9d5ca, #23272b);
-  --signal: light-dark(#c8321b, #ff6447);
-  --signal-ink: light-dark(#ffffff, #0a0b0c);
-  --proof: light-dark(#1f5fa8, #6fa8f5);
+  --bg: light-dark(#f5f7ff, #06070f);
+  --surface: light-dark(#ffffff, #0c0e1a);
+  --raised: light-dark(#eef1fd, #131627);
+  --fg: light-dark(#14172b, #dfe3f5);
+  --hi: light-dark(#000000, #ffffff);
+  --dim: light-dark(#565c7d, #9299ba);
+  --rule: light-dark(#d3d9f2, #232846);
+  --signal: light-dark(#d81e5b, #ff3d7f);
+  --signal-ink: light-dark(#ffffff, #06070f);
+  --proof: light-dark(#2f43c4, #6f8cff);
   /* the one instrument accent: live ink, micro-charts, and "not sure yet" (waiting, stale, small sample) */
-  --live: light-dark(#8a5a1c, #d9a05f);
+  --live: light-dark(#3443b8, #c6f432);
+  /* buttons: pale periwinkle with cobalt words; the soft pair is the low-emphasis button */
+  --btn: #d6dcfa;
+  --btn-hover: #b9c3f4;
+  --btn-ink: #3443b8;
+  --btn-soft: light-dark(#e8ebfd, color-mix(in srgb, #d6dcfa 14%, transparent));
+  --btn-soft-hover: light-dark(#d6dcfa, color-mix(in srgb, #d6dcfa 7%, transparent));
+  --btn-soft-ink: light-dark(#3443b8, #d6dcfa);
   --live-dim: color-mix(in srgb, var(--live) 20%, var(--bg));
   --caution: var(--live);
   --bad: var(--signal);
