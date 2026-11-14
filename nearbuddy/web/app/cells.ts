@@ -25,6 +25,8 @@ export type ChainEvent = {
   method: string;
   tx: string;
   at_ms: number;
+  /** An `intent` event's side, as the arena logged it (the Trace draws its line from these). */
+  side?: "Long" | "Short";
 };
 
 const hms = (ms: number) => new Date(ms).toISOString().slice(11, 19);

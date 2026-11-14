@@ -4,7 +4,6 @@
 import type { Metadata } from "next";
 import { KEYLESS_ARENA } from "../api/keyless";
 import { NETWORK_ID } from "../network";
-import "../term/term.css";
 import Enter from "./enter";
 
 export const metadata: Metadata = {

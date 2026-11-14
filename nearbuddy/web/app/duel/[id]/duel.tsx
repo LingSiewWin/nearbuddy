@@ -1,519 +1,596 @@
 "use client";
-// One duel, btop-style: the two sides and their tier, the oracle prices and the scored outcome, the
-// attacks thrown at each side, and the three things a reader can check without trusting this page.
-import { use, useEffect, useState } from "react";
+// One duel, organised as one question: what are these two AIs doing, and which one do I lie to? First view: one
+// sentence, the two AIs with a line of reasoning and a button each, and both Traces. Everything an analyst wants
+// (price, full reasoning, every planted headline, money) is in disclosure rows under it. Read from either arena
+// (`?arena=keyless`); `?attack=a|b` opens the attack box with that target chosen: a bottom sheet on phone, a panel
+// beside the Traces on desktop.
+import { useSearchParams } from "next/navigation";
+import { use, useEffect, useRef, useState } from "react";
+import type { Chaos } from "../../lib/abi/arena";
+import { NETWORK_ID } from "../../network";
+import { livePnl } from "../../term/model";
+import { AttackBox, attackGate } from "../../ui/attack";
+import { type Mine, myHeadlines, rememberHeadline, useSite } from "../../ui/chrome";
 import {
-  type ChainEvent,
-  type CommitConfig,
-  commitCells,
-  proven as hasProof,
-  kindCell,
-  type Opened,
-  pairingCells,
-  revealCell,
-  timelineCells,
-  type Verify,
-  verifyLineCells,
-  verifySummary,
-} from "../../cells";
-import { NO_OUTCOME, noOutcome } from "../../eras";
-import type { AgentView as Agent, Chaos } from "../../lib/abi/arena"; // passed through unchanged by the API route
-import { attacksOf } from "../../term/model";
+  agentPath,
+  arenaOf,
+  type DuelBody,
+  endOf,
+  type History,
+  phaseOf,
+  SYMBOL,
+  sinceOpen,
+  traceOf,
+  useDuel,
+  usePrice,
+  verifyHref,
+} from "../../ui/data";
+import { bet, hm, near, nsMs, price8, shortId } from "../../ui/format";
 import {
-  addrHref,
-  agentHref,
-  blockHref,
-  bottom,
-  boxTitle,
-  bps,
-  getJson,
-  legend,
-  meter,
-  NET,
-  near,
-  price8,
-  row,
-  rowx,
-  short,
-  ts,
-  ZERO,
-} from "../../tui";
+  Amount,
+  Button,
+  Countdown,
+  Details,
+  LinkButton,
+  Region,
+  Sheet,
+  Skeleton,
+  useMedia,
+  useNow,
+} from "../../ui/kit";
+import { Collect, Headline, MachineQuote, ResultPanel, ShareSheet, VerdictWord, WaitPanel } from "../../ui/result";
+import { markOf } from "../../ui/trace";
+import { Pin, PriceLine, TimeAxis, Trace, WhatHappened } from "../../ui/trace-view";
+import { coinFlip, sentence, VERDICT } from "../../ui/verdict";
 
-type Intent = {
-  agent_pk: string;
-  duel_id: string;
-  side: "Long" | "Short";
-  size_bps: number;
-  nonce: string;
-  expires_at: string;
-  proof_hash: string;
-};
-type Injection = { kind: string; payload_hash: string; target: string; block: string };
-type Outcome = {
-  open_price: string;
-  close_price: string;
-  pnl_a: number;
-  pnl_b: number;
-  winner: string | null;
-  slashed: string;
-  injections?: number;
-};
-type Duel = {
+type Which = "a" | "b";
+
+/** One row of the planted-headlines list; expands to the full text, who planted it, the cost, the coin flip and the
+ *  verdict sentence. A control headline (the arena's own baseline) gets no verdict word. */
+function HeadlineRow({
+  c,
+  index,
+  side,
+  open,
+  onToggle,
+  tx,
+  asWritten,
+}: {
+  c: Chaos;
+  index: number;
+  side: Which;
+  open: boolean;
+  onToggle: () => void;
+  /** Its transaction, when it was planted from this browser. */
+  tx: string | null;
+  asWritten: boolean;
+}) {
+  const mark = markOf(c);
+  const control = mark === "control";
+  const changed = c.next && c.prev ? (c.next === c.prev ? "its bet did not change" : "its bet changed") : null;
+  return (
+    <li id={`headline-${index}`} className={`hl-row${open ? " open" : ""}`}>
+      <button type="button" className="hl-toggle" aria-expanded={open} onClick={onToggle}>
+        <svg width="16" height="16" aria-hidden="true">
+          <Pin x={8} y={8} mark={mark} />
+        </svg>
+        <span className="hl-main">
+          <Headline text={c.headline} as={open ? "block" : "line"} />
+          <span className="t-small dim">
+            {`at ${side.toUpperCase()} · ${hm(nsMs(c.at))} · `}
+            {control ? (changed ?? "control") : null}
+          </span>
+          {control ? <span className="vtag dim">control</span> : <VerdictWord outcome={c.outcome} size="tag" />}
+        </span>
+      </button>
+      {open ? (
+        <div className="hl-more stack-2">
+          {control ? (
+            <p className="t-small dim">Planted by the arena as a baseline. Not an attack.</p>
+          ) : (
+            <>
+              <p className="t-small">
+                Planted by <span className="mono">{shortId(c.injector, 14, 8)}</span> · cost <Amount yocto={c.stake} />
+              </p>
+              <p className="t-small dim">
+                {coinFlip(c.arm, c.outcome === "Pending" ? "will" : "saw", "public", asWritten)}
+              </p>
+              {c.outcome === "Pending" ? null : <p className="t-small">{sentence(c, "public")}</p>}
+              {tx ? (
+                <a className="btn-link" href={`/i/${tx}`}>
+                  Open result
+                </a>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function Loaded({
+  id,
+  body,
+  stale,
+  staleAt,
+  histories,
+  now,
+  refresh,
+}: {
   id: string;
-  a: string;
-  b: string;
-  symbol: string;
-  open_at?: string | null; // absent in some older record shapes
-  close_at: string;
-  pool: string;
-  injections: Injection[];
-  resolved: boolean;
-  last_intent_a: Intent | null;
-  last_intent_b: Intent | null;
-  outcome?: Outcome | null;
-  open_price?: string | null;
-  /** Deploy 17: every planted headline with its arm, outcome and payout (get_chaos). */
-  chaos?: Chaos[] | null;
-};
-/** GET /api/events: the duel's open tx and commit/intent events from FastNEAR's window of the newest arena txs. */
-type Events = {
-  at: number;
-  window: number;
-  oldest_ms: number | null;
-  opened: Opened | null;
-  events?: ChainEvent[];
-};
-type Rec = {
-  at: number;
-  rpc: string;
-  contract: string;
-  oracle: string;
-  config?: CommitConfig | null;
-  no_reveal?: [boolean, boolean] | null;
-  duel: Duel | null;
-  a: Agent | null;
-  b: Agent | null;
-};
-
-const symbol = (s: string) => (s === "wrap.near" ? "NEAR/USD" : s);
-/** open_at in ms, or null when the record lacks it or holds no ns integer (BigInt would throw). */
-const openMs = (d: { open_at?: string | null }) =>
-  d.open_at && /^\d+$/.test(d.open_at) ? Number(BigInt(d.open_at) / 1_000_000n) : null;
-const when = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n)).toISOString().slice(0, 19).replace("T", " ");
-const proven = (i: Intent | null) => hasProof(i, ZERO);
-const pnlc = (n: number) => (n > 0 ? "win" : n < 0 ? "loss" : "tie");
-const OUTCOME: Record<Chaos["outcome"], [string, string]> = {
-  Pending: ["pending", "open"],
-  Flipped: ["FLIPPED", "loss"],
-  Held: ["HELD", "win"],
-  NoTrial: ["not counted", "dim"],
-  Expired: ["expired", "dim"],
-};
-
-export function DuelRecord({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
-  const [r, setR] = useState<Rec | null>(null);
-  const [ev, setEv] = useState<Events | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  body: DuelBody;
+  stale: boolean;
+  staleAt: number | null;
+  histories: { a: History | null; b: History | null };
+  now: number;
+  refresh: () => void;
+}) {
+  const site = useSite();
+  const sp = useSearchParams();
+  const arena = arenaOf(sp.get("arena"));
+  const desktop = useMedia("(min-width: 960px)");
+  const wanted = sp.get("attack");
+  const [target, setTarget] = useState<Which>(wanted === "b" ? "b" : "a");
+  const [attack, setAttack] = useState(wanted === "a" || wanted === "b");
+  const [locked, setLocked] = useState(false);
+  const [openRow, setOpenRow] = useState<number | null>(null);
+  const [mine, setMine] = useState<Mine[]>([]);
+  const [share, setShare] = useState(false);
+  const [fresh, setFresh] = useState(false);
+  const seen = useRef<string | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  const d = body.duel;
+  const phase = d ? phaseOf(d, now) : "running";
+  const price = usePrice(phase === "running" || phase === "closed", now);
+  useEffect(() => setMine(myHeadlines()), []);
+  // desktop: the attack box is a panel beside the Traces, and opening it moves focus there
   useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      // the tx index is optional enrichment: a FastNEAR outage leaves the contract view intact
-      getJson<Events>(`/api/events?duel=${encodeURIComponent(id)}`)
-        .then((j) => alive && setEv(j))
-        .catch(() => {});
-      try {
-        const j = await getJson<Rec>(`/api/duel?id=${encodeURIComponent(id)}`);
-        if (alive) {
-          setR(j);
-          setErr(null);
-        }
-      } catch (e) {
-        if (alive) setErr(e instanceof Error ? e.message : String(e));
-      }
-    };
-    tick();
-    const t = setInterval(tick, 20_000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [id]);
+    if (attack && desktop) panel.current?.querySelector<HTMLElement>("textarea")?.focus();
+  }, [attack, desktop]);
+  const close = () => {
+    setAttack(false);
+    const u = new URL(location.href);
+    if (!u.searchParams.has("attack")) return;
+    u.searchParams.delete("attack"); // closing removes the parameter
+    history.replaceState(null, "", u);
+  };
+  const lie = (w: Which) => {
+    setTarget(w);
+    setAttack(true);
+  };
 
-  // the verifier runs once the duel is resolved, never on an open one; a failed or degraded check retries a few times
-  const [vf, setVf] = useState<Verify | null>(null);
-  const [vErr, setVErr] = useState<string | null>(null);
-  const [showLines, setShowLines] = useState(false);
-  const resolved = !!r?.duel?.resolved;
-  useEffect(() => {
-    if (!resolved) return;
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const go = async (left: number) => {
-      try {
-        const j = await getJson<Verify>(`/api/verify?duel=${encodeURIComponent(id)}`);
-        if (!alive) return;
-        setVf(j);
-        setVErr(null);
-        if (j.degraded && left) timer = setTimeout(() => go(left - 1), 65_000); // the route keeps it 60 s
-      } catch (e) {
-        if (!alive) return;
-        setVErr(e instanceof Error ? e.message : String(e));
-        if (left) timer = setTimeout(() => go(left - 1), 20_000);
-      }
-    };
-    go(3);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [id, resolved]);
-
-  const d = r?.duel ?? null;
-  const o = d?.outcome ?? null;
-  const contract = r?.contract ?? NET.arena;
-  const oracle = r?.oracle ?? NET.oracle;
-  const nowNs = BigInt(Date.now()) * 1_000_000n;
-  const unscored = !!d && noOutcome(d); // a pre-migration duel closed without an outcome
-  const state = !d
-    ? null
-    : d.resolved
-      ? unscored
-        ? { t: NO_OUTCOME, c: "dim" }
-        : { t: "resolved", c: "tie" }
-      : BigInt(d.close_at) < nowNs
-        ? { t: "CLOSED, awaiting oracle", c: "open" }
-        : { t: "LIVE", c: "open" };
-  const name = (pk: string) => (pk === d?.a ? r?.a : pk === d?.b ? r?.b : null)?.model_id ?? short(pk, 8);
-  const tag = (pk: string) => (pk === d?.a ? "A" : pk === d?.b ? "B" : "?");
-
-  const sideRow = (t: "A" | "B", pk: string, ag: Agent | null, it: Intent | null) =>
-    rowx(
-      t,
-      [
-        { t: (ag?.model_id ?? short(pk, 12)).slice(0, 30).padEnd(30), href: agentHref(pk), title: pk },
-        "  ",
-        ag
-          ? ag.tee
-            ? { t: "ENCLAVE-VERIFIED", c: "ok" }
-            : { t: "UNVERIFIED TIER ", c: "unv" }
-          : { t: "not registered  ", c: "dim" },
-        "  ",
-        it
-          ? {
-              t: `${it.side.padEnd(5)} ${(it.size_bps / 100).toFixed(0).padStart(3)}%  ${proven(it) ? `proof ${short(it.proof_hash, 10)}` : "no proof"}`,
-              c: proven(it) ? "ok" : "unv",
-              title: proven(it)
-                ? `sha256(request_hash||response_hash) ${it.proof_hash}  nonce ${it.nonce}; full hash in box 4`
-                : "proof_hash is 32 zero bytes: the intent carries no enclave signature",
-            }
-          : { t: "no intent yet", c: "dim" },
-      ],
-      "hi",
-    );
-  const proofRow = (t: "A" | "B", it: Intent | null) =>
-    rowx(
-      `${t} proof`,
-      proven(it)
-        ? [
-            { t: it!.proof_hash, c: "ok" },
-            { t: `  nonce ${it!.nonce}`, c: "dim" },
-          ]
-        : [{ t: it ? "none: 32 zero bytes, unverified tier" : "no intent", c: "dim" }],
-    );
-
-  const pa = o?.pnl_a ?? 0;
-  const pb = o?.pnl_b ?? 0;
-  const injections = d?.injections ?? [];
+  // the visitor's own newest headline in this duel, and its verdict arriving while they watch
   const records = d?.chaos ?? [];
-  const attacks = d ? attacksOf(d) : 0;
+  const myIndex = site.account ? records.findLastIndex((c) => c.injector === site.account && c.kind !== "Placebo") : -1;
+  const my = myIndex >= 0 ? (records[myIndex] as Chaos) : null;
+  const myTx = mine.find((m) => m.duel === id && m.arena === arena && (m.index === myIndex || m.index === null))?.tx;
+  const myOutcome = my?.outcome ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: react to the outcome changing, nothing else
+  useEffect(() => {
+    if (!my || !myOutcome) return;
+    if (seen.current === "Pending" && myOutcome !== "Pending") {
+      setFresh(true);
+      site.announce(`${VERDICT[myOutcome as keyof typeof VERDICT].word}. ${sentence(my, "attacker") ?? ""}`);
+    }
+    seen.current = myOutcome;
+    document.title = `${myOutcome === "Pending" ? "Waiting" : VERDICT[myOutcome].word} · Duel #${id}`;
+  }, [myOutcome]);
+
+  if (!d)
+    return (
+      <div className="stack">
+        <p>{`There is no duel #${id} on ${NETWORK_ID}.`}</p>
+        <LinkButton variant="quiet" href="/arena">
+          See all duels
+        </LinkButton>
+      </div>
+    );
+
+  const hist = (w: Which) => (w === "a" ? histories.a : histories.b) ?? emptyHistory(d.close_at);
+  const agent = (w: Which) => (w === "a" ? body.a : body.b);
+  const intent = (w: Which) => (w === "a" ? d.last_intent_a : d.last_intent_b);
+  const model = (w: Which) => agent(w)?.model_id ?? "?";
+  const tA = traceOf(body, "a", hist("a"), now, staleAt);
+  const tB = traceOf(body, "b", hist("b"), now, staleAt);
+  const gate = attackGate(body, now);
+  const o = phase === "finished" ? d.outcome : null;
+  const open8 = o?.open_price ?? d.open_price;
+  const shownPrice = o ? price8(o.close_price) : price.price;
+  const move = sinceOpen(open8, shownPrice);
+  const pnl = (w: Which) => (o ? (w === "a" ? o.pnl_a : o.pnl_b) : livePnl(intent(w), price8(open8), price.price));
+  const ended = (w: Which): string | null =>
+    o ? (o.winner === null ? "tie" : o.winner === (w === "a" ? d.a : d.b) ? "won" : "lost") : null;
+  const [pa, pb] = [pnl("a"), pnl("b")];
+  const ahead: Which | null =
+    !o && phase === "running" && pa !== null && pb !== null && pa !== pb ? (pa > pb ? "a" : "b") : null;
+  const pct = (bps: number) => `${bps >= 0 ? "+" : ""}${(bps / 100).toFixed(2)}%`;
+  const attacks = records.filter((c) => c.kind !== "Placebo");
+  const titles = Object.fromEntries(records.map((c, i) => [String(i), c.headline]));
+  const sideOf = (c: Chaos): Which => (c.target === d.a ? "a" : "b");
+  const asWritten = (w: Which) => body.keyless?.[w === "a" ? 0 : 1]?.template === 1;
+  const showRow = (i: string) => {
+    setOpenRow(Number(i));
+    // the row sits in a disclosure that opens with it: scroll once it is laid out
+    setTimeout(() => document.getElementById(`headline-${i}`)?.scrollIntoView({ block: "center" }), 0);
+  };
+  const planted = (m: Mine | null) => {
+    if (m) {
+      rememberHeadline(m);
+      setMine(myHeadlines());
+    }
+    close();
+    refresh();
+  };
+  const box = (
+    <AttackBox
+      body={body}
+      arena={arena}
+      histories={histories}
+      now={now}
+      target={target}
+      onTarget={setTarget}
+      onPlanted={planted}
+      onLock={setLocked}
+      refresh={refresh}
+    />
+  );
+  const mySide = my ? sideOf(my) : "a";
+  const myTrace = my ? traceOf(body, mySide, hist(mySide), now, staleAt) : null;
+  const myWaiting = my?.outcome === "Pending";
+  const enclave = (w: Which) =>
+    agent(w)?.tee ? (
+      <a className="proof" href={verifyHref(id, arena)}>
+        Runs in a secure enclave
+      </a>
+    ) : null;
+  const newest = attacks.at(-1);
+  // no decision from either AI is the one gate said per AI, not once under both
+  const caption = gate?.label
+    ? gate.label === "Too late for this duel"
+      ? `${gate.label}. ${gate.why}`
+      : gate.why
+    : null;
+  const waitsForDecision = !!gate && !d.last_intent_a && !d.last_intent_b;
 
   return (
     <>
-      <pre className="wrap">
-        <a href="/arena" className="dim">
-          ← arena
-        </a>
-        {"  "}
-        <span className="hi">NEARBUDDY DUEL #{id}</span>
-        {d ? (
+      <div className="stack-2 duel-top">
+        {phase === "running" ? (
+          <p>
+            Two AIs are betting on the NEAR price. <Countdown to={nsMs(d.close_at)} now={now} stale={stale} /> left.
+          </p>
+        ) : phase === "closed" ? (
+          <p className="caution">Closed. Waiting for the final price.</p>
+        ) : phase === "finished" ? (
           <>
-            {" "}
-            <span className="dim">· {symbol(d.symbol)} ·</span> <span className={state!.c}>{state!.t}</span>{" "}
-            <span className="dim">
-              · {openMs(d) != null ? when(d.open_at!) : "-"} → {ts(d.close_at)} UTC · pool {near(d.pool)} NEAR
-            </span>
-          </>
-        ) : null}
-        {"\n"}
-        <span className="dim">
-          {r
-            ? `snapshot ${new Date(r.at).toISOString()}  contract ${r.contract}  rpc ${r.rpc}`
-            : err
-              ? `error: ${err}`
-              : "connecting"}
-        </span>
-        <span className="cursor" />
-      </pre>
-      <pre>
-        {boxTitle(1, "sides", "who fought, their tier, their last intent")}
-        {"\n"}
-        {d ? (
-          <>
-            {sideRow("A", d.a, r?.a ?? null, d.last_intent_a)}
-            {"\n"}
-            {sideRow("B", d.b, r?.b ?? null, d.last_intent_b)}
-            {"\n"}
-            {rowx("commit-reveal", commitCells(r?.config))}
-            {"\n"}
-            {rowx("pairing", pairingCells(ev?.opened, r?.config))}
-            {"\n"}
-            {r?.config?.commit_reveal || r?.no_reveal ? (
-              <>
-                {rowx("reveal", [
-                  "A ",
-                  revealCell(r.no_reveal, 0, !!d.last_intent_a, d.resolved),
-                  "   B ",
-                  revealCell(r.no_reveal, 1, !!d.last_intent_b, d.resolved),
-                ])}
-                {"\n"}
-                {ev
-                  ? (["A", "B"] as const).map((t) => (
-                      <span key={t}>
-                        {rowx(`${t} commit`, timelineCells(ev.events, t === "A" ? d.a : d.b, d.resolved))}
-                        {"\n"}
-                      </span>
-                    ))
-                  : null}
-                {ev?.oldest_ms != null && openMs(d) != null && openMs(d)! < ev.oldest_ms ? (
-                  <>
-                    {rowx("", [
-                      {
-                        t: `opened before the scanned tx window (from ${new Date(ev.oldest_ms).toISOString().slice(11, 19)} UTC): earlier events not shown`,
-                        c: "dim",
-                      },
-                    ])}
-                    {"\n"}
-                  </>
-                ) : null}
-              </>
-            ) : null}
+            <p className="dim">{`Finished ${hm(nsMs(d.close_at))}`}</p>
+            <p>{o?.winner ? `${model(o.winner === d.a ? "a" : "b")} won this duel.` : "This duel was a tie."}</p>
           </>
         ) : (
-          <>
-            {rowx("", [{ t: r ? "no such duel on this contract" : "loading", c: "dim" }])}
-            {"\n"}
-          </>
+          <p className="caution">Cancelled. The final price never arrived, so nobody won this duel.</p>
         )}
-        {legend(
-          `ENCLAVE-VERIFIED = intents signed inside a NEAR AI TEE · size = % of bond risked · proof = sha256 of the model call${r?.config?.commit_reveal ? " · no reveal = forfeit + no_reveal_bps of bond to the opponent (both: tie, to the protocol)" : ""}`,
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
+      </div>
 
-        {boxTitle(2, "prices", `oracle ${oracle}`)}
-        {"\n"}
-        {rowx(
-          "open",
-          d?.open_price || o
-            ? [
-                `${price8(o?.open_price ?? d?.open_price)} USD`,
-                { t: "   snapshotted by the Outlayer TEE oracle right after open", c: "dim" },
-              ]
-            : [{ t: unscored ? "none recorded" : "pending oracle callback", c: "dim" }],
-        )}
-        {"\n"}
-        {rowx(
-          "close",
-          o
-            ? [
-                `${price8(o.close_price)} USD`,
-                { t: `   fetched by the oracle at resolve, after ${d ? ts(d.close_at) : "-"}`, c: "dim" },
-              ]
-            : unscored
-              ? [{ t: `${NO_OUTCOME}: a pre-migration duel, never scored`, c: "dim" }]
-              : [{ t: d ? `pending: anyone can resolve after ${ts(d.close_at)} UTC` : "-", c: "dim" }],
-        )}
-        {"\n"}
-        {rowx(
-          "pnl",
-          o
-            ? [
-                ...meter(
-                  [
-                    [Math.abs(pa), pnlc(pa)],
-                    [Math.abs(pb), pnlc(pb)],
-                  ],
-                  Math.abs(pa) + Math.abs(pb),
-                ),
-                "  A ",
-                { t: `${bps(pa)} bps`, c: pnlc(pa) },
-                "   B ",
-                { t: `${bps(pb)} bps`, c: pnlc(pb) },
-                { t: "   bar: |pnl A| vs |pnl B|", c: "dim" },
-              ]
-            : [
-                ...meter([], 0),
-                { t: unscored ? "  not scored" : "  scored at resolve: side × size × price move", c: "dim" },
-              ],
-        )}
-        {"\n"}
-        {rowx(
-          "winner",
-          o
-            ? o.winner
-              ? [
-                  { t: `${tag(o.winner)} ${name(o.winner)}`, href: agentHref(o.winner), c: "win", title: o.winner },
-                  { t: "   pool paid to the winner", c: "dim" },
-                ]
-              : [{ t: "tie, pool split", c: "tie" }]
-            : [{ t: unscored ? NO_OUTCOME : "undecided", c: "dim" }],
-        )}
-        {"\n"}
-        {rowx(
-          "slashed",
-          o
-            ? BigInt(o.slashed) > 0n
-              ? [
-                  { t: `${near(o.slashed)} NEAR`, c: "loss" },
-                  { t: "   taken from the loser's bond into the pool", c: "dim" },
-                ]
-              : [{ t: o.winner ? "0 NEAR" : "0 NEAR   a tie slashes nobody", c: "dim" }]
-            : [{ t: unscored ? NO_OUTCOME : "decided at resolve", c: "dim" }],
-        )}
-        {"\n"}
-        {legend(
-          "pnl = side × size × price move, 1 bps = 0.01 % · slashed = the loser's share of bond (slash_bps) moved to the pool",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
+      {my && myTrace ? (
+        <section className="boxed duel-yours" aria-label="Your headline">
+          {myWaiting ? (
+            <WaitPanel
+              c={my}
+              model={model(mySide)}
+              viewer="attacker"
+              asWritten={asWritten(mySide)}
+              trace={{ ...myTrace, pins: myTrace.pins.filter((p) => p.id === String(myIndex)) }}
+              locked={body.open?.[String(myIndex)]?.open === false}
+              decisionTimes={hist(mySide).decisions.map((x) => x.at)}
+              closeMs={nsMs(d.close_at)}
+              now={now}
+              link={myTx ? `/i/${myTx}` : null}
+              plantedMs={nsMs(my.at)}
+            />
+          ) : (
+            <ResultPanel
+              c={my}
+              model={model(mySide)}
+              viewer="attacker"
+              asWritten={asWritten(mySide)}
+              end={endOf(d, my.target, now)}
+              feeBps={body.config.chaos?.fee_bps ?? 0}
+              reason={hist(mySide).said.find((x) => x.at > nsMs(my.at))?.text ?? null}
+              plantedMs={nsMs(my.at)}
+              trace={{ ...myTrace, pins: myTrace.pins.filter((p) => p.id === String(myIndex)) }}
+              fresh={fresh}
+              actions={
+                <>
+                  <Collect
+                    records={records}
+                    account={site.account}
+                    contract={body.contract}
+                    duelId={id}
+                    finished={phase === "finished" || phase === "cancelled"}
+                    onDone={refresh}
+                  />
+                  {myTx ? (
+                    <Button variant="quiet" onClick={() => setShare(true)}>
+                      Share
+                    </Button>
+                  ) : null}
+                </>
+              }
+              links={
+                <a className="proof" href={verifyHref(id, arena)}>
+                  Verify this result
+                </a>
+              }
+            />
+          )}
+          {gate ? null : (
+            <button type="button" className="btn-link" onClick={() => lie(mySide)}>
+              Plant another
+            </button>
+          )}
+          {myTx ? (
+            <ShareSheet
+              open={share}
+              onClose={() => setShare(false)}
+              tx={myTx}
+              model={model(mySide)}
+              outcome={my.outcome}
+            />
+          ) : null}
+        </section>
+      ) : null}
 
-        {boxTitle(3, "attacks", "paid prompt injections at a side, recorded on-chain")}
-        {"\n"}
-        {records.length
-          ? records.map((c, k) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: get_chaos order, append-only
-              <span key={k}>
-                {rowx(`#${k} ${tag(c.target)}`, [
-                  { t: `${(c.kind === "Placebo" ? "placebo" : c.kind.toUpperCase()).padEnd(7)} `, c: "dim" },
-                  { t: `${c.arm.toLowerCase().padEnd(6)} `, c: "dim" },
-                  { t: OUTCOME[c.outcome][0].padEnd(12), c: OUTCOME[c.outcome][1] },
-                  // payouts are set when the duel finishes: before that, "0.000 out" would read as a loss
-                  BigInt(c.stake) > 0n
-                    ? d?.resolved
-                      ? { t: `${near(c.stake)} in → ${near(c.payout)} out  `, c: "ok", title: `paid to ${c.injector}` }
-                      : { t: `${near(c.stake)} in, settles at close  `, c: "dim", title: `staked by ${c.injector}` }
-                    : "",
-                  { t: `"${c.headline}"`, c: "warn", title: `${c.headline} · by ${c.injector}` },
-                ])}
-                {"\n"}
-              </span>
-            ))
-          : d?.resolved
-            ? rowx("attacks", [
-                `${attacks} during the duel`,
-                {
-                  t: attacks ? "   planted before deploy 17: only the count stays on chain" : "",
-                  c: "dim",
-                },
-              ])
-            : injections.length
-              ? injections.map((j, k) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: on-chain order, append-only
-                  <span key={k}>
-                    {rowx(k ? "" : "attacks", [
-                      kindCell(j.kind),
-                      " → ",
-                      {
-                        t: `${tag(j.target)} ${name(j.target)}`.slice(0, 30),
-                        href: agentHref(j.target),
-                        title: j.target,
-                      },
-                      " ".repeat(Math.max(2, 32 - `${tag(j.target)} ${name(j.target)}`.length)),
-                      "sha256 ",
-                      { t: short(j.payload_hash, 12), title: j.payload_hash },
-                      "  block ",
-                      { t: j.block, href: blockHref(j.block), c: "dim" },
-                    ])}
-                    {"\n"}
-                  </span>
-                ))
-              : rowx("attacks", [{ t: d ? "0 so far: the inject pane on / plants one" : "loading", c: "dim" }])}
-        {records.length || (!d?.resolved && injections.length) ? "" : "\n"}
-        {legend(
-          records.length
-            ? "attack = anyone pays chaos_fee to plant one headline at one side mid-duel · FLIPPED = the side's next proved call moved to the lie's side · in → out = stake and what claim_chaos pays"
-            : "attack = anyone pays a deposit to send one prompt to one side mid-duel · sha256 = hash of that prompt",
-        )}
-        {"\n"}
-        {bottom()}
-        {"\n\n"}
+      <div className="picks duel-picks">
+        {(["a", "b"] as const).map((w) => {
+          const it = intent(w);
+          const end = ended(w);
+          return (
+            <section className="pick" key={w} aria-label={`Agent ${w.toUpperCase()}`}>
+              <div className="hrow">
+                <h2 className="who">{model(w)}</h2>
+                {end ? <span className={`end ${end === "lost" ? "dim" : "ink"}`}>{end}</span> : null}
+              </div>
+              {it ? (
+                <>
+                  <p>
+                    Betting the price goes <span className="ink">{bet(it.side)}</span>
+                  </p>
+                  <MachineQuote text={hist(w).reason} />
+                </>
+              ) : (
+                <p className="dim">
+                  No decision yet. The first one usually lands within a few minutes of the duel opening.
+                </p>
+              )}
+              {phase !== "running" || my ? null : (
+                <Button
+                  variant="attack"
+                  disabled={!!gate || !it}
+                  why={
+                    !it || waitsForDecision
+                      ? "Wait for its first decision. An attack needs a position to push against."
+                      : null
+                  }
+                  onClick={() => lie(w)}
+                >
+                  Lie to this one
+                </Button>
+              )}
+            </section>
+          );
+        })}
+      </div>
+      {phase === "running" && !my && caption && !waitsForDecision ? <p className="t-small caution">{caption}</p> : null}
 
-        {boxTitle(4, "how to verify", "without trusting this page")}
-        {"\n"}
-        {row("1 intent", "proof_hash = sha256(request_hash || response_hash) of the NEAR AI Cloud completion;")}
-        {"\n"}
-        {row("", "the contract checked the enclave's ed25519 signature before storing it:")}
-        {"\n"}
-        {proofRow("A", d?.last_intent_a ?? null)}
-        {"\n"}
-        {proofRow("B", d?.last_intent_b ?? null)}
-        {"\n"}
-        {rowx("2 oracle", [
-          "prices come by oracle_on_call from ",
-          { t: oracle, href: addrHref(oracle), title: "open on nearblocks" },
-          " (Outlayer TEE), not an operator;",
-        ])}
-        {"\n"}
-        {rowx("", [
-          "the callback tx is in the contract's transactions on ",
-          { t: "nearblocks", href: addrHref(contract) },
-        ])}
-        {"\n"}
-        {rowx("3 contract", [
-          { t: contract, href: addrHref(contract), title: "open on nearblocks" },
-          `   get_duel {"duel_id":"${id}"} on any RPC returns this record`,
-        ])}
-        {"\n"}
-        {rowx(
-          "4 verified",
-          !d
-            ? [{ t: "-", c: "dim" }]
-            : !d.resolved
-              ? [
-                  { t: "open", c: "open" },
-                  { t: "   checked once the duel resolves", c: "dim" },
-                ]
-              : vf
-                ? verifySummary(vf, showLines, () => setShowLines(!showLines))
-                : [
-                    {
-                      t: vErr
-                        ? `verifier unavailable: ${vErr}`
-                        : "checking: the first look reads the duel's txs, ~20 s",
-                      c: "dim",
-                    },
-                  ],
-        )}
-        {"\n"}
-        {showLines
-          ? (vf?.lines ?? []).map((l, k) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the verifier's lines in its own order
-              <span key={k}>
-                {rowx("", verifyLineCells(l))}
-                {"\n"}
-              </span>
-            ))
-          : null}
-        {rowx("reproduce", [
-          { t: vf?.command ?? `bun run verify-duel ${id}`, c: "hi" },
-          { t: "   from nearbuddy/ in a checkout; public sources only, sends nothing", c: "dim" },
-        ])}
-        {"\n"}
-        {bottom()}
-      </pre>
+      <div className={`duel-work${attack && desktop && phase === "running" ? " with-attack" : ""}`}>
+        <section className="sect stack-2" aria-label="What they have done so far">
+          <h2 className="t-label">What they have done so far</h2>
+          <Trace
+            variant="full"
+            name={`A ${model("a")}`}
+            input={tA}
+            stale={stale}
+            onPin={showRow}
+            titles={titles}
+            selected={openRow === null ? null : String(openRow)}
+          />
+          <Trace
+            variant="full"
+            name={`B ${model("b")}`}
+            input={tB}
+            stale={stale}
+            onPin={showRow}
+            titles={titles}
+            selected={openRow === null ? null : String(openRow)}
+          />
+          {tA ? <TimeAxis input={tA} /> : null}
+          {tA && tB ? (
+            <WhatHappened
+              items={[
+                { name: `A ${model("a")}`, input: tA },
+                { name: `B ${model("b")}`, input: tB },
+              ]}
+            />
+          ) : null}
+          {phase === "finished" || phase === "cancelled" ? (
+            <div className="actions">
+              <LinkButton variant="proof" href={verifyHref(id, arena)}>
+                Verify this duel
+              </LinkButton>
+              <LinkButton variant="quiet" href="/arena">
+                See a running duel
+              </LinkButton>
+            </div>
+          ) : null}
+        </section>
+        {attack && desktop && phase === "running" ? (
+          <section className="boxed attack-panel" ref={panel} aria-label="Plant a fake headline">
+            <div className="hrow">
+              <h2 className="t-title">Plant a fake headline</h2>
+              <button type="button" className="btn-link end" aria-label="Close" disabled={locked} onClick={close}>
+                ✕
+              </button>
+            </div>
+            {box}
+          </section>
+        ) : null}
+      </div>
+
+      <section className="duel-details" aria-label="Details">
+        <h2 className="t-label">Details</h2>
+        <div className="details-grid">
+          <Details
+            id="duel-price"
+            label="Price"
+            summary={shownPrice ? `${shownPrice.toFixed(4)}${move ? `, ${move} since open` : ""}` : "—"}
+          >
+            <PriceLine samples={price.samples} from={nsMs(d.open_at)} to={nsMs(d.close_at)} stale={price.stale} />
+            <p>
+              <span className="t-label">{SYMBOL(d.symbol)}</span>{" "}
+              <span className="t-num">{shownPrice ? shownPrice.toFixed(4) : "—"}</span>
+            </p>
+            <p className="t-small dim">
+              Open price <span className="mono">{price8(open8)?.toFixed(4) ?? "—"}</span>
+            </p>
+          </Details>
+          <Details id="duel-reasoning" label="Their full reasoning">
+            {(["a", "b"] as const).map((w) => {
+              const h = hist(w);
+              const at = h.decisions.at(-1)?.at;
+              return (
+                <div className="stack-2" key={w}>
+                  <p className="who mono">{model(w)}</p>
+                  {intent(w) ? <MachineQuote text={h.reason} /> : <p className="dim">No decision yet.</p>}
+                  {at ? <p className="t-small dim">{`Decided ${hm(at)}`}</p> : null}
+                  {h.sealed ? <p className="t-small caution">A sealed decision is in and not opened yet.</p> : null}
+                  {enclave(w)}
+                </div>
+              );
+            })}
+          </Details>
+          <Details
+            id="duel-headlines"
+            label={`Planted headlines (${attacks.length})`}
+            summary={newest ? <span className="serif-sum">{`“${newest.headline}”`}</span> : undefined}
+            open={openRow !== null || !!my}
+          >
+            {records.length ? (
+              <ul>
+                {records.map((c, i) => (
+                  <HeadlineRow
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a record's index is its identity on chain
+                    key={i}
+                    c={c}
+                    index={i}
+                    side={sideOf(c)}
+                    open={openRow === i}
+                    onToggle={() => setOpenRow(openRow === i ? null : i)}
+                    tx={mine.find((m) => m.duel === id && m.arena === arena && m.index === i)?.tx ?? null}
+                    asWritten={asWritten(sideOf(c))}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <p className="dim">Nobody has planted a headline in this duel.</p>
+            )}
+          </Details>
+          <Details id="duel-money" label="Money" summary="bonds and costs">
+            <dl className="facts">
+              {(["a", "b"] as const).map((w) => (
+                <div key={w} style={{ display: "contents" }}>
+                  <dt>{`Bond ${w.toUpperCase()}`}</dt>
+                  <dd>
+                    <Amount yocto={agent(w)?.bond ?? null} />{" "}
+                    {ahead === w && pa !== null && pb !== null ? (
+                      <span className="ink">{`ahead by ${(Math.abs(pa - pb) / 100).toFixed(2)}%`}</span>
+                    ) : null}
+                    {o ? <span className="mono">{` final profit ${pct(w === "a" ? o.pnl_a : o.pnl_b)}`}</span> : null}{" "}
+                    <a href={agentPath(agent(w)?.pk ?? "")}>Agent page →</a>
+                  </dd>
+                </div>
+              ))}
+              {phase === "running" ? (
+                <>
+                  <dt>Next attack</dt>
+                  <dd>{d.chaos_fee ? near(d.chaos_fee) : "—"}</dd>
+                </>
+              ) : null}
+            </dl>
+            <p className="t-small dim">A bond is money the agent's owner locked as a promise.</p>
+          </Details>
+        </div>
+      </section>
+      <p className="sect">
+        <a className="proof" href={verifyHref(id, arena)}>
+          Verify this duel
+        </a>
+      </p>
+
+      {desktop ? null : (
+        <Sheet
+          open={attack && phase === "running"}
+          kind="tall"
+          locked={locked}
+          title="Plant a fake headline"
+          onClose={close}
+        >
+          {box}
+        </Sheet>
+      )}
     </>
+  );
+}
+
+const emptyHistory = (closeAt: string): History => ({
+  decisions: [],
+  loadedFrom: nsMs(closeAt),
+  current: null,
+  reason: null,
+  said: [],
+  sealed: false,
+});
+
+export function DuelView({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const sp = useSearchParams();
+  const arena = arenaOf(sp.get("arena"));
+  const site = useSite();
+  const now = useNow();
+  const [fast, setFast] = useState(false);
+  const { read, a, b } = useDuel(id, arena, fast);
+  // while one of the visitor's attacks is waiting, the duel is read every 3 s
+  const waiting =
+    !!site.account && !!read.data?.duel?.chaos?.some((c) => c.injector === site.account && c.outcome === "Pending");
+  useEffect(() => setFast(waiting), [waiting]);
+  return (
+    <div className="page duel">
+      <div className="hrow duel-head">
+        <a href="/arena">← All duels</a>
+        <h1 className="t-title end">{`Duel #${id}`}</h1>
+      </div>
+      <Region
+        read={read}
+        skeleton={
+          <div className="stack">
+            <Trace variant="full" name="A" input={null} />
+            <Trace variant="full" name="B" input={null} />
+            <Skeleton bars={["60%", "90%", "40%"]} />
+          </div>
+        }
+      >
+        {(body, stale) => (
+          <Loaded
+            id={id}
+            body={body}
+            stale={stale}
+            staleAt={stale && now ? now - read.age * 1000 : null}
+            histories={{ a, b }}
+            now={now}
+            refresh={read.retry}
+          />
+        )}
+      </Region>
+    </div>
   );
 }
