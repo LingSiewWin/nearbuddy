@@ -66,13 +66,13 @@ export function Strip({
   of: number;
   cells?: number;
   kind?: "live" | "alert" | "ink" | "ok";
-  /** What is counted, for the accessible name: "fooled". */
+  /** The accessible name, with its counts: "Fooled 676 of 704". */
   label: string;
 }) {
   const total = of > 0 && of <= cells ? of : cells;
   const lit = stripCells(n, of, total);
   return (
-    <span className={`strip ${kind}`} role="img" aria-label={`${label}: ${n} of ${of}`}>
+    <span className={`strip ${kind}`} role="img" aria-label={label}>
       {Array.from({ length: total }, (_, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: cells are positional
         <i key={i} className={i < lit ? "on" : undefined} />
