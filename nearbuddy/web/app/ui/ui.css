@@ -2691,9 +2691,8 @@ table.board tbody th {
 .hero-copy {
   position: relative;
   z-index: 3;
-  max-width: 34rem;
+  max-width: 46rem;
   margin: var(--s-6);
-  margin-bottom: 11rem;
   padding: var(--s-5);
   display: grid;
   align-content: center;
@@ -2707,6 +2706,8 @@ table.board tbody th {
 }
 .hero-band .hero-title {
   color: #f4f6ff;
+  /* three lines at most beside the ocean, not a column of single words */
+  font-size: clamp(34px, 4.6vw, 64px);
 }
 .hero-band .hero-lede {
   color: color-mix(in srgb, #f4f6ff 72%, transparent);
@@ -3798,4 +3799,38 @@ dialog.wallet-gate[open] {
   .docs-sect .sect-head {
     margin-top: var(--s-6);
   }
+}
+
+/* ---------------------------------------------------------------- home: chapter 03, the two things a visitor can do */
+.try {
+  display: grid;
+  gap: var(--s-7);
+}
+.match {
+  display: grid;
+  gap: var(--s-3);
+}
+/* the ocean as a stage: the canvas, then the two-model dock under it instead of floating over it */
+.ocean-stage {
+  position: relative;
+  border: 1px solid var(--rule);
+}
+.ocean-arena.ocean-arena-stage {
+  position: relative;
+  inset: auto;
+  display: grid;
+}
+.ocean-arena-stage .ascii-ocean {
+  position: relative;
+  inset: auto;
+  height: clamp(280px, 48vh, 460px);
+}
+.ocean-arena-stage .ocean-dock {
+  position: static;
+  transform: none;
+  width: auto;
+  padding: var(--s-4);
+  border-radius: 0;
+  backdrop-filter: none;
+  font-size: 13px;
 }

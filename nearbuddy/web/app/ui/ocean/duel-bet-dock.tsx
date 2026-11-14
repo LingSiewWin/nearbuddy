@@ -134,8 +134,8 @@ export function DuelBetDock({
           />
         </div>
         <p className="ocean-dock-note">
-          Stake on <strong>{active.label}</strong> · pool weight {odds}× — kinematics only, not a NEAR payout.{" "}
-          <a href="/enter">Enter a real agent</a> or <a href="/board">audit counts</a>.
+          Backing <strong>{active.label}</strong> at {odds}×. Sizes and odds come from each model's recorded results;
+          nothing is staked on chain. <a href="/enter">Enter a real agent</a> or <a href="/board">see the counts</a>.
         </p>
         <button type="submit" className="ocean-dock-go">
           Run a round

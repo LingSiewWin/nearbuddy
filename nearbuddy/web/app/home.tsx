@@ -196,7 +196,7 @@ export default function Home({ practice }: { practice: boolean }) {
             title: "What it is",
             node: (go) => (
               <div className="hero-band hero-band-ocean">
-                <OceanArena models={board.models} datasetRows={board.rows} />
+                <OceanArena models={board.models} datasetRows={board.rows} dock={false} />
                 <InteractiveGrid cellSize={16} />
                 <div className="hero-copy">
                   {shown ? (
@@ -248,7 +248,30 @@ export default function Home({ practice }: { practice: boolean }) {
                 />
               ),
           },
-          { title: "Try it yourself", node: () => <PracticePanel enabled={practice} second={!!shown} /> },
+          {
+            title: "Try it yourself",
+            node: () => (
+              <div className="try">
+                <PracticePanel enabled={practice} second={!!shown} />
+                <section className="match" aria-labelledby="match-title">
+                  <header className="practice-head">
+                    <h2 id="match-title" className="t-label">
+                      Match two models
+                    </h2>
+                    <span className="practice-terms">each one is as large as its record</span>
+                  </header>
+                  <div className="ocean-stage">
+                    <OceanArena
+                      models={board.models}
+                      datasetRows={board.rows}
+                      pill={false}
+                      className="ocean-arena-stage"
+                    />
+                  </div>
+                </section>
+              </div>
+            ),
+          },
         ]}
       />
 

@@ -15,6 +15,10 @@ export type OceanArenaProps = {
   datasetRows?: number;
   /** Prefer strongest vs weakest by resistance for the opening duel. */
   className?: string;
+  /** The two-model dock. Off for the hero, where the ocean is only the backdrop. */
+  dock?: boolean;
+  /** The count pill at the top. */
+  pill?: boolean;
 };
 
 function pickOpeningPair(catalog: ModelSpec[]): [ModelSpec, ModelSpec] | null {
@@ -47,7 +51,7 @@ function useSiteTheme(): ArenaTheme {
   return theme;
 }
 
-export function OceanArena({ models, datasetRows = 0, className }: OceanArenaProps) {
+export function OceanArena({ models, datasetRows = 0, className, dock = true, pill = true }: OceanArenaProps) {
   const catalog = useMemo(() => catalogFromBoard(models), [models]);
   const seeds = useMemo(() => seedFromBoard(models), [models]);
   const simulation = useMemo(() => {
@@ -84,16 +88,18 @@ export function OceanArena({ models, datasetRows = 0, className }: OceanArenaPro
         onTickHud={bump}
       />
 
-      <header className="ocean-pill">
-        <span className="ocean-pill-dot" aria-hidden />
-        <span>
-          <strong>{datasetRows.toLocaleString("en-US")}</strong> signed decisions on record
-        </span>
-      </header>
+      {pill ? (
+        <header className="ocean-pill">
+          <span className="ocean-pill-dot" aria-hidden />
+          <span>
+            <strong>{datasetRows.toLocaleString("en-US")}</strong> signed decisions on record
+          </span>
+        </header>
+      ) : null}
 
       <AuditDrawer model={inspected} theme={theme} onClose={() => setInspectedId(null)} />
 
-      {left && right ? (
+      {dock && left && right ? (
         <DuelBetDock
           leftModel={left}
           rightModel={right}
