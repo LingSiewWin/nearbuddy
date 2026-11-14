@@ -15,6 +15,7 @@ import { agentPath } from "../ui/data";
 import { bet, TEST_NOTE } from "../ui/format";
 import { Panel, Readout, Tag } from "../ui/instruments";
 import { Button, Field, LinkButton, Region, Skeleton, StatusBar, useRead } from "../ui/kit";
+import { LoadingState } from "../ui/loading";
 
 // starting points a newcomer can pick; each passes the contract's strategy rules (printable ASCII, one line)
 const STARTERS: { name: string; line: string; text: string }[] = [
@@ -181,7 +182,10 @@ export default function Enter({ contract }: { contract: string | null }) {
         typeof pk === "string"
           ? null
           : await getJson<Info>(`/api/keyless?owner=${encodeURIComponent(account)}`).catch(() => null);
-      setEntered({ pk: typeof pk === "string" ? pk : (mine?.agents?.at(-1) ?? null) });
+      const key = typeof pk === "string" ? pk : (mine?.agents?.at(-1) ?? null);
+      // the owner's next page is the agent's own; the note below is only for a wallet that hands back no key
+      if (key) window.location.assign(agentPath(key));
+      setEntered({ pk: key });
     } catch (e) {
       const reason = String(e instanceof Error ? e.message : e).slice(0, 200);
       setFailed({ cancelled: /reject|cancel|denied|closed|abort|declin/i.test(reason), reason });
@@ -201,7 +205,9 @@ export default function Enter({ contract }: { contract: string | null }) {
         </p>
       </header>
       <div className="enter-grid">
-        {entered ? (
+        {entered?.pk ? (
+          <LoadingState label="Opening your agent's page" variant="orbit" />
+        ) : entered ? (
           <div className="stack">
             <p className="t-title">Your agent is entered.</p>
             {entered.pk ? (
@@ -307,6 +313,7 @@ export default function Enter({ contract }: { contract: string | null }) {
                           : `Could not enter. Nothing was locked. ${failed.reason}`}
                       </StatusBar>
                     ) : null}
+                    {busy ? <LoadingState label={busy} /> : null}
                     <Button variant="primary" type="submit" busy={busy}>
                       {site.account ? "Lock bond and enter" : "Sign in to enter"}
                     </Button>

@@ -11,7 +11,8 @@ import { IntervalBar } from "../../ui/charts";
 import { useSite } from "../../ui/chrome";
 import { type DuelBody, duelPath, duelUrl, phaseOf, verifyHref } from "../../ui/data";
 import { shortId, shortModel } from "../../ui/format";
-import { Amount, Details, LinkButton, Region, Skeleton, useMedia, useNow, useRead } from "../../ui/kit";
+import { Amount, Details, LinkButton, Region, useMedia, useNow, useRead } from "../../ui/kit";
+import { LoadingState } from "../../ui/loading";
 import { MachineQuote } from "../../ui/result";
 
 type Main = {
@@ -28,7 +29,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const q = encodeURIComponent(pk);
   const now = useNow();
   const desktop = useMedia("(min-width: 960px)"); // desktop: the first two rows start open
-  const { list } = useSite();
+  const { list, account } = useSite();
   const main = useRead<Main>(`/api/agent?pk=${q}`, 60_000, 300_000);
   // not on the main arena: the keyless one is asked next
   const elsewhere = main.data !== null && !main.data.agent;
@@ -41,12 +42,9 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const settled = main.data !== null && (!elsewhere || kl.data !== null || kl.error !== null);
   return (
     <div className="page">
-      <p>
-        <a href="/board">← Scoreboard</a>
-      </p>
-      <Region read={main} skeleton={<Skeleton bars={["60%", "40%", "90%"]} />}>
+      <Region read={main} skeleton={<LoadingState label="Reading the agent from the chain" variant="dots" />}>
         {() => {
-          if (!settled) return <Skeleton bars={["60%", "40%", "90%"]} />;
+          if (!settled) return <LoadingState label="Reading the agent from the chain" variant="dots" />;
           if (!agent) return <p>{`No agent with this key on ${NETWORK_ID}.`}</p>;
           const row = board.data?.models.find((m) => m.model === agent.model_id) ?? null;
           const running = !!duel.data?.duel && phaseOf(duel.data.duel, now) === "running";
@@ -58,13 +56,13 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
               })();
           const strategy = kl.data?.state?.keyless?.strategy ?? null;
           const inList = list.data?.duels.some((r) => r.a.pk === pk || r.b.pk === pk);
+          const mine = !!account && account === agent.owner;
+          const fresh = !agent.in_duel && !record?.duels && !inList;
           return (
-            <div className="agent-grid">
+            <div className="agent-grid reveal">
               <div className="stack">
+                <p className="t-label">{mine ? "Your agent" : "Agent"}</p>
                 <h1 className="t-display mono agent-model">{shortModel(agent.model_id)}</h1>
-                <p className="t-small dim">
-                  model <span className="mono">{agent.model_id}</span>
-                </p>
                 <p className="t-small">
                   owner <span className="mono">{shortId(agent.owner, 16, 10)}</span>
                   {agent.tee ? (
@@ -80,16 +78,46 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
                     </>
                   ) : null}
                 </p>
-                {row ? (
-                  <>
-                    <p>{`Fooled ${row.fooled} of ${row.tested} times.`}</p>
-                    <p className="t-small dim">{`All agents running ${agent.model_id}, from ${board.data?.rows.toLocaleString("en-US")} recorded decisions.`}</p>
-                  </>
-                ) : board.data ? (
-                  <p>No recorded attacks on this model yet.</p>
+                <dl className="kv agent-facts">
+                  <dt>Bond locked</dt>
+                  <dd>
+                    <Amount yocto={agent.bond} />
+                  </dd>
+                  <dt>Duels</dt>
+                  <dd>
+                    {record?.duels ? `${record.wins} won · ${record.losses} lost · ${record.ties} tie` : "none yet"}
+                  </dd>
+                </dl>
+                {strategy ? (
+                  <div className="stack-2">
+                    <p className="t-label">Its strategy</p>
+                    <MachineQuote text={strategy} />
+                  </div>
                 ) : null}
-                {!agent.in_duel && record?.duels === 0 && !inList ? (
-                  <p className="dim">Entered, waiting for its first duel.</p>
+                {mine && fresh ? (
+                  <div className="stack-2 agent-next">
+                    <p className="t-label">What happens next</p>
+                    <ol className="next-steps">
+                      {[
+                        "It is entered and its bond is locked. Nothing more to sign.",
+                        "It is paired into a duel against another agent on the NEAR price. Each decision is signed inside a secure enclave.",
+                        "While it duels, anyone can plant a fake headline at it. This page then shows whether it held.",
+                      ].map((t, i) => (
+                        <li key={t}>
+                          <span>{i + 1}</span>
+                          <span>{t}</span>
+                        </li>
+                      ))}
+                    </ol>
+                    <div className="stage-lead">
+                      <LinkButton variant="primary" fit href="/enter">
+                        Test a strategy against a headline
+                      </LinkButton>
+                      <LinkButton variant="quiet" fit href="/arena">
+                        See the arena
+                      </LinkButton>
+                    </div>
+                  </div>
                 ) : null}
                 {running && agent.in_duel ? (
                   <LinkButton
@@ -102,7 +130,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
                 ) : null}
               </div>
               <div>
-                <Details id="agent-hard" label="How hard is this model to fool" open={desktop}>
+                <Details id="agent-hard" label="This model, across every agent that runs it" open={desktop}>
                   {row && row.tested >= MIN_RANKED ? (
                     <>
                       <p>{`Fooled ${row.fooled} of ${row.tested} attacks that counted`}</p>
@@ -127,32 +155,6 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
                         <Amount yocto={duel.data?.duel?.chaos_fee ?? null} />
                       </span>
                     </div>
-                  </Details>
-                ) : (
-                  <div className="details">
-                    <p className="t-small dim" style={{ padding: "12px 0" }}>
-                      It is not in a running duel, so it cannot be attacked right now.{" "}
-                      <a href="/">Watch a real attack</a> or <a href="/arena">see all duels</a>.
-                    </p>
-                  </div>
-                )}
-                <Details
-                  id="agent-duels"
-                  label="Duels"
-                  summary={record ? `${record.wins} won · ${record.losses} lost · ${record.ties} tie` : undefined}
-                >
-                  {record ? (
-                    <p>{`${record.wins} won · ${record.losses} lost · ${record.ties} tie`}</p>
-                  ) : (
-                    <p className="dim">Its duels could not be counted just now.</p>
-                  )}
-                  <p>
-                    Bond <Amount yocto={agent.bond} />
-                  </p>
-                </Details>
-                {strategy ? (
-                  <Details id="agent-strategy" label="Strategy" summary="open" open={desktop}>
-                    <MachineQuote text={strategy} />
                   </Details>
                 ) : null}
               </div>

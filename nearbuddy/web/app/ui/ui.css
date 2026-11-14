@@ -3923,6 +3923,15 @@ dialog.wallet-gate[open] {
   padding-bottom: var(--s-4);
 }
 
+/* ---------------------------------------------------------------- /agent: the owner's facts and next steps */
+.agent-facts {
+  max-width: 28rem;
+}
+.agent-next {
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
+}
+
 /* ---------------------------------------------------------------- loading state: pixel grid, sheen label, timer */
 .loading-state {
   display: grid;
