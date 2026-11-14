@@ -14,7 +14,7 @@ import { bet, near, nsMs, shortModel } from "./ui/format";
 import { Chapters } from "./ui/hero";
 import { Panel, Readout, Strip, Tag } from "./ui/instruments";
 import { InteractiveGrid } from "./ui/interactive-grid";
-import { Button, Countdown, Details, LinkButton, StatusBar, useNow } from "./ui/kit";
+import { Button, Countdown, LinkButton, StatusBar, useNow } from "./ui/kit";
 import { OceanArena } from "./ui/ocean";
 import { PracticePanel } from "./ui/practice";
 import { QUICK_PLAY_MS, RECORDED } from "./ui/replay";
