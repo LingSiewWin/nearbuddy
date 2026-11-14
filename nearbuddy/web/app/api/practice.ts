@@ -20,8 +20,9 @@ export const PER_ADDRESS = 5;
 export const WINDOW_S = 600;
 export const SITE_DAILY = 600;
 export const DAY_S = 86_400;
-const COMPLETION_MS = 25_000;
-const SIGNATURE_MS = 4_000;
+// the slowest answer seen in testing took over 25 s; the route may run 60 s in all
+const COMPLETION_MS = 35_000;
+const SIGNATURE_MS = 3_000;
 const SIGNATURE_TRIES = 3;
 
 /** Seconds to wait before this address may play again; 0 when the round may run now. `bump` adds one to a counter
