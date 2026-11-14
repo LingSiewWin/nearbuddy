@@ -1363,3 +1363,338 @@ table.plain td {
     margin-top: 0;
   }
 }
+
+/* ================================================================ the control room
+   Everything below restyles the frame above into a dense instrument panel: a wider page, a compact header, panels
+   joined by hairlines (.deck), and the small instruments of ui/instruments.tsx. One accent (--live) for live ink and
+   micro-charts; --signal still means only "did not hold, or was refused"; --proof means checked. */
+.page {
+  max-width: 1360px;
+  padding: var(--s-4) var(--s-4) var(--s-7);
+}
+.site-header .bar,
+.site-footer .bar {
+  max-width: 1360px;
+}
+.site-header .bar {
+  height: 48px;
+}
+.wordmark {
+  font: 600 15px / 1 var(--sans);
+  letter-spacing: 0.02em;
+}
+.site-nav a,
+.net-tag {
+  font: 500 11px / 1 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.site-nav a[aria-current="page"],
+.menu-list a[aria-current="page"] {
+  color: var(--hi);
+  border-bottom-color: var(--live);
+}
+.site-header .btn {
+  min-height: 32px;
+  font-size: 13px;
+  padding: 0 var(--s-3);
+}
+.site-header .menu-button {
+  min-width: 44px;
+  min-height: 44px;
+}
+.btn {
+  min-height: 44px;
+  font-size: 15px;
+}
+.btn-primary {
+  background: var(--live);
+  color: var(--bg);
+}
+.site a.btn-primary {
+  color: var(--bg);
+}
+.seg label:has(input:checked) {
+  background: var(--live);
+  color: var(--bg);
+}
+.t-label {
+  letter-spacing: 0.08em;
+}
+.vtag {
+  font: 500 10.5px / 1 var(--mono);
+  letter-spacing: 0.08em;
+  padding: 3px 6px;
+  border-radius: 2px;
+}
+.live {
+  color: var(--live);
+}
+.lede {
+  color: var(--dim);
+  max-width: 68ch;
+}
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-2) var(--s-5);
+  padding-bottom: var(--s-4);
+}
+.page-head h1 {
+  margin-right: auto;
+}
+.page-head .lede {
+  flex-basis: 100%;
+}
+
+/* ---------------------------------------------------------------- deck: panels joined by hairlines */
+.deck {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+.deck + .deck {
+  border-top: 0;
+}
+.panel {
+  background: var(--bg);
+  padding: var(--s-3);
+  min-width: 0;
+}
+.panel > * + * {
+  margin-top: var(--s-2);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 18px;
+}
+.panel-head .t-label {
+  margin-right: auto;
+}
+.panel p,
+.panel li {
+  font: var(--t-small);
+}
+.panel .hl {
+  font: 500 17px / 1.3 var(--serif);
+}
+.panel a.btn-link,
+.panel .btn-link {
+  min-height: 32px;
+  font: var(--t-small);
+}
+@media (min-width: 600px) {
+  .deck.c2,
+  .deck.c3,
+  .deck.c4,
+  .deck.c6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .deck.c3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (min-width: 960px) {
+  .deck.c4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .deck.c6 {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .panel.w2 {
+    grid-column: span 2;
+  }
+  .panel.w3 {
+    grid-column: span 3;
+  }
+}
+
+/* ---------------------------------------------------------------- instruments */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 500 10.5px / 1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 3px 6px;
+  border: 1px solid currentcolor;
+  border-radius: 2px;
+  color: var(--dim);
+}
+.tag.ok {
+  color: var(--proof);
+}
+.tag.live {
+  color: var(--live);
+}
+.tag.alert {
+  color: var(--signal);
+}
+.tag.ink {
+  color: var(--hi);
+}
+.readout {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 6px;
+}
+.readout .v {
+  font: var(--t-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--hi);
+  overflow-wrap: anywhere;
+}
+.readout .v.sm {
+  font-size: 15px;
+}
+.readout .u {
+  font: 500 11px / 1 var(--mono);
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+.note {
+  font: var(--t-small);
+  color: var(--dim);
+}
+.strip {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+}
+.strip i {
+  flex: 1;
+  background: var(--live-dim);
+}
+.strip i.on {
+  background: var(--live);
+}
+.strip.alert i.on {
+  background: var(--signal);
+}
+.strip.ink i.on {
+  background: var(--fg);
+}
+.strip.ok i.on {
+  background: var(--proof);
+}
+.spark {
+  display: block;
+  width: 100%;
+  height: 28px;
+  overflow: visible;
+}
+.spark polyline {
+  fill: none;
+  stroke: var(--live);
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+.spark .base {
+  stroke: var(--rule);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.ival {
+  display: block;
+  width: 100%;
+  height: 14px;
+  overflow: visible;
+}
+.ival line {
+  vector-effect: non-scaling-stroke;
+}
+.ival .track {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.ival .noise {
+  stroke: var(--dim);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+.ival .range {
+  stroke: var(--live);
+  stroke-width: 4;
+}
+.ival .at {
+  stroke: var(--hi);
+  stroke-width: 2;
+}
+.kv {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px var(--s-3);
+  margin: 0;
+  font: var(--t-small);
+}
+.kv dt {
+  color: var(--dim);
+}
+.kv dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+table.dense {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--t-small);
+}
+table.dense th {
+  font: var(--t-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: left;
+  padding: var(--s-2) var(--s-3) var(--s-2) 0;
+  white-space: nowrap;
+}
+table.dense td,
+table.dense tbody th {
+  padding: var(--s-2) var(--s-3) var(--s-2) 0;
+  border-top: 1px solid var(--rule);
+  vertical-align: middle;
+  text-align: left;
+  font-weight: 400;
+}
+table.dense tbody th {
+  font: 400 13px / 1.4 var(--mono);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--fg);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+table.dense .n {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+table.dense tr:hover td,
+table.dense tr:hover th {
+  background: var(--surface);
+}
+.scroll-x {
+  overflow-x: auto;
+}
+.site-header .net-tag {
+  display: none;
+}
+@media (min-width: 960px) {
+  .site-header .net-tag {
+    display: inline-flex;
+  }
+  .site-nav {
+    gap: var(--s-4);
+  }
+}
