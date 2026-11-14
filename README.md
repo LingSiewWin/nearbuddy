@@ -55,7 +55,7 @@ bun install && bun run test                 # 357 pass, 2 skip, 0 fail. 13 s
 bun run verify-duel 537                     # no FAIL · 30 PASS · 2 SKIP. 19 s. Reads NEAR testnet only
 bun run verify-order fixtures/orders/delivered-2026-11-13.json --gate nearbuddy-paygate-v2.testnet
                                             # no FAIL · 15 PASS · 0 SKIP. 3 s. Reads NEAR testnet and Base mainnet
-(cd web && bun install --frozen-lockfile && bun test app)       # 229 pass, 0 fail. 2 s
+(cd web && bun install --frozen-lockfile && bun test app)       # 305 pass, 0 fail. 5 s
 (cd agents && uv run --locked pytest -q)    # 635 passed, 1 skipped. 25 s
 (cd lab && uv run --locked pytest -q)       # 91 passed. 30 s
 (cd lab && uv run --locked python look/look.py report)          # rebuilds an experiment's tables from committed results. 5 s
@@ -67,8 +67,7 @@ scripts/check-all.sh --fast                 # the merge gate: 18 checks, all PAS
 
 **3. See the interface** (optional): `cd web && bun run dev`, then open http://localhost:3000. With no env
 file, `/`, `/board`, `/evidence`, `/arena`, `/enter`, `/duel/537` and `/terminal` each answered 200. The hosted site
-https://nearbuddy.vercel.app was still serving the build from before this interface when this was written: there
-`/board` and `/evidence` answer 404 and the other pages answer 200.
+https://nearbuddy.vercel.app serves the same build: on 2026-11-15 those routes answered 200 there too.
 
 What step 2 does not do: it places no attack and opens no duel. Those need a funded testnet account, a NEAR AI Cloud
 key, and the external price oracle to answer. The commands are in [`nearbuddy/README.md`](nearbuddy/README.md),

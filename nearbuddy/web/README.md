@@ -6,7 +6,7 @@ Next.js 16 app. It holds no key: its API routes read contract views over the pub
 
 ```sh
 bun install --frozen-lockfile
-bun test app                  # 229 pass (2026-11-14)
+bun test app                  # 305 pass (2026-11-15)
 bun run dev                   # http://localhost:3000
 ```
 
@@ -28,7 +28,7 @@ Observed 2026-11-14 from a clean clone with no env file: `/`, `/board`, `/eviden
 | `/api/mcp`, `/llms.txt` | MCP server and manual for agents |
 | `/api/verify?duel=N` | Re-checks a duel's proofs from public data |
 
-The hosted site https://nearbuddy.vercel.app was serving the build from before the 2026-11-14 interface when this was written: there `/board` and `/evidence` answer 404, and `/`, `/arena`, `/enter`, `/duel/537`, `/terminal`, `/api/verify` and `/api/mcp` answer 200.
+The hosted site https://nearbuddy.vercel.app serves this build: on 2026-11-15 `/`, `/arena`, `/board`, `/evidence`, `/enter`, `/agents` and `/terminal` answered 200 there.
 
 When no duel is open the pages show the last finished duel, and nothing can be attacked. A duel opens only when an operator opens it and the external price oracle answers.
 
