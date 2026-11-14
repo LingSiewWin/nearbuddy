@@ -660,3 +660,123 @@ dialog.sheet[open] {
   display: flex;
   flex-direction: column;
 }
+
+/* ---------------------------------------------------------------- Trace */
+.trace svg {
+  display: block;
+  overflow: visible;
+}
+.trace .rail {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.trace .rail-label {
+  font: 500 11px / 1 var(--sans);
+  letter-spacing: 0.06em;
+  fill: var(--dim);
+}
+.trace .gap {
+  stroke: var(--rule);
+  stroke-width: 2;
+  stroke-dasharray: 2 4;
+}
+.trace .line {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 2;
+  stroke-linejoin: miter;
+}
+.trace .line.red {
+  stroke: var(--signal);
+  stroke-width: 3;
+}
+.trace .price-line {
+  fill: none;
+  stroke: var(--dim);
+  stroke-width: 1;
+}
+.trace .hatch {
+  stroke: var(--caution);
+  stroke-opacity: 0.4;
+  stroke-width: 1;
+}
+.trace .zone-edge {
+  stroke: var(--caution);
+  stroke-width: 2;
+}
+.trace .head {
+  fill: var(--fg);
+}
+.trace .head-ring {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 1;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: head-ring 2s var(--m-ease) infinite;
+}
+@keyframes head-ring {
+  from {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+.trace .pin-hit {
+  cursor: pointer;
+}
+.pin.waiting {
+  fill: var(--caution);
+}
+.pin.held {
+  fill: var(--bg);
+  stroke: var(--fg);
+  stroke-width: 2;
+}
+.pin.fooled {
+  fill: var(--signal);
+}
+.pin.nocount,
+.pin.refunded {
+  fill: var(--bg);
+  stroke: var(--caution);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
+.pin.control {
+  fill: var(--dim);
+}
+.trace-note {
+  font: var(--t-small);
+  color: var(--dim);
+}
+.trace.full .trace-note {
+  padding-left: 36px;
+}
+.trace-axis {
+  display: flex;
+  justify-content: space-between;
+  font: 400 12px / 1.4 var(--mono);
+  color: var(--dim);
+}
+.trace-marks {
+  display: block;
+  max-width: 100%;
+}
+.what-happened dl {
+  margin: var(--s-2) 0 0;
+}
+.what-happened dd {
+  font: var(--t-small);
+  color: var(--dim);
+  margin-bottom: var(--s-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .trace .head-ring {
+    animation: none;
+    display: none;
+  }
+}
