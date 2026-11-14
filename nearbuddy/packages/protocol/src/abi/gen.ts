@@ -411,7 +411,7 @@ const OUTPUTS = [
     ts: ["packages/protocol/src/abi/arena.ts", "web/app/lib/abi/arena.ts"],
     py: "agents/arena_types.py",
   },
-  { abi: "abi/vault.json", prefix: "Vault", ts: ["packages/protocol/src/abi/vault.ts", "web/app/lib/abi/vault.ts"] },
+  { abi: "abi/vault.json", prefix: "Vault", ts: ["packages/protocol/src/abi/vault.ts"] },
   {
     abi: "abi/predict.json",
     prefix: "Predict",
