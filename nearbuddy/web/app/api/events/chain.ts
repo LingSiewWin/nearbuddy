@@ -63,7 +63,11 @@ export function eventsOf(t: Tx, arena: string): ChainEvent[] {
       ? []
       : r.execution_outcome.outcome.logs.flatMap((log): ChainEvent[] => {
           if (!log.startsWith("EVENT_JSON:")) return [];
-          let e: { standard?: string; event?: string; data?: { duel_id?: number | string; agent_pk?: string } };
+          let e: {
+            standard?: string;
+            event?: string;
+            data?: { duel_id?: number | string; agent_pk?: string; side?: unknown };
+          };
           try {
             e = parseEventJson(log) as typeof e; // keeps u64 duel_id past 2^53 exact
           } catch {
@@ -71,6 +75,7 @@ export function eventsOf(t: Tx, arena: string): ChainEvent[] {
           }
           if (e.standard !== "nearbuddy-arena" || (e.event !== "commit" && e.event !== "intent")) return [];
           if (e.data?.duel_id == null || !e.data.agent_pk) return [];
+          const side = e.data.side === "Long" || e.data.side === "Short" ? e.data.side : null;
           return [
             {
               event: e.event,
@@ -79,6 +84,7 @@ export function eventsOf(t: Tx, arena: string): ChainEvent[] {
               method: method(r) ?? "",
               tx: t.transaction.hash,
               at_ms: ms(r.execution_outcome.block_timestamp),
+              ...(e.event === "intent" && side ? { side } : {}),
             },
           ];
         }),

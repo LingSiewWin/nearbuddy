@@ -32,7 +32,8 @@ export const useSite = () => useContext(Ctx);
 
 // ---------------------------------------------------------------- headlines planted from this browser
 
-export type Mine = { tx: string; duel: string; arena: "main" | "keyless"; at: number };
+/** `index`: the headline's place in the duel's get_chaos, when the call returned it. */
+export type Mine = { tx: string; duel: string; arena: "main" | "keyless"; at: number; index: number | null };
 const MINE = "nb:headlines";
 /** Every attack made from this browser, newest first (the account menu's "Your headlines"). */
 export function myHeadlines(): Mine[] {

@@ -161,7 +161,11 @@ export function story(t: TraceIn, time: (ms: number) => string | null): string[]
     (a, b) => a.at - b.at || (a.d ? -1 : 1),
   );
   let side: Side | null = null;
-  let open: PinIn[] = []; // pins planted since the last decision
+  let open: PinIn[] = []; // pins planted and not answered yet
+  // a fooled pin is answered by the first later decision that leaves the bet it was planted against (a decision
+  // sealed before the pin and opened after it does not answer it); a held one by the first later decision
+  const answers = (p: PinIn, d: Decision) =>
+    p.mark === "held" || (p.mark === "fooled" && (!p.prev || d.side !== p.prev));
   for (const e of evs) {
     if (e.p) {
       const p = e.p;
@@ -175,16 +179,17 @@ export function story(t: TraceIn, time: (ms: number) => string | null): string[]
       continue;
     }
     const d = e.d as Decision;
-    const judged = open.filter((p) => p.mark !== "waiting");
-    if (side === null)
-      out.push(`${time(d.at) ? `Betting ${bet(d.side)} since ${time(d.at)}` : `Betting ${bet(d.side)}`}.`);
-    else {
-      const lead = judged.length ? "Next decision" : "Decision";
+    const judged = open.filter((p) => answers(p, d));
+    if (side === null) {
+      const t0 = time(d.at);
+      out.push(t0 ? `Betting ${bet(d.side)} since ${t0}.` : `Betting ${bet(d.side)}.`);
+    } else {
+      const lead = open.length ? "Next decision" : "Decision";
       const what = d.side === side ? `still betting ${bet(d.side)}` : `betting ${bet(d.side)}`;
       out.push(`${when(d.at, lead)}: ${what}.`);
     }
     for (const p of judged) out.push(p.mark === "fooled" ? "Fooled." : "Held.");
-    open = open.filter((p) => p.mark === "waiting");
+    open = open.filter((p) => !judged.includes(p));
     side = d.side;
   }
   // a verdict whose deciding decision the page does not hold still gets its word

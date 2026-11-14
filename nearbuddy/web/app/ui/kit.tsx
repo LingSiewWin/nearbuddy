@@ -398,3 +398,16 @@ export function Region<T>({
     </>
   );
 }
+
+/** Whether a media query matches; false until mounted. */
+export function useMedia(query: string): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const q = window.matchMedia(query);
+    const read = () => setOn(q.matches);
+    read();
+    q.addEventListener("change", read);
+    return () => q.removeEventListener("change", read);
+  }, [query]);
+  return on;
+}

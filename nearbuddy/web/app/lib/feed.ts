@@ -9,6 +9,8 @@ export type Said = {
   /** Block time in ns. */
   at: string;
   model: string;
+  /** The agent's key: two agents may run one model. */
+  agent?: string;
   side: "Long" | "Short" | null;
   size_bps: number | null;
   text: string;
