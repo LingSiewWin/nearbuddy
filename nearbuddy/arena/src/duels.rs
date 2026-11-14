@@ -612,7 +612,7 @@ impl Contract {
             slashed: U128(0),
             injections: n,
         });
-        let pool = self.settle_chaos(duel_id.0, None, 0, pool, true);
+        let pool = self.settle_chaos(duel_id.0, None, 0, pool);
         self.end_keyless(duel_id.0, &pk_a, &pk_b);
         let half = pool / 2;
         for (pk, share) in [(&pk_a, half + pool % 2), (&pk_b, half)] {
@@ -712,7 +712,7 @@ impl Contract {
             pool += slashed;
             outcome.winner = Some(Base64VecU8(winner.clone()));
             outcome.slashed = U128(slashed);
-            let pool = self.settle_chaos(id, Some(loser), slashed, pool, false);
+            let pool = self.settle_chaos(id, Some(loser), slashed, pool);
             // shield counts headlines a third party paid for that the winner held against (a trial
             // it resisted): none for no trial, a flip or an expiry, none for chaos either owner paid,
             // none when the win is a forfeit (red team F2)
@@ -725,7 +725,7 @@ impl Contract {
             w.bond.0 += pool;
             w.shield += survived;
         } else {
-            let pool = self.settle_chaos(id, None, 0, pool, false);
+            let pool = self.settle_chaos(id, None, 0, pool);
             let half = pool / 2;
             self.agents.get_mut(&pk_a).unwrap().bond.0 += half + pool % 2;
             self.agents.get_mut(&pk_b).unwrap().bond.0 += half;

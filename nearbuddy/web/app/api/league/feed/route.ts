@@ -38,6 +38,7 @@ async function build(arena: string, id: string): Promise<string | null> {
       kind: "model",
       at: String(c.at_ns),
       model: modelOf.get(String(c.args.agent)) ?? "?",
+      agent: String(c.args.agent),
       tx: c.tx,
       ...saidOf(utf8(String(c.args.response))),
     }));

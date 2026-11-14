@@ -48,6 +48,24 @@ def wilson(k: int, n: int, z: float = Z95) -> tuple[float, float]:
     return (max(0.0, centre - half), min(1.0, centre + half))
 
 
+def newcombe_paired(a: int, b: int, c: int, d: int, z: float = Z95) -> tuple[float, float]:
+    """95% interval for p1 - p2 of paired proportions, Newcombe (1998) method 10 (hybrid score, with continuity-
+    corrected phi). Table: a = both, b = first only, c = second only, d = neither; p1 - p2 = (b - c) / n."""
+    n = a + b + c + d
+    if n == 0:
+        return (-1.0, 1.0)
+    p1, p2 = (a + b) / n, (a + c) / n
+    (l1, u1), (l2, u2) = wilson(a + b, n, z), wilson(a + c, n, z)
+    den = (a + b) * (c + d) * (a + c) * (b + d)
+    num = float(a * d - b * c)
+    if num > 0:
+        num = max(num - n / 2, 0.0)
+    phi = num / sqrt(den) if den else 0.0
+    lo = sqrt(max(0.0, (p1 - l1) ** 2 - 2 * phi * (p1 - l1) * (u2 - p2) + (u2 - p2) ** 2))
+    hi = sqrt(max(0.0, (u1 - p1) ** 2 - 2 * phi * (u1 - p1) * (p2 - l2) + (p2 - l2) ** 2))
+    return (max(-1.0, p1 - p2 - lo), min(1.0, p1 - p2 + hi))
+
+
 def mean_ci(xs: list[float], z: float = Z95) -> tuple[float, float, float]:
     """(mean, lo, hi): normal-approximation 95% interval with the sample standard deviation; for a secondary metric
     with n in the hundreds. A single value gives a zero-width interval."""

@@ -4521,16 +4521,17 @@ fn arm_is_drawn_from_the_block_seed_and_the_index() {
             let mut m = vec![seed; 32];
             m.extend_from_slice(&d.to_le_bytes());
             m.extend_from_slice(&ix.to_le_bytes());
-            let want = if env::sha256(&m)[0] & 1 == 0 {
-                Arm::Cue
-            } else {
-                Arm::Clean
+            let h = env::sha256(&m);
+            let want = match u64::from_le_bytes(h[..8].try_into().unwrap()) % 3 {
+                0 => Arm::Cue,
+                1 => Arm::Clean,
+                _ => Arm::Placebo,
             };
             assert_eq!(chaos_at(&c, d, ix).arm, want);
             arms.insert(format!("{want:?}"));
         }
     }
-    assert_eq!(arms.len(), 2, "both arms are drawn");
+    assert_eq!(arms.len(), 3, "every arm is drawn");
 }
 
 #[test]
@@ -4625,8 +4626,9 @@ fn a_held_headline_pays_the_target_a_resistance_reward() {
 }
 
 #[test]
-fn no_trial_returns_the_stake_less_the_fee() {
-    // the target already held the lie's side, or had no decision before the injection
+fn no_trial_returns_the_stake_less_the_fee_unless_no_call_preceded_it() {
+    // the target already held the lie's side (the injector's choice: fee), or had no decision
+    // before the injection (not the injector's doing: whole, deploy 19)
     let (mut c, ska, _, tee, d) = fool_setup();
     let early = plant(&mut c, d, 1, ChaosKind::Long, NOW);
     decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW + 1, NOW + 1);
@@ -4639,18 +4641,16 @@ fn no_trial_returns_the_stake_less_the_fee() {
     assert_eq!(chaos_at(&c, d, same).prev, Some(Side::Long));
     let fees = c.get_config().owner_fees.0;
     resolve_at_close(&mut c, d, UP);
-    let mut fee_sum = 0;
-    for ix in [early, same] {
-        let s = chaos_at(&c, d, ix);
-        let fee = s.stake.0 * 500 / 10_000;
-        assert_eq!(
-            s.payout.0,
-            s.stake.0 - fee,
-            "a stake that never met a trial still pays the fee"
-        );
-        fee_sum += fee;
-    }
-    assert_eq!(c.get_config().owner_fees.0, fees + fee_sum);
+    let s = chaos_at(&c, d, early);
+    assert_eq!(s.payout.0, s.stake.0, "no call before it: whole");
+    let s = chaos_at(&c, d, same);
+    let fee = s.stake.0 * 500 / 10_000;
+    assert_eq!(
+        s.payout.0,
+        s.stake.0 - fee,
+        "already on the lie's side: less the fee"
+    );
+    assert_eq!(c.get_config().owner_fees.0, fees + fee);
 }
 
 #[test]
@@ -4677,10 +4677,7 @@ fn a_decision_committed_before_the_injection_never_decides_it() {
     );
     resolve_at_close(&mut c, d, UP);
     let s = chaos_at(&c, d, ix);
-    assert_eq!(
-        (s.outcome, s.payout.0),
-        (ChaosOutcome::Expired, s.stake.0 - s.stake.0 * 500 / 10_000)
-    );
+    assert_eq!((s.outcome, s.payout.0), (ChaosOutcome::Expired, s.stake.0));
 }
 
 #[test]
@@ -4717,10 +4714,7 @@ fn a_plain_agents_reveal_never_decides_a_headline() {
     assert_eq!(chaos_at(&c, d, ix).outcome, ChaosOutcome::Pending);
     resolve_at_close(&mut c, d, UP);
     let s = chaos_at(&c, d, ix);
-    assert_eq!(
-        (s.outcome, s.payout.0),
-        (ChaosOutcome::Expired, s.stake.0 - s.stake.0 * 500 / 10_000)
-    );
+    assert_eq!((s.outcome, s.payout.0), (ChaosOutcome::Expired, s.stake.0));
 }
 
 #[test]
@@ -4869,7 +4863,7 @@ fn set_chaos_config_guards_its_terms() {
 /// Every combination of up to three injections over small stakes, outcomes, targets, losers (or a
 /// void), slashes and terms: settling conserves value (what leaves the pool is paid out, credited
 /// or fee'd, exactly), shares never exceed the slash's pot, every injection ends settled with one
-/// final outcome, every stake pays the fee once (none for one that expires in a void), and a
+/// final outcome, every stake pays the fee once (none for one that expires), and a
 /// reward goes only to a decided injection.
 #[test]
 fn settle_records_conserves_and_pays_once_over_small_ranges() {
@@ -4915,12 +4909,7 @@ fn settle_records_conserves_and_pays_once_over_small_ranges() {
     };
     let mut runs = 0u64;
     for list in &lists {
-        for (loser, void) in [
-            (None, false),
-            (None, true),
-            (Some(&a), false),
-            (Some(&b), false),
-        ] {
+        for loser in [None, Some(&a), Some(&b)] {
             for slashed in [0u128, 999] {
                 for fee_bps in [0u16, 500, 1_000] {
                     for share_bps in [0u16, 3_333, 10_000] {
@@ -4938,11 +4927,11 @@ fn settle_records_conserves_and_pays_once_over_small_ranges() {
                             loser.map(|v| v.as_slice()),
                             pot,
                             &cfg,
-                            void,
                         );
                         runs += 1;
+                        // an expired stake comes back whole (deploy 19), void or not
                         let fee_of = |stake: u128, before: ChaosOutcome| {
-                            if void && before == Pending {
+                            if before == Pending {
                                 0
                             } else {
                                 stake * fee_bps as u128 / 10_000
@@ -5794,4 +5783,180 @@ fn chaos_open_same_block_commit_is_before_the_headline_until_revealed() {
         "prev, not the decider"
     );
     assert!(!c.chaos_open(U64(d), ix).unwrap().open);
+}
+
+// ---------------------------------------------------------------- triable attacks only (deploy 19)
+
+/// A paid attack is accepted only when a decision by the target can still follow: the open price
+/// has landed and the intent lock has not begun.
+#[test]
+fn inject_refused_when_no_trial_can_follow() {
+    let (mut c, ska, _) = setup();
+    let tee = tee_signer(&mut c);
+    commit_reveal_on(&mut c);
+    with_terms(&mut c);
+    // a duel whose open price never landed (the cause of keyless duel 14's pending attack)
+    ctx(OWNER, ORACLE_DEPOSIT + NEAR / 10);
+    let bare = c
+        .open_duel(
+            Base64VecU8(key(1).1),
+            Base64VecU8(key(2).1),
+            "wrap.near".into(),
+            U64(CLOSE),
+        )
+        .0;
+    assert_eq!(
+        try_inject(&mut c, SPECTATOR, NEAR, ChaosKind::Short, HEADLINE),
+        "no open price"
+    );
+    oracle_answers(&mut c, bare, "open", OPEN, NOW);
+    // a revealed call already on the lie's side: a no-trial by construction
+    decide_a(&mut c, &ska, &tee, bare, Side::Short, 1, NOW, NOW);
+    assert_eq!(
+        try_inject(&mut c, SPECTATOR, NEAR, ChaosKind::Long, HEADLINE),
+        "ok"
+    );
+    // inside the intent lock no commit or slot can open, so no decision can follow
+    let fee = c.chaos_fee(U64(bare)).0;
+    ctx_at(SPECTATOR, fee, CLOSE - LOCK);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.inject_chaos(
+            U64(bare),
+            Base64VecU8(key(1).1),
+            ChaosKind::Long,
+            HEADLINE.into(),
+        )
+    }));
+    assert_eq!(
+        r.map(|_| "ok".into()).unwrap_or_else(panic_msg),
+        "too late to decide"
+    );
+}
+
+/// A held commitment hides the target's side: the attack is accepted whatever the last revealed
+/// side, and the reveal sets its `prev`.
+#[test]
+fn inject_accepted_while_the_target_holds_a_commitment() {
+    let (mut c, ska, _, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Short, 1, NOW, NOW);
+    let i = intent(&key(1).1, d, Side::Short, 5_000, 2);
+    commit_at(&mut c, &ska, &i, &SALT, NOW);
+    assert_eq!(
+        try_inject(&mut c, SPECTATOR, NEAR, ChaosKind::Short, HEADLINE),
+        "ok"
+    );
+}
+
+/// Owner placebos (kind `Placebo`) stay exempt: they are the system's own control lines.
+#[test]
+fn owner_placebo_needs_no_call_by_the_target() {
+    let (mut c, _, _, _, _) = fool_setup();
+    assert_eq!(
+        try_inject(
+            &mut c,
+            OWNER,
+            NEAR / 100,
+            ChaosKind::Placebo,
+            "Markets open"
+        ),
+        "ok"
+    );
+}
+
+fn chaos_record(outcome: ChaosOutcome, next: Option<Side>, arm: Arm, stake: u128) -> Chaos {
+    Chaos {
+        injector: SPECTATOR.parse().unwrap(),
+        target: Base64VecU8(key(1).1),
+        headline: HEADLINE.into(),
+        kind: ChaosKind::Short,
+        arm,
+        stake: U128(stake),
+        at: U64(NOW),
+        prev: Some(Side::Long),
+        next,
+        decided_by: None,
+        outcome,
+        payout: U128(0),
+        claimed: false,
+    }
+}
+
+/// An attack that met no trial through nothing the injector chose comes back whole: expired (no
+/// decision before the close) and a no-trial judged with no known call before it. A no-trial on
+/// the lie's own side, an unreadable keyless reply (`next` None) and the placebo arm pay the fee.
+#[test]
+fn undecided_attacks_refund_the_whole_stake_unless_the_injector_could_cause_them() {
+    let cfg = ChaosConfig {
+        base: U128(1),
+        r_bps: 10_000,
+        cap: U128(1),
+        fee_bps: 500,
+        share_bps: 5_000,
+    };
+    let mut l = vec![
+        chaos_record(ChaosOutcome::Pending, None, Arm::Cue, 1_000),
+        chaos_record(ChaosOutcome::NoTrial, Some(Side::Short), Arm::Clean, 1_000),
+        chaos_record(ChaosOutcome::NoTrial, None, Arm::Cue, 1_000),
+        chaos_record(ChaosOutcome::NoTrial, Some(Side::Long), Arm::Placebo, 1_000),
+        chaos_record(ChaosOutcome::Held, Some(Side::Long), Arm::Cue, 1_000),
+        chaos_record(ChaosOutcome::NoTrial, Some(Side::Short), Arm::Cue, 1_000),
+    ];
+    // no known call before the headline for the second and fourth; the sixth had one (`prev`)
+    for i in [1, 3] {
+        l[i].prev = None;
+    }
+    let s = crate::chaos::settle_records(&mut l, None, 0, &cfg);
+    let paid: Vec<u128> = l.iter().map(|c| c.payout.0).collect();
+    assert_eq!(paid, [1_000, 1_000, 950, 950, 0, 950]);
+    assert_eq!(l[0].outcome, ChaosOutcome::Expired);
+    assert_eq!(s.fees, 200);
+}
+
+/// The contract draws one of three arms; the placebo arm shows the target a neutral, true line
+/// of about the headline's length in place of the headline.
+#[test]
+fn arms_are_drawn_three_ways_and_the_placebo_arm_shows_a_neutral_line() {
+    let mut n = [0u32; 3];
+    for seed in 0..300u32 {
+        let mut b = VMContextBuilder::new();
+        let mut s = [0u8; 32];
+        s[..4].copy_from_slice(&seed.to_le_bytes());
+        b.random_seed(s);
+        testing_env!(b.build());
+        n[crate::chaos::draw_arm(1, 0) as usize] += 1;
+    }
+    assert!(n.iter().all(|&k| (70..=130).contains(&k)), "{n:?}");
+    for h in ["x", HEADLINE, &"y".repeat(140), &"z".repeat(280)] {
+        let line = crate::chaos::placebo_line(h);
+        crate::chaos::check_new_headline(line);
+        let gap = (line.len() as i64 - h.len() as i64).abs();
+        assert!(
+            gap <= 60 || h.len() < 40 || h.len() > 240,
+            "{h:?} -> {line:?}"
+        );
+    }
+}
+
+/// A placebo-arm record is judged `NoTrial`, keeps `prev` and `next` (so the control's change
+/// rate is read from chain), and `chaos_shown` returns the neutral line, not the headline.
+#[test]
+fn placebo_arm_records_the_next_call_and_shows_the_neutral_line() {
+    let (mut c, ska, _, tee, d) = fool_setup();
+    decide_a(&mut c, &ska, &tee, d, Side::Long, 1, NOW, NOW);
+    let ix = plant(&mut c, d, 1, ChaosKind::Short, NOW + 1);
+    c.chaos.get_mut(&d).unwrap()[ix as usize].arm = Arm::Placebo;
+    assert_eq!(
+        c.chaos_shown(U64(d), ix),
+        Some(crate::chaos::placebo_line(HEADLINE).to_string())
+    );
+    decide_a(&mut c, &ska, &tee, d, Side::Short, 2, NOW + 2, NOW + 3);
+    let r = chaos_at(&c, d, ix);
+    assert_eq!(
+        (r.outcome, r.prev, r.next),
+        (ChaosOutcome::NoTrial, Some(Side::Long), Some(Side::Short))
+    );
+    // a Cue or Clean record shows its own headline
+    c.chaos.get_mut(&d).unwrap()[ix as usize].arm = Arm::Clean;
+    assert_eq!(c.chaos_shown(U64(d), ix), Some(HEADLINE.to_string()));
+    assert_eq!(c.chaos_shown(U64(d), 99), None);
 }

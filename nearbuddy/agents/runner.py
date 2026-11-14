@@ -985,7 +985,7 @@ def commit_decision(
         record({**old.row, "revealed_tx": None, "tx": None, "replaced_by": committed["tx"]})
     cands[:] = [p]
     consume(solver, pk, duel_id, inj)
-    print(f"  {label} committed nonce {nonce} tx {committed['tx']}")
+    print(f"  {label} committed {p.signed['intent']['side']} nonce {nonce} tx {committed['tx']}")
     return nonce, "committed"
 
 
