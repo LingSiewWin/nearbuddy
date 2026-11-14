@@ -13,16 +13,22 @@ function go(i: number) {
   document.getElementById(idOf(i))?.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "start" });
 }
 
-export function Chapters({ chapters }: { chapters: Chapter[] }) {
+export function Chapters({
+  chapters,
+  start = 0,
+}: {
+  chapters: Chapter[] /** Chapters already shown above. */;
+  start?: number;
+}) {
   return (
     <>
       {chapters.map((c, i) => (
-        <section key={c.title} id={idOf(i)} className="chapter" aria-labelledby={`${idOf(i)}-title`}>
+        <section key={c.title} id={idOf(start + i)} className="chapter" aria-labelledby={`${idOf(start + i)}-title`}>
           <header className="chapter-head">
             <span className="chapter-no" aria-hidden="true">
-              {String(i + 1).padStart(2, "0")}
+              {String(start + i + 1).padStart(2, "0")}
             </span>
-            <h2 id={`${idOf(i)}-title`} className="chapter-title">
+            <h2 id={`${idOf(start + i)}-title`} className="chapter-title">
               {c.title}
             </h2>
           </header>

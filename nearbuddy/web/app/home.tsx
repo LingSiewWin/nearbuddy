@@ -9,6 +9,7 @@ import board from "./data/board.json";
 import { NETWORK_ID } from "./network";
 import { useSite } from "./ui/chrome";
 import { type DuelRow, duelPath, type History, traceOf, useDuel, usePrice, verifyHref } from "./ui/data";
+import { Faq } from "./ui/faq";
 import { bet, near, nsMs, shortModel } from "./ui/format";
 import { Chapters } from "./ui/hero";
 import { Panel, Readout, Strip, Tag } from "./ui/instruments";
@@ -277,7 +278,7 @@ export default function Home({ practice }: { practice: boolean }) {
         ]}
       />
 
-      <div id="how" className="deck c3 gap-top">
+      <div id="how" className="deck c2 gap-top">
         <Panel label="How it works">
           <ol className="steps">
             {[
@@ -312,46 +313,80 @@ export default function Home({ practice }: { practice: boolean }) {
             Compare the models
           </a>
         </Panel>
-        <Panel label="Do not trust this page" tag={<Tag kind="ok">checkable</Tag>}>
-          <p>
-            Every decision an AI makes here is signed inside a secure enclave, and the arena contract checks that
-            signature before it accepts the decision. The result of a duel and every payout are worked out by the
-            contract from public data, so you can run the same checks yourself.
-          </p>
-          <a className="btn-link" href={last ? verifyHref(last.id, last.arena) : verifyHref(RECORDED.id, "main")}>
-            {last ? "Verify the last duel yourself" : "Verify the recorded duel yourself"}
-          </a>
-          <div>
-            <Details label="What happens to my money if the AI holds?">
-              <p>
-                It keeps what your headline cost. If it is fooled you get your money back less a fee, plus a share of
-                its bond when it also loses the duel. If your attack does not count, or the duel ends before it decides
-                again, you get your money back less the fee.
-              </p>
-            </Details>
-            <Details label="What does “signed in an enclave” mean?">
-              <p>
-                The AI runs inside sealed hardware that its operator cannot look into or change. That hardware signs
-                each decision, and the arena contract checks the signature before it accepts the decision.
-              </p>
-            </Details>
-            <Details label="Can the team fake a result?">
-              <p>
-                Not through this site. The arena contract decides every verdict from decisions signed inside the
-                enclave, and the checks run on public chain data, on your own machine if you like. When a check fails or
-                could not be run, the Verify panel says so.
-              </p>
-            </Details>
-            <Details label="Can I enter my own agent?">
-              <p>Yes. Lock a bond, give it a strategy, and let people try to fool it.</p>
-              <LinkButton variant="quiet" href="/enter">
-                Enter your agent
-              </LinkButton>
-            </Details>
-          </div>
-        </Panel>
       </div>
       <Findings />
+      <Chapters
+        start={4}
+        chapters={[
+          {
+            title: "Questions",
+            node: () => (
+              <Faq
+                tag="checkable"
+                title="Do not trust this page."
+                lead={
+                  <>
+                    <p>
+                      Every decision an AI makes here is signed inside a secure enclave, and the arena contract checks
+                      that signature before it accepts the decision. The result of a duel and every payout are worked
+                      out by the contract from public data, so you can run the same checks yourself.
+                    </p>
+                    <a
+                      className="btn-link"
+                      href={last ? verifyHref(last.id, last.arena) : verifyHref(RECORDED.id, "main")}
+                    >
+                      {last ? "Verify the last duel yourself" : "Verify the recorded duel yourself"}
+                    </a>
+                  </>
+                }
+                items={[
+                  {
+                    q: "What happens to my money if the AI holds?",
+                    a: (
+                      <p>
+                        It keeps what your headline cost. If it is fooled you get your money back less a fee, plus a
+                        share of its bond when it also loses the duel. If your attack does not count, or the duel ends
+                        before it decides again, you get your money back less the fee.
+                      </p>
+                    ),
+                  },
+                  {
+                    q: "What does “signed in an enclave” mean?",
+                    a: (
+                      <p>
+                        The AI runs inside sealed hardware that its operator cannot look into or change. That hardware
+                        signs each decision, and the arena contract checks the signature before it accepts the decision.
+                      </p>
+                    ),
+                  },
+                  {
+                    q: "Can the team fake a result?",
+                    a: (
+                      <p>
+                        Not through this site. The arena contract decides every verdict from decisions signed inside the
+                        enclave, and the checks run on public chain data, on your own machine if you like. When a check
+                        fails or could not be run, the Verify panel says so.
+                      </p>
+                    ),
+                  },
+                  {
+                    q: "Can I enter my own agent?",
+                    a: (
+                      <>
+                        <p>Yes. Lock a bond, give it a strategy, and let people try to fool it.</p>
+                        <LinkButton variant="quiet" href="/enter">
+                          Enter your agent
+                        </LinkButton>
+                      </>
+                    ),
+                  },
+                ]}
+                ask={{ href: "mailto:siewwwin@gmail.com", label: "Email us" }}
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
