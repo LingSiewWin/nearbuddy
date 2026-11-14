@@ -40,9 +40,7 @@ export function mosaicGlyph(density: number, salt: number): string {
 export function cellFill(density: number): string {
   const t = Math.min(1, Math.max(0, density));
   const mix = (a: number, b: number) => Math.round(a + (b - a) * t);
-  const lo = [0xec, 0xec, 0xef];
-  const hi = [0x22, 0x22, 0x26];
-  return `rgb(${mix(lo[0], hi[0])},${mix(lo[1], hi[1])},${mix(lo[2], hi[2])})`;
+  return `rgb(${mix(0xec, 0x22)},${mix(0xec, 0x22)},${mix(0xef, 0x26)})`;
 }
 
 /** Glyph ink: dark on light cells, light on dark cells. */
@@ -51,7 +49,8 @@ export function cellInk(density: number): string {
 }
 
 export function accentRgb(salt: number): [number, number, number] {
-  return ACCENTS[salt % ACCENTS.length] ?? ACCENTS[0];
+  const a = ACCENTS[salt % ACCENTS.length] ?? ACCENTS[0];
+  return [a[0], a[1], a[2]];
 }
 
 /** Repeatable [0,1) from cell coords + time bucket. */

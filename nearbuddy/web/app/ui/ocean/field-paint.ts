@@ -120,13 +120,15 @@ export function paintField(
         const [ar, ag, ab] = accentRgb(salt);
         const k = sil.prey ? 0.55 : 0.35;
         const mix = (ch: number, base: number) => Math.round(base * (1 - k) + ch * k);
-        const lo = dens > 0.5 ? [0x22, 0x22, 0x26] : [0xec, 0xec, 0xef];
-        fill = `rgb(${mix(ar, lo[0])},${mix(ag, lo[1])},${mix(ab, lo[2])})`;
+        const dark = dens > 0.5;
+        fill = `rgb(${mix(ar, dark ? 0x22 : 0xec)},${mix(ag, dark ? 0x22 : 0xec)},${mix(ab, dark ? 0x26 : 0xef)})`;
       } else if (sil.prey && dens > 0.3) {
         // prey reads slightly coral
         const k = 0.22;
-        const base = dens > 0.45 ? [0x22, 0x22, 0x26] : [0xec, 0xec, 0xef];
-        fill = `rgb(${Math.round(base[0] * (1 - k) + 170 * k)},${Math.round(base[1] * (1 - k) + 110 * k)},${Math.round(base[2] * (1 - k) + 110 * k)})`;
+        const br = dens > 0.45 ? 0x22 : 0xec;
+        const bg = dens > 0.45 ? 0x22 : 0xec;
+        const bb = dens > 0.45 ? 0x26 : 0xef;
+        fill = `rgb(${Math.round(br * (1 - k) + 170 * k)},${Math.round(bg * (1 - k) + 110 * k)},${Math.round(bb * (1 - k) + 110 * k)})`;
       }
 
       const pad = 1;

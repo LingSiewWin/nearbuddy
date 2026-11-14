@@ -48,7 +48,8 @@ export const layoutWord = (advances: number[], tracking: number, fontSize: numbe
   let at = 0
   const gap = (Number.isFinite(tracking) ? tracking : 0) * fontSize
   for (let i = 0; i < advances.length; i++) {
-    const a = Number.isFinite(advances[i]) && advances[i] > 0 ? advances[i] : 0
+    const raw = advances[i]
+    const a = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0
     x.push(at)
     w.push(a)
     at += a + (i < advances.length - 1 ? gap : 0)
@@ -781,7 +782,7 @@ export function DoodleCrewFooter({
           const li = clamp(Math.floor(m.letter) || 0, 0, chars.length - 1)
           const scale = (cap / 144) * art.k * (m.scale ?? 1)
           const seat = m.seat || art.seat
-          const p = seatPoint(seat, layout.x[li], layout.w[li], cap, m.offset ?? 0, scale)
+          const p = seatPoint(seat, layout.x[li] ?? 0, layout.w[li] ?? 0, cap, m.offset ?? 0, scale)
           return { i, m, art, seat, scale, ...p, flip: m.flip ? -1 : 1 }
         })
         .filter(Boolean) as { i: number; m: CrewMember; art: Art; seat: Seat; scale: number; x: number; y: number; flip: number }[],
@@ -795,9 +796,10 @@ export function DoodleCrewFooter({
     let t = -cap
     let b = 30
     for (const p of placed) {
-      const bx = p.flip > 0 ? [p.art.box.l, p.art.box.r] : [-p.art.box.r, -p.art.box.l]
-      l = Math.min(l, p.x + bx[0] * p.scale)
-      r = Math.max(r, p.x + bx[1] * p.scale)
+      const bl = p.flip > 0 ? p.art.box.l : -p.art.box.r
+      const br = p.flip > 0 ? p.art.box.r : -p.art.box.l
+      l = Math.min(l, p.x + bl * p.scale)
+      r = Math.max(r, p.x + br * p.scale)
       t = Math.min(t, p.y + p.art.box.t * p.scale)
       b = Math.max(b, p.y + p.art.box.b * p.scale)
     }
@@ -832,7 +834,7 @@ export function DoodleCrewFooter({
     const kinds = doodles.length ? doodles : []
     const n = kinds.length ? clamp(Math.floor(doodleCount) || 0, 0, 40) : 0
     return Array.from({ length: n }, (_, k) => ({
-      kind: kinds[k % kinds.length],
+      kind: (kinds[k % kinds.length] ?? "star") as DoodleKind,
       size: 22 + hash(k * 4.7) * 14,
       seed: k,
     }))
@@ -981,6 +983,7 @@ export function DoodleCrewFooter({
       if (svg && s.inside && interactive) target = svgPoint(svg, s.px, s.py)
       for (let c = 0; c < placed.length; c++) {
         const p = placed[c]
+        if (!p) continue
         const g = (s.gaze[c] ||= { x: 0, y: 0, tx: 0, ty: 0, next: 0, blinkAt: t + 1 + hash(c * 3.7) * 3, blink: 0 })
         if (!target && t > g.next) {
           // idle: glance somewhere, now and then at a neighbour
@@ -1003,6 +1006,7 @@ export function DoodleCrewFooter({
         const eyes = eyeRefs.current[c] || []
         for (let e = 0; e < p.art.eyes.length; e++) {
           const eye = p.art.eyes[e]
+          if (!eye) continue
           const ex = p.x + eye.x * p.scale * p.flip
           const ey = p.y + eye.y * p.scale
           const tx = target ? target.x : g.tx
@@ -1225,23 +1229,26 @@ export function DoodleCrewFooter({
               {placed.filter((p) => p.seat === "behind").map((p) => renderCrew(p, "body"))}
             </g>
 
-            {chars.map((c, i) =>
-              c === " " ? null : (
+            {chars.map((c, i) => {
+              if (c === " ") return null
+              const xi = layout.x[i] ?? 0
+              const wi = layout.w[i] ?? 0
+              return (
                 <g key={i} className="dcf-letter" style={{ "--d": tl.letter(i) + "ms", "--r": ((hash(i * 2.3) - 0.5) * 9).toFixed(2) + "deg" } as React.CSSProperties}>
                   <g className="dcf-glyph">
-                    <text x={layout.x[i]} y={0} fontSize={FONT_SIZE} fontWeight={900} style={{ fontFamily }} filter={"url(#" + uid + "-ink)"}>
+                    <text x={xi} y={0} fontSize={FONT_SIZE} fontWeight={900} style={{ fontFamily }} filter={"url(#" + uid + "-ink)"}>
                       {c}
                     </text>
                   </g>
                   <path
                     className="dcf-dust"
                     d={
-                      "M" + (layout.x[i] - 6) + " -6 l-16 -6 M" + (layout.x[i] - 4) + " -16 l-12 -12 M" + (layout.x[i] + layout.w[i] + 6) + " -6 l16 -6 M" + (layout.x[i] + layout.w[i] + 4) + " -16 l12 -12"
+                      "M" + (xi - 6) + " -6 l-16 -6 M" + (xi - 4) + " -16 l-12 -12 M" + (xi + wi + 6) + " -6 l16 -6 M" + (xi + wi + 4) + " -16 l12 -12"
                     }
                   />
                 </g>
-              ),
-            )}
+              )
+            })}
 
             <g ref={(el) => void (crewLayerRefs.current[1] = el)}>
               {placed.filter((p) => p.seat === "behind").map((p) => renderCrew(p, "front"))}
@@ -1250,16 +1257,17 @@ export function DoodleCrewFooter({
 
             {interactive &&
               placed.map((p) => {
-                const bx = p.flip > 0 ? [p.art.box.l, p.art.box.r] : [-p.art.box.r, -p.art.box.l]
+                const bl = p.flip > 0 ? p.art.box.l : -p.art.box.r
+                const br = p.flip > 0 ? p.art.box.r : -p.art.box.l
                 const top = p.seat === "behind" ? p.art.box.t : p.art.box.t
                 const bottom = p.seat === "behind" ? -30 : p.art.box.b
                 return (
                   <rect
                     key={"hit" + p.i}
                     className="dcf-hit"
-                    x={p.x + bx[0] * p.scale}
+                    x={p.x + bl * p.scale}
                     y={p.y + top * p.scale}
-                    width={(bx[1] - bx[0]) * p.scale}
+                    width={(br - bl) * p.scale}
                     height={(bottom - top) * p.scale}
                     rx={12}
                     role="button"

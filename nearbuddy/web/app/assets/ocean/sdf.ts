@@ -136,7 +136,7 @@ export function rasterizeOceanField(
     const wy = ((Math.cos(i * 78.233 + timeSec * 0.14) * 0.5 + 0.5) * rows) | 0;
     if (wx >= 0 && wx < cols && wy >= 0 && wy < rows) {
       const idx = wy * cols + wx;
-      density[idx] = Math.max(density[idx], 0.12 + (i % 3) * 0.05);
+      density[idx] = Math.max(density[idx] ?? 0, 0.12 + (i % 3) * 0.05);
     }
   }
 
@@ -181,8 +181,10 @@ export function rasterizeOceanField(
     }
 
     const dorsalBaseIdx = 4;
-    const dorsalTipX = jx[dorsalBaseIdx] + nx * (spec.maxRadius * 1.65) - fx * (spec.maxRadius * 0.65);
-    const dorsalTipY = jy[dorsalBaseIdx] + ny * (spec.maxRadius * 1.65) - fy * (spec.maxRadius * 0.65);
+    const dorsalBaseX = jx[dorsalBaseIdx] ?? 0;
+    const dorsalBaseY = jy[dorsalBaseIdx] ?? 0;
+    const dorsalTipX = dorsalBaseX + nx * (spec.maxRadius * 1.65) - fx * (spec.maxRadius * 0.65);
+    const dorsalTipY = dorsalBaseY + ny * (spec.maxRadius * 1.65) - fy * (spec.maxRadius * 0.65);
 
     const c0 = Math.max(0, Math.floor(minX / CELL_SIZE));
     const c1 = Math.min(cols - 1, Math.ceil(maxX / CELL_SIZE));
@@ -196,12 +198,18 @@ export function rasterizeOceanField(
         const px = (col + 0.5) * CELL_SIZE;
         let minSd = Infinity;
         for (let i = 0; i < SEGMENTS; i++) {
-          const { dist, t } = distToSegment(px, py, jx[i], jy[i], jx[i + 1], jy[i + 1]);
-          const sd = dist - (jr[i] + t * (jr[i + 1] - jr[i]));
+          const x0 = jx[i] ?? 0;
+          const y0 = jy[i] ?? 0;
+          const x1 = jx[i + 1] ?? 0;
+          const y1 = jy[i + 1] ?? 0;
+          const r0s = jr[i] ?? 0;
+          const r1s = jr[i + 1] ?? 0;
+          const { dist, t } = distToSegment(px, py, x0, y0, x1, y1);
+          const sd = dist - (r0s + t * (r1s - r0s));
           if (sd < minSd) minSd = sd;
         }
         if (spec.hasDorsalFin) {
-          const { dist, t } = distToSegment(px, py, jx[dorsalBaseIdx], jy[dorsalBaseIdx], dorsalTipX, dorsalTipY);
+          const { dist, t } = distToSegment(px, py, dorsalBaseX, dorsalBaseY, dorsalTipX, dorsalTipY);
           const finSd = dist - spec.maxRadius * 0.42 * (1 - t * 0.85);
           if (finSd < minSd) minSd = finSd;
         }
@@ -219,11 +227,12 @@ export function rasterizeOceanField(
           if (hash > 0.62) d *= 0.25;
         }
         const idx = row * cols + col;
-        if (d > density[idx]) {
+        const prev = density[idx] ?? 0;
+        if (d > prev) {
           density[idx] = d;
           palette[idx] = creature.accentPalette;
           const edgeBand = d > 0.22 && d < 0.78 ? 1 - Math.abs(d - 0.5) * 3.2 : 0;
-          glint[idx] = Math.max(glint[idx], edgeBand * 0.85);
+          glint[idx] = Math.max(glint[idx] ?? 0, edgeBand * 0.85);
         }
       }
     }
@@ -243,10 +252,11 @@ export function rasterizeOceanField(
         if (ringDist >= bandWidth) continue;
         const d = (1 - ringDist / bandWidth) * ripple.alpha * 0.85;
         const idx = row * cols + col;
-        if (d > density[idx]) {
+        const prev = density[idx] ?? 0;
+        if (d > prev) {
           density[idx] = d;
           palette[idx] = ripple.accentPalette;
-          glint[idx] = Math.max(glint[idx], ripple.alpha);
+          glint[idx] = Math.max(glint[idx] ?? 0, ripple.alpha);
         }
       }
     }
