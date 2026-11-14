@@ -27,25 +27,7 @@ COMMIT_DOMAIN = b"nearbuddy-commit-v1"
 COMMIT_DOMAIN_V2 = b"nearbuddy-commit-v2"
 CONSENT_DOMAIN = b"nearbuddy-duel-v1"
 ZERO_PROOF = bytes(32)
-_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 TEE_KIND = {"gateway": 1, "provider_tee": 2}
-
-
-def b58decode(s: str) -> bytes:
-    n = 0
-    for ch in s:
-        n = n * 58 + _B58.index(ch)
-    out = n.to_bytes((n.bit_length() + 7) // 8, "big") if n else b""
-    pad = len(s) - len(s.lstrip("1"))
-    return b"\x00" * pad + out
-
-
-def key_from_near_secret(secret: str) -> SigningKey:
-    """`ed25519:<base58 64 bytes>` (near-cli / near-api-js format) -> SigningKey."""
-    assert secret.startswith("ed25519:"), "expected ed25519:<base58>"
-    raw = b58decode(secret.split(":", 1)[1])
-    assert len(raw) == 64, f"expected 64-byte secret, got {len(raw)}"
-    return SigningKey(raw[:32])
 
 
 def _vec(b: bytes) -> bytes:
