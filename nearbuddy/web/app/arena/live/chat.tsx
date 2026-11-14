@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { type Comment, clean, loginMessage, MAX_COMMENT, newNonce } from "../../lib/comments";
 import { recall } from "../../lib/guest";
 import * as wallet from "../../lib/wallet";
+import { useSite } from "../../ui/chrome";
 
 export type Session = { available: boolean; account: string | null };
 
@@ -25,6 +26,7 @@ export function Chat({
   account: string | null;
   onPosted: (c: Comment) => void;
 }) {
+  const site = useSite();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -45,7 +47,8 @@ export function Chat({
     setBusy(true);
     setNote(null);
     try {
-      if (!(await wallet.account())) await wallet.signIn();
+      // not signed in yet: the site header's gate is the one place to connect (ui/wallet-sign-in.tsx)
+      if (!(await wallet.account()) && !(await site.signIn())) return;
       const nonce = newNonce(Date.now());
       const s = await wallet.signMessage({ message: loginMessage(location.host), recipient: location.host, nonce });
       const r = await fetch("/api/arena/live/session", {

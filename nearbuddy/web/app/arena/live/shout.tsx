@@ -6,6 +6,7 @@ import type { Match } from "../../api/arena-live";
 import { chaosDeploy17, checkHeadline, type Direction, MAX_HEADLINE, utf8Bytes } from "../../lib/inject";
 import * as wallet from "../../lib/wallet";
 import { near } from "../../tui";
+import { useSite } from "../../ui/chrome";
 
 export function Shout({
   live,
@@ -21,6 +22,7 @@ export function Shout({
   account: string | null;
   onAccount: (a: string | null) => void;
 }) {
+  const site = useSite();
   const [target, setTarget] = useState<"A" | "B">("A");
   const [kind, setKind] = useState<Direction>("Long");
   const [text, setText] = useState("");
@@ -46,7 +48,8 @@ export function Shout({
   async function connect() {
     setNote(null);
     try {
-      onAccount(await wallet.signIn());
+      // the site header's gate is the one place to connect (ui/wallet-sign-in.tsx)
+      onAccount(await site.signIn());
     } catch (e) {
       setNote({ c: "warn", t: String(e instanceof Error ? e.message : e).slice(0, 160) });
     }

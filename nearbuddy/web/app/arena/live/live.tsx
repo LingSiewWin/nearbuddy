@@ -9,7 +9,6 @@ import type { FeedLine } from "../../lib/feed";
 import { fresh, push, type Sample } from "../../lib/stage";
 import * as wallet from "../../lib/wallet";
 import { getJson } from "../../tui";
-import { AccountBar } from "./account";
 import { Boards, Ticker } from "./boards";
 import { Chat, type Session } from "./chat";
 import { Feed } from "./feed";
@@ -227,7 +226,6 @@ export default function LiveArena() {
 
   return (
     <section className="arena-live" aria-label="Live match">
-      <AccountBar account={account} onAccount={setAccount} />
       {arena ? <Ticker arena={arena} /> : null}
       <Start op={operator} now={now} live={!!live} onStarted={setOperator} />
       <div className="live">

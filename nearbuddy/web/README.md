@@ -81,7 +81,7 @@ The live match on `/arena` (`web/app/arena/live/`) is the arena as a spectator s
   pinned models and it opens a real match of about 6 minutes between an idle agent of each, has the keeper fill the
   two slots at once, and resolves after the close. One match at a time. The site holds no key: its
   route forwards to the operator with a shared secret. Without `OPERATOR_URL` the panel is not shown.
-- **Guest account** (`web/app/arena/live/account.tsx`, `web/app/lib/guest*.ts`, `web/app/api/guest/route.ts`). Testnet
+- **Guest account** (`web/app/ui/wallet-sign-in.tsx`, the one sign-in gate, opened from the site header; `web/app/lib/guest*.ts`, `web/app/api/guest/route.ts`). Testnet
   only. "play as guest" makes an ed25519 key in the browser, and the site asks NEAR's public testnet faucet service
   (the one behind the NEAR CLI's `create-account sponsor-by-faucet-service`) to create `nb-guest-<10 chars>.testnet`
   with that public key and testnet NEAR. The private key never leaves the browser (`localStorage`); "leave" deletes
