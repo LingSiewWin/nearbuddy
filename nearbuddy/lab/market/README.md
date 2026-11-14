@@ -1,5 +1,14 @@
 # lab/market: does a prediction-market price protect a duelist from a fake headline?
 
+**Result (2026-11-14, 36 trials per cell).** H1 held for three of the four cells. An honest market line ("the crowd
+prices this headline at 4-8%") cut the naive prompt's flip rate from 0.99 to 0.46 (pooled). It still let about half of
+the fake headlines through. **H2 was not supported in any cell.** A manipulated line pricing the fake at 91-95% did
+not raise flips. On naive the headline alone already flips 0.97-1.00, so there is no room for more. On hardened-v3
+the rigged arm (0.14-0.23) stayed at the headline-only and placebo levels. One caveat leaves one cell open: on
+Qwen3.8-27B with hardened-v3, the rigged arm lost 14 of 36 outcomes, 13 of them to replies that reasoned past 2400
+tokens without answering. If all 14 had flipped, H2 would hold there, so for that cell H2 is undetermined, not
+refuted.
+
 ## Pre-registration
 
 This section was committed before the first paid call of this experiment. The commit is the record. Any change after
@@ -166,3 +175,94 @@ signals (price, social), which this does not model.
    N_budget = (1200 - 262 calls used) // 26 = 36, so **N = 36 trials per cell**, as foreseen. At N = 36 the exact
    McNemar test at alpha 0.0125 has 5% power for the minimal effect (0.15 vs 0.05), 71% for 0.25 vs 0, and 99% for
    0.40 vs 0 (`stats.power_mcnemar`, 5000 simulations). Only large effects can show; a null here is "not detected".
+
+## Results
+
+`uv run --locked python market/market.py report` prints every table below from `results/main.jsonl.gz`. All
+calls are verified calls that parsed. Intervals are Wilson 95% for rates and Newcombe 95% for paired differences.
+p-values come from exact McNemar tests, Holm-adjusted over the four cells within each hypothesis.
+
+### Flip rate per arm (main, N = 36 trials per cell)
+
+| model | prompt | headline | honest | rigged | placebo |
+|---|---|---|---|---|---|
+| Qwen3.8-27B | naive | 35/35 1.00 [0.90, 1.00] | 16/35 0.46 [0.30, 0.62] | 36/36 1.00 [0.90, 1.00] | 2/34 0.06 [0.02, 0.19] |
+| DeepSeek-V4.1-Flash-1017 | naive | 35/36 0.97 [0.86, 1.00] | 17/36 0.47 [0.32, 0.63] | 34/36 0.94 [0.82, 0.98] | 10/36 0.28 [0.16, 0.44] |
+| Qwen3.8-27B | hardened-v3 | 7/36 0.19 [0.10, 0.35] | 0/36 0.00 [0.00, 0.10] | 5/22 0.23 [0.10, 0.43] | 7/36 0.19 [0.10, 0.35] |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | 6/36 0.17 [0.08, 0.32] | 3/36 0.08 [0.03, 0.22] | 5/36 0.14 [0.06, 0.29] | 6/36 0.17 [0.08, 0.32] |
+
+### Paired differences against the headline-only arm
+
+| model | prompt | H1 discordant (honest only vs headline only) | honest - headline | Holm p | H1 | H2 discordant (rigged only vs headline only) | rigged - headline | Holm p | H2 |
+|---|---|---|---|---|---|---|---|---|---|
+| Qwen3.8-27B | naive | 0 vs 18 | -0.53 [-0.69, -0.34] | 3.1e-05 | supported | 0 vs 0 | +0.00 [-0.10, +0.10] | 1.000 | not supported |
+| DeepSeek-V4.1-Flash-1017 | naive | 0 vs 18 | -0.50 [-0.65, -0.31] | 3.1e-05 | supported | 0 vs 1 | -0.03 [-0.15, +0.08] | 1.000 | not supported |
+| Qwen3.8-27B | hardened-v3 | 0 vs 7 | -0.19 [-0.35, -0.06] | 0.031 | supported | 1 vs 2 | -0.05 [-0.22, +0.13] | 1.000 | undetermined (see below) |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | 0 vs 3 | -0.08 [-0.21, +0.03] | 0.250 | not supported | 2 vs 3 | -0.03 [-0.17, +0.11] | 1.000 | not supported |
+
+Pooled over the two models (secondary, uncorrected): honest minus headline is -0.51 [-0.63, -0.38] on naive
+(p = 2.9e-11) and -0.14 [-0.24, -0.06] on hardened-v3 (p = 0.002). Rigged minus headline is -0.01 [-0.08, +0.04]
+and -0.03 [-0.14, +0.07].
+
+### What it shows
+
+- **On the naive prompt an honest market line helps a lot, but only by half.** Both models flipped on 0.97-1.00 of
+  fake headlines alone and 0.46-0.47 with the line. Of the 70 lies that worked alone, 36 were stopped. No lie that failed
+  alone worked with the line (0 discordant pairs the other way). The effect is about 0.5, far above the 0.11 re-roll
+  noise floor.
+- **A rigged market adds nothing measurable on top of a fake headline the naive prompt already believes.** The
+  ceiling makes H2 untestable there, as the pre-registration expected.
+- **On hardened-v3 the headline itself does nothing.** Headline-only flips (0.17-0.19) equal the placebo arm's (no
+  headline, an irrelevant market line): those are noise flips. The rigged line, although it sits in the block
+  labelled trusted, did not raise them. The honest line lowered them (Qwen 7 to 0). Qwen's 0.19 drop passes the
+  noise-floor rule (|0.19| >= 0.11, Holm p 0.031). What dropped, though, is noise flips, not lie-driven ones: on
+  this prompt the lie had no effect for the market line to block.
+- **Noise floor.** The placebo arm (one extra, irrelevant line and a fresh sample) changed the side on 0.06-0.28 of
+  trials, bracketing the 11% re-roll rate of `../reroll/README.md`. DeepSeek is the noisier model on both prompts.
+
+### What it does not show
+
+- **Qwen + hardened-v3 + rigged is open.** 13 of 36 rigged calls ended at `finish_reason: length` after 2400 tokens
+  of reasoning with no answer, plus 1 transport failure. The headline arm lost none. With all 14 counted as
+  non-flips the rigged rate is 5/36 = 0.14. With all 14 counted as flips it is 19/36 = 0.53, and the McNemar test
+  would be 14 vs 2 (raw p = 0.004). A trusted line that says 93% next to a judge verdict of "likely fabricated" seems
+  to send Qwen into long deliberation. In the live runner an unparsed reply is no trade, so in practice this is an
+  abstention, not a flip. But this experiment cannot tell which way those trials would have gone.
+- **Synthetic market lines, not a live market.** No order book, no price history, no correlation with other signals.
+  A real manipulated market would also move prices and social channels.
+- **Small N.** 36 trials per cell is set by the 1,200-call budget. It detects effects of about 0.25 or more (71%
+  power at 0.25 vs 0) and has almost no power for the 0.15 vs 0.05 minimal effect. A null here means "not detected".
+- **These two models, these two prompts, one corpus of crypto headlines, 5-minute duels.** The market line is placed
+  in the operator's brief. On hardened-v3 that means a block labelled trusted. Putting it in the paid-text channel
+  was not tested.
+- **The main run uses a 2400-token reply allowance (deviation 2),** so its request bytes differ from the live
+  duelists' (600). The pilot ran at 600 and is excluded.
+
+### Calls, spend and verification
+
+- 1,198 calls of the 1,200 cap: 2 probe, 260 pilot, 936 main (720 duelist calls plus 216 hardened-v3 judge calls).
+  $0.598 in all (`spend.jsonl`), against the $6.00 cap. No budget stop.
+- 1,197 of 1,198 calls returned an enclave-signed completion whose signature verifies (provider enclave, kind 2,
+  over our request and response hashes). The one other call was a transport failure with no completion. On
+  hardened-v3 all 276 judge calls verified. `report` re-checks every verified main call from the stored bytes:
+  719 of 719 re-verify. The check covers the signed system and user messages, each arm's market line and headline,
+  and on v3 the judge call.
+- The pilot (`results/pilot.jsonl.gz`, 10 trials per cell at 600 tokens) is kept but not analysed above.
+
+### Reproduce
+
+```sh
+cd nearbuddy/lab
+uv sync --locked
+uv run --locked pytest tests/test_market.py                               # no network
+uv run --locked python market/market.py report                            # tables from results/main.jsonl.gz
+uv run --locked python market/market.py report --phase pilot
+# paid, needs NEAR_AI_API_KEY in nearbuddy/.env; resumes from results/<phase>.jsonl and refuses call 1,201 / $6
+uv run --locked python market/market.py probe
+uv run --locked python market/market.py run --phase pilot --n 10
+uv run --locked python market/market.py power
+uv run --locked python market/market.py run --phase main --n 36 --max-tokens 2400
+```
+
+A fresh paid run writes `results/<phase>.jsonl` and appends to `spend.jsonl`. Move the committed `spend.jsonl`
+aside first, or the 1,200-call cap counts the calls already logged.
