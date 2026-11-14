@@ -411,3 +411,47 @@ export function useMedia(query: string): boolean {
   }, [query]);
   return on;
 }
+
+/** A disclosure row holding the analyst's layer: a label, a short summary of what is inside, and a chevron, on the
+ *  native <details>, closed by default. With an `id` its open state is remembered in this browser. */
+export function Details({
+  id,
+  label,
+  summary,
+  open,
+  children,
+}: {
+  id?: string;
+  label: ReactNode;
+  summary?: ReactNode;
+  /** Open it now (a pin was pressed, the visitor has a headline here). */
+  open?: boolean;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    try {
+      if (open || (id && localStorage.getItem(`nb:details:${id}`) === "1")) el.open = true;
+    } catch {} // storage blocked: rows start closed
+  }, [id, open]);
+  return (
+    <details
+      ref={ref}
+      className="details"
+      onToggle={(e) => {
+        if (!id) return;
+        try {
+          localStorage.setItem(`nb:details:${id}`, e.currentTarget.open ? "1" : "0");
+        } catch {}
+      }}
+    >
+      <summary>
+        <span className="t-label">{label}</span>
+        {summary ? <span className="details-sum">{summary}</span> : null}
+      </summary>
+      <div className="details-body">{children}</div>
+    </details>
+  );
+}

@@ -12,7 +12,7 @@ import { getJson } from "../tui";
 import { type Mine, useSite } from "./chrome";
 import { type ArenaKind, type DuelBody, duelUrl, type History, phaseOf } from "./data";
 import { bet, near, nsMs, other, type Side, TEST_NOTE } from "./format";
-import { Button, Field, LinkButton, Segmented, StatusBar } from "./kit";
+import { Button, Details, Field, LinkButton, Segmented, StatusBar } from "./kit";
 import { Headline } from "./result";
 import { gapStats, headlineError } from "./verdict";
 
@@ -311,17 +311,16 @@ export function AttackBox({
         {NETWORK_ID === "testnet" ? <p className="t-small dim">{TEST_NOTE}</p> : null}
       </div>
       <div className="stack-2">
-        <h3 className="t-label">What can happen</h3>
-        <dl className="outcomes">
-          <dt>Fooled, and it loses the duel</dt>
-          <dd>{`your money back less a ${feeBps / 100}% fee, plus a share of its bond`}</dd>
-          <dt>Fooled, but it does not lose</dt>
-          <dd>your money back less the fee</dd>
-          <dt>It holds</dt>
-          <dd>{`you lose your ${fee ? near(fee) : "money"}`}</dd>
-          <dt>It never decides again, or your attack does not count</dt>
-          <dd>your money back less the fee</dd>
-        </dl>
+        <h3 className="t-label">If it works</h3>
+        <p>It falls for it and loses the duel: you get your money back plus a share of its bond.</p>
+        <h3 className="t-label">If it does not</h3>
+        <p>{`It holds: you lose your ${fee ? near(fee) : "money"}.`}</p>
+        <Details label="Every possible outcome">
+          <p>{`Fooled, and it loses the duel: your money back less a ${feeBps / 100}% fee, plus a share of its bond.`}</p>
+          <p>Fooled, but it does not lose: your money back less the fee.</p>
+          <p>{`It holds: you lose your ${fee ? near(fee) : "money"}.`}</p>
+          <p>It never decides again, or your attack does not count: your money back less the fee.</p>
+        </Details>
       </div>
       <p className="t-small dim">
         {asWritten

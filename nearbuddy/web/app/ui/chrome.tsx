@@ -3,12 +3,14 @@
 // network, theme toggle and the Terminal link, the sign-in sheet, and the one polite live region status changes are
 // announced through. Wallet and guest accounts are lib/wallet.ts and lib/guest.ts, unchanged.
 import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react";
+import type { DuelList, DuelRow } from "../api/list/route";
 import { recall } from "../lib/guest";
 import * as wallet from "../lib/wallet";
-import { NETWORK_ID } from "../network";
-import { REPO } from "../tui";
+import { NET, NETWORK_ID } from "../network";
+import { addrHref, REPO } from "../tui";
 import { guestLabel, shortId } from "./format";
-import { Button, Sheet, StatusBar } from "./kit";
+import { Button, type Read, Sheet, StatusBar, useNow, useRead } from "./kit";
+import { pickLive } from "./verdict";
 
 type Kind = "none" | "guest" | "wallet";
 type Site = {
@@ -20,6 +22,8 @@ type Site = {
   signIn: () => Promise<string | null>;
   /** Says a status change through the page's live region. */
   announce: (text: string) => void;
+  /** The duel list of both arenas (/api/list), read once for the whole page: every 60 s, stale after 5 minutes. */
+  list: Read<DuelList>;
 };
 const Ctx = createContext<Site>({
   account: null,
@@ -27,6 +31,7 @@ const Ctx = createContext<Site>({
   ready: false,
   signIn: async () => null,
   announce: () => {},
+  list: { data: null, error: null, loading: true, slow: false, stale: false, age: 0, retry: () => {} },
 });
 export const useSite = () => useContext(Ctx);
 
@@ -70,6 +75,7 @@ function ThemeToggle() {
     <button
       type="button"
       className="btn-link"
+      aria-label="Switch theme"
       onClick={() => {
         const next: Theme = shown() === "light" ? "dark" : "light";
         document.documentElement.dataset.theme = next;
@@ -79,7 +85,7 @@ function ThemeToggle() {
         setTheme(next);
       }}
     >
-      Switch theme
+      ◐ theme
     </button>
   );
 }
@@ -213,12 +219,9 @@ function AccountMenu({
 
 // ---------------------------------------------------------------- the frame
 
-const NAV = [
-  ["/arena", "Duels"],
-  ["/board", "Scoreboard"],
-  ["/evidence", "Evidence"],
-  ["/enter", "Enter an agent"],
-] as const;
+const path = (r: DuelRow, extra = "") =>
+  `/duel/${r.id}${r.arena === "keyless" || extra ? "?" : ""}${[r.arena === "keyless" ? "arena=keyless" : "", extra].filter(Boolean).join("&")}`;
+const verifyOf = (r: DuelRow) => `?verify=${r.arena === "keyless" ? "keyless%3A" : ""}${r.id}`;
 
 export function Chrome({ children }: { children: ReactNode }) {
   const [account, setAccount] = useState<string | null>(null);
@@ -226,12 +229,19 @@ export function Chrome({ children }: { children: ReactNode }) {
   const [signingIn, setSigningIn] = useState(false);
   const [menu, setMenu] = useState(false);
   const [nav, setNav] = useState(false);
+  const [headlines, setHeadlines] = useState<Mine[] | null>(null);
+  const [mine, setMine] = useState(false);
   const [said, setSaid] = useState("");
+  const [at, setAt] = useState<string | null>(null); // the page's path, once mounted
   const waiting = useRef<((a: string | null) => void)[]>([]);
+  const list = useRead<DuelList>("/api/list", 60_000, 300_000);
+  const now = useNow(15_000);
   // the account a previous visit left (a guest in this browser, or a connected wallet), then sign-in and sign-out
   useEffect(() => {
     let alive = true;
     let off = () => {};
+    setAt(location.pathname);
+    setMine(myHeadlines().length > 0);
     wallet.account().then((a) => {
       if (!alive) return;
       setAccount(a);
@@ -263,7 +273,36 @@ export function Chrome({ children }: { children: ReactNode }) {
         setSigningIn(true);
       }),
     announce: setSaid,
+    list,
   };
+  const rows = list.data?.duels ?? [];
+  const live = now ? pickLive(rows, now, (r) => list.data?.lock_s[r.arena] ?? 0) : null;
+  const last = rows.find((r) => r.resolved && !r.cancelled) ?? null;
+  // the header's one button: hidden on the landing page and on a duel page, where the page's own action is on screen
+  const cta =
+    at === null || at === "/" || at.startsWith("/duel/") ? null : live ? (
+      <a className="btn btn-attack cta" href={path(live)}>
+        Attack an AI
+      </a>
+    ) : last ? (
+      <a className="btn btn-quiet cta" href={path(last)}>
+        See the last duel
+      </a>
+    ) : null;
+  const control = account ? (
+    <button type="button" className="btn btn-quiet account-button" onClick={() => setMenu(true)}>
+      {kind === "guest" ? guestLabel(account) : <span className="mono">{shortId(account, 12, 8)}</span>}
+    </button>
+  ) : (
+    <button type="button" className="btn btn-quiet" onClick={() => site.signIn()}>
+      Sign in
+    </button>
+  );
+  const link = (href: string, label: string) => (
+    <a href={href} aria-current={at === href ? "page" : undefined}>
+      {label}
+    </a>
+  );
   return (
     <Ctx.Provider value={site}>
       <div className="site">
@@ -272,32 +311,13 @@ export function Chrome({ children }: { children: ReactNode }) {
             <a className="wordmark" href="/">
               NearBuddy
             </a>
-            <nav className={`site-nav${nav ? " open" : ""}`} id="site-nav" aria-label="Main">
-              {NAV.map(([href, label]) => (
-                <a key={href} href={href}>
-                  {label}
-                </a>
-              ))}
+            <nav className="site-nav" aria-label="Main">
+              {link("/board", "Scoreboard")}
+              {link("/evidence", "Research")}
             </nav>
-            <div className="account">
-              {account ? (
-                <button type="button" className="btn btn-quiet account-button" onClick={() => setMenu(true)}>
-                  {kind === "guest" ? guestLabel(account) : <span className="mono">{shortId(account, 12, 8)}</span>}
-                </button>
-              ) : (
-                <button type="button" className="btn btn-quiet" onClick={() => site.signIn()}>
-                  Sign in
-                </button>
-              )}
-            </div>
-            <button
-              type="button"
-              className="btn btn-quiet menu-button"
-              aria-label="Menu"
-              aria-expanded={nav}
-              aria-controls="site-nav"
-              onClick={() => setNav((v) => !v)}
-            >
+            <div className="account">{control}</div>
+            {cta}
+            <button type="button" className="btn btn-quiet menu-button" aria-label="Menu" onClick={() => setNav(true)}>
               ☰
             </button>
           </div>
@@ -305,18 +325,84 @@ export function Chrome({ children }: { children: ReactNode }) {
         <main className="site-main">{children}</main>
         <footer className="site-footer">
           <div className="bar">
-            <span className="mono">{NETWORK_ID}</span>
-            <ThemeToggle />
-            <a href="/terminal">Terminal</a>
-            <a href={REPO} target="_blank" rel="noreferrer">
-              Source
-            </a>
+            <p className="wordmark">NearBuddy</p>
+            <p>A market that puts a price on how hard an AI is to deceive.</p>
+            <div className="foot-cols">
+              <div>
+                <h2 className="t-label">Play</h2>
+                {live ? <a href={path(live)}>Live duel</a> : null}
+                <a href="/arena">All duels</a>
+                {mine ? (
+                  <button type="button" className="btn-link" onClick={() => setHeadlines(myHeadlines())}>
+                    Your headlines
+                  </button>
+                ) : null}
+              </div>
+              <div>
+                <h2 className="t-label">Proof</h2>
+                <a href="/evidence">Evidence</a>
+                <a href="/board">Scoreboard</a>
+                {last ? <a href={verifyOf(last)}>Verify the last duel</a> : null}
+              </div>
+              <div>
+                <h2 className="t-label">Build</h2>
+                <a href="/enter">Enter an agent</a>
+                <a href="/api/mcp">Agent API (MCP)</a>
+                <a href={`${REPO}/tree/HEAD/nearbuddy/dataset#readme`} target="_blank" rel="noreferrer">
+                  Dataset
+                </a>
+              </div>
+              <div>
+                <h2 className="t-label">Project</h2>
+                <a href={REPO} target="_blank" rel="noreferrer">
+                  Source code
+                </a>
+                <a href="/terminal">Terminal</a>
+              </div>
+            </div>
+            <div className="foot-line">
+              <span>
+                arena{" "}
+                <a className="mono" href={addrHref(NET.arena)} target="_blank" rel="noreferrer">
+                  {NET.arena} ↗
+                </a>
+              </span>
+              <span>
+                network <span className="mono">{NETWORK_ID}</span>
+              </span>
+              <ThemeToggle />
+            </div>
+            {NETWORK_ID === "testnet" ? <p>Test network. Money here is test NEAR with no real value.</p> : null}
           </div>
         </footer>
         <div className="sr" aria-live="polite">
           {said}
         </div>
       </div>
+      <Sheet open={nav} onClose={() => setNav(false)} title="Menu" kind="drawer">
+        <nav className="menu-list" aria-label="Menu">
+          {link("/board", "Scoreboard")}
+          {link("/evidence", "Research")}
+          {link("/arena", "All duels")}
+          {link("/enter", "Enter an agent")}
+        </nav>
+        <div className="menu-foot">
+          {control}
+          <ThemeToggle />
+        </div>
+      </Sheet>
+      <Sheet open={headlines !== null} onClose={() => setHeadlines(null)} title="Your headlines">
+        <ul>
+          {(headlines ?? []).map((m) => (
+            <li key={m.tx}>
+              <a className="btn-link" href={`/i/${m.tx}`}>
+                {`Duel #${m.duel} · `}
+                <span className="mono">{shortId(m.tx, 8, 0)}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </Sheet>
       <SignIn open={signingIn} onDone={done} />
       {account ? <AccountMenu open={menu} onClose={() => setMenu(false)} account={account} kind={kind} /> : null}
     </Ctx.Provider>

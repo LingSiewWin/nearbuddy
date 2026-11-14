@@ -139,6 +139,8 @@ export function ResultView({ tx, initial }: { tx: string; initial: Card | null }
                 end={endOf(bd.duel, rec.target, now)}
                 feeBps={bd.config.chaos?.fee_bps ?? 0}
                 reason={history?.said.find((s) => s.at > nsMs(rec.at))?.text ?? null}
+                plantedMs={nsMs(rec.at)}
+                decidedMs={history?.decisions.find((x) => x.at > nsMs(rec.at))?.at ?? null}
                 trace={recordTrace(rec)}
                 time={noClock}
                 fresh={fresh}

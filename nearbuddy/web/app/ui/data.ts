@@ -12,7 +12,7 @@ import type { FeedLine } from "../lib/feed";
 import { fresh, push, type Sample } from "../lib/stage";
 import { getJson } from "../tui";
 import { nsMs, price8, type Side } from "./format";
-import { type Read, usePoll, useRead } from "./kit";
+import { usePoll, useRead } from "./kit";
 import { type Decision, pinsOf, type TraceIn } from "./trace";
 import type { DuelEnd } from "./verdict";
 
@@ -205,9 +205,6 @@ export function usePrice(on: boolean, now: number) {
   const ok = on && fresh(buf, now);
   return { samples: buf, price: ok ? (buf[buf.length - 1]?.p ?? null) : null, stale: on && buf.length > 0 && !ok };
 }
-
-/** The duel list: every 60 s, stale after 5 minutes. */
-export const useList = (): Read<DuelList> => useRead<DuelList>("/api/list", 60_000, 300_000);
 
 /** A duel's percentage move since its open, "+0.31%", or null without both prices. */
 export function sinceOpen(openPrice: string | null | undefined, price: number | null): string | null {

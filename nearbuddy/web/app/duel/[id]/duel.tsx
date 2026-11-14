@@ -1,7 +1,9 @@
 "use client";
-// One duel: the price and both agents' Traces on one time axis, what each AI decided and why, the planted headlines,
-// and the attack box (a bottom sheet on phone, inline in the right column on desktop). Read from either arena
-// (`?arena=keyless`); `?attack=a|b` opens the attack box with that target chosen.
+// One duel, organised as one question: what are these two AIs doing, and which one do I lie to? First view: one
+// sentence, the two AIs with a line of reasoning and a button each, and both Traces. Everything an analyst wants
+// (price, full reasoning, every planted headline, money) is in disclosure rows under it. Read from either arena
+// (`?arena=keyless`); `?attack=a|b` opens the attack box with that target chosen: a bottom sheet on phone, a panel
+// beside the Traces on desktop.
 import { useSearchParams } from "next/navigation";
 import { use, useEffect, useRef, useState } from "react";
 import type { Chaos } from "../../lib/abi/arena";
@@ -23,70 +25,25 @@ import {
   usePrice,
   verifyHref,
 } from "../../ui/data";
-import { bet, hm, near, nsMs, plural, price8, shortId } from "../../ui/format";
-import { Amount, Button, Countdown, LinkButton, Region, Sheet, Skeleton, useMedia, useNow } from "../../ui/kit";
+import { bet, hm, near, nsMs, price8, shortId } from "../../ui/format";
+import {
+  Amount,
+  Button,
+  Countdown,
+  Details,
+  LinkButton,
+  Region,
+  Sheet,
+  Skeleton,
+  useMedia,
+  useNow,
+} from "../../ui/kit";
 import { Collect, Headline, MachineQuote, ResultPanel, ShareSheet, VerdictWord, WaitPanel } from "../../ui/result";
 import { markOf } from "../../ui/trace";
 import { Pin, PriceLine, TimeAxis, Trace, WhatHappened } from "../../ui/trace-view";
 import { coinFlip, sentence, VERDICT } from "../../ui/verdict";
 
 type Which = "a" | "b";
-
-/** One side of the duel: the model, its bet and since when, its own words, its enclave label and bond. */
-function AgentPanel({
-  which,
-  body,
-  h,
-  word,
-  pnl,
-  arenaQuery,
-}: {
-  which: Which;
-  body: DuelBody;
-  h: History | null;
-  /** "ahead" while running; "won", "lost" or "tie" once finished. */
-  word: string | null;
-  /** The final profit in bps, once finished. */
-  pnl: number | null;
-  arenaQuery: string;
-}) {
-  const d = body.duel;
-  const agent = which === "a" ? body.a : body.b;
-  if (!d || !agent) return null;
-  const it = which === "a" ? d.last_intent_a : d.last_intent_b;
-  const lastAt = h?.decisions.at(-1);
-  const since = it && lastAt && lastAt.side === it.side ? ` since ${hm(lastAt.at)}` : "";
-  return (
-    <section className="sect stack-2" aria-label={`Agent ${which.toUpperCase()}`}>
-      <div className="hrow">
-        <h2 className="agent-name">
-          {which.toUpperCase()} <span className="mono">{agent.model_id}</span>
-        </h2>
-        {word ? <span className={`end${word === "lost" ? " dim" : " ink"}`}>{word}</span> : null}
-      </div>
-      {it ? (
-        <>
-          <p>{`Betting ${bet(it.side)}${since}`}</p>
-          <MachineQuote text={h?.reason ?? null} clamp />
-        </>
-      ) : (
-        <p className="dim">No decision yet. The first one usually lands within a few minutes of the duel opening.</p>
-      )}
-      {h?.sealed ? <p className="t-small caution">A sealed decision is in and not opened yet.</p> : null}
-      {pnl !== null ? <p className="mono">{`Final profit ${pnl >= 0 ? "+" : ""}${(pnl / 100).toFixed(2)}%`}</p> : null}
-      {agent.tee ? (
-        <p>
-          <a className="proof" href={verifyHref(d.id, arenaOf(arenaQuery))}>
-            Runs in a secure enclave
-          </a>
-        </p>
-      ) : null}
-      <p className="t-small">
-        Bond <Amount yocto={agent.bond} /> · <a href={agentPath(agent.pk)}>Agent page →</a>
-      </p>
-    </section>
-  );
-}
 
 /** One row of the planted-headlines list; expands to the full text, who planted it, the cost, the coin flip and the
  *  verdict sentence. A control headline (the arena's own baseline) gets no verdict word. */
@@ -175,29 +132,32 @@ function Loaded({
   const desktop = useMedia("(min-width: 960px)");
   const wanted = sp.get("attack");
   const [target, setTarget] = useState<Which>(wanted === "b" ? "b" : "a");
-  const [sheet, setSheet] = useState(false);
+  const [attack, setAttack] = useState(wanted === "a" || wanted === "b");
   const [locked, setLocked] = useState(false);
   const [openRow, setOpenRow] = useState<number | null>(null);
   const [mine, setMine] = useState<Mine[]>([]);
   const [share, setShare] = useState(false);
   const [fresh, setFresh] = useState(false);
   const seen = useRef<string | null>(null);
-  const inline = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLElement>(null);
   const d = body.duel;
   const phase = d ? phaseOf(d, now) : "running";
   const price = usePrice(phase === "running" || phase === "closed", now);
   useEffect(() => setMine(myHeadlines()), []);
-  // ?attack=a|b: the sheet on phone, focus moved to the inline box on desktop
+  // desktop: the attack box is a panel beside the Traces, and opening it moves focus there
   useEffect(() => {
-    if (wanted !== "a" && wanted !== "b") return;
-    if (desktop) inline.current?.querySelector<HTMLElement>("input, textarea")?.focus();
-    else setSheet(true);
-  }, [wanted, desktop]);
-  const dropParam = () => {
+    if (attack && desktop) panel.current?.querySelector<HTMLElement>("textarea")?.focus();
+  }, [attack, desktop]);
+  const close = () => {
+    setAttack(false);
     const u = new URL(location.href);
     if (!u.searchParams.has("attack")) return;
-    u.searchParams.delete("attack");
+    u.searchParams.delete("attack"); // closing removes the parameter
     history.replaceState(null, "", u);
+  };
+  const lie = (w: Which) => {
+    setTarget(w);
+    setAttack(true);
   };
 
   // the visitor's own newest headline in this duel, and its verdict arriving while they watch
@@ -227,37 +187,39 @@ function Loaded({
       </div>
     );
 
-  const tA = traceOf(body, "a", histories.a ?? emptyHistory(d.close_at), now, staleAt);
-  const tB = traceOf(body, "b", histories.b ?? emptyHistory(d.close_at), now, staleAt);
+  const hist = (w: Which) => (w === "a" ? histories.a : histories.b) ?? emptyHistory(d.close_at);
+  const agent = (w: Which) => (w === "a" ? body.a : body.b);
+  const intent = (w: Which) => (w === "a" ? d.last_intent_a : d.last_intent_b);
+  const model = (w: Which) => agent(w)?.model_id ?? "?";
+  const tA = traceOf(body, "a", hist("a"), now, staleAt);
+  const tB = traceOf(body, "b", hist("b"), now, staleAt);
   const gate = attackGate(body, now);
   const o = phase === "finished" ? d.outcome : null;
   const open8 = o?.open_price ?? d.open_price;
   const shownPrice = o ? price8(o.close_price) : price.price;
   const move = sinceOpen(open8, shownPrice);
-  const live = {
-    a: livePnl(d.last_intent_a, price8(open8), price.price),
-    b: livePnl(d.last_intent_b, price8(open8), price.price),
-  };
-  const word = (w: Which): string | null => {
-    if (o) return o.winner === null ? "tie" : o.winner === (w === "a" ? d.a : d.b) ? "won" : "lost";
-    if (phase !== "running" || live.a === null || live.b === null || live.a === live.b) return null;
-    return (w === "a" ? live.a > live.b : live.b > live.a) ? "ahead" : null;
-  };
+  const pnl = (w: Which) => (o ? (w === "a" ? o.pnl_a : o.pnl_b) : livePnl(intent(w), price8(open8), price.price));
+  const ended = (w: Which): string | null =>
+    o ? (o.winner === null ? "tie" : o.winner === (w === "a" ? d.a : d.b) ? "won" : "lost") : null;
+  const [pa, pb] = [pnl("a"), pnl("b")];
+  const ahead: Which | null =
+    !o && phase === "running" && pa !== null && pb !== null && pa !== pb ? (pa > pb ? "a" : "b") : null;
+  const pct = (bps: number) => `${bps >= 0 ? "+" : ""}${(bps / 100).toFixed(2)}%`;
   const attacks = records.filter((c) => c.kind !== "Placebo");
   const titles = Object.fromEntries(records.map((c, i) => [String(i), c.headline]));
   const sideOf = (c: Chaos): Which => (c.target === d.a ? "a" : "b");
   const asWritten = (w: Which) => body.keyless?.[w === "a" ? 0 : 1]?.template === 1;
   const showRow = (i: string) => {
     setOpenRow(Number(i));
-    document.getElementById(`headline-${i}`)?.scrollIntoView({ block: "center" });
+    // the row sits in a disclosure that opens with it: scroll once it is laid out
+    setTimeout(() => document.getElementById(`headline-${i}`)?.scrollIntoView({ block: "center" }), 0);
   };
   const planted = (m: Mine | null) => {
     if (m) {
       rememberHeadline(m);
       setMine(myHeadlines());
     }
-    setSheet(false);
-    dropParam();
+    close();
     refresh();
   };
   const box = (
@@ -273,55 +235,160 @@ function Loaded({
       refresh={refresh}
     />
   );
-  const myTrace = my
-    ? traceOf(
-        body,
-        sideOf(my),
-        (sideOf(my) === "a" ? histories.a : histories.b) ?? emptyHistory(d.close_at),
-        now,
-        staleAt,
-      )
-    : null;
+  const mySide = my ? sideOf(my) : "a";
+  const myTrace = my ? traceOf(body, mySide, hist(mySide), now, staleAt) : null;
   const myWaiting = my?.outcome === "Pending";
-  const verify = (
-    <a className="proof" href={verifyHref(id, arena)}>
-      Verify this duel
-    </a>
-  );
+  const enclave = (w: Which) =>
+    agent(w)?.tee ? (
+      <a className="proof" href={verifyHref(id, arena)}>
+        Runs in a secure enclave
+      </a>
+    ) : null;
+  const newest = attacks.at(-1);
+  // no decision from either AI is the one gate said per AI, not once under both
+  const caption = gate?.label
+    ? gate.label === "Too late for this duel"
+      ? `${gate.label}. ${gate.why}`
+      : gate.why
+    : null;
+  const waitsForDecision = !!gate && !d.last_intent_a && !d.last_intent_b;
 
   return (
     <>
-      <div className="duel-top">
-        <div className="hrow">
-          <span className="t-num">
-            <span className="t-label">{SYMBOL(d.symbol)}</span> {shownPrice ? shownPrice.toFixed(4) : "—"}
-          </span>
-          <span className="end">
-            {phase === "running" ? (
-              <>
-                ends in <Countdown to={nsMs(d.close_at)} now={now} stale={stale} />
-              </>
-            ) : phase === "closed" ? (
-              <span className="caution">Closed. Waiting for the final price.</span>
-            ) : phase === "finished" ? (
-              `Finished ${hm(nsMs(d.close_at))}`
-            ) : null}
-          </span>
-        </div>
-        {move ? <p className="mono t-small">{`${move} since open`}</p> : null}
-        {phase === "cancelled" ? (
+      <div className="stack-2 duel-top">
+        {phase === "running" ? (
+          <p>
+            Two AIs are betting on the NEAR price. <Countdown to={nsMs(d.close_at)} now={now} stale={stale} /> left.
+          </p>
+        ) : phase === "closed" ? (
+          <p className="caution">Closed. Waiting for the final price.</p>
+        ) : phase === "finished" ? (
+          <>
+            <p className="dim">{`Finished ${hm(nsMs(d.close_at))}`}</p>
+            <p>{o?.winner ? `${model(o.winner === d.a ? "a" : "b")} won this duel.` : "This duel was a tie."}</p>
+          </>
+        ) : (
           <p className="caution">Cancelled. The final price never arrived, so nobody won this duel.</p>
-        ) : null}
+        )}
       </div>
 
-      <div className="duel-grid">
-        <section className="duel-chart" aria-label="Decisions over time">
-          {phase === "running" || price.samples.some((x) => x.t <= nsMs(d.close_at)) ? (
-            <PriceLine samples={price.samples} from={nsMs(d.open_at)} to={nsMs(d.close_at)} stale={price.stale} />
+      {my && myTrace ? (
+        <section className="boxed duel-yours" aria-label="Your headline">
+          {myWaiting ? (
+            <WaitPanel
+              c={my}
+              model={model(mySide)}
+              viewer="attacker"
+              asWritten={asWritten(mySide)}
+              trace={{ ...myTrace, pins: myTrace.pins.filter((p) => p.id === String(myIndex)) }}
+              locked={body.open?.[String(myIndex)]?.open === false}
+              decisionTimes={hist(mySide).decisions.map((x) => x.at)}
+              closeMs={nsMs(d.close_at)}
+              now={now}
+              link={myTx ? `/i/${myTx}` : null}
+              plantedMs={nsMs(my.at)}
+            />
+          ) : (
+            <ResultPanel
+              c={my}
+              model={model(mySide)}
+              viewer="attacker"
+              asWritten={asWritten(mySide)}
+              end={endOf(d, my.target, now)}
+              feeBps={body.config.chaos?.fee_bps ?? 0}
+              reason={hist(mySide).said.find((x) => x.at > nsMs(my.at))?.text ?? null}
+              plantedMs={nsMs(my.at)}
+              trace={{ ...myTrace, pins: myTrace.pins.filter((p) => p.id === String(myIndex)) }}
+              fresh={fresh}
+              actions={
+                <>
+                  <Collect
+                    records={records}
+                    account={site.account}
+                    contract={body.contract}
+                    duelId={id}
+                    finished={phase === "finished" || phase === "cancelled"}
+                    onDone={refresh}
+                  />
+                  {myTx ? (
+                    <Button variant="quiet" onClick={() => setShare(true)}>
+                      Share
+                    </Button>
+                  ) : null}
+                </>
+              }
+              links={
+                <a className="proof" href={verifyHref(id, arena)}>
+                  Verify this result
+                </a>
+              }
+            />
+          )}
+          {gate ? null : (
+            <button type="button" className="btn-link" onClick={() => lie(mySide)}>
+              Plant another
+            </button>
+          )}
+          {myTx ? (
+            <ShareSheet
+              open={share}
+              onClose={() => setShare(false)}
+              tx={myTx}
+              model={model(mySide)}
+              outcome={my.outcome}
+            />
           ) : null}
+        </section>
+      ) : null}
+
+      <div className="picks duel-picks">
+        {(["a", "b"] as const).map((w) => {
+          const it = intent(w);
+          const end = ended(w);
+          return (
+            <section className="pick" key={w} aria-label={`Agent ${w.toUpperCase()}`}>
+              <div className="hrow">
+                <h2 className="who">{model(w)}</h2>
+                {end ? <span className={`end ${end === "lost" ? "dim" : "ink"}`}>{end}</span> : null}
+              </div>
+              {it ? (
+                <>
+                  <p>
+                    Betting the price goes <span className="ink">{bet(it.side)}</span>
+                  </p>
+                  <MachineQuote text={hist(w).reason} />
+                </>
+              ) : (
+                <p className="dim">
+                  No decision yet. The first one usually lands within a few minutes of the duel opening.
+                </p>
+              )}
+              {phase !== "running" || my ? null : (
+                <Button
+                  variant="attack"
+                  disabled={!!gate || !it}
+                  why={
+                    !it || waitsForDecision
+                      ? "Wait for its first decision. An attack needs a position to push against."
+                      : null
+                  }
+                  onClick={() => lie(w)}
+                >
+                  Lie to this one
+                </Button>
+              )}
+            </section>
+          );
+        })}
+      </div>
+      {phase === "running" && !my && caption && !waitsForDecision ? <p className="t-small caution">{caption}</p> : null}
+
+      <div className={`duel-work${attack && desktop && phase === "running" ? " with-attack" : ""}`}>
+        <section className="sect stack-2" aria-label="What they have done so far">
+          <h2 className="t-label">What they have done so far</h2>
           <Trace
             variant="full"
-            name={`A ${body.a?.model_id ?? ""}`}
+            name={`A ${model("a")}`}
             input={tA}
             stale={stale}
             onPin={showRow}
@@ -330,7 +397,7 @@ function Loaded({
           />
           <Trace
             variant="full"
-            name={`B ${body.b?.model_id ?? ""}`}
+            name={`B ${model("b")}`}
             input={tB}
             stale={stale}
             onPin={showRow}
@@ -341,173 +408,136 @@ function Loaded({
           {tA && tB ? (
             <WhatHappened
               items={[
-                { name: `A ${body.a?.model_id ?? ""}`, input: tA },
-                { name: `B ${body.b?.model_id ?? ""}`, input: tB },
+                { name: `A ${model("a")}`, input: tA },
+                { name: `B ${model("b")}`, input: tB },
               ]}
             />
           ) : null}
+          {phase === "finished" || phase === "cancelled" ? (
+            <div className="actions">
+              <LinkButton variant="proof" href={verifyHref(id, arena)}>
+                Verify this duel
+              </LinkButton>
+              <LinkButton variant="quiet" href="/arena">
+                See a running duel
+              </LinkButton>
+            </div>
+          ) : null}
         </section>
-
-        {my && myTrace ? (
-          <section className="duel-yours boxed" aria-label="Your headline">
-            {myWaiting ? (
-              <WaitPanel
-                c={my}
-                model={(sideOf(my) === "a" ? body.a : body.b)?.model_id ?? "the AI"}
-                viewer="attacker"
-                asWritten={asWritten(sideOf(my))}
-                trace={{ ...myTrace, pins: myTrace.pins.filter((p) => p.id === String(myIndex)) }}
-                locked={body.open?.[String(myIndex)]?.open === false}
-                decisionTimes={((sideOf(my) === "a" ? histories.a : histories.b)?.decisions ?? []).map((x) => x.at)}
-                closeMs={nsMs(d.close_at)}
-                now={now}
-                link={myTx ? `/i/${myTx}` : null}
-                plantedMs={nsMs(my.at)}
-              />
-            ) : (
-              <ResultPanel
-                c={my}
-                model={(sideOf(my) === "a" ? body.a : body.b)?.model_id ?? "the AI"}
-                viewer="attacker"
-                asWritten={asWritten(sideOf(my))}
-                end={endOf(d, my.target, now)}
-                feeBps={body.config.chaos?.fee_bps ?? 0}
-                reason={
-                  (sideOf(my) === "a" ? histories.a : histories.b)?.said.find((s) => s.at > nsMs(my.at))?.text ?? null
-                }
-                trace={{ ...myTrace, pins: myTrace.pins.filter((p) => p.id === String(myIndex)) }}
-                fresh={fresh}
-                actions={
-                  <>
-                    <Collect
-                      records={records}
-                      account={site.account}
-                      contract={body.contract}
-                      duelId={id}
-                      finished={phase === "finished" || phase === "cancelled"}
-                      onDone={refresh}
-                    />
-                    {myTx ? (
-                      <Button variant="quiet" onClick={() => setShare(true)}>
-                        Share
-                      </Button>
-                    ) : null}
-                  </>
-                }
-                links={
-                  <>
-                    <a className="proof" href={verifyHref(id, arena)}>
-                      Verify this result
-                    </a>
-                    {gate ? null : (
-                      <button
-                        type="button"
-                        className="btn-link"
-                        onClick={() =>
-                          desktop ? inline.current?.querySelector<HTMLElement>("textarea")?.focus() : setSheet(true)
-                        }
-                      >
-                        Plant another
-                      </button>
-                    )}
-                  </>
-                }
-              />
-            )}
-            {myTx ? (
-              <ShareSheet
-                open={share}
-                onClose={() => setShare(false)}
-                tx={myTx}
-                model={(sideOf(my) === "a" ? body.a : body.b)?.model_id ?? "an AI"}
-                outcome={my.outcome}
-              />
-            ) : null}
+        {attack && desktop && phase === "running" ? (
+          <section className="boxed attack-panel" ref={panel} aria-label="Plant a fake headline">
+            <div className="hrow">
+              <h2 className="t-title">Plant a fake headline</h2>
+              <button type="button" className="btn-link end" aria-label="Close" disabled={locked} onClick={close}>
+                ✕
+              </button>
+            </div>
+            {box}
           </section>
         ) : null}
-
-        <div className="duel-side">
-          <div className="duel-agents">
-            <AgentPanel
-              which="a"
-              body={body}
-              h={histories.a}
-              word={word("a")}
-              pnl={o ? o.pnl_a : null}
-              arenaQuery={arena}
-            />
-            <AgentPanel
-              which="b"
-              body={body}
-              h={histories.b}
-              word={word("b")}
-              pnl={o ? o.pnl_b : null}
-              arenaQuery={arena}
-            />
-          </div>
-          {desktop && phase === "running" ? (
-            <section className="sect duel-attack" ref={inline} aria-label="Plant a fake headline">
-              {box}
-            </section>
-          ) : null}
-          <p className="sect duel-verify">{verify}</p>
-        </div>
-
-        <section className="sect duel-headlines stack-2">
-          <h2 className="t-label">{`Planted headlines (${attacks.length})`}</h2>
-          {records.length ? (
-            <ul>
-              {records.map((c, i) => (
-                <HeadlineRow
-                  // biome-ignore lint/suspicious/noArrayIndexKey: a record's index is its identity on chain
-                  key={i}
-                  c={c}
-                  index={i}
-                  side={sideOf(c)}
-                  open={openRow === i}
-                  onToggle={() => setOpenRow(openRow === i ? null : i)}
-                  tx={mine.find((m) => m.duel === id && m.arena === arena && m.index === i)?.tx ?? null}
-                  asWritten={asWritten(sideOf(c))}
-                />
-              ))}
-            </ul>
-          ) : (
-            <p className="dim">Nobody has planted a headline in this duel.</p>
-          )}
-        </section>
       </div>
 
-      {desktop ? null : phase === "running" && !myWaiting ? (
-        <div className="sticky-bar">
-          <Button variant="attack" disabled={!!gate} why={gate?.why} onClick={() => setSheet(true)}>
-            {gate?.label || "Plant a fake headline"}
-          </Button>
+      <section className="duel-details" aria-label="Details">
+        <h2 className="t-label">Details</h2>
+        <div className="details-grid">
+          <Details
+            id="duel-price"
+            label="Price"
+            summary={shownPrice ? `${shownPrice.toFixed(4)}${move ? `, ${move} since open` : ""}` : "—"}
+          >
+            <PriceLine samples={price.samples} from={nsMs(d.open_at)} to={nsMs(d.close_at)} stale={price.stale} />
+            <p>
+              <span className="t-label">{SYMBOL(d.symbol)}</span>{" "}
+              <span className="t-num">{shownPrice ? shownPrice.toFixed(4) : "—"}</span>
+            </p>
+            <p className="t-small dim">
+              Open price <span className="mono">{price8(open8)?.toFixed(4) ?? "—"}</span>
+            </p>
+          </Details>
+          <Details id="duel-reasoning" label="Their full reasoning">
+            {(["a", "b"] as const).map((w) => {
+              const h = hist(w);
+              const at = h.decisions.at(-1)?.at;
+              return (
+                <div className="stack-2" key={w}>
+                  <p className="who mono">{model(w)}</p>
+                  {intent(w) ? <MachineQuote text={h.reason} /> : <p className="dim">No decision yet.</p>}
+                  {at ? <p className="t-small dim">{`Decided ${hm(at)}`}</p> : null}
+                  {h.sealed ? <p className="t-small caution">A sealed decision is in and not opened yet.</p> : null}
+                  {enclave(w)}
+                </div>
+              );
+            })}
+          </Details>
+          <Details
+            id="duel-headlines"
+            label={`Planted headlines (${attacks.length})`}
+            summary={newest ? <span className="serif-sum">{`“${newest.headline}”`}</span> : undefined}
+            open={openRow !== null || !!my}
+          >
+            {records.length ? (
+              <ul>
+                {records.map((c, i) => (
+                  <HeadlineRow
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a record's index is its identity on chain
+                    key={i}
+                    c={c}
+                    index={i}
+                    side={sideOf(c)}
+                    open={openRow === i}
+                    onToggle={() => setOpenRow(openRow === i ? null : i)}
+                    tx={mine.find((m) => m.duel === id && m.arena === arena && m.index === i)?.tx ?? null}
+                    asWritten={asWritten(sideOf(c))}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <p className="dim">Nobody has planted a headline in this duel.</p>
+            )}
+          </Details>
+          <Details id="duel-money" label="Money" summary="bonds and costs">
+            <dl className="facts">
+              {(["a", "b"] as const).map((w) => (
+                <div key={w} style={{ display: "contents" }}>
+                  <dt>{`Bond ${w.toUpperCase()}`}</dt>
+                  <dd>
+                    <Amount yocto={agent(w)?.bond ?? null} />{" "}
+                    {ahead === w && pa !== null && pb !== null ? (
+                      <span className="ink">{`ahead by ${(Math.abs(pa - pb) / 100).toFixed(2)}%`}</span>
+                    ) : null}
+                    {o ? <span className="mono">{` final profit ${pct(w === "a" ? o.pnl_a : o.pnl_b)}`}</span> : null}{" "}
+                    <a href={agentPath(agent(w)?.pk ?? "")}>Agent page →</a>
+                  </dd>
+                </div>
+              ))}
+              {phase === "running" ? (
+                <>
+                  <dt>Next attack</dt>
+                  <dd>{d.chaos_fee ? near(d.chaos_fee) : "—"}</dd>
+                </>
+              ) : null}
+            </dl>
+            <p className="t-small dim">A bond is money the agent's owner locked as a promise.</p>
+          </Details>
         </div>
-      ) : phase === "finished" || phase === "cancelled" ? (
-        <div className="sticky-bar two">
-          <LinkButton variant="proof" href={verifyHref(id, arena)}>
-            Verify this duel
-          </LinkButton>
-          <LinkButton variant="quiet" href="/arena">
-            See a running duel
-          </LinkButton>
-        </div>
-      ) : null}
+      </section>
+      <p className="sect">
+        <a className="proof" href={verifyHref(id, arena)}>
+          Verify this duel
+        </a>
+      </p>
+
       {desktop ? null : (
         <Sheet
-          open={sheet}
+          open={attack && phase === "running"}
           kind="tall"
           locked={locked}
           title="Plant a fake headline"
-          onClose={() => {
-            setSheet(false);
-            dropParam();
-          }}
+          onClose={close}
         >
           {box}
         </Sheet>
       )}
-      <p className="sr">{`${plural(attacks.length, "planted headline")} in this duel. Cost of the next one: ${d.chaos_fee ? near(d.chaos_fee) : "not read yet"}.`}</p>
     </>
   );
 }
@@ -536,7 +566,7 @@ export function DuelView({ params }: { params: Promise<{ id: string }> }) {
   return (
     <div className="page duel">
       <div className="hrow duel-head">
-        <a href="/arena">← Duels</a>
+        <a href="/arena">← All duels</a>
         <h1 className="t-title end">{`Duel #${id}`}</h1>
       </div>
       <Region

@@ -6,10 +6,10 @@ import type { Chaos } from "../lib/abi/arena";
 import { claimable, claimCall } from "../lib/inject";
 import * as wallet from "../lib/wallet";
 import { txHref } from "../tui";
-import { clock, near } from "./format";
-import { Button, LinkButton, Sheet, Skeleton, StatusBar } from "./kit";
+import { clock, hm, near } from "./format";
+import { Button, Details, LinkButton, Sheet, Skeleton, StatusBar } from "./kit";
 import type { TraceIn } from "./trace";
-import { Trace, WhatHappened } from "./trace-view";
+import { Trace } from "./trace-view";
 import { coinFlip, type DuelEnd, gapLine, moneyLine, sentence, shareText, VERDICT, type Viewer } from "./verdict";
 
 /** A planted headline: serif, in quotes, and nothing else is ever set in serif. */
@@ -140,8 +140,8 @@ export function WaitPanel({
   );
 }
 
-/** Step 5: the verdict, the headline, the two-segment Trace, the sentence, the AI's reason, how it saw the headline,
- *  the money line and the actions. */
+/** Step 5. First view: the verdict word, the headline, the Trace, one sentence, the money line and the actions.
+ *  The AI's own words and how the headline was tested are in disclosure rows under it. */
 export function ResultPanel({
   c,
   model,
@@ -150,6 +150,8 @@ export function ResultPanel({
   end,
   feeBps,
   reason,
+  plantedMs,
+  decidedMs,
   trace,
   time,
   fresh,
@@ -165,6 +167,9 @@ export function ResultPanel({
   feeBps: number;
   /** The AI's reason for the deciding decision; null when it carried none. */
   reason: string | null;
+  plantedMs: number;
+  /** When the deciding decision was made, where the page holds it. */
+  decidedMs?: number | null;
   trace: TraceIn;
   time?: (ms: number) => string | null;
   /** The verdict arrived while the visitor was on the page: play its appearance once. */
@@ -180,18 +185,28 @@ export function ResultPanel({
       <Headline text={c.headline} />
       <Trace variant="mini" name={model} input={trace} {...(time ? { time } : {})} />
       <p>{sentence(c, viewer)}</p>
-      {decided ? <MachineQuote text={reason} /> : null}
-      {flipLine ? <p className="t-small dim">{flipLine}</p> : null}
       <p>{moneyLine(c, end, feeBps, viewer)}</p>
       {actions ? <div className="actions">{actions}</div> : null}
+      {decided ? <p className="t-small dim">One attack is one data point.</p> : null}
+      <div>
+        {decided ? (
+          <Details id="result-said" label="What the AI said">
+            <MachineQuote text={reason} />
+          </Details>
+        ) : null}
+        <Details id="result-tested" label="How it was tested">
+          {flipLine ? <p>{flipLine}</p> : null}
+          <p className="mono t-small">
+            {`Planted ${hm(plantedMs)}`}
+            {decidedMs ? ` · decided ${hm(decidedMs)}` : ""}
+          </p>
+          <p className="t-small dim">
+            About 1 in 9 decisions change on a re-run with no attack. See the <a href="/board">scoreboard</a> for the
+            pattern.
+          </p>
+        </Details>
+      </div>
       {links ? <div className="hrow">{links}</div> : null}
-      {decided ? (
-        <p className="t-small dim">
-          One attack is one data point. About 1 in 9 decisions change on a re-run with no attack. See the{" "}
-          <a href="/board">scoreboard</a> for the pattern.
-        </p>
-      ) : null}
-      <WhatHappened items={[{ name: model, input: trace, ...(time ? { time } : {}) }]} />
     </div>
   );
 }
