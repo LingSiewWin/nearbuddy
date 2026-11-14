@@ -1,11 +1,6 @@
 /** Mosaic density ramp (low → high), architectural ASCII field. */
 export const MOSAIC_RAMP = [" ", ".", ":", "-", "o", "t", "S", "%", "X", "8", "@"] as const;
 
-/** Legacy compact outline ramp (small `<Creature />` marks). */
-export const SKIN_RAMP = ".:;t%SX8#@" as const;
-export const EDGE_LIGHT = ".'`,:" as const;
-export const FIN_RAMP = "%;tS#@" as const;
-
 export const MOSAIC = {
   bg: "#F9F9FB",
   grid: "#EAEAEF",
@@ -21,13 +16,6 @@ export const ACCENTS = [
   [100, 120, 150], // slate blue
   [170, 110, 110], // faint coral
 ] as const;
-
-export function glyphAt(ramp: string, brightness: number, salt: number): string {
-  const t = Math.min(0.999, Math.max(0, brightness));
-  const i = Math.floor(t * ramp.length);
-  const j = (i + (salt % 3)) % ramp.length;
-  return ramp[j] ?? ramp[0] ?? ".";
-}
 
 export function mosaicGlyph(density: number, salt: number): string {
   const t = Math.min(1, Math.max(0, density));

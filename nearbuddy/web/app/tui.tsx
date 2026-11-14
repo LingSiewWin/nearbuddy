@@ -13,7 +13,6 @@ const KEY = 16; // label column
 const VW = W - KEY - 5; // value column: W minus "│ ", label, " ", " │"
 export const NEAR = 10n ** 24n;
 export const ZERO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-export const TAMPER_TX = "4rmFo38nQWqUStouFr4Uqv3ZLnQ8MXe4NTNDAN9xPPSt"; // flipped-byte proof refused on testnet (README); linked to testnet on every network
 
 export const near = (y: string | null | undefined, d = 3) => {
   if (!y) return "-";

@@ -115,4 +115,3 @@ export function eraSplit(agents: { pk: string; alpha_bps: number }[], oracleDuel
     }),
   );
 }
-export type EraSplit = ReturnType<typeof eraSplit>;

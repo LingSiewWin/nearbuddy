@@ -60,8 +60,6 @@ export const nsMs = (ns: string) => Number(BigInt(ns) / 1_000_000n);
 /** An oracle price (8 decimals) as a number, or null. */
 export const price8 = (p: string | null | undefined) => (p && p !== "0" ? Number(p) / 1e8 : null);
 
-export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-
 /** A model id as the screens print it: its last path segment ("Qwen/Qwen3.8-27B" reads "Qwen3.8-27B"). The full id
  *  stays available as the element's title. */
 export const shortModel = (id: string) => id.split("/").pop() || id;
