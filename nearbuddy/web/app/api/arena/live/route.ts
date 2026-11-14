@@ -1,13 +1,13 @@
-// GET /api/league: the league home's body (api/league.ts) from the keyless arena. Every tab polls it, so the CDN keeps
+// GET /api/arena/live: the live arena's body (api/arena-live.ts) from the keyless arena. Every tab polls it, so the CDN keeps
 // one copy 3 s and this process builds one at a time; the last good body beats a 502 while the RPC is throttled.
 // A resolved duel and a registered agent never change, so both are read once and kept.
-import type { Duel } from "../../lib/abi/arena";
-import type { AgentInfo } from "../../lib/league";
-import { NETWORK_ID } from "../../network";
-import { chunked } from "../duels";
-import { KEYLESS_ARENA, keylessView } from "../keyless";
-import { build, SCAN } from "../league";
-import { json, jsonBody } from "../near";
+import type { Duel } from "../../../lib/abi/arena";
+import type { AgentInfo } from "../../../lib/standings";
+import { NETWORK_ID } from "../../../network";
+import { build, SCAN } from "../../arena-live";
+import { chunked } from "../../duels";
+import { KEYLESS_ARENA, keylessView } from "../../keyless";
+import { json, jsonBody } from "../../near";
 
 const EDGE = "public, s-maxage=3, stale-while-revalidate=10";
 const TTL = 3_000;
@@ -38,9 +38,9 @@ async function read(): Promise<string> {
     const pk = unknown[i];
     if (v && pk) agents.set(pk, { pk, owner: v.owner, model_id: v.model_id });
   });
-  const league = build(duels, agents, BigInt(Date.now()) * 1_000_000n, NETWORK_ID, contract);
-  if (league.live) league.shout_fee = await keylessView("chaos_fee", { duel_id: league.live.id }).catch(() => null);
-  const body = jsonBody(league);
+  const arena = build(duels, agents, BigInt(Date.now()) * 1_000_000n, NETWORK_ID, contract);
+  if (arena.live) arena.shout_fee = await keylessView("chaos_fee", { duel_id: arena.live.id }).catch(() => null);
+  const body = jsonBody(arena);
   cache = { at: Date.now(), body };
   return body;
 }

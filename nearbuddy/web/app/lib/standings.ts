@@ -1,4 +1,4 @@
-// League standings from resolved matches: each model's (and each agent's) mean profit per match in bps with its sample
+// LiveArenaBody standings from resolved matches: each model's (and each agent's) mean profit per match in bps with its sample
 // standard error, and which ranks cannot be told apart. No Node API: the route and the page share it.
 
 /** One resolved match as the standings read it: pks in base64, P&L in bps, `winner` a pk or null on a tie. */

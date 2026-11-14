@@ -21,7 +21,7 @@ type Main = {
 };
 type Keyless = { state?: { agent: AgentView | null; keyless: KeylessAgent | null; duels: string[] } };
 type Board = { rows: number; models: BoardModel[] };
-type League = { coaches: { key: string; w: number; t: number; l: number }[] };
+type LiveArenaBody = { coaches: { key: string; w: number; t: number; l: number }[] };
 
 export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   const pk = decodeURIComponent(use(params).pk);
@@ -33,7 +33,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
   // not on the main arena: the keyless one is asked next
   const elsewhere = main.data !== null && !main.data.agent;
   const kl = useRead<Keyless>(elsewhere ? `/api/keyless?agent=${q}` : null, 60_000, 300_000);
-  const league = useRead<League>(elsewhere ? "/api/league" : null, 60_000, 300_000);
+  const standings = useRead<LiveArenaBody>(elsewhere ? "/api/arena/live" : null, 60_000, 300_000);
   const board = useRead<Board>("/api/board", 300_000, 0);
   const agent = main.data?.agent ?? kl.data?.state?.agent ?? null;
   const arena = main.data?.agent ? "main" : "keyless";
@@ -53,7 +53,7 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           const record = main.data?.agent
             ? main.data.eras.oracle
             : (() => {
-                const c = league.data?.coaches.find((x) => x.key === pk);
+                const c = standings.data?.coaches.find((x) => x.key === pk);
                 return c ? { wins: c.w, ties: c.t, losses: c.l, duels: c.w + c.t + c.l } : null;
               })();
           const strategy = kl.data?.state?.keyless?.strategy ?? null;

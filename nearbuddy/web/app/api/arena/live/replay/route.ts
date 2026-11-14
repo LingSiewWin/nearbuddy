@@ -1,13 +1,13 @@
-// GET /api/league/replay?duel=<id>: the price line of a resolved keyless match (lib/replay.ts), from Coinbase
+// GET /api/arena/live/replay?duel=<id>: the price line of a resolved keyless match (lib/replay.ts), from Coinbase
 // Exchange one-minute candles over the minutes the match spans (`from`..`to`, minute-aligned around open_at and
 // close_at). The chain keeps no price series. A resolved match's line never changes: kept for good here and a day at
 // the CDN, once its last candle is final (lib/replay settled). No samples (the exchange throttled, or no trade in the
 // window) answers 200 with an empty list, not kept.
-import { canonicalDuelId } from "../../../lib/enter";
-import { samplesOf, settled } from "../../../lib/replay";
-import { NETWORK_ID } from "../../../network";
-import { KEYLESS_ARENA, keylessView } from "../../keyless";
-import { json } from "../../near";
+import { canonicalDuelId } from "../../../../lib/enter";
+import { samplesOf, settled } from "../../../../lib/replay";
+import { NETWORK_ID } from "../../../../network";
+import { KEYLESS_ARENA, keylessView } from "../../../keyless";
+import { json } from "../../../near";
 
 const CANDLES = "https://api.exchange.coinbase.com/products/NEAR-USD/candles";
 const kept = new Map<string, string>();

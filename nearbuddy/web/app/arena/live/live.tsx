@@ -1,19 +1,19 @@
 "use client";
-// The league home: a ticker, the live match (or a replay of the last one) with the feed beside it, and the
-// leaderboards. Read-only: nothing here signs or sends. Data, polled only while the tab is visible: /api/league (5 s),
-// /api/spot (2 s, live only), /api/league/feed (3 s live, 30 s replay), /api/league/replay (once per finished match).
+// The live arena: a ticker, the live match (or a replay of the last one) with the feed beside it, and the
+// leaderboards. Read-only: nothing here signs or sends. Data, polled only while the tab is visible: /api/arena/live (5 s),
+// /api/spot (2 s, live only), /api/arena/live/feed (3 s live, 30 s replay), /api/arena/live/replay (once per finished match).
 import { useEffect, useRef, useState } from "react";
-import type { League as Body } from "../api/league";
-import type { Comment } from "../lib/comments";
-import type { FeedLine } from "../lib/feed";
-import { fresh, push, type Sample } from "../lib/stage";
-import * as wallet from "../lib/wallet";
-import { getJson } from "../tui";
+import type { LiveArenaBody as Body } from "../../api/arena-live";
+import type { Comment } from "../../lib/comments";
+import type { FeedLine } from "../../lib/feed";
+import { fresh, push, type Sample } from "../../lib/stage";
+import * as wallet from "../../lib/wallet";
+import { getJson } from "../../tui";
 import { AccountBar } from "./account";
 import { Boards, Ticker } from "./boards";
 import { Chat, type Session } from "./chat";
 import { Feed } from "./feed";
-import "./league.css";
+import "./live.css";
 import { Shout } from "./shout";
 import { Stage } from "./stage";
 import { type Operator, Start } from "./start";
@@ -54,8 +54,8 @@ function usePoll(f: () => void, every: number, key: string) {
   }, [every, key]);
 }
 
-export default function League() {
-  const [league, setLeague] = useState<Body | null>(null);
+export default function LiveArena() {
+  const [arena, setArena] = useState<Body | null>(null);
   const [failed, setFailed] = useState(false);
   const [buf, setBuf] = useState<Sample[]>([]);
   const [lines, setLines] = useState<FeedLine[]>([]);
@@ -89,29 +89,29 @@ export default function League() {
     };
   }, []);
 
-  // a match is live only until its close by this browser's clock: a stale league body must not keep it on stage
-  const told = league?.live ?? null;
+  // a match is live only until its close by this browser's clock: a stale arena body must not keep it on stage
+  const told = arena?.live ?? null;
   const live = told && (now === 0 || now < ms(told.close_at)) ? told : null;
   // past its close and not resolved yet: it stays on stage, closed, until the oracle answers
-  const closing = live ? null : (told ?? league?.closing ?? null);
-  const shown = live ?? closing ?? league?.last ?? null;
+  const closing = live ? null : (told ?? arena?.closing ?? null);
+  const shown = live ?? closing ?? arena?.last ?? null;
   const shownId = shown?.id ?? "";
 
   usePoll(
     () =>
-      getJson<Body>("/api/league")
+      getJson<Body>("/api/arena/live")
         .then((l) => {
-          setLeague(l);
+          setArena(l);
           setFailed(false);
         })
         .catch(() => setFailed(true)),
     5_000,
-    "league",
+    "arena-live",
   );
   usePoll(() => setNow(Date.now()), 500, "clock");
   usePoll(
     () =>
-      getJson<Operator>("/api/league/start")
+      getJson<Operator>("/api/arena/live/start")
         .then(setOperator)
         .catch(() => {}),
     5_000,
@@ -137,7 +137,7 @@ export default function League() {
   usePoll(
     () => {
       if (!shownId) return;
-      getJson<{ duel: string; lines: FeedLine[] }>(`/api/league/feed?duel=${shownId}`)
+      getJson<{ duel: string; lines: FeedLine[] }>(`/api/arena/live/feed?duel=${shownId}`)
         .then((f) => f.duel === shownId && setLines(f.lines))
         .catch(() => {});
     },
@@ -146,7 +146,7 @@ export default function League() {
   );
   // who the comment session is for, once; the chat box changes it on sign-in and sign-out
   useEffect(() => {
-    getJson<Session>("/api/league/session")
+    getJson<Session>("/api/arena/live/session")
       .then(setSession)
       .catch(() => {});
   }, []);
@@ -155,13 +155,13 @@ export default function League() {
   // another name; the visitor signs in to comments again as who they are now.
   useEffect(() => {
     if (!accountRead || !session.account || session.account === account) return;
-    fetch("/api/league/session", { method: "DELETE" }).catch(() => {});
+    fetch("/api/arena/live/session", { method: "DELETE" }).catch(() => {});
     setSession({ available: true, account: null });
   }, [accountRead, account, session.account]);
   usePoll(
     () => {
       if (!shownId || !session.available) return;
-      getJson<{ duel: string; comments: Comment[] }>(`/api/league/comments?duel=${shownId}`)
+      getJson<{ duel: string; comments: Comment[] }>(`/api/arena/live/comments?duel=${shownId}`)
         .then((c) => c.duel === shownId && setComments(c.comments))
         .catch(() => {});
     },
@@ -179,7 +179,7 @@ export default function League() {
   useEffect(() => {
     if (live || closing || !shownId) return;
     let alive = true;
-    getJson<Replay>(`/api/league/replay?duel=${shownId}`)
+    getJson<Replay>(`/api/arena/live/replay?duel=${shownId}`)
       .then((r) => {
         if (!alive) return;
         setReplay(r);
@@ -226,19 +226,14 @@ export default function League() {
   }
 
   return (
-    <main className="league">
-      <h1>
-        NearBuddy <span className="dim">· AI models trade the same market live; every call is signed and checked</span>
-      </h1>
+    <section className="arena-live" aria-label="Live match">
       <AccountBar account={account} onAccount={setAccount} />
-      {league ? <Ticker league={league} /> : null}
+      {arena ? <Ticker arena={arena} /> : null}
       <Start op={operator} now={now} live={!!live} onStarted={setOperator} />
       <div className="live">
         {stage ?? (
           <section id="stage" className="panel stage">
-            <p className="dim">
-              {league ? "no match yet" : failed ? "the league is unreachable" : "reading the league"}
-            </p>
+            <p className="dim">{arena ? "no match yet" : failed ? "the arena is unreachable" : "reading the arena"}</p>
           </section>
         )}
         <Feed lines={lines} comments={comments}>
@@ -251,20 +246,19 @@ export default function League() {
           />
           <Shout
             live={live}
-            contract={league?.contract ?? null}
-            fee={league?.shout_fee ?? null}
+            contract={arena?.contract ?? null}
+            fee={arena?.shout_fee ?? null}
             account={account}
             onAccount={setAccount}
           />
         </Feed>
       </div>
-      {league ? <Boards league={league} /> : null}
+      {arena ? <Boards arena={arena} /> : null}
       <footer>
         <a href="/enter">enter an agent</a>
         <a href="/terminal">terminal</a>
-        <a href="/arena">full record</a>
-        {league?.contract ? <span>{`${league.contract} on NEAR ${league.network}`}</span> : null}
+        {arena?.contract ? <span>{`${arena.contract} on NEAR ${arena.network}`}</span> : null}
       </footer>
-    </main>
+    </section>
   );
 }

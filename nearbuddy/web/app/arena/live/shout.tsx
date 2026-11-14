@@ -2,10 +2,10 @@
 // (lib/inject.ts builds the call, the connected wallet signs it): the model reads the headline before its next call,
 // and the contract settles whether it took the bait. Paid and at risk, and the box says so before anything is signed.
 import { useState } from "react";
-import type { Match } from "../api/league";
-import { chaosDeploy17, checkHeadline, type Direction, MAX_HEADLINE, utf8Bytes } from "../lib/inject";
-import * as wallet from "../lib/wallet";
-import { near } from "../tui";
+import type { Match } from "../../api/arena-live";
+import { chaosDeploy17, checkHeadline, type Direction, MAX_HEADLINE, utf8Bytes } from "../../lib/inject";
+import * as wallet from "../../lib/wallet";
+import { near } from "../../tui";
 
 export function Shout({
   live,

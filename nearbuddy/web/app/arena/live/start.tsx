@@ -1,5 +1,5 @@
 // The "start match" panel: pick two models, and the operator service opens a real match between an idle agent of
-// each. Shown only where an operator runs (GET /api/league/start says so). One match at a time: while the operator is
+// each. Shown only where an operator runs (GET /api/arena/live/start says so). One match at a time: while the operator is
 // busy, or a match is live, the button is off and the panel says where the match is.
 import { useEffect, useState } from "react";
 
@@ -66,7 +66,7 @@ export function Start({
     setSending(true);
     setRefused(null);
     try {
-      const r = await fetch("/api/league/start", {
+      const r = await fetch("/api/arena/live/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ a, b }),

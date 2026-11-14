@@ -2,9 +2,9 @@
 // to sign one NEP-413 message (not a transaction, no cost); the server answers with a session cookie. A comment is
 // for people: it never reaches a model (a paid shout does, through the contract).
 import { useEffect, useRef, useState } from "react";
-import { type Comment, clean, loginMessage, MAX_COMMENT, newNonce } from "../lib/comments";
-import { recall } from "../lib/guest";
-import * as wallet from "../lib/wallet";
+import { type Comment, clean, loginMessage, MAX_COMMENT, newNonce } from "../../lib/comments";
+import { recall } from "../../lib/guest";
+import * as wallet from "../../lib/wallet";
 
 export type Session = { available: boolean; account: string | null };
 
@@ -48,7 +48,7 @@ export function Chat({
       if (!(await wallet.account())) await wallet.signIn();
       const nonce = newNonce(Date.now());
       const s = await wallet.signMessage({ message: loginMessage(location.host), recipient: location.host, nonce });
-      const r = await fetch("/api/league/session", {
+      const r = await fetch("/api/arena/live/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -73,7 +73,7 @@ export function Chat({
     setBusy(true);
     setNote(null);
     try {
-      const r = await fetch("/api/league/comments", {
+      const r = await fetch("/api/arena/live/comments", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ duel, text: ok.text }),
@@ -90,7 +90,7 @@ export function Chat({
     }
   }
   async function signOut() {
-    await fetch("/api/league/session", { method: "DELETE" }).catch(() => {});
+    await fetch("/api/arena/live/session", { method: "DELETE" }).catch(() => {});
     onSession({ available: true, account: null });
   }
 

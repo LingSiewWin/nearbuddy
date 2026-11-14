@@ -1,14 +1,14 @@
-// GET /api/league/feed?duel=<id>: one keyless match's feed (lib/feed.ts): each model's reply from the
+// GET /api/arena/live/feed?duel=<id>: one keyless match's feed (lib/feed.ts): each model's reply from the
 // submit_completion transactions (the chain keeps only the reply's hash, so the text is read from the call's args
 // through lib/verify's transaction reader) and the shouts from get_chaos. Kept as lib/feed keepFor says (3 s open,
 // 60 s resolved, for good an hour after the close); the last good body beats a 502.
 // ponytail: an open match rescans its transaction window every 3 s; an events indexer when matches run back to back.
-import { canonicalDuelId } from "../../../lib/enter";
-import { keepFor, merge, type Said, type Shout, saidOf } from "../../../lib/feed";
-import { arenaCalls, txsBetween } from "../../../lib/verify";
-import { NETWORK_ID } from "../../../network";
-import { KEYLESS_ARENA, keylessView } from "../../keyless";
-import { json, jsonBody } from "../../near";
+import { canonicalDuelId } from "../../../../lib/enter";
+import { keepFor, merge, type Said, type Shout, saidOf } from "../../../../lib/feed";
+import { arenaCalls, txsBetween } from "../../../../lib/verify";
+import { NETWORK_ID } from "../../../../network";
+import { KEYLESS_ARENA, keylessView } from "../../../keyless";
+import { json, jsonBody } from "../../../near";
 
 export const maxDuration = 60;
 

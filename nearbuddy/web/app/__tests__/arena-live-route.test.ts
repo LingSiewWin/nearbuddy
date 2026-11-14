@@ -1,9 +1,9 @@
-// The league body from raw duels: which match is live, which was last, who won, and what stays null while a match is
+// The arena body from raw duels: which match is live, which was last, who won, and what stays null while a match is
 // only half open.
 import { expect, test } from "bun:test";
-import { build } from "../api/league";
+import { build } from "../api/arena-live";
 import type { Duel } from "../lib/abi/arena";
-import type { AgentInfo } from "../lib/league";
+import type { AgentInfo } from "../lib/standings";
 
 const agents = new Map<string, AgentInfo>([
   ["pkA", { pk: "pkA", owner: "alice.testnet", model_id: "deepseek-ai/DeepSeek-V4.1-Flash-1017" }],

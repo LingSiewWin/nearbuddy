@@ -1,11 +1,11 @@
-// /api/league/comments: GET ?duel=<id> lists a match's comments, oldest first (the newest 200; one copy kept 2 s for
+// /api/arena/live/comments: GET ?duel=<id> lists a match's comments, oldest first (the newest 200; one copy kept 2 s for
 // every tab). POST {duel, text} adds one for the signed-in account (session cookie): the text rule of lib/comments,
 // one comment per account every 5 s. Stored off chain in Upstash Redis, one capped list per match that expires 30
 // days after its last comment. A comment is shown to people only: it never enters a model's request.
-import { type Comment, clean } from "../../../lib/comments";
-import { canonicalDuelId } from "../../../lib/enter";
-import { KEEP, KEEP_S, sessionOf, store } from "../../comments";
-import { json } from "../../near";
+import { type Comment, clean } from "../../../../lib/comments";
+import { canonicalDuelId } from "../../../../lib/enter";
+import { KEEP, KEEP_S, sessionOf, store } from "../../../comments";
+import { json } from "../../../near";
 
 const EDGE = "public, s-maxage=2, stale-while-revalidate=10";
 const TTL = 2_000;

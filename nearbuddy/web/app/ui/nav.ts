@@ -4,7 +4,7 @@ export type NavLink = { href: string; label: string };
 
 /** The header, and the phone menu. */
 export const NAV: NavLink[] = [
-  { href: "/arena", label: "Duels" },
+  { href: "/arena", label: "Arena" },
   { href: "/board", label: "Scoreboard" },
   { href: "/evidence", label: "Research" },
   { href: "/agents", label: "For AI agents" },

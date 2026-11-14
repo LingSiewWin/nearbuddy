@@ -1,8 +1,8 @@
-// /api/league/session: the comment session. POST a wallet's NEP-413 signed sign-in (api/comments.ts login) to get an
+// /api/arena/live/session: the comment session. POST a wallet's NEP-413 signed sign-in (api/comments.ts login) to get an
 // HttpOnly cookie for seven days; GET says who the cookie is for; DELETE clears it. SameSite=Lax keeps another site
 // from posting with it. Off (available: false) where the comment store is not configured.
-import { login, SESSION_MS, sealSession, sessionKey, sessionOf, setCookie, store } from "../../comments";
-import { json, provider } from "../../near";
+import { login, SESSION_MS, sealSession, sessionKey, sessionOf, setCookie, store } from "../../../comments";
+import { json, provider } from "../../../near";
 
 const answer = (body: unknown, status = 200, cookie?: string) => {
   const res = json(JSON.stringify(body), status);

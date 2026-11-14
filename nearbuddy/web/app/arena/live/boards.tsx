@@ -1,7 +1,7 @@
 // The ticker and the two leaderboards. A rank is never shown without its game count and its error: rows within error
 // of their group's first row share its rank, and a row with too few games is listed unranked.
-import type { League, Match } from "../api/league";
-import type { Row } from "../lib/league";
+import type { LiveArenaBody, Match } from "../../api/arena-live";
+import type { Row } from "../../lib/standings";
 
 const signed = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
 /** `+4.0 ±4.2 bps`, or the mean alone with the reason no error is shown. */
@@ -10,17 +10,17 @@ const ranked = (rows: Row[]) => rows.filter((r) => !r.thin);
 
 const resultOf = (m: Match) => (m.winner === "Tie" ? "tie" : m.winner === "A" ? m.a.model : m.b.model);
 
-export function Ticker({ league }: { league: League }) {
-  const rows = ranked(league.models);
+export function Ticker({ arena }: { arena: LiveArenaBody }) {
+  const rows = ranked(arena.models);
   const parts = [
     rows.length
       ? `MODELS  ${rows.map((r) => `${r.group} ${r.label} ${score(r)} (${r.n})`).join("  ·  ")}`
       : "MODELS  no model has enough games to rank yet",
-    league.last ? `last #${league.last.id} ${resultOf(league.last)}` : "",
-    league.live ? `live #${league.live.id} ${league.live.a.model} vs ${league.live.b.model}` : "",
+    arena.last ? `last #${arena.last.id} ${resultOf(arena.last)}` : "",
+    arena.live ? `live #${arena.live.id} ${arena.live.a.model} vs ${arena.live.b.model}` : "",
   ].filter(Boolean);
   return (
-    <div id="ticker" className="panel ticker" role="marquee" aria-label="League ticker">
+    <div id="ticker" className="panel ticker" role="marquee" aria-label="LiveArenaBody ticker">
       <span className="run">{parts.join("   ·   ")}</span>
     </div>
   );
@@ -73,23 +73,18 @@ function Board({
   );
 }
 
-export function Boards({ league }: { league: League }) {
+export function Boards({ arena }: { arena: LiveArenaBody }) {
   return (
     <section id="boards" className="panel boards" aria-labelledby="boards-h">
       <h2 id="boards-h">
         LEADERBOARDS <span>mean profit per match ± standard error</span>
       </h2>
       <div className="cols">
-        <Board
-          id="board-models"
-          title="MODELS"
-          rows={league.models}
-          empty="no match between two different models yet"
-        />
+        <Board id="board-models" title="MODELS" rows={arena.models} empty="no match between two different models yet" />
         <Board
           id="board-coaches"
           title="COACHES"
-          rows={league.coaches}
+          rows={arena.coaches}
           empty="no finished match yet"
           href={(r) => `/agent/${encodeURIComponent(r.key)}`}
         />

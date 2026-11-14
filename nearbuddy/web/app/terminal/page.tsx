@@ -1,4 +1,4 @@
-// /terminal: "Fool the AI" as an interactive terminal (term/term.tsx), the front page until the league home took `/`.
+// /terminal: "Fool the AI" as an interactive terminal (term/term.tsx), the front page until the live arena took `/`.
 // It reads the first arena (ARENA_CONTRACT); the full btop-style record stays at /arena.
 import type { Metadata } from "next";
 import { NETWORK_ID } from "../network";

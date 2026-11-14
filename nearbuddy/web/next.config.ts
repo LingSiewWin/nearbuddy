@@ -23,7 +23,10 @@ const nextConfig: NextConfig = {
   partialPrefetching: true,
   reactCompiler: true,
   env: { NEXT_PUBLIC_NEAR_NETWORK: network },
-  // "/" is the league home, "/terminal" the Fool-the-AI terminal; the full record stays at /arena
+  // the live match and its start panel moved from /league onto /arena; old links keep working
+  async redirects() {
+    return [{ source: "/league", destination: "/arena", permanent: true }];
+  },
   async headers() {
     return [{ source: "/:path*", headers: SECURITY_HEADERS }];
   },

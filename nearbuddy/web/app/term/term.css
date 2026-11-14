@@ -26,7 +26,7 @@
 }
 /* the old body: its padding and page colour, on the frame around an old page (the terminal sizes its columns from its
    own width, so the padding cannot sit on .term itself) */
-.site:has(.term, .term-tokens) > .site-main {
+.site:has(.term, .term-tokens:not(.inline)) > .site-main {
   padding: 16px;
   background: #06070f;
 }
@@ -35,7 +35,7 @@
   .term-tokens {
     font-size: 11.5px;
   }
-  .site:has(.term, .term-tokens) > .site-main {
+  .site:has(.term, .term-tokens:not(.inline)) > .site-main {
     padding: 10px;
   }
 }
@@ -56,7 +56,7 @@
     --ok: #2f43c4;
     --unv: #3443b8;
   }
-  .site:has(.term, .term-tokens) > .site-main {
+  .site:has(.term, .term-tokens:not(.inline)) > .site-main {
     background: #f5f7ff;
   }
 }

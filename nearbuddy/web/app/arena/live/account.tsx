@@ -2,9 +2,9 @@
 // one click, its key kept in this browser, funded with testnet NEAR) or a wallet. A guest is told what it is, and
 // leaving asks first, because it drops the key.
 import { useState } from "react";
-import { recall } from "../lib/guest";
-import * as wallet from "../lib/wallet";
-import { NETWORK_ID } from "../tui";
+import { recall } from "../../lib/guest";
+import * as wallet from "../../lib/wallet";
+import { NETWORK_ID } from "../../tui";
 
 export function AccountBar({ account, onAccount }: { account: string | null; onAccount: (a: string | null) => void }) {
   const [busy, setBusy] = useState(false);

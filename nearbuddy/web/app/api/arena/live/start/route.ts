@@ -1,8 +1,8 @@
-// GET|POST /api/league/start: the league home's "start match" panel talks to the operator service through this route
+// GET|POST /api/arena/live/start: the live arena's "start match" panel talks to the operator service through this route
 // (packages/keeper/src/operator-cli.ts, which holds the keys and binds 127.0.0.1). The operator's address and secret
 // stay on the server (OPERATOR_URL, OPERATOR_SECRET). Without OPERATOR_URL, or with the operator unreachable, GET
 // answers {available: false} and the page shows no panel.
-import { json } from "../../near";
+import { json } from "../../../near";
 
 const URL_ = process.env.OPERATOR_URL?.trim().replace(/\/$/, "") ?? "";
 const SECRET = process.env.OPERATOR_SECRET?.trim() ?? "";

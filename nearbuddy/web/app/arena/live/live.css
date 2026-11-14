@@ -1,97 +1,97 @@
-/* The league home. Every rule sits under .league: production merges client CSS into shared chunks. Colours come from
+/* The live arena. Every rule sits under .arena-live: production merges client CSS into shared chunks. Colours come from
    the tokens in globals.css, so it follows the terminal's dark and light themes. */
-.league {
+.arena-live {
   display: grid;
   gap: 0.9em;
   max-width: 76em;
   margin: 0 auto;
   line-height: 1.35;
 }
-.league h1,
-.league h2 {
+.arena-live h1,
+.arena-live h2 {
   font: inherit;
   margin: 0;
 }
-.league h1 {
+.arena-live h1 {
   color: var(--hi);
 }
-.league .panel {
+.arena-live .panel {
   border: 1px solid var(--dim);
   padding: 0.6em 0.8em;
   min-width: 0;
 }
-.league .panel > h2 {
+.arena-live .panel > h2 {
   color: var(--hi);
   display: flex;
   justify-content: space-between;
   gap: 1em;
   margin-bottom: 0.4em;
 }
-.league .panel > h2 span {
+.arena-live .panel > h2 span {
   color: var(--dim);
 }
 
 /* ticker: one line moving right to left; still for a reader who asked for less motion */
-.league .ticker {
+.arena-live .ticker {
   overflow: hidden;
   white-space: nowrap;
   padding: 0.35em 0;
 }
-.league .ticker .run {
+.arena-live .ticker .run {
   display: inline-block;
   padding-left: 100%;
-  animation: league-run 40s linear infinite;
+  animation: arena-live-run 40s linear infinite;
 }
-.league .ticker:hover .run {
+.arena-live .ticker:hover .run {
   animation-play-state: paused;
 }
-@keyframes league-run {
+@keyframes arena-live-run {
   to {
     transform: translateX(-100%);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .league .ticker {
+  .arena-live .ticker {
     white-space: normal;
   }
-  .league .ticker .run {
+  .arena-live .ticker .run {
     animation: none;
     padding-left: 0.8em;
   }
 }
 
 /* the stage and the feed beside it, the feed as tall as the stage */
-.league .live {
+.arena-live .live {
   display: grid;
   grid-template-columns: 2.4fr 1fr;
   gap: 0.9em;
   align-items: stretch;
 }
-.league .stage svg {
+.arena-live .stage svg {
   display: block;
   width: 100%;
   height: auto;
   margin: 0.3em 0;
 }
-.league .stage svg text {
+.arena-live .stage svg text {
   fill: var(--dim);
   font-size: 11px;
 }
-.league .sides {
+.arena-live .sides {
   display: flex;
   justify-content: space-between;
   gap: 1em;
 }
-.league .sides b {
+.arena-live .sides b {
   font-size: 1.5em;
 }
-.league .rope {
+.arena-live .rope {
   position: relative;
   height: 0.9em;
   border: 1px solid var(--dim);
   margin: 0.4em 0;
 }
-.league .rope i {
+.arena-live .rope i {
   position: absolute;
   top: -0.3em;
   bottom: -0.3em;
@@ -100,11 +100,11 @@
   background: var(--hi);
   transition: left 0.5s linear;
 }
-.league .feed {
+.arena-live .feed {
   display: flex;
   flex-direction: column;
 }
-.league .feed ol {
+.arena-live .feed ol {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -116,24 +116,24 @@
   gap: 0.5em;
   overflow-wrap: anywhere;
 }
-.league .feed li.model {
+.arena-live .feed li.model {
   border-left: 2px solid var(--dim);
   padding-left: 0.5em;
 }
-.league .tag {
+.arena-live .tag {
   border: 1px solid currentColor;
   padding: 0 0.3em;
   font-size: 0.85em;
 }
 
-.league .start .pickers {
+.arena-live .start .pickers {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6em;
   align-items: center;
 }
-.league .start select,
-.league .start button {
+.arena-live .start select,
+.arena-live .start button {
   font: inherit;
   color: var(--fg);
   background: var(--bg);
@@ -141,21 +141,21 @@
   padding: 0.15em 0.6em;
   max-width: 100%;
 }
-.league .start button {
+.arena-live .start button {
   color: var(--hi);
   cursor: pointer;
 }
-.league .start button:disabled {
+.arena-live .start button:disabled {
   color: var(--dim);
   cursor: not-allowed;
 }
-.league .account {
+.arena-live .account {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4em 1em;
   align-items: baseline;
 }
-.league .account button:not(.link) {
+.arena-live .account button:not(.link) {
   font: inherit;
   color: var(--hi);
   background: var(--bg);
@@ -163,65 +163,65 @@
   padding: 0.15em 0.7em;
   cursor: pointer;
 }
-.league .account button:disabled {
+.arena-live .account button:disabled {
   color: var(--dim);
   border-color: var(--dim);
   cursor: wait;
 }
-.league .chat {
+.arena-live .chat {
   border-top: 1px solid var(--dim);
   margin-top: 0.6em;
   padding-top: 0.5em;
   font-size: 0.92em;
 }
-.league .chat form {
+.arena-live .chat form {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4em;
 }
-.league .chat input {
+.arena-live .chat input {
   flex: 1 1 8em;
   min-width: 0;
 }
-.league .chat input,
-.league .chat button:not(.link) {
+.arena-live .chat input,
+.arena-live .chat button:not(.link) {
   font: inherit;
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--dim);
   padding: 0.15em 0.5em;
 }
-.league .chat button:not(.link) {
+.arena-live .chat button:not(.link) {
   color: var(--hi);
   cursor: pointer;
 }
-.league .chat button:disabled {
+.arena-live .chat button:disabled {
   color: var(--dim);
   cursor: not-allowed;
 }
-.league .chat p {
+.arena-live .chat p {
   margin: 0.3em 0;
   flex: 1 1 100%;
 }
-.league .shout {
+.arena-live .shout {
   border-top: 1px solid var(--dim);
   margin-top: 0.6em;
   padding-top: 0.5em;
   font-size: 0.92em;
 }
-.league .shout form {
+.arena-live .shout form {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4em;
 }
-.league .shout input {
+.arena-live .shout input {
   flex: 1 1 100%;
   min-width: 0;
 }
-.league .shout select,
-.league .shout input,
-.league .shout button,
-.league button.link {
+.arena-live .shout select,
+.arena-live .shout input,
+.arena-live .shout button,
+.arena-live button.link {
   font: inherit;
   color: var(--fg);
   background: var(--bg);
@@ -229,60 +229,60 @@
   padding: 0.15em 0.5em;
   max-width: 100%;
 }
-.league .shout button {
+.arena-live .shout button {
   color: var(--hi);
   cursor: pointer;
 }
-.league .shout button:disabled {
+.arena-live .shout button:disabled {
   color: var(--dim);
   cursor: not-allowed;
 }
-.league button.link {
+.arena-live button.link {
   border: 0;
   padding: 0;
   text-decoration: underline;
   cursor: pointer;
   color: inherit;
 }
-.league .shout p {
+.arena-live .shout p {
   margin: 0.3em 0;
 }
-.league .start p {
+.arena-live .start p {
   margin: 0.4em 0 0;
 }
 
-.league .boards .cols {
+.arena-live .boards .cols {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 36em), 1fr));
   gap: 0.8em 1.5em;
 }
-.league table {
+.arena-live table {
   border-collapse: collapse;
   width: 100%;
 }
-.league td,
-.league th {
+.arena-live td,
+.arena-live th {
   text-align: left;
   font-weight: inherit;
   padding: 0.1em 0.7em 0.1em 0;
   white-space: nowrap;
 }
-.league th {
+.arena-live th {
   color: var(--dim);
 }
-.league td.who {
+.arena-live td.who {
   max-width: 17ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.league .boards .cols > div {
+.arena-live .boards .cols > div {
   min-width: 0;
   overflow-x: auto;
 }
-.league tr.thin td {
+.arena-live tr.thin td {
   color: var(--dim);
 }
-.league footer {
+.arena-live footer {
   color: var(--dim);
   display: flex;
   gap: 1.5em;
@@ -290,7 +290,7 @@
 }
 
 @media (max-width: 720px) {
-  .league .live {
+  .arena-live .live {
     grid-template-columns: 1fr;
   }
 }

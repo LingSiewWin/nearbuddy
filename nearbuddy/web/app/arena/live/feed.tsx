@@ -1,8 +1,8 @@
 // The feed beside the stage: what each model said and the paid shouts planted at it, newest at the bottom. Every
 // string here came from a model or a stranger: it is rendered as text, never as markup.
 import { type ReactNode, useEffect, useRef } from "react";
-import type { Comment } from "../lib/comments";
-import type { FeedLine } from "../lib/feed";
+import type { Comment } from "../../lib/comments";
+import type { FeedLine } from "../../lib/feed";
 
 const OUTCOME: Record<string, string> = {
   Pending: "",

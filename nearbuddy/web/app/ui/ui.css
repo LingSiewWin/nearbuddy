@@ -9,8 +9,8 @@
   flex-direction: column;
 }
 /* the old pages (.term, .term-tokens) keep their own full-screen look: no new header or footer around them */
-.site:has(.term, .term-tokens) > .site-header,
-.site:has(.term, .term-tokens) > .site-footer {
+.site:has(.term, .term-tokens:not(.inline)) > .site-header,
+.site:has(.term, .term-tokens:not(.inline)) > .site-footer {
   display: none;
 }
 .site-main {

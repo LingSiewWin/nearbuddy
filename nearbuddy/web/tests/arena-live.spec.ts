@@ -1,4 +1,4 @@
-// The league home in a browser: it renders from the live keyless arena, something on the stage moves, and the cases a
+// The live arena in a browser: it renders from the live keyless arena, something on the stage moves, and the cases a
 // visitor can meet without doing anything wrong (no price, no match, one game, hostile text, a phone) read sanely.
 // The first two tests need the network (RPC through the api routes, exchange candles); the rest stub the routes.
 import { expect, type Page, test } from "@playwright/test";
@@ -11,7 +11,7 @@ const side = (model: string, s: "Long" | "Short") => ({
   size_bps: 5000,
   pnl: null,
 });
-/** A match open for the next five minutes, as /api/league would describe it. */
+/** A match open for the next five minutes, as /api/arena/live would describe it. */
 const liveMatch = () => ({
   id: "9",
   symbol: "wrap.near",
@@ -24,7 +24,7 @@ const liveMatch = () => ({
   winner: null,
   attacks: 0,
 });
-const league = (over: Record<string, unknown>) => ({
+const arenaBody = (over: Record<string, unknown>) => ({
   at: Date.now(),
   network: "testnet",
   contract: "arena.testnet",
@@ -58,8 +58,8 @@ test("something on the stage moves within 15 s", async ({ page }) => {
 });
 
 test("without a spot price a live match says so and shows no profit or rope", async ({ page }) => {
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
   await stub(page, "**/api/spot", { error: "coinbase 503" }, 502);
   await page.goto("/");
   await expect(page.locator("#stage")).toContainText("price unavailable");
@@ -68,8 +68,8 @@ test("without a spot price a live match says so and shows no profit or rope", as
 });
 
 test("a live match with a price shows both sides' profit and the rope", async ({ page }) => {
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
   await page.route("**/api/spot", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ price: "3.4340", at: Date.now() }) }),
   );
@@ -83,8 +83,8 @@ test("a price that stops arriving goes stale, even when the server's clock runs 
   page,
 }) => {
   const ahead = Date.now() + 5 * 60_000; // one reading, stamped five minutes ahead, served over and over
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
   await stub(page, "**/api/spot", { price: "3.4340", at: ahead });
   await page.goto("/");
   await expect(page.locator("#stage")).toContainText("+50.0 bps");
@@ -96,8 +96,8 @@ test("a price that stops arriving goes stale, even when the server's clock runs 
 
 test("a match past its close is shown as closed and waiting for the oracle, never as live", async ({ page }) => {
   const m = liveMatch();
-  await stub(page, "**/api/league", league({ live: { ...m, close_at: `${(Date.now() - 5_000) * 1_000_000}` } }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: { ...m, close_at: `${(Date.now() - 5_000) * 1_000_000}` } }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
   await stub(page, "**/api/spot", { price: "3.4340", at: Date.now() });
   await page.goto("/");
   await expect(page.locator("#stage")).toContainText("CLOSED #9");
@@ -112,8 +112,8 @@ test("a closing match the arena reports is on stage until it resolves, not a rep
 }) => {
   const m = liveMatch();
   const closing = { ...m, close_at: `${(Date.now() - 60_000) * 1_000_000}` };
-  await stub(page, "**/api/league", league({ closing }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ closing }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
   await page.goto("/");
   await expect(page.locator("#stage")).toContainText("CLOSED #9");
   await expect(page.locator("#stage")).not.toContainText("REPLAY");
@@ -121,8 +121,8 @@ test("a closing match the arena reports is on stage until it resolves, not a rep
 
 test("a side that has not called yet is waiting, and there is no rope", async ({ page }) => {
   const m = liveMatch();
-  await stub(page, "**/api/league", league({ live: { ...m, a: { ...m.a, side: null, size_bps: null } } }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: { ...m, a: { ...m.a, side: null, size_bps: null } } }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
   await page.route("**/api/spot", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ price: "3.4340", at: Date.now() }) }),
   );
@@ -135,7 +135,7 @@ test("a side that has not called yet is waiting, and there is no rope", async ({
 test("an empty arena says there is no match yet and logs no error", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await stub(page, "**/api/league", league({}));
+  await stub(page, "**/api/arena/live", arenaBody({}));
   await page.goto("/");
   await expect(page.locator("#stage")).toContainText("no match yet");
   await expect(page.locator("#board-models")).toContainText("no match between two different models yet");
@@ -145,9 +145,9 @@ test("an empty arena says there is no match yet and logs no error", async ({ pag
 
 test("markup in a model's reply or a shout shows as text and does not run", async ({ page }) => {
   const hostile = '<img src=x onerror="window.__pwned=1">';
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
   await stub(page, "**/api/spot", { error: "x" }, 502);
-  await stub(page, "**/api/league/feed*", {
+  await stub(page, "**/api/arena/live/feed*", {
     at: 0,
     duel: "9",
     lines: [
@@ -164,7 +164,7 @@ test("markup in a model's reply or a shout shows as text and does not run", asyn
 
 test("a model with one game is listed unranked, with no error shown", async ({ page }) => {
   const row = { key: "m", label: "ModelA", n: 1, mean: 4, se: null, w: 1, t: 0, l: 0, thin: true, group: 0 };
-  await stub(page, "**/api/league", league({ models: [row] }));
+  await stub(page, "**/api/arena/live", arenaBody({ models: [row] }));
   await page.goto("/");
   const tr = page.locator("#board-models tbody tr");
   await expect(tr).toContainText("not enough games");
@@ -186,7 +186,7 @@ test("ranks within error of each other share a rank and say so", async ({ page }
     thin: false,
     group,
   });
-  await stub(page, "**/api/league", league({ models: [row("ModelA", 5, 1), row("ModelB", 3, 1), row("ModelC", -20, 2)] }));
+  await stub(page, "**/api/arena/live", arenaBody({ models: [row("ModelA", 5, 1), row("ModelB", 3, 1), row("ModelC", -20, 2)] }));
   await page.goto("/");
   await expect(page.locator("#board-models tbody tr td:first-child")).toHaveText(["1", "1", "2"]);
   await expect(page.locator("#board-models")).toContainText("the first 2 rows are within error of the leader");
@@ -219,8 +219,8 @@ const operator = (over: Record<string, unknown>) => ({
 });
 
 test("with no operator there is no start panel", async ({ page }) => {
-  await stub(page, "**/api/league", league({}));
-  await stub(page, "**/api/league/start", { available: false });
+  await stub(page, "**/api/arena/live", arenaBody({}));
+  await stub(page, "**/api/arena/live/start", { available: false });
   await page.goto("/");
   await expect(page.locator("#stage")).toContainText("no match yet");
   await expect(page.locator("#start")).toHaveCount(0);
@@ -228,8 +228,8 @@ test("with no operator there is no start panel", async ({ page }) => {
 
 test("the start panel lists the operator's models and posts the two chosen", async ({ page }) => {
   let posted: unknown = null;
-  await stub(page, "**/api/league", league({}));
-  await page.route("**/api/league/start", (r) => {
+  await stub(page, "**/api/arena/live", arenaBody({}));
+  await page.route("**/api/arena/live/start", (r) => {
     if (r.request().method() === "POST") posted = r.request().postDataJSON();
     return r.fulfill({
       contentType: "application/json",
@@ -246,10 +246,10 @@ test("the start panel lists the operator's models and posts the two chosen", asy
 });
 
 test("while the operator runs a match the panel says where it is, and cannot start another", async ({ page }) => {
-  await stub(page, "**/api/league", league({}));
+  await stub(page, "**/api/arena/live", arenaBody({}));
   await stub(
     page,
-    "**/api/league/start",
+    "**/api/arena/live/start",
     operator({ busy: true, phase: "racing", duel: "9", open_at: Date.now(), close_at: Date.now() + 125_000 }),
   );
   await page.goto("/");
@@ -258,8 +258,8 @@ test("while the operator runs a match the panel says where it is, and cannot sta
 });
 
 test("a refused start shows the operator's reason", async ({ page }) => {
-  await stub(page, "**/api/league", league({}));
-  await page.route("**/api/league/start", (r) =>
+  await stub(page, "**/api/arena/live", arenaBody({}));
+  await page.route("**/api/arena/live/start", (r) =>
     r.request().method() === "POST"
       ? r.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: `no idle agent for ${QW}` }) })
       : r.fulfill({ contentType: "application/json", body: JSON.stringify(operator({})) }),
@@ -270,8 +270,8 @@ test("a refused start shows the operator's reason", async ({ page }) => {
 });
 
 test("with a live match and no wallet, the feed offers to connect one before a shout", async ({ page }) => {
-  await stub(page, "**/api/league", league({ live: liveMatch(), shout_fee: "100000000000000000000000" }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch(), shout_fee: "100000000000000000000000" }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
   await stub(page, "**/api/spot", { price: "3.4340", at: Date.now() });
   await page.goto("/");
   await expect(page.locator("#shout")).toContainText("0.100 NEAR");
@@ -280,7 +280,7 @@ test("with a live match and no wallet, the feed offers to connect one before a s
 });
 
 test("with no live match there is nothing to shout at", async ({ page }) => {
-  await stub(page, "**/api/league", league({}));
+  await stub(page, "**/api/arena/live", arenaBody({}));
   await page.goto("/");
   await expect(page.locator("#shout")).toContainText("shouts open when a match is live");
   await expect(page.locator("#shout button")).toHaveCount(0);
@@ -290,15 +290,15 @@ const comment = (id: string, at: number, by: string, text: string) => ({ id, at,
 
 test("comments show in the feed in time order with the models' lines, as text", async ({ page }) => {
   const t = Date.now() - 60_000;
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
   await stub(page, "**/api/spot", { price: "3.4340", at: Date.now() });
-  await stub(page, "**/api/league/session", { available: true, account: null });
-  await stub(page, "**/api/league/feed*", {
+  await stub(page, "**/api/arena/live/session", { available: true, account: null });
+  await stub(page, "**/api/arena/live/feed*", {
     at: 0,
     duel: "9",
     lines: [{ kind: "model", at: `${(t + 10_000) * 1_000_000}`, model: "ModelA", side: "Long", size_bps: 1, text: "calling long", tx: "t1" }],
   });
-  await stub(page, "**/api/league/comments*", {
+  await stub(page, "**/api/arena/live/comments*", {
     available: true,
     duel: "9",
     comments: [
@@ -313,10 +313,10 @@ test("comments show in the feed in time order with the models' lines, as text", 
 });
 
 test("without a session the chat offers to sign in and has no input", async ({ page }) => {
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
-  await stub(page, "**/api/league/session", { available: true, account: null });
-  await stub(page, "**/api/league/comments*", { available: true, duel: "9", comments: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live/session", { available: true, account: null });
+  await stub(page, "**/api/arena/live/comments*", { available: true, duel: "9", comments: [] });
   await page.goto("/");
   await expect(page.locator("#chat button")).toHaveText(/sign in to comment/);
   await expect(page.locator("#chat input")).toHaveCount(0);
@@ -331,10 +331,10 @@ const signedIn = (page: Page) =>
 
 test("with a session a comment is posted for the shown match and appears", async ({ page }) => {
   let posted: unknown = null;
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
-  await stub(page, "**/api/league/session", { available: true, account: ME });
-  await page.route("**/api/league/comments*", (r) => {
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live/session", { available: true, account: ME });
+  await page.route("**/api/arena/live/comments*", (r) => {
     if (r.request().method() === "POST") {
       posted = r.request().postDataJSON();
       return r.fulfill({ contentType: "application/json", body: JSON.stringify({ comment: comment("c9", Date.now(), ME, "glm again") }) });
@@ -351,10 +351,10 @@ test("with a session a comment is posted for the shown match and appears", async
 });
 
 test("a refused comment shows the reason and keeps the text", async ({ page }) => {
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
-  await stub(page, "**/api/league/session", { available: true, account: ME });
-  await page.route("**/api/league/comments*", (r) =>
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live/session", { available: true, account: ME });
+  await page.route("**/api/arena/live/comments*", (r) =>
     r.request().method() === "POST"
       ? r.fulfill({ status: 429, contentType: "application/json", body: JSON.stringify({ error: "one comment every 5 seconds" }) })
       : r.fulfill({ contentType: "application/json", body: JSON.stringify({ available: true, duel: "9", comments: [] }) }),
@@ -368,10 +368,10 @@ test("a refused comment shows the reason and keeps the text", async ({ page }) =
 });
 
 test("where comments are not set up there is no chat box", async ({ page }) => {
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
-  await stub(page, "**/api/league/session", { available: false, account: null });
-  await stub(page, "**/api/league/comments*", { available: false, duel: "9", comments: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live/session", { available: false, account: null });
+  await stub(page, "**/api/arena/live/comments*", { available: false, duel: "9", comments: [] });
   await page.goto("/");
   await expect(page.locator("#shout")).toBeVisible();
   await expect(page.locator("#chat")).toHaveCount(0);
@@ -382,14 +382,14 @@ test("play as guest makes an account with a key from this browser, signs in to c
 }) => {
   let asked: { accountId?: string; publicKey?: string } = {};
   let login: { accountId?: string; publicKey?: string; signature?: string; nonce?: string } = {};
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
-  await stub(page, "**/api/league/comments*", { available: true, duel: "9", comments: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live/comments*", { available: true, duel: "9", comments: [] });
   await page.route("**/api/guest", (r) => {
     asked = r.request().postDataJSON();
     return r.fulfill({ contentType: "application/json", body: JSON.stringify({ accountId: asked.accountId, balance: "1" }) });
   });
-  await page.route("**/api/league/session", (r) => {
+  await page.route("**/api/arena/live/session", (r) => {
     if (r.request().method() !== "POST")
       return r.fulfill({ contentType: "application/json", body: JSON.stringify({ available: true, account: null }) });
     login = r.request().postDataJSON();
@@ -416,7 +416,7 @@ test("play as guest makes an account with a key from this browser, signs in to c
 });
 
 test("a refused guest account shows the reason and leaves the visitor signed out", async ({ page }) => {
-  await stub(page, "**/api/league", league({}));
+  await stub(page, "**/api/arena/live", arenaBody({}));
   await stub(page, "**/api/guest", { error: "too many guest accounts from here for now" }, 429);
   await page.goto("/");
   await page.locator("#account button", { hasText: "play as guest" }).click();
@@ -425,8 +425,8 @@ test("a refused guest account shows the reason and leaves the visitor signed out
 });
 
 test("a match the oracle gave no opening price takes no shouts", async ({ page }) => {
-  await stub(page, "**/api/league", league({ live: { ...liveMatch(), open_price: null } }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live", arenaBody({ live: { ...liveMatch(), open_price: null } }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
   await page.goto("/");
   await expect(page.locator("#shout")).toContainText("shouts open once the match has its opening price");
   await expect(page.locator("#shout input")).toHaveCount(0);
@@ -436,10 +436,10 @@ test("a chat session left over from another account is dropped: comments never g
   page,
 }) => {
   let dropped = false;
-  await stub(page, "**/api/league", league({ live: liveMatch() }));
-  await stub(page, "**/api/league/feed*", { at: 0, duel: "9", lines: [] });
-  await stub(page, "**/api/league/comments*", { available: true, duel: "9", comments: [] });
-  await page.route("**/api/league/session", (r) => {
+  await stub(page, "**/api/arena/live", arenaBody({ live: liveMatch() }));
+  await stub(page, "**/api/arena/live/feed*", { at: 0, duel: "9", lines: [] });
+  await stub(page, "**/api/arena/live/comments*", { available: true, duel: "9", comments: [] });
+  await page.route("**/api/arena/live/session", (r) => {
     if (r.request().method() === "DELETE") dropped = true;
     // the cookie still belongs to a guest this browser has left
     const account = dropped ? null : "nb-guest-aaaaaaaaaa.testnet";

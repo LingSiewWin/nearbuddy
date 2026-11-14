@@ -1,6 +1,6 @@
 "use client";
 // What the Trace pages read, and how: one duel from either arena (/api/duel), its decision history (/api/events on
-// the main arena, /api/league/feed on the keyless one), the price (/api/spot) and the duel list (/api/list). The pure
+// the main arena, /api/arena/live/feed on the keyless one), the price (/api/spot) and the duel list (/api/list). The pure
 // functions turn those bodies into what the screens show; the hooks poll them at the design's rates.
 import { useState } from "react";
 import type { ArenaKind, DuelList, DuelRow } from "../api/list/route";
@@ -175,7 +175,7 @@ export function useDuel(id: string | null, arena: ArenaKind, fast = false) {
           .then((ev) => setEvents({ key, ev }))
           .catch(() => {});
       else
-        getJson<Feed>(`/api/league/feed?duel=${encodeURIComponent(id)}`)
+        getJson<Feed>(`/api/arena/live/feed?duel=${encodeURIComponent(id)}`)
           .then((f) => setFeed({ key, feed: f }))
           .catch(() => {});
     },

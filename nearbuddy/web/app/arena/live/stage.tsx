@@ -1,8 +1,8 @@
 // The stage: one match's price line against its open price, each side's call and profit at the shown price, and a
 // rope whose marker leans to the side ahead. Live, the price is the exchange's last trade; in a replay, the finished
 // match's candles played back. Display only either way: a match settles on the oracle's prices.
-import type { Match, Side } from "../api/league";
-import { points, rope, type Sample } from "../lib/stage";
+import type { Match, Side } from "../../api/arena-live";
+import { points, rope, type Sample } from "../../lib/stage";
 
 const VW = 560;
 const VH = 170;

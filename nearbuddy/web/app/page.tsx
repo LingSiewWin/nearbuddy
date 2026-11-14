@@ -1,4 +1,4 @@
-// The front page: the game in one screen (home.tsx). The league home that was here is at /league; the terminal is at
+// The front page: the game in one screen (home.tsx). The live match that was here is on /arena; the terminal is at
 // /terminal.
 import type { Metadata } from "next";
 import Home from "./home";

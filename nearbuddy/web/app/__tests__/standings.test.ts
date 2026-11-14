@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { type AgentInfo, coachRows, MIN_MODEL_GAMES, modelRows, type Scored, within } from "../lib/league";
+import { type AgentInfo, coachRows, MIN_MODEL_GAMES, modelRows, type Scored, within } from "../lib/standings";
 
 const agents = new Map<string, AgentInfo>([
   ["pkA", { pk: "pkA", owner: "alice.testnet", model_id: "deepseek-ai/DeepSeek-V4.1-Flash-1017" }],

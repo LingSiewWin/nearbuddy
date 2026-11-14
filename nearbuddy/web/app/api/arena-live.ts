@@ -1,7 +1,7 @@
-// The league home's one body, built from the keyless arena's duels: the live match, the last finished one, and the
-// model and coach standings (lib/league.ts). Pure: api/league/route.ts does the reading.
+// The live arena's one body, built from the keyless arena's duels: the live match, the last finished one, and the
+// model and coach standings (lib/standings.ts). Pure: api/arena/live/route.ts does the reading.
 import type { Duel, Intent } from "../lib/abi/arena";
-import { type AgentInfo, coachRows, modelRows, type Row, type Scored } from "../lib/league";
+import { type AgentInfo, coachRows, modelRows, type Row, type Scored } from "../lib/standings";
 
 /** One side of a match. `pnl` is the scored bps once resolved; null while open (the page computes live P&L). */
 export type Side = {
@@ -24,7 +24,7 @@ export type Match = {
   winner: "A" | "B" | "Tie" | null;
   attacks: number;
 };
-export type League = {
+export type LiveArenaBody = {
   at: number;
   network: string;
   contract: string | null;
@@ -78,7 +78,7 @@ export function build(
   nowNs: bigint,
   network: string,
   contract: string,
-): League {
+): LiveArenaBody {
   const done = duels.filter((d) => d.resolved && d.outcome);
   // a voided match (no oracle price: open_price 0, both sides scored 0) is a game for nobody
   const played = done.filter((d) => d.outcome?.open_price !== "0");

@@ -2,7 +2,7 @@
 // The duel list. Its job: find a duel. Every duel of both arenas in three groups that cannot contradict the home
 // page: running (can still be watched live), awaiting the final price (time is up, not settled), and finished, where
 // duels in which a headline fooled its target come first. Each row draws a mini Trace of its headline.
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { NETWORK_ID } from "../network";
 import { useSite } from "../ui/chrome";
 import { Panel, Readout, Strip, Tag } from "../ui/instruments";
@@ -10,20 +10,21 @@ import { Button, LinkButton, Region, Skeleton, useNow } from "../ui/kit";
 import { RECORDED } from "../ui/replay";
 import { DuelRows, fooledFirst, isRunning, tally } from "../ui/rows";
 
-export default function Arena() {
+export default function Arena({ children }: { children?: ReactNode }) {
   const { list } = useSite();
   const now = useNow();
   const [shown, setShown] = useState(20);
   return (
     <div className="page">
       <header className="page-head">
-        <h1 className="t-display">Duels</h1>
+        <h1 className="t-display">Arena</h1>
         <Tag>{NETWORK_ID}</Tag>
         <p className="lede">
-          Every recent duel between two AIs. A row's small Trace is its planted headline: the line crosses and turns red
-          where the AI was fooled, and stays where it held.
+          The current match, then every recent duel between two AIs. A row's small Trace is its planted headline: the
+          line crosses and turns red where the AI was fooled, and stays where it held.
         </p>
       </header>
+      {children}
       <Region read={list} skeleton={<Skeleton rows={8} />}>
         {(l) => {
           const running = l.duels.filter((r) => isRunning(r, now));
