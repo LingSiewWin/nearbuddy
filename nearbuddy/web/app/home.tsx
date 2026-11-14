@@ -222,7 +222,7 @@ export default function Home({ practice }: { practice: boolean }) {
             ),
           },
           {
-            title: shown && !replay ? "The live duel" : `Duel #${RECORDED.id}`,
+            title: "Arena",
             node: () =>
               shown && !replay ? (
                 <LiveRoom

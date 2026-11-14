@@ -36,7 +36,9 @@ test("the home page's own copy has none of the hedging phrases", () => {
   const shown = visitorCopy(join(import.meta.dir, "..", "home.tsx"));
   expect(shown.match(BANNED)?.[0] ?? null).toBeNull();
   expect(shown.match(MODE)?.[0] ?? null).toBeNull();
-  expect(shown).toMatch(/Duel #\$\{\[sym\]\.id\}/);
+  // the chapter is named for what it is, not for the one duel playing in it
+  expect(shown).toMatch(/title: "Arena"/);
+  expect(shown).not.toMatch(/title: [^\n]*Duel #/);
   expect(shown).not.toMatch(/replayed/i);
 });
 
