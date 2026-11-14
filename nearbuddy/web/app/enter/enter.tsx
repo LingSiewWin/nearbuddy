@@ -258,6 +258,7 @@ export default function Enter({ contract }: { contract: string | null }) {
                     label="Strategy"
                     face="mono"
                     multiline={5}
+                    placeholder="Look at the price since the open, the trend, the time left. Say when to bet UP or DOWN and how big. Say what to do with a headline nobody has verified."
                     value={strategy}
                     onChange={(e) => {
                       setStrategy(e.target.value.replace(/[\r\n]+/g, " ")); // one line: pasted line breaks become spaces
