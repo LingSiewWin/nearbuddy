@@ -10,7 +10,7 @@ import { NETWORK_ID } from "./network";
 import { useSite } from "./ui/chrome";
 import { type DuelRow, duelPath, type History, traceOf, useDuel, usePrice, verifyHref } from "./ui/data";
 import { bet, near, nsMs, shortModel } from "./ui/format";
-import { Carousel } from "./ui/hero";
+import { Chapters } from "./ui/hero";
 import { Panel, Readout, Strip, Tag } from "./ui/instruments";
 import { Button, Countdown, Details, LinkButton, StatusBar, useNow } from "./ui/kit";
 import { PracticePanel } from "./ui/practice";
@@ -189,11 +189,10 @@ export default function Home({ practice }: { practice: boolean }) {
   return (
     <div className="page home">
       <TileField />
-      <Carousel
-        label="What you can do here"
-        slides={[
+      <Chapters
+        chapters={[
           {
-            label: "What it is",
+            title: "What it is",
             node: (go) => (
               <div className="hero-copy">
                 {shown ? (
@@ -232,7 +231,7 @@ export default function Home({ practice }: { practice: boolean }) {
             ),
           },
           {
-            label: shown && !replay ? "Live duel" : `Duel #${RECORDED.id}`,
+            title: shown && !replay ? "The live duel" : `Duel #${RECORDED.id}, replayed`,
             node: () =>
               shown && !replay ? (
                 <LiveRoom
@@ -258,7 +257,7 @@ export default function Home({ practice }: { practice: boolean }) {
                 />
               ),
           },
-          { label: "Try it", node: () => <PracticePanel enabled={practice} second={!!shown} /> },
+          { title: "Try it yourself", node: () => <PracticePanel enabled={practice} second={!!shown} /> },
         ]}
       />
 

@@ -2478,36 +2478,52 @@ table.board tbody th {
   z-index: 1;
   background: var(--bg);
 }
-.hero {
-  min-height: calc(100vh - 48px - var(--s-7));
+/* a chapter: rule, number and title, rule, content */
+.chapter {
+  scroll-margin-top: 56px;
+  padding-bottom: var(--s-8);
+}
+.chapter-head {
   display: flex;
-  flex-direction: column-reverse;
-  justify-content: flex-end;
+  align-items: baseline;
   gap: var(--s-4);
-  padding-bottom: var(--s-5);
+  padding: var(--s-3) 0;
+  margin-bottom: var(--s-5);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
 }
-.hero-track {
-  display: flex;
-  align-items: flex-start;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
+.chapter-no {
+  font: 500 clamp(22px, 2.6vw, 34px) / 1 var(--mono);
+  color: var(--live);
 }
-.hero-track::-webkit-scrollbar {
-  display: none;
+.chapter-title {
+  font: 600 clamp(22px, 2.6vw, 34px) / 1.1 var(--sans);
+  letter-spacing: -0.02em;
+  color: var(--hi);
 }
-.hero-slide {
-  flex: 0 0 100%;
-  min-width: 0;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
-  padding: var(--s-2);
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .chapter {
+      animation: chapter-in linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 40%;
+    }
+    @keyframes chapter-in {
+      from {
+        opacity: 0;
+        transform: translateY(48px);
+      }
+      to {
+        opacity: 1;
+        transform: none;
+      }
+    }
+  }
 }
 /* the words keep their contrast over the moving field: a soft patch of the page colour behind them */
 .hero-copy {
   max-width: 900px;
-  min-height: calc(100vh - 48px - 44px - var(--s-8));
+  min-height: calc(100vh - 48px - 120px - var(--s-8));
   display: grid;
   align-content: center;
   justify-items: start;
@@ -2547,30 +2563,6 @@ table.board tbody th {
   margin: 0;
   font: var(--t-mono);
   color: var(--hi);
-}
-.hero-nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s-2);
-}
-.hero-nav .btn {
-  width: auto;
-  min-width: 44px;
-}
-.hero-tab {
-  min-height: 44px;
-  padding: 0 var(--s-3);
-  font: var(--t-small);
-  color: var(--dim);
-  background: color-mix(in srgb, var(--bg) 85%, transparent);
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  cursor: pointer;
-}
-.hero-tab[aria-current] {
-  color: var(--hi);
-  border-color: var(--live);
 }
 @media (prefers-reduced-motion: reduce) {
   .tiles {
