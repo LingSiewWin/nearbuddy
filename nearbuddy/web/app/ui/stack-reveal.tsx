@@ -72,7 +72,8 @@ const STACK: StackItem[] = [
 const CARD = { w: 340, gap: 20, edge: 16 };
 const ext = (href: string) => (href.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {});
 
-/** Numbered kinetic rows. Mouse: hover a row, a detail card follows the pointer. Touch: tap a row to open it. */
+/** Numbered kinetic rows, the body of the home page's fourth chapter (its heading comes from ui/hero.tsx).
+ *  Mouse: hover a row, a detail card follows the pointer. Touch: tap a row to open it. */
 export function StackReveal() {
   const [active, setActive] = useState<string | null>(null);
   // the card keeps its last content while it fades out
@@ -134,14 +135,7 @@ export function StackReveal() {
   };
 
   return (
-    <section className="stack-reveal" aria-labelledby={labelId}>
-      <header className="stack-reveal-head">
-        <h2 id={labelId} className="stack-reveal-title">
-          What this product <span>wired</span>
-        </h2>
-        <span className="stack-reveal-rule" aria-hidden="true" />
-        <p className="stack-reveal-kicker">{`On NEAR · ${STACK.length} integrations`}</p>
-      </header>
+    <div className="stack-reveal">
       <ul
         className={`stack-reveal-list${active ? " has-active" : ""}`}
         onPointerMove={(e) => {
@@ -234,6 +228,6 @@ export function StackReveal() {
           {NET.arena} ↗
         </a>
       </p>
-    </section>
+    </div>
   );
 }

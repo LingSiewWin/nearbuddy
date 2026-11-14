@@ -272,10 +272,9 @@ export default function Home({ practice }: { practice: boolean }) {
               </div>
             ),
           },
+          { title: "What this product wired", node: () => <StackReveal /> },
         ]}
       />
-
-      <StackReveal />
 
       <div id="how" className="deck c3 gap-top">
         <Panel label="How it works">
