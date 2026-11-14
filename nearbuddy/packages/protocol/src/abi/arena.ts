@@ -394,6 +394,13 @@ export interface ArenaViews {
    */
   chaos_open: { args: { duel_id: string; index: number }; result: ChaosOpen | null };
   /**
+   * The text injection `index` of duel `duel_id` must reach its target as: the headline for the
+   *  `Cue` and `Clean` arms (a runner cleans `Clean` with its cue guard) and for an owner placebo,
+   *  the neutral `placebo_line` for a paid record drawn into the placebo arm. `None` for an unknown
+   *  record. View: anyone, no deposit, no panics.
+   */
+  chaos_shown: { args: { duel_id: string; index: number }; result: string | null };
+  /**
    * The exact bytes an agent key signs for `commit_intent(duel_id, _, commitment, sig, seen)`:
    *  message v2 with `seen`, v1 without. View: anyone, no deposit, no panics.
    */
@@ -668,13 +675,14 @@ export interface ArenaCalls {
    *  no price. The deposit must reach `chaos_fee(duel_id)`; less the record's storage it is the
    *  stake (more than 0 when paid), escrowed in the pool until the duel finishes. When the payer owns either agent the
    *  stake goes to `owner_fees` instead, earns nothing and buys no shield (as does a placebo).
-   *  The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`. Returns the
-   *  injection's index in `get_chaos(duel_id)`.
+   *  A paid attack is refused unless a decision can still follow: the open price has landed and
+   *  the intent lock has not begun. The arm is drawn here; `sha256(headline)` is listed in `Duel.injections`.
+   *  Returns the injection's index in `get_chaos(duel_id)`.
    *  Caller: anyone (spectator); the owner for a placebo. Deposit: at least `chaos_fee` and the
    *  record's storage. Panics: "paused", "headline empty", "headline too long", "headline control
    *  character", "headline hidden character", "headline lookalike bracket",
    *  "placebo is system-run", "duel missing", "chaos deposit too small", "duel
-   *  closed", "bad target", "chaos full".
+   *  closed", "bad target", "no open price", "too late to decide", "chaos full".
    * modifiers: payable
    */
   inject_chaos: { args: { duel_id: string; target: Base64VecU8; kind: ChaosKind; headline: string }; result: number };

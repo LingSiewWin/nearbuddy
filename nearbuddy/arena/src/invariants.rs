@@ -729,6 +729,8 @@ struct ChaosM {
     /// The target replaced, unrevealed, the call it held at the injection: `prev` stays unknown,
     /// and the hidden call counts against the target (a lie-side next flips, any other is no trial).
     hidden: bool,
+    /// The contract drew the placebo arm (deploy 19): the target read a neutral line, never the lie.
+    placebo_arm: bool,
     outcome: ChaosOutcome,
     stake: u128,
     injector: String,
@@ -750,14 +752,12 @@ fn model_fee(cfg: &ChaosConfig, n: usize) -> u128 {
 
 /// Settles a finished duel's records in the model: `(fees, resistance credit per side, taken out of
 /// the pool, shares taken from the loser's bond)`, and sets each payout. `loser_b`: `Some(true)` when
-/// side b lost; `pot`: what the loser's bond pays the flips at it, at most; `void`: the duel was
-/// voided, so an expiring stake pays no fee.
+/// side b lost; `pot`: what the loser's bond pays the flips at it, at most.
 fn settle_model(
     recs: &mut [ChaosM],
     loser_b: Option<bool>,
     pot: u128,
     cfg: &ChaosConfig,
-    void: bool,
 ) -> (u128, [u128; 2], u128, u128) {
     let at_loser = |r: &ChaosM| loser_b == Some(r.side_b) && r.outcome == ChaosOutcome::Flipped;
     let weight: u128 = recs.iter().filter(|r| at_loser(r)).map(|r| r.stake).sum();
@@ -767,8 +767,14 @@ fn settle_model(
         if expired {
             r.outcome = ChaosOutcome::Expired;
         }
-        // every stake pays the fee, whatever its outcome; none expires into a fee in a void
-        let fee = if void && expired {
+        // deploy 19: an expired stake, and a no-trial judged with no known call before it (not in
+        // the placebo arm), come back whole; every other stake pays the fee
+        let whole = expired
+            || (r.outcome == ChaosOutcome::NoTrial
+                && r.prev.is_none()
+                && r.next.is_some()
+                && !r.placebo_arm);
+        let fee = if whole {
             0
         } else {
             r.stake * cfg.fee_bps as u128 / 10_000
@@ -1138,6 +1144,7 @@ impl World {
             } else if counts {
                 r.next = Some(long);
                 r.outcome = match (r.dir, r.prev) {
+                    _ if r.placebo_arm => ChaosOutcome::NoTrial,
                     (Some(lie), _) if r.hidden && long == lie => ChaosOutcome::Flipped,
                     (Some(_), _) if r.hidden => ChaosOutcome::NoTrial,
                     (Some(lie), Some(p)) if p != lie && long == lie => ChaosOutcome::Flipped,
@@ -1694,7 +1701,7 @@ impl World {
                         let unpaid = own || dir.is_none();
                         let c = self.snap().chaos[d][ix].clone();
                         assert_eq!(c.stake.0, if unpaid { 0 } else { stake }, "stake");
-                        assert_eq!(c.arm == Arm::Placebo, dir.is_none(), "placebo arm");
+                        assert!(dir.is_some() || c.arm == Arm::Placebo, "placebo arm");
                         let side_b = b_side as usize;
                         let last = [&pre.duels[d].last_intent_a, &pre.duels[d].last_intent_b]
                             [side_b]
@@ -1708,6 +1715,7 @@ impl World {
                             prev: last,
                             next: None,
                             hidden: false,
+                            placebo_arm: c.arm == Arm::Placebo,
                             outcome: ChaosOutcome::Pending,
                             stake: if unpaid { 0 } else { stake },
                             injector: payer,
@@ -1716,6 +1724,21 @@ impl World {
                         });
                     }
                     Err(e) if e == "chaos deposit too small" && under && dir.is_some() => {}
+                    // deploy 19: no paid attack where no decision can follow
+                    Err(e) if e == "no open price" && dir.is_some() => {
+                        assert!(
+                            pre.duels[d].open_price.is_none(),
+                            "refused with an open price"
+                        )
+                    }
+                    Err(e) if e == "too late to decide" && dir.is_some() => {
+                        let c: Contract = env::state_read().expect("state");
+                        let lock = c.duel_lock(U64(d as u64)).expect("lock").0;
+                        assert!(
+                            self.now + lock >= self.duels[d].close_at,
+                            "refused before the lock"
+                        )
+                    }
                     Err(e) => assert!(
                         !open || ix >= MAX_INJECTIONS,
                         "an injection at the price was refused: {e}"
@@ -1820,7 +1843,7 @@ impl World {
                     // a void settles the injections as a tie (an expiring one pays no fee), then
                     // splits what is left
                     let (fees, credit, taken, _) =
-                        settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos, true);
+                        settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos);
                     let rest = pool - taken;
                     let (sa, sb) = (rest / 2 + rest % 2 + credit[0], rest / 2 + credit[1]);
                     assert_eq!(post.fees, pre.fees + fees, "void chaos fees");
@@ -2007,7 +2030,7 @@ impl World {
             None => {
                 assert!(o.winner.is_none() && o.slashed.0 == 0, "tie must not slash");
                 let (f, credit, taken, _) =
-                    settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos, false);
+                    settle_model(&mut self.duels[d].recs, None, 0, &self.cfg.chaos);
                 let rest = pool - taken;
                 na += rest / 2 + rest % 2 + credit[0];
                 nb += rest / 2 + credit[1];
@@ -2030,13 +2053,8 @@ impl World {
                 // loser's bond before any resistance reward reaches it
                 *lb -= slashed;
                 let pot = (slashed * self.cfg.chaos.share_bps as u128 / 10_000).min(*lb);
-                let (f, credit, taken, shares) = settle_model(
-                    &mut self.duels[d].recs,
-                    Some(a_wins),
-                    pot,
-                    &self.cfg.chaos,
-                    false,
-                );
+                let (f, credit, taken, shares) =
+                    settle_model(&mut self.duels[d].recs, Some(a_wins), pot, &self.cfg.chaos);
                 assert!(shares <= pot, "shares above the pot");
                 *lb -= shares;
                 // every stake leaves the pool; the winner keeps the whole slash
