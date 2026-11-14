@@ -34,7 +34,9 @@
 
   --sans: var(--font-sans), system-ui, sans-serif;
   --serif: var(--font-serif), Georgia, serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --mono: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Hero title/lede/CTAs. Footer NEARBUDDY stamp stays Arial Black (doodle-crew-footer DEFAULT_FONT). */
+  --display: var(--font-display), system-ui, sans-serif;
   --t-verdict: 600 44px / 1 var(--sans);
   --t-display: 600 28px / 1.1 var(--sans);
   --t-headline: 500 20px / 1.3 var(--serif);

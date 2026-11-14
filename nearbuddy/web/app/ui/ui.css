@@ -2954,13 +2954,14 @@ table.board tbody th {
   }
 }
 .hero-title {
-  font: 600 clamp(38px, 6.2vw, 84px) / 0.98 var(--sans);
+  /* Space Grotesk (Option A); face tops out at 700. */
+  font: 700 clamp(38px, 6.2vw, 84px) / 0.98 var(--display);
   letter-spacing: -0.035em;
   text-wrap: balance;
   color: var(--hi);
 }
 .hero-lede {
-  font: 400 clamp(17px, 1.6vw, 21px) / 1.45 var(--sans);
+  font: 600 clamp(17px, 1.6vw, 21px) / 1.45 var(--display);
   color: var(--fg);
   max-width: 52ch;
 }
@@ -2968,6 +2969,10 @@ table.board tbody th {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s-3);
+}
+.hero-actions .btn {
+  font-family: var(--display);
+  font-weight: 600;
 }
 .hero-facts {
   display: flex;
