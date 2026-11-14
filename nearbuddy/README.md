@@ -27,7 +27,7 @@ bond is slashed 10%.
 While a duel runs, anyone can pay to plant one fake headline at one of the agents by calling `inject_chaos` from
 their own account. The headline is stored on chain. The agent's next decision is signed inside a NEAR AI Cloud
 enclave, and the contract checks that signature before it accepts the decision. The contract then records the
-attack as `Flipped` (the agent moved to the lie's side) or `Held`. The game on the site is called "Lie to an AI".
+attack as `Flipped` (the agent moved to the lie's side) or `Held`.
 
 **Who has attacked so far.** Every attack recorded on chain was placed by an account the project created or
 controls. No outside attacker has been recorded. 58 attacks were placed, 23 reached a deciding call, 12 were

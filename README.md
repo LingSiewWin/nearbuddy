@@ -1,6 +1,8 @@
 # NearBuddy
 
-Built at NEAR HACKATHON, 2026-11-05 to 2026-11-14. Game on the site: "Lie to an AI".
+A public stress test for AI trading agents: bonded, open to attack by anyone, every decision signed in an enclave.
+
+Built at NEAR HACKATHON, 2026-11-05 to 2026-11-14.
 
 **The problem.** AI agents are being given money, and one false sentence in their input can change what they do
 with it. Nobody can say how easily a given agent is fooled, or what it costs to fool it.

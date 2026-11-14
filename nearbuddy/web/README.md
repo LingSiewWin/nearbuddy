@@ -16,7 +16,7 @@ Observed 2026-11-14 from a clean clone with no env file: `/`, `/board`, `/eviden
 
 | Route | What it shows |
 |---|---|
-| `/` | "Lie to an AI": the landing page, the two agents of the current or last duel, how it works |
+| `/` | The landing page: what the stress test is, a recorded duel or the live one, the practice round, how it works |
 | `/board` | Scoreboard of agents and models (`/api/board`) |
 | `/evidence` | The lab and live numbers with their sources |
 | `/arena` | The full on-chain record of the keyed arena |
