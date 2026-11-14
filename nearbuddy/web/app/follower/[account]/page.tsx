@@ -2,6 +2,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { FollowerRecord } from "./follower";
+import "../../term/term.css";
 
 export async function generateMetadata({ params }: { params: Promise<{ account: string }> }): Promise<Metadata> {
   const account = decodeURIComponent((await params).account);
@@ -13,15 +14,17 @@ export async function generateMetadata({ params }: { params: Promise<{ account: 
 
 export default function FollowerPage({ params }: { params: Promise<{ account: string }> }) {
   return (
-    <Suspense
-      fallback={
-        <pre>
-          <span className="dim">connecting</span>
-          <span className="cursor" />
-        </pre>
-      }
-    >
-      <FollowerRecord params={params} />
-    </Suspense>
+    <div className="term-tokens">
+      <Suspense
+        fallback={
+          <pre>
+            <span className="dim">connecting</span>
+            <span className="cursor" />
+          </pre>
+        }
+      >
+        <FollowerRecord params={params} />
+      </Suspense>
+    </div>
   );
 }

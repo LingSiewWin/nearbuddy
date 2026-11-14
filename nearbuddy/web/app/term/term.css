@@ -1,3 +1,65 @@
+/* The green terminal look, as it was before the Trace design: the old token values and the 13px mono body, scoped so
+   /terminal keeps them. .term-tokens carries the same tokens for the old pages that are not the terminal itself. */
+.term,
+.term-tokens {
+  --bg: #0b0f0c;
+  --fg: #c8f5c8;
+  --dim: #5f8a5f;
+  --hi: #eaffea;
+  --warn: #f5d76e;
+  --bad: #ff7b72;
+  --num: #f5d76e; /* btop box index digit */
+  --win: #7ee787;
+  --loss: #ff7b72;
+  --tie: #8fa38f;
+  --open: #f5d76e; /* duel outcomes */
+  --ok: #7ee787;
+  --unv: #f5d76e; /* enclave-verified / unverified tier */
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px / 1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+/* the old body: its padding and page colour, on the frame around an old page (the terminal sizes its columns from its
+   own width, so the padding cannot sit on .term itself) */
+.site:has(.term, .term-tokens) > .site-main {
+  padding: 16px;
+  background: #0b0f0c;
+}
+@media (max-width: 600px) {
+  .term,
+  .term-tokens {
+    font-size: 11.5px;
+  }
+  .site:has(.term, .term-tokens) > .site-main {
+    padding: 10px;
+  }
+}
+@media (prefers-color-scheme: light) {
+  .term,
+  .term-tokens {
+    --bg: #f4fbf4;
+    --fg: #163816;
+    --dim: #4a6e4a;
+    --hi: #000;
+    --warn: #8a6d00;
+    --bad: #b3261e;
+    --num: #b35900;
+    --win: #1a7f37;
+    --loss: #b3261e;
+    --tie: #5c6b5c;
+    --open: #8a6d00;
+    --ok: #1a7f37;
+    --unv: #8a6d00;
+  }
+  .site:has(.term, .term-tokens) > .site-main {
+    background: #f4fbf4;
+  }
+}
 /* The terminal screen. Every rule sits under .term: production merges client CSS into shared chunks, so an
    unscoped rule here would restyle /arena and the record pages. Colours come from the tokens in globals.css. */
 .term {

@@ -2,6 +2,7 @@
 import type { Metadata } from "next";
 import League from "./league/league";
 import { NETWORK_ID } from "./network";
+import "./term/term.css";
 
 export const metadata: Metadata = {
   title: { absolute: "NearBuddy · AI models, live, with receipts" },
@@ -9,5 +10,9 @@ export const metadata: Metadata = {
 };
 
 export default function Home() {
-  return <League />;
+  return (
+    <div className="term-tokens">
+      <League />
+    </div>
+  );
 }

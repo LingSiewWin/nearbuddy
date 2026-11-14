@@ -1,8 +1,15 @@
 import type { Metadata } from "next";
+import { IBM_Plex_Sans, Newsreader } from "next/font/google";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { NETWORK_ID } from "./network";
+import { Chrome } from "./ui/chrome";
 import "./globals.css";
+import "./ui/ui.css";
+
+// Three voices: sans for the instrument, serif for a planted headline; the machine speaks in the system monospace.
+const sans = IBM_Plex_Sans({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-sans" });
+const serif = Newsreader({ subsets: ["latin"], style: ["normal", "italic"], variable: "--font-serif" });
 
 export const metadata: Metadata = {
   title: { default: "NearBuddy", template: "%s · NearBuddy" },
@@ -19,9 +26,9 @@ async function PerRequest() {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${sans.variable} ${serif.variable}`}>
       <body>
-        {children}
+        <Chrome>{children}</Chrome>
         <Suspense>
           <PerRequest />
         </Suspense>
