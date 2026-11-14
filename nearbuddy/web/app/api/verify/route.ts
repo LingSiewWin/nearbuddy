@@ -7,6 +7,7 @@
 
 import { checkDuel, collect, incomplete, type Line, state } from "../../lib/verify";
 import { NET, NETWORK_ID } from "../../network";
+import { eventsOf, type Tx } from "../events/chain";
 import { ARENA, json } from "../near";
 
 export const maxDuration = 60; // a cold check pages FastNEAR's history; the result is then cached
@@ -54,6 +55,12 @@ async function run(id: string): Promise<string> {
     lines,
     degraded,
     window: evidence.window,
+    // the duel's sealed and opened decisions with their block times, from the same transactions the checks read: a
+    // finished duel's Trace is drawn from these however old it is
+    events: evidence.txs
+      .flatMap((t) => eventsOf(t as unknown as Tx, ARENA))
+      .filter((e) => e.duel_id === id)
+      .sort((x, y) => x.at_ms - y.at_ms),
     command: command(id),
   });
   keep(id, body, degraded ? INCOMPLETE_TTL : Number.POSITIVE_INFINITY);

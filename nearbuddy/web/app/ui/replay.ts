@@ -201,9 +201,9 @@ export function frameAt(rec: ReplayRecord, time: number): Frame {
   };
 }
 
-/** The checks of `bun run verify-duel` on the recorded duel, counted: INFO lines are notes, not checks. */
-export function checkCounts(rec: ReplayRecord) {
-  const n = (r: string, start = "") => rec.checks.filter((c) => c.result === r && c.check.startsWith(start)).length;
+/** The checks of `bun run verify-duel` on a duel, counted: INFO lines are notes, not checks. */
+export function countChecks(checks: { result: string; check: string }[]) {
+  const n = (r: string, start = "") => checks.filter((c) => c.result === r && c.check.startsWith(start)).length;
   return {
     pass: n("PASS"),
     fail: n("FAIL"),
@@ -213,3 +213,4 @@ export function checkCounts(rec: ReplayRecord) {
     signed: { pass: n("PASS", "intent "), fail: n("FAIL", "intent "), skip: n("SKIP", "intent ") },
   };
 }
+export const checkCounts = (rec: ReplayRecord) => countChecks(rec.checks);

@@ -6,7 +6,9 @@
 // beside the Traces on desktop.
 import { useSearchParams } from "next/navigation";
 import { use, useEffect, useRef, useState } from "react";
+import type { ChainEvent } from "../../cells";
 import type { Chaos } from "../../lib/abi/arena";
+import type { Sample } from "../../lib/stage";
 import { NETWORK_ID } from "../../network";
 import { livePnl } from "../../term/model";
 import { AttackBox, attackGate } from "../../ui/attack";
@@ -17,31 +19,34 @@ import {
   type DuelBody,
   endOf,
   type History,
+  mainHistory,
   phaseOf,
-  SYMBOL,
   sinceOpen,
   traceOf,
   useDuel,
   usePrice,
   verifyHref,
 } from "../../ui/data";
-import { bet, hm, near, nsMs, price8, shortId } from "../../ui/format";
+import { bet, hm, near, nsMs, price8, shortId, shortModel, TEST_NOTE } from "../../ui/format";
+import { Panel, Readout, Strip, Tag } from "../../ui/instruments";
 import {
   Amount,
   Button,
   Countdown,
-  Details,
   LinkButton,
   Region,
   Sheet,
   Skeleton,
   useMedia,
   useNow,
+  useRead,
 } from "../../ui/kit";
+import { countChecks, RECORDED } from "../../ui/replay";
 import { Collect, Headline, MachineQuote, ResultPanel, ShareSheet, VerdictWord, WaitPanel } from "../../ui/result";
+import { BetTag, ChecksPanel, MarkTag, PricePanel, Stage } from "../../ui/room";
 import { markOf } from "../../ui/trace";
-import { Pin, PriceLine, TimeAxis, Trace, WhatHappened } from "../../ui/trace-view";
-import { coinFlip, sentence, VERDICT } from "../../ui/verdict";
+import { Pin, Trace, WhatHappened } from "../../ui/trace-view";
+import { coinFlip, pickLive, sentence, VERDICT } from "../../ui/verdict";
 
 type Which = "a" | "b";
 
@@ -143,6 +148,19 @@ function Loaded({
   const d = body.duel;
   const phase = d ? phaseOf(d, now) : "running";
   const price = usePrice(phase === "running" || phase === "closed", now);
+  const done = phase === "finished" || phase === "cancelled";
+  // a finished duel: the same checks as the Verify drawer (kept by the server once run), which also carry the duel's
+  // sealed and opened decisions however old it is; and the exchange's candles for its price line
+  const checks = useRead<{ status: string; lines?: { result: string; check: string }[]; events?: ChainEvent[] }>(
+    done && d && arena === "main" ? `/api/verify?duel=${id}` : null,
+    300_000,
+    0,
+  );
+  const candles = useRead<{ source: string; samples: Sample[] }>(
+    done && d ? `/api/candles?from=${nsMs(d.open_at)}&to=${nsMs(d.close_at)}` : null,
+    600_000,
+    0,
+  );
   useEffect(() => setMine(myHeadlines()), []);
   // desktop: the attack box is a panel beside the Traces, and opening it moves focus there
   useEffect(() => {
@@ -187,7 +205,14 @@ function Loaded({
       </div>
     );
 
-  const hist = (w: Which) => (w === "a" ? histories.a : histories.b) ?? emptyHistory(d.close_at);
+  const recorded = checks.data?.events;
+  const hist = (w: Which) =>
+    recorded
+      ? mainHistory(w === "a" ? d.a : d.b, d, { oldest_ms: nsMs(d.open_at), partial: false, events: recorded })
+      : ((w === "a" ? histories.a : histories.b) ?? emptyHistory(d.close_at));
+  const liveRow = now ? pickLive(site.list.data?.duels ?? [], now, (r) => site.list.data?.lock_s[r.arena] ?? 0) : null;
+  const samples = done ? (candles.data?.samples ?? []) : price.samples;
+  const counts = checks.data?.lines ? countChecks(checks.data.lines) : null;
   const agent = (w: Which) => (w === "a" ? body.a : body.b);
   const intent = (w: Which) => (w === "a" ? d.last_intent_a : d.last_intent_b);
   const model = (w: Which) => agent(w)?.model_id ?? "?";
@@ -244,7 +269,6 @@ function Loaded({
         Runs in a secure enclave
       </a>
     ) : null;
-  const newest = attacks.at(-1);
   // no decision from either AI is the one gate said per AI, not once under both
   const caption = gate?.label
     ? gate.label === "Too late for this duel"
@@ -253,24 +277,114 @@ function Loaded({
     : null;
   const waitsForDecision = !!gate && !d.last_intent_a && !d.last_intent_b;
 
+  const state =
+    phase === "running" ? (
+      <Tag kind="ok">live</Tag>
+    ) : phase === "closed" ? (
+      <Tag kind="live">closed · waiting for the final price</Tag>
+    ) : phase === "finished" ? (
+      <Tag kind="ink">finished</Tag>
+    ) : (
+      <Tag kind="live">cancelled</Tag>
+    );
+  const count = (...which: Chaos["outcome"][]) => attacks.filter((c) => which.includes(c.outcome)).length;
+  const agentPanel = (w: Which) => {
+    const it = intent(w);
+    const end = ended(w);
+    const h = hist(w);
+    const lastAt = h.decisions.at(-1)?.at;
+    return (
+      <Panel
+        key={w}
+        label={`Agent ${w.toUpperCase()}`}
+        tag={
+          end ? (
+            <Tag kind={end === "lost" ? "idle" : "ink"}>{end}</Tag>
+          ) : (
+            <BetTag side={it?.side ?? null} sealed={h.sealed} />
+          )
+        }
+      >
+        <Readout
+          small
+          value={
+            <a href={agentPath(agent(w)?.pk ?? "")} title={model(w)}>
+              {shortModel(model(w))}
+            </a>
+          }
+        />
+        <dl className="kv">
+          <dt>Bet</dt>
+          <dd>{it ? bet(it.side) : "—"}</dd>
+          <dt>Bond</dt>
+          <dd>
+            <Amount yocto={agent(w)?.bond ?? null} />
+          </dd>
+          {o ? (
+            <>
+              <dt>Final profit</dt>
+              <dd>{pct(w === "a" ? o.pnl_a : o.pnl_b)}</dd>
+            </>
+          ) : ahead === w && pa !== null && pb !== null ? (
+            <>
+              <dt>Ahead by</dt>
+              <dd>{`${(Math.abs(pa - pb) / 100).toFixed(2)}%`}</dd>
+            </>
+          ) : null}
+          {lastAt ? (
+            <>
+              <dt>Last decision opened</dt>
+              <dd>{hm(lastAt)}</dd>
+            </>
+          ) : null}
+        </dl>
+        {h.reason ? <MachineQuote text={h.reason} clamp /> : null}
+        {!it && phase === "running" ? (
+          <p className="note">No decision yet. The first one usually lands within a few minutes of the duel opening.</p>
+        ) : null}
+        {h.sealed && phase === "running" ? (
+          <p className="note caution">A sealed decision is in and not opened yet.</p>
+        ) : null}
+        {enclave(w)}
+        {phase !== "running" || my ? null : (
+          <Button
+            variant="attack"
+            disabled={!!gate || !it}
+            why={
+              !it || waitsForDecision
+                ? "Wait for its first decision. An attack needs a position to push against."
+                : gate
+                  ? caption
+                  : null
+            }
+            onClick={() => lie(w)}
+          >
+            Lie to this one
+          </Button>
+        )}
+      </Panel>
+    );
+  };
+
   return (
     <>
-      <div className="stack-2 duel-top">
-        {phase === "running" ? (
-          <p>
-            Two AIs are betting on the NEAR price. <Countdown to={nsMs(d.close_at)} now={now} stale={stale} /> left.
-          </p>
-        ) : phase === "closed" ? (
-          <p className="caution">Closed. Waiting for the final price.</p>
-        ) : phase === "finished" ? (
-          <>
-            <p className="dim">{`Finished ${hm(nsMs(d.close_at))}`}</p>
-            <p>{o?.winner ? `${model(o.winner === d.a ? "a" : "b")} won this duel.` : "This duel was a tie."}</p>
-          </>
-        ) : (
-          <p className="caution">Cancelled. The final price never arrived, so nobody won this duel.</p>
-        )}
-      </div>
+      <header className="page-head">
+        <h1 className="t-display">{`Duel #${id}`}</h1>
+        {state}
+        <p className="lede">
+          {phase === "running" ? (
+            <>
+              Two AIs are betting on the NEAR price. <Countdown to={nsMs(d.close_at)} now={now} stale={stale} /> left.
+            </>
+          ) : phase === "closed" ? (
+            "Time is up. The duel is waiting for the oracle's final price, so nothing can be planted here any more."
+          ) : phase === "finished" ? (
+            `${o?.winner ? `${shortModel(model(o.winner === d.a ? "a" : "b"))} won this duel.` : "This duel was a tie."} Finished ${hm(nsMs(d.close_at))}.`
+          ) : (
+            "Cancelled. The final price never arrived, so nobody won this duel."
+          )}
+        </p>
+      </header>
 
       {my && myTrace ? (
         <section className="boxed duel-yours" aria-label="Your headline">
@@ -307,7 +421,7 @@ function Loaded({
                     account={site.account}
                     contract={body.contract}
                     duelId={id}
-                    finished={phase === "finished" || phase === "cancelled"}
+                    finished={done}
                     onDone={refresh}
                   />
                   {myTx ? (
@@ -341,143 +455,88 @@ function Loaded({
         </section>
       ) : null}
 
-      <div className="picks duel-picks">
-        {(["a", "b"] as const).map((w) => {
-          const it = intent(w);
-          const end = ended(w);
-          return (
-            <section className="pick" key={w} aria-label={`Agent ${w.toUpperCase()}`}>
-              <div className="hrow">
-                <h2 className="who">{model(w)}</h2>
-                {end ? <span className={`end ${end === "lost" ? "dim" : "ink"}`}>{end}</span> : null}
-              </div>
-              {it ? (
-                <>
-                  <p>
-                    Betting the price goes <span className="ink">{bet(it.side)}</span>
-                  </p>
-                  <MachineQuote text={hist(w).reason} />
-                </>
-              ) : (
-                <p className="dim">
-                  No decision yet. The first one usually lands within a few minutes of the duel opening.
-                </p>
-              )}
-              {phase !== "running" || my ? null : (
-                <Button
-                  variant="attack"
-                  disabled={!!gate || !it}
-                  why={
-                    !it || waitsForDecision
-                      ? "Wait for its first decision. An attack needs a position to push against."
-                      : null
-                  }
-                  onClick={() => lie(w)}
-                >
-                  Lie to this one
-                </Button>
-              )}
-            </section>
-          );
-        })}
-      </div>
-      {phase === "running" && !my && caption && !waitsForDecision ? <p className="t-small caution">{caption}</p> : null}
-
-      <div className={`duel-work${attack && desktop && phase === "running" ? " with-attack" : ""}`}>
-        <section className="sect stack-2" aria-label="What they have done so far">
-          <h2 className="t-label">What they have done so far</h2>
-          <Trace
-            variant="full"
-            name={`A ${model("a")}`}
-            input={tA}
-            stale={stale}
-            onPin={showRow}
-            titles={titles}
-            selected={openRow === null ? null : String(openRow)}
-          />
-          <Trace
-            variant="full"
-            name={`B ${model("b")}`}
-            input={tB}
-            stale={stale}
-            onPin={showRow}
-            titles={titles}
-            selected={openRow === null ? null : String(openRow)}
-          />
-          {tA ? <TimeAxis input={tA} /> : null}
-          {tA && tB ? (
-            <WhatHappened
-              items={[
-                { name: `A ${model("a")}`, input: tA },
-                { name: `B ${model("b")}`, input: tB },
-              ]}
-            />
-          ) : null}
-          {phase === "finished" || phase === "cancelled" ? (
-            <div className="actions">
-              <LinkButton variant="proof" href={verifyHref(id, arena)}>
-                Verify this duel
-              </LinkButton>
-              <LinkButton variant="quiet" href="/arena">
-                See a running duel
-              </LinkButton>
-            </div>
-          ) : null}
-        </section>
-        {attack && desktop && phase === "running" ? (
-          <section className="boxed attack-panel" ref={panel} aria-label="Plant a fake headline">
-            <div className="hrow">
-              <h2 className="t-title">Plant a fake headline</h2>
-              <button type="button" className="btn-link end" aria-label="Close" disabled={locked} onClick={close}>
-                ✕
-              </button>
-            </div>
-            {box}
-          </section>
-        ) : null}
-      </div>
-
-      <section className="duel-details" aria-label="Details">
-        <h2 className="t-label">Details</h2>
-        <div className="details-grid">
-          <Details
-            id="duel-price"
-            label="Price"
-            summary={shownPrice ? `${shownPrice.toFixed(4)}${move ? `, ${move} since open` : ""}` : "—"}
-          >
-            <PriceLine samples={price.samples} from={nsMs(d.open_at)} to={nsMs(d.close_at)} stale={price.stale} />
-            <p>
-              <span className="t-label">{SYMBOL(d.symbol)}</span>{" "}
-              <span className="t-num">{shownPrice ? shownPrice.toFixed(4) : "—"}</span>
+      <div className="room">
+        <Stage
+          head={
+            <>
+              {state}
+              <span className="mono">{`duel #${id}`}</span>
+              <span className="dim">{`${hm(nsMs(d.open_at))} to ${hm(nsMs(d.close_at))}, your local time`}</span>
+              {phase === "running" ? (
+                <span className="end">
+                  ends in <Countdown to={nsMs(d.close_at)} now={now} stale={stale} />
+                </span>
+              ) : null}
+            </>
+          }
+          a={tA}
+          b={tB}
+          names={[model("a"), model("b")]}
+          tags={[
+            <BetTag key="a" side={intent("a")?.side ?? null} sealed={hist("a").sealed} />,
+            <BetTag key="b" side={intent("b")?.side ?? null} sealed={hist("b").sealed} />,
+          ]}
+          samples={samples}
+          stale={stale}
+          priceStale={price.stale}
+          onPin={showRow}
+          titles={titles}
+          selected={openRow === null ? null : String(openRow)}
+        >
+          {done && checks.loading ? (
+            <p className="note caution">
+              Reading this duel's recorded decisions from the chain. This can take a few seconds.
             </p>
-            <p className="t-small dim">
-              Open price <span className="mono">{price8(open8)?.toFixed(4) ?? "—"}</span>
-            </p>
-          </Details>
-          <Details id="duel-reasoning" label="Their full reasoning">
-            {(["a", "b"] as const).map((w) => {
-              const h = hist(w);
-              const at = h.decisions.at(-1)?.at;
-              return (
-                <div className="stack-2" key={w}>
-                  <p className="who mono">{model(w)}</p>
-                  {intent(w) ? <MachineQuote text={h.reason} /> : <p className="dim">No decision yet.</p>}
-                  {at ? <p className="t-small dim">{`Decided ${hm(at)}`}</p> : null}
-                  {h.sealed ? <p className="t-small caution">A sealed decision is in and not opened yet.</p> : null}
-                  {enclave(w)}
-                </div>
-              );
-            })}
-          </Details>
-          <Details
-            id="duel-headlines"
-            label={`Planted headlines (${attacks.length})`}
-            summary={newest ? <span className="serif-sum">{`“${newest.headline}”`}</span> : undefined}
-            open={openRow !== null || !!my}
-          >
-            {records.length ? (
-              <ul>
-                {records.map((c, i) => (
+          ) : null}
+          <div className="stage-planted" id="planted">
+            {attacks.length ? (
+              records.map((c, i) => {
+                if (c.kind === "Placebo") return null;
+                const w = sideOf(c);
+                const tx = mine.find((m) => m.duel === id && m.arena === arena && m.index === i)?.tx ?? null;
+                return (
+                  <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a record's index is its identity on chain
+                    key={i}
+                    id={`headline-${i}`}
+                    className={`planted${c.outcome === "Flipped" ? " fooled" : ""}${openRow === i ? " picked" : ""}`}
+                  >
+                    <p className="planted-top">
+                      <span className="t-label">{`Planted at ${w.toUpperCase()} · ${hm(nsMs(c.at))}`}</span>
+                      <MarkTag mark={markOf(c)} locked={body.open?.[String(i)]?.open === false} />
+                    </p>
+                    <Headline text={c.headline} />
+                    <p className="note">
+                      {c.outcome === "Pending"
+                        ? `Waiting for ${shortModel(model(w))}'s next decision.`
+                        : sentence(c, "public", shortModel(model(w)))}
+                    </p>
+                    <p className="note">
+                      Planted by <span className="mono">{shortId(c.injector, 14, 8)}</span> · cost{" "}
+                      <Amount yocto={c.stake} />
+                      {" · "}
+                      {coinFlip(c.arm, c.outcome === "Pending" ? "will" : "saw", "public", asWritten(w))}
+                    </p>
+                    {tx ? (
+                      <a className="btn-link" href={`/i/${tx}`}>
+                        Open its result page
+                      </a>
+                    ) : null}
+                  </div>
+                );
+              })
+            ) : (
+              <p className="note">
+                {phase === "running"
+                  ? "Nobody has planted a headline in this duel yet. Pick an AI and lie to it."
+                  : "Nobody planted a headline in this duel, so there is no FOOLED or HELD to show."}
+              </p>
+            )}
+          </div>
+          {records.some((c) => c.kind === "Placebo") ? (
+            <ul className="controls-list">
+              {records.map((c, i) =>
+                c.kind === "Placebo" ? (
                   <HeadlineRow
                     // biome-ignore lint/suspicious/noArrayIndexKey: a record's index is its identity on chain
                     key={i}
@@ -486,46 +545,131 @@ function Loaded({
                     side={sideOf(c)}
                     open={openRow === i}
                     onToggle={() => setOpenRow(openRow === i ? null : i)}
-                    tx={mine.find((m) => m.duel === id && m.arena === arena && m.index === i)?.tx ?? null}
+                    tx={null}
                     asWritten={asWritten(sideOf(c))}
                   />
-                ))}
-              </ul>
+                ) : null,
+              )}
+            </ul>
+          ) : null}
+          <div className="stage-lead">
+            {phase === "running" ? null : liveRow ? (
+              <LinkButton
+                variant="primary"
+                href={`/duel/${liveRow.id}${liveRow.arena === "keyless" ? "?arena=keyless" : ""}`}
+              >
+                See the running duel
+              </LinkButton>
             ) : (
-              <p className="dim">Nobody has planted a headline in this duel.</p>
+              <>
+                <LinkButton variant="primary" href="/">
+                  Watch a real attack
+                </LinkButton>
+                {id === RECORDED.id && arena === "main" ? null : (
+                  <LinkButton variant="quiet" href={`/duel/${RECORDED.id}`}>
+                    Open the recorded duel
+                  </LinkButton>
+                )}
+              </>
             )}
-          </Details>
-          <Details id="duel-money" label="Money" summary="bonds and costs">
-            <dl className="facts">
-              {(["a", "b"] as const).map((w) => (
-                <div key={w} style={{ display: "contents" }}>
-                  <dt>{`Bond ${w.toUpperCase()}`}</dt>
-                  <dd>
-                    <Amount yocto={agent(w)?.bond ?? null} />{" "}
-                    {ahead === w && pa !== null && pb !== null ? (
-                      <span className="ink">{`ahead by ${(Math.abs(pa - pb) / 100).toFixed(2)}%`}</span>
-                    ) : null}
-                    {o ? <span className="mono">{` final profit ${pct(w === "a" ? o.pnl_a : o.pnl_b)}`}</span> : null}{" "}
-                    <a href={agentPath(agent(w)?.pk ?? "")}>Agent page →</a>
-                  </dd>
-                </div>
-              ))}
-              {phase === "running" ? (
+            {done ? (
+              <LinkButton variant="proof" href={verifyHref(id, arena)}>
+                Verify this duel
+              </LinkButton>
+            ) : null}
+            {phase === "running" ? null : (
+              <p className="note">
+                {liveRow
+                  ? "This duel can no longer be attacked. Another one is running."
+                  : "This duel can no longer be attacked and no other duel is running right now. The replay shows a real attack from start to verdict."}
+              </p>
+            )}
+          </div>
+          {tA && tB ? (
+            <details className="details">
+              <summary>
+                <span className="t-label">What happened, as text</span>
+              </summary>
+              <div className="details-body">
+                <WhatHappened
+                  items={[
+                    { name: `A ${model("a")}`, input: tA },
+                    { name: `B ${model("b")}`, input: tB },
+                  ]}
+                />
+              </div>
+            </details>
+          ) : null}
+        </Stage>
+        <div className="room-col room-left">
+          {agentPanel("a")}
+          {agentPanel("b")}
+        </div>
+        <div className="room-col room-right">
+          {attack && desktop && phase === "running" ? (
+            <section className="panel attack-panel" ref={panel} aria-label="Plant a fake headline">
+              <div className="hrow">
+                <h2 className="t-title">Plant a fake headline</h2>
+                <button type="button" className="btn-link end" aria-label="Close" disabled={locked} onClick={close}>
+                  ✕
+                </button>
+              </div>
+              {box}
+            </section>
+          ) : null}
+          <PricePanel
+            price={shownPrice}
+            samples={samples}
+            open={open8}
+            close={o ? o.close_price : undefined}
+            source={
+              done
+                ? `Line: ${candles.data?.source ?? "exchange candles"}. The duel settled on the oracle's prices.`
+                : `Line: this browser's own readings since the page opened.${move ? ` ${move} since the open.` : ""}`
+            }
+            stale={price.stale}
+          />
+          <Panel
+            label={phase === "running" ? "Cost to plant a headline" : "Headlines in this duel"}
+            tag={NETWORK_ID === "testnet" ? <Tag>test NEAR</Tag> : undefined}
+          >
+            {phase === "running" ? (
+              <Readout
+                value={d.chaos_fee ? near(d.chaos_fee).replace(" NEAR", "") : "—"}
+                unit="NEAR for the next one"
+              />
+            ) : (
+              <Readout value={attacks.length} unit="planted" />
+            )}
+            {count("Flipped", "Held") ? (
+              <Strip
+                n={count("Flipped")}
+                of={count("Flipped", "Held")}
+                kind="alert"
+                label={`Fooled ${count("Flipped")} of ${count("Flipped", "Held")} that reached a decision`}
+              />
+            ) : null}
+            <dl className="kv">
+              <dt>Fooled</dt>
+              <dd>{count("Flipped")}</dd>
+              <dt>Held</dt>
+              <dd>{count("Held")}</dd>
+              <dt>Waiting</dt>
+              <dd>{count("Pending")}</dd>
+              {o ? (
                 <>
-                  <dt>Next attack</dt>
-                  <dd>{d.chaos_fee ? near(d.chaos_fee) : "—"}</dd>
+                  <dt>Loser paid from its bond</dt>
+                  <dd>{near(o.slashed)}</dd>
                 </>
               ) : null}
             </dl>
-            <p className="t-small dim">A bond is money the agent's owner locked as a promise.</p>
-          </Details>
+            <p className="note">
+              {`A bond is money the agent's owner locked as a promise.${NETWORK_ID === "testnet" ? ` ${TEST_NOTE}.` : ""}`}
+            </p>
+          </Panel>
+          <ChecksPanel counts={counts} href={verifyHref(id, arena)} />
         </div>
-      </section>
-      <p className="sect">
-        <a className="proof" href={verifyHref(id, arena)}>
-          Verify this duel
-        </a>
-      </p>
+      </div>
 
       {desktop ? null : (
         <Sheet
@@ -565,17 +709,21 @@ export function DuelView({ params }: { params: Promise<{ id: string }> }) {
   useEffect(() => setFast(waiting), [waiting]);
   return (
     <div className="page duel">
-      <div className="hrow duel-head">
+      <p className="duel-head">
         <a href="/arena">← All duels</a>
-        <h1 className="t-title end">{`Duel #${id}`}</h1>
-      </div>
+      </p>
       <Region
         read={read}
         skeleton={
           <div className="stack">
-            <Trace variant="full" name="A" input={null} />
-            <Trace variant="full" name="B" input={null} />
-            <Skeleton bars={["60%", "90%", "40%"]} />
+            <h1 className="t-display">{`Duel #${id}`}</h1>
+            <div className="room">
+              <section className="panel stage">
+                <Trace variant="stage" name="A" input={null} />
+                <Trace variant="stage" name="B" input={null} />
+                <Skeleton bars={["60%", "90%", "40%"]} />
+              </section>
+            </div>
           </div>
         }
       >
