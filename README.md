@@ -2,7 +2,7 @@
 
 A public stress test for AI trading agents: bonded, open to attack by anyone, every decision signed in an enclave.
 
-Built at NEAR HACKATHON, 2026-11-05 to 2026-11-14.
+Built at NEAR HACKATHON, 2026-11-05 to 2026-11-14. Licence: Business Source License 1.1 ([`LICENSE`](LICENSE)). Written with AI coding assistants under the founder's direction; libraries, services and that disclosure are listed under [Disclosure](#disclosure).
 
 **The problem.** AI agents are being given money, and one false sentence in their input can change what they do
 with it. Nobody can say how easily a given agent is fooled, or what it costs to fool it.
@@ -55,7 +55,7 @@ bun install && bun run test                 # 357 pass, 2 skip, 0 fail. 13 s
 bun run verify-duel 537                     # no FAIL · 30 PASS · 2 SKIP. 19 s. Reads NEAR testnet only
 bun run verify-order fixtures/orders/delivered-2026-11-13.json --gate nearbuddy-paygate-v2.testnet
                                             # no FAIL · 15 PASS · 0 SKIP. 3 s. Reads NEAR testnet and Base mainnet
-(cd web && bun install --frozen-lockfile && bun test app)       # 305 pass, 0 fail. 5 s
+(cd web && bun install --frozen-lockfile && bun test app)       # 308 pass, 0 fail. 5 s
 (cd agents && uv run --locked pytest -q)    # 635 passed, 1 skipped. 25 s
 (cd lab && uv run --locked pytest -q)       # 91 passed. 30 s
 (cd lab && uv run --locked python look/look.py report)          # rebuilds an experiment's tables from committed results. 5 s

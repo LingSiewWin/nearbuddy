@@ -6,7 +6,7 @@ Next.js 16 app. It holds no key: its API routes read contract views over the pub
 
 ```sh
 bun install --frozen-lockfile
-bun test app                  # 305 pass (2026-11-15)
+bun test app                  # 308 pass (2026-11-15)
 bun run dev                   # http://localhost:3000
 ```
 

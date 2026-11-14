@@ -21,7 +21,7 @@ configs:
 - config_name: default
   data_files:
   - split: decisions
-    path: decisions.parquet
+    path: decisions.jsonl
 ---
 
 # NearBuddy Arena Duels
@@ -57,15 +57,15 @@ Verification: {'no tee bytes': 1060, 'ok': 1723, 'no signature record': 16}. Pro
 ```python
 from datasets import load_dataset
 
-ds = load_dataset("NekoRobbin/nearbuddy-arena-duels", split="decisions")
+ds = load_dataset("json", data_files="decisions.jsonl", split="train")  # run from nearbuddy/dataset/
 attacked = ds.filter(lambda r: r["injection"] is not None)  # the prompt-injection subset
 enclave = ds.filter(lambda r: r["verifiable"])  # rows whose enclave proof re-verifies
 ```
 
 ## Schema
 
-One row per decision. `decisions.jsonl` is the source of truth (one JSON object per line); `decisions.parquet` is
-the same rows for the viewer, with absent keys as null.
+One row per decision. `decisions.jsonl` is the source of truth (one JSON object per line) and the file in this
+repository. A `decisions.parquet` copy for a viewer is built by the exporter and is not committed.
 
 | Field | Type | Meaning |
 |---|---|---|

@@ -545,7 +545,7 @@ cd .. && bun run arena-demo                  # follower mandate, chaos, 1Click q
 DUELS=8 TARGET=b bun run spectator           # one attack per new duel at the naive model; deploy 17: pays chaos_fee and claims payouts
 bun run status                            # processes, chain config, newest duel, balances, batch state (--json, --watch)
 bun run readout -- --since 340 [--out r.md]  # morning readout: duels per pair, enclave and commit-reveal stats, attack splits, parse rate per cap, verify-duel
-(cd web && bun install --frozen-lockfile && bun test app)   # 305 web tests
+(cd web && bun install --frozen-lockfile && bun test app)   # 308 web tests
 bun --cwd web run build && bun --cwd web run start   # /arena reads the public RPC, no keys in the browser
 bun run real-swap                            # by hand: one real 1Click swap from ONECLICK_ACCOUNT (mainnet), for the proof
 sh scripts/arena-up.sh 3 90               # or all at once: solver + web + three 90-second duels
