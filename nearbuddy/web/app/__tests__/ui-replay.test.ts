@@ -99,6 +99,6 @@ test("the waiting zone and the line grow with the playhead", () => {
 
 test("the finished frame reads as the story of the attack", () => {
   expect(story(frameAt(rec, rec.to).b, utc).join(" ")).toBe(
-    "Earlier decisions not loaded. Headline planted 11:08. Betting UP since 11:09. Next decision 11:16: betting DOWN. Fooled.",
+    "First decisions sealed. Headline planted 11:08. Betting UP since 11:09. Next decision 11:16: betting DOWN. Fooled.",
   );
 });

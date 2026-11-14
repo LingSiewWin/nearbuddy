@@ -6,7 +6,7 @@ import { type ReactNode, type RefObject, useEffect, useRef, useState } from "rea
 import type { Sample } from "../lib/stage";
 import { NETWORK_ID } from "../network";
 import { duelPath, verifyHref } from "./data";
-import { bet, clock, near, nsMs, price8, type Side, shortModel, TEST_NOTE, utcTime } from "./format";
+import { bet, clock, near, nsMs, price8, type Side, shortModel, utcTime } from "./format";
 import { Panel, Readout, Sparkline, Strip, Tag } from "./instruments";
 import { Details, LinkButton } from "./kit";
 import { answeredAt, checkCounts, frameAt, HOLD_MS, PLAY_MS, type ReplayRecord, timeline } from "./replay";
@@ -102,7 +102,7 @@ const StageKey = () => (
 
 /** What an agent is doing, as the tag beside its name. */
 export const BetTag = ({ side, sealed }: { side: Side | null; sealed?: boolean }) =>
-  side ? <Tag kind="ink">{`betting ${bet(side)}`}</Tag> : <Tag>{sealed ? "sealed" : "no decision yet"}</Tag>;
+  side ? <Tag kind="ink">{`betting ${bet(side)}`}</Tag> : <Tag>{sealed ? "sealed" : "first bet coming"}</Tag>;
 
 const PIN_TAG: Record<PinMark, [string, "live" | "alert" | "ink" | "idle"]> = {
   waiting: ["waiting", "live"],
@@ -155,7 +155,7 @@ export function PricePanel({
         {close !== undefined ? (
           <>
             <dt>Oracle close</dt>
-            <dd>{c ? c.toFixed(4) : "not in yet"}</dd>
+            <dd>{c ? c.toFixed(4) : "at the close"}</dd>
           </>
         ) : null}
       </dl>
@@ -190,7 +190,7 @@ export function ChecksPanel({
     >
       {counts ? (
         <>
-          <Readout value={`${counts.pass} of ${counts.total}`} unit="checks passed" />
+          <Readout value={counts.pass} unit={`checks passed, ${counts.fail} failed`} />
           <Strip
             n={counts.pass}
             of={counts.total}
@@ -418,7 +418,7 @@ export function ReplayRoom({
             </>
           ) : null}
         </dl>
-        <p className="note">{`${TEST_NOTE}. Both headlines were planted by one of the project's own accounts.`}</p>
+        <p className="note">Both headlines were planted by the project.</p>
       </Panel>
       <Panel label="Recorded time" tag={<Tag kind={f.done ? "idle" : "live"}>{f.done ? "closed" : "playing"}</Tag>}>
         <Readout value={clock(elapsed)} unit={`of ${clock(span / 1000)}`} />
@@ -428,7 +428,7 @@ export function ReplayRoom({
           cells={30}
           label={`${clock(elapsed)} of ${clock(span / 1000)} played`}
         />
-        <p className="note">{`A recording, played about ${Math.round(span / PLAY_MS)} times faster than it happened.`}</p>
+        <p className="note">{`Played at ${Math.round(span / PLAY_MS)}× speed.`}</p>
       </Panel>
     </>
   );
@@ -481,7 +481,7 @@ export function ReplayRoom({
         {quiet ? (
           <p className="stage-checks">
             <Tag kind={counts.fail ? "alert" : "ok"}>{counts.fail ? `${counts.fail} failed` : "verified"}</Tag>
-            <span className="mono">{`${counts.pass} of ${counts.total} checks passed`}</span>
+            <span className="mono">{`${counts.pass} checks passed, ${counts.fail} failed`}</span>
             <a href={verifyHref(rec.id, "main")}>Run the checks yourself</a>
           </p>
         ) : null}
@@ -516,7 +516,7 @@ export function ReplayRoom({
               );
             })
           ) : (
-            <p className="note">No headline has been planted yet at this point of the recording.</p>
+            <p className="note">The first headline lands in a moment.</p>
           )}
         </div>
         {quiet ? transport : null}
@@ -533,7 +533,7 @@ export function ReplayRoom({
       {quiet ? (
         <div className="panel instruments">
           <Details id="instruments" label="Instruments">
-            <p className="note">{`Recorded ${recordedOn(rec.from)} on ${NETWORK_ID}.`}</p>
+            <p className="note">{`${recordedOn(rec.from)} UTC.`}</p>
             <div className="deck c3">
               {left}
               {right}
