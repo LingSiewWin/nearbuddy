@@ -360,9 +360,6 @@ def experiment(phase: str, prompt: str, recs: list[dict[str, Any]]) -> None:
     breakdown(recs, against, "lie vs the brief's move")
 
 
-Pair = tuple[dict[str, Any], dict[str, Any]]
-
-
 def cross_profile(
     recs: list[dict[str, Any]],
     profiles: list[str],
