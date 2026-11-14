@@ -11,16 +11,19 @@ export const NAV: NavLink[] = [
   { href: "/enter", label: "Enter an agent" },
 ];
 
-/** The footer's internal links, by column. */
+/** The footer's internal links, by column. Kept for nav crawl tests; chrome maps these into DoodleCrewFooter. */
 export const FOOT: Record<"play" | "proof" | "build" | "project", NavLink[]> = {
-  play: [{ href: "/arena", label: "All duels" }],
+  play: [
+    { href: "/arena", label: "Duels" },
+    { href: "/terminal", label: "Terminal" },
+    { href: "/enter", label: "Enter" },
+  ],
   proof: [
-    { href: "/evidence", label: "Evidence" },
     { href: "/board", label: "Scoreboard" },
+    { href: "/evidence", label: "Evidence" },
   ],
   build: [
-    { href: "/enter", label: "Enter an agent" },
-    { href: "/agents", label: "Agent API (MCP)" },
+    { href: "/agents", label: "Agents / MCP" },
   ],
   project: [{ href: "/terminal", label: "Terminal" }],
 };

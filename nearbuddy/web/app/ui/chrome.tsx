@@ -9,6 +9,7 @@ import * as wallet from "../lib/wallet";
 import { NET, NETWORK_ID } from "../network";
 import { addrHref, REPO } from "../tui";
 import { guestLabel, shortId } from "./format";
+import { DoodleCrewFooter, type FooterColumn } from "./doodle-crew-footer";
 import { Button, type Read, Sheet, StatusBar, useNow, useRead } from "./kit";
 import { FOOT, NAV } from "./nav";
 import { pickLive } from "./verdict";
@@ -328,52 +329,60 @@ export function Chrome({ children }: { children: ReactNode }) {
           </div>
         </header>
         <main className="site-main">{children}</main>
-        <footer className="site-footer">
-          <div className="bar">
-            <p className="wordmark">NearBuddy</p>
-            <p>{TAGLINE}</p>
-            <div className="foot-cols">
-              <div>
-                <h2 className="t-label">Play</h2>
-                {live ? <a href={path(live)}>Live duel</a> : null}
-                {FOOT.play.map((l) => link(l.href, l.label))}
-                {mine ? (
-                  <button type="button" className="btn-link" onClick={() => setHeadlines(myHeadlines())}>
-                    Your headlines
-                  </button>
-                ) : null}
-              </div>
-              <div>
-                <h2 className="t-label">Proof</h2>
-                {FOOT.proof.map((l) => link(l.href, l.label))}
-                {last ? <a href={verifyOf(last)}>Verify the last duel</a> : null}
-              </div>
-              <div>
-                <h2 className="t-label">Build</h2>
-                {FOOT.build.map((l) => link(l.href, l.label))}
-                <a href={`${REPO}/tree/HEAD/nearbuddy/dataset#readme`} target="_blank" rel="noreferrer">
-                  Dataset
-                </a>
-              </div>
-              <div>
-                <h2 className="t-label">Project</h2>
-                <a href={REPO} target="_blank" rel="noreferrer">
-                  Source code
-                </a>
-                {FOOT.project.map((l) => link(l.href, l.label))}
-              </div>
-              <div>
-                <h2 className="t-label">Reach us</h2>
-                <a href="https://x.com/siewwwin" target="_blank" rel="noreferrer">
-                  X
-                </a>
-                <a href="https://www.linkedin.com/in/ling-siew-win/" target="_blank" rel="noreferrer">
-                  LinkedIn
-                </a>
-                <a href="mailto:siewwwin@gmail.com">Email</a>
-              </div>
-            </div>
-            <div className="foot-line">
+        <DoodleCrewFooter
+          className="site-footer"
+          preset="night"
+          wordmark="NEARBUDDY"
+          brand="NearBuddy"
+          blurb={TAGLINE}
+          tagline="Bonded agents. Open attacks. Enclave-signed decisions."
+          columns={
+            [
+              {
+                title: "Play",
+                links: [
+                  ...(live ? [{ label: "Live duel", href: path(live) }] : []),
+                  ...FOOT.play,
+                ],
+              },
+              {
+                title: "Proof",
+                links: [
+                  ...FOOT.proof,
+                  {
+                    label: "Dataset",
+                    href: `${REPO}/tree/HEAD/nearbuddy/dataset#readme`,
+                  },
+                  ...(last ? [{ label: "Verify last duel", href: verifyOf(last) }] : []),
+                ],
+              },
+              {
+                title: "Build",
+                links: [...FOOT.build, { label: "Source", href: REPO }],
+              },
+              {
+                title: "Reach us",
+                links: [
+                  { label: "X", href: "https://x.com/siewwwin" },
+                  { label: "LinkedIn", href: "https://www.linkedin.com/in/ling-siew-win/" },
+                  { label: "Email", href: "mailto:siewwwin@gmail.com" },
+                ],
+              },
+            ] satisfies FooterColumn[]
+          }
+          actions={[
+            { label: "Enter an agent", href: "/enter", icon: "bolt", variant: "outline" },
+            { label: "Try to fool one", href: "/#chapter-3", icon: "flame", variant: "solid" },
+          ]}
+          copyright="NearBuddy"
+          legal={[]}
+          socials={[
+            { label: "X", href: "https://x.com/siewwwin" },
+            { label: "LinkedIn", href: "https://www.linkedin.com/in/ling-siew-win/" },
+            { label: "Email", href: "mailto:siewwwin@gmail.com" },
+          ]}
+          barExtra={
+            <>
               <span>
                 arena{" "}
                 <a className="mono" href={addrHref(NET.arena)} target="_blank" rel="noreferrer">
@@ -384,9 +393,14 @@ export function Chrome({ children }: { children: ReactNode }) {
                 network <span className="mono">{NETWORK_ID}</span>
               </span>
               <ThemeToggle />
-            </div>
-          </div>
-        </footer>
+              {mine ? (
+                <button type="button" className="btn-link" onClick={() => setHeadlines(myHeadlines())}>
+                  Your headlines
+                </button>
+              ) : null}
+            </>
+          }
+        />
         <div className="sr" aria-live="polite">
           {said}
         </div>

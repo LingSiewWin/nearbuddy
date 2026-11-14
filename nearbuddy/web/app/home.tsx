@@ -11,14 +11,16 @@ import { useSite } from "./ui/chrome";
 import { type DuelRow, duelPath, type History, traceOf, useDuel, usePrice, verifyHref } from "./ui/data";
 import { bet, near, nsMs, shortModel } from "./ui/format";
 import { Chapters } from "./ui/hero";
+import { InteractiveGrid } from "./ui/interactive-grid";
 import { Panel, Readout, Strip, Tag } from "./ui/instruments";
 import { Button, Countdown, Details, LinkButton, StatusBar, useNow } from "./ui/kit";
+import { OceanArena } from "./ui/ocean";
 import { PracticePanel } from "./ui/practice";
+import { StackReveal } from "./ui/stack-reveal";
 import { RECORDED } from "./ui/replay";
 import { MachineQuote } from "./ui/result";
 import { BetTag, ChecksPanel, PricePanel, ReplayActions, ReplayRoom, Stage } from "./ui/room";
 import { isRunning } from "./ui/rows";
-import { TileField } from "./ui/tiles-view";
 import { recordTrace, type TraceIn } from "./ui/trace";
 import { Trace } from "./ui/trace-view";
 import { pickLive } from "./ui/verdict";
@@ -187,46 +189,35 @@ export default function Home({ practice }: { practice: boolean }) {
   const shown = list.data && now ? choose(rows, now, lock) : null;
   const last = rows.find((r) => r.resolved && !r.cancelled) ?? null;
   return (
-    <div className="page home">
-      <TileField />
+    <div className="page home home-ocean">
       <Chapters
         chapters={[
           {
             title: "What it is",
             node: (go) => (
-              <div className="hero-copy">
-                {shown ? (
-                  <Tag kind="ok">
-                    live · ends in <Countdown to={nsMs(shown.row.close_at)} now={now} stale={list.stale} />
-                  </Tag>
-                ) : null}
-                <h1 className="hero-title">A public stress test for AI trading agents.</h1>
-                <p className="hero-lede">
-                  Bonded, open to attack by anyone, every decision signed in an enclave. Plant one fake headline and see
-                  if the agent changes its bet.
-                </p>
-                <div className="hero-actions">
-                  <Button variant="attack" fit onClick={() => go(2)}>
-                    Try to fool one now
-                  </Button>
-                  <Button fit onClick={() => go(1)}>
-                    {shown ? "Watch the live duel" : "Watch one get fooled"}
-                  </Button>
+              <div className="hero-band hero-band-ocean">
+                <OceanArena models={board.models} datasetRows={board.rows} />
+                <InteractiveGrid cellSize={16} />
+                <div className="hero-copy">
+                  {shown ? (
+                    <Tag kind="ok">
+                      live · ends in <Countdown to={nsMs(shown.row.close_at)} now={now} stale={list.stale} />
+                    </Tag>
+                  ) : null}
+                  <h1 className="hero-title">A public stress test for AI trading agents.</h1>
+                  <p className="hero-lede">
+                    Bonded, open to attack by anyone, every decision signed in an enclave. Plant one fake headline and
+                    see if the agent changes its bet.
+                  </p>
+                  <div className="hero-actions">
+                    <Button variant="attack" fit onClick={() => go(2)}>
+                      Try to fool one now
+                    </Button>
+                    <Button fit onClick={() => go(1)}>
+                      {shown ? "Watch the live duel" : "Watch one get fooled"}
+                    </Button>
+                  </div>
                 </div>
-                <dl className="hero-facts">
-                  <div>
-                    <dt>Unguarded model</dt>
-                    <dd>fooled 676 of 704</dd>
-                  </div>
-                  <div>
-                    <dt>Guarded model</dt>
-                    <dd>fooled 49 of 705</dd>
-                  </div>
-                  <div>
-                    <dt>Signed decisions on record</dt>
-                    <dd>{board.rows.toLocaleString("en-US")}</dd>
-                  </div>
-                </dl>
               </div>
             ),
           },
@@ -260,6 +251,8 @@ export default function Home({ practice }: { practice: boolean }) {
           { title: "Try it yourself", node: () => <PracticePanel enabled={practice} second={!!shown} /> },
         ]}
       />
+
+      <StackReveal />
 
       <div id="how" className="deck c3 gap-top">
         <Panel label="How it works">
