@@ -1,12 +1,13 @@
 // POST /api/practice {headline, target}: one practice round (lib/practice.ts). Two model calls on NEAR AI Cloud with
-// the server's key: the defender's decision without the headline and with it. Nothing touches a chain and nothing is
+// the server's key: the defender's decision with the headline and a control without it, judged against its cached
+// baseline bet. POST {target} alone answers that baseline. Nothing touches a chain and nothing is
 // stored: no headline is kept or logged. Limited per address and site-wide (api/practice.ts), counted in the comment
 // store's Redis when it is configured, else in this process. Every error is a short fixed string with a code.
 
-import { checkPractice } from "../../lib/practice";
+import { checkPractice, PRACTICE_MODEL, type PracticeBaseline, SNAPSHOT } from "../../lib/practice";
 import { store } from "../comments";
 import { json } from "../near";
-import { limit, playRound } from "../practice";
+import { baselineOf, type Cache, limit, playRound } from "../practice";
 
 export const maxDuration = 60;
 const MAX_BODY = 4096;
@@ -31,6 +32,25 @@ async function bump(key: string, ttlS: number): Promise<number> {
   return next.n;
 }
 
+const kept = new Map<string, { v: string; until: number }>();
+/** The baseline cache: Redis when the comment store is configured, else this process. */
+const cache: Cache = {
+  async get(key) {
+    const redis = store();
+    if (redis) {
+      const v = await redis.get(key); // the client parses JSON it stored
+      return v == null ? null : typeof v === "string" ? v : JSON.stringify(v);
+    }
+    const hit = kept.get(key);
+    return hit && hit.until > Date.now() ? hit.v : null;
+  },
+  async set(key, value, ttlS) {
+    const redis = store();
+    if (redis) await redis.set(key, value, { ex: ttlS });
+    else kept.set(key, { v: value, until: Date.now() + ttlS * 1000 });
+  },
+};
+
 export async function POST(req: Request) {
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json"))
     return refuse(415, "json_only", "send JSON");
@@ -43,12 +63,28 @@ export async function POST(req: Request) {
   } catch {}
   const input = checkPractice(body);
   if ("error" in input) return refuse(400, "bad_input", input.error);
+  // no headline: the defender's bet before anyone lies to it. Cached, so it spends a model call only when cold.
+  if (input.headline === null) {
+    try {
+      const baseline = await baselineOf(key, input.target, cache);
+      const body: PracticeBaseline = {
+        practice: true,
+        target: input.target,
+        model: PRACTICE_MODEL,
+        snapshot: SNAPSHOT,
+        baseline,
+      };
+      return answer(body);
+    } catch {
+      return refuse(502, "model_failed", "the model did not answer with a decision: try again");
+    }
+  }
   const address = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
   // a counter that cannot be read refuses the round: the limit is what protects the model credit
   const wait = await limit(address, bump, Math.floor(Date.now() / 1000)).catch(() => 60);
   if (wait > 0) return refuse(429, "limited", "too many practice rounds from here for now", { wait_s: wait });
   try {
-    return answer(await playRound(key, input.target, input.headline));
+    return answer(await playRound(key, input.target, input.headline, cache));
   } catch {
     return refuse(502, "model_failed", "the model did not answer with a decision: try again");
   }

@@ -2438,3 +2438,15 @@ table.board tbody th {
 .practice-stage {
   scroll-margin-top: var(--s-8);
 }
+.practice .practice-ask {
+  font: var(--t-body);
+  color: var(--hi);
+}
+.practice .practice-ask.dim {
+  color: var(--dim);
+}
+.practice-next {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
