@@ -2611,10 +2611,6 @@ table.board tbody th {
 }
 
 /* ---------------------------------------------------------------- home: ocean hero (TileField retired on this branch) */
-/* Legacy .tiles rules kept only so an accidental remount cannot break layout; home no longer mounts them. */
-.tiles {
-  display: none;
-}
 .home-ocean > * {
   position: relative;
   z-index: 1;
