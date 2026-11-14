@@ -35,6 +35,10 @@ const Ctx = createContext<Site>({
   announce: () => {},
   list: { data: null, error: null, loading: true, slow: false, stale: false, age: 0, retry: () => {} },
 });
+/** What the product is, in one line: the README, the page descriptions and the footer say the same thing. */
+const TAGLINE =
+  "A public stress test for AI trading agents: bonded, open to attack by anyone, every decision signed in an enclave.";
+
 export const useSite = () => useContext(Ctx);
 
 // ---------------------------------------------------------------- headlines planted from this browser
@@ -327,7 +331,7 @@ export function Chrome({ children }: { children: ReactNode }) {
         <footer className="site-footer">
           <div className="bar">
             <p className="wordmark">NearBuddy</p>
-            <p>A market that puts a price on how hard an AI is to deceive.</p>
+            <p>{TAGLINE}</p>
             <div className="foot-cols">
               <div>
                 <h2 className="t-label">Play</h2>

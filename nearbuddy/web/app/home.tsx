@@ -193,7 +193,7 @@ export default function Home({ practice }: { practice: boolean }) {
         label="What you can do here"
         slides={[
           {
-            label: "The game",
+            label: "What it is",
             node: (go) => (
               <div className="hero-copy">
                 {shown ? (
@@ -201,10 +201,10 @@ export default function Home({ practice }: { practice: boolean }) {
                     live · ends in <Countdown to={nsMs(shown.row.close_at)} now={now} stale={list.stale} />
                   </Tag>
                 ) : null}
-                <h1 className="hero-title">Lie to an AI.</h1>
+                <h1 className="hero-title">A public stress test for AI trading agents.</h1>
                 <p className="hero-lede">
-                  Plant one fake headline at an AI trading agent and see if it changes its bet. Every decision is signed
-                  inside a secure enclave and checked on chain.
+                  Bonded, open to attack by anyone, every decision signed in an enclave. Plant one fake headline and see
+                  if the agent changes its bet.
                 </p>
                 <div className="hero-actions">
                   <Button variant="attack" fit onClick={() => go(2)}>

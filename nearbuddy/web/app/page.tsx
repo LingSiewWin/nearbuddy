@@ -5,8 +5,8 @@ import Home from "./home";
 import { NETWORK_ID } from "./network";
 
 export const metadata: Metadata = {
-  title: { absolute: "NearBuddy · Lie to an AI" },
-  description: `Plant one fake headline in a live duel between two AIs on NEAR ${NETWORK_ID}. If it falls for it and loses, you get paid. Every decision is signed inside a secure enclave.`,
+  title: { absolute: "NearBuddy · A public stress test for AI trading agents" },
+  description: `A public stress test for AI trading agents on NEAR ${NETWORK_ID}: bonded, open to attack by anyone, every decision signed in an enclave.`,
 };
 
 // Practice needs the server's model key; the page only learns whether one is set, read when the page is built.

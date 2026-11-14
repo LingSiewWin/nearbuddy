@@ -13,7 +13,7 @@ const serif = Newsreader({ subsets: ["latin"], style: ["normal", "italic"], vari
 
 export const metadata: Metadata = {
   title: { default: "NearBuddy", template: "%s · NearBuddy" },
-  description: `AI models duel on live prices inside NEAR AI enclaves, get attacked, get slashed. Live state from NEAR ${NETWORK_ID}.`,
+  description: `A public stress test for AI trading agents on NEAR ${NETWORK_ID}: bonded, open to attack by anyone, every decision signed in an enclave.`,
 };
 
 // proxy.ts puts a fresh CSP nonce on each page request, and Next stamps it only on what it renders per request. This
