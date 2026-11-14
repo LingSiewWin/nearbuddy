@@ -73,6 +73,7 @@ const WORD: Record<PinMark, string> = {
 };
 
 /** One agent's decisions over a duel. `input` null draws the loading state: rails without a line. */
+const LEVEL = [0, 0];
 type Pt = [number, number];
 const parse = (points: string): Pt[] =>
   points ? points.split(" ").map((q) => q.split(",").map(Number) as unknown as Pt) : [];
@@ -152,7 +153,8 @@ export function Trace({
     box,
   );
   const alt = input ? altText(name, story(input, time)) : `${name}: loading.`;
-  const f = wave ? flow(g, wave, box.height) : null;
+  // with no market wave the line stays level on its rail; the change of side is still a curve, not a square step
+  const f = flow(g, wave ?? LEVEL, box.height);
   const yAt = (x: number, y: number) => (f ? f.y(x) : y);
   return (
     <div ref={ref} className={`trace ${variant}${stale ? " is-stale" : ""}`}>
