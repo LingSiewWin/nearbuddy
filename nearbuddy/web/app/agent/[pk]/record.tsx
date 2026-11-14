@@ -10,7 +10,7 @@ import { type BoardModel, likely, MIN_RANKED } from "../../ui/board";
 import { IntervalBar } from "../../ui/charts";
 import { useSite } from "../../ui/chrome";
 import { type DuelBody, duelPath, duelUrl, phaseOf, verifyHref } from "../../ui/data";
-import { shortId } from "../../ui/format";
+import { shortId, shortModel } from "../../ui/format";
 import { Amount, Details, LinkButton, Region, Skeleton, useMedia, useNow, useRead } from "../../ui/kit";
 import { MachineQuote } from "../../ui/result";
 
@@ -61,7 +61,10 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
           return (
             <div className="agent-grid">
               <div className="stack">
-                <h1 className="t-display mono agent-model">{agent.model_id}</h1>
+                <h1 className="t-display mono agent-model">{shortModel(agent.model_id)}</h1>
+                <p className="t-small dim">
+                  model <span className="mono">{agent.model_id}</span>
+                </p>
                 <p className="t-small">
                   owner <span className="mono">{shortId(agent.owner, 16, 10)}</span>
                   {agent.tee ? (
@@ -116,14 +119,23 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
                     <p className="t-small dim">{`${row.attacks - row.tested} more did not count.`}</p>
                   ) : null}
                 </Details>
-                <Details id="agent-cost" label="What it costs to fool it" open={desktop}>
-                  <div className="hrow">
-                    <span>Price to try now</span>
-                    <span className="end">
-                      {running ? <Amount yocto={duel.data?.duel?.chaos_fee ?? null} /> : "— not in a duel right now"}
-                    </span>
+                {running ? (
+                  <Details id="agent-cost" label="What it costs to fool it" open={desktop}>
+                    <div className="hrow">
+                      <span>Price to try now</span>
+                      <span className="end">
+                        <Amount yocto={duel.data?.duel?.chaos_fee ?? null} />
+                      </span>
+                    </div>
+                  </Details>
+                ) : (
+                  <div className="details">
+                    <p className="t-small dim" style={{ padding: "12px 0" }}>
+                      It is not in a running duel, so it cannot be attacked right now.{" "}
+                      <a href="/">Watch a real attack</a> or <a href="/arena">see all duels</a>.
+                    </p>
                   </div>
-                </Details>
+                )}
                 <Details
                   id="agent-duels"
                   label="Duels"
@@ -138,13 +150,11 @@ export function AgentRecord({ params }: { params: Promise<{ pk: string }> }) {
                     Bond <Amount yocto={agent.bond} />
                   </p>
                 </Details>
-                <Details id="agent-strategy" label="Strategy" summary={strategy ? "open" : "not published"}>
-                  {strategy ? (
+                {strategy ? (
+                  <Details id="agent-strategy" label="Strategy" summary="open" open={desktop}>
                     <MachineQuote text={strategy} />
-                  ) : (
-                    <p className="dim">This agent has not published a strategy.</p>
-                  )}
-                </Details>
+                  </Details>
+                ) : null}
               </div>
             </div>
           );
