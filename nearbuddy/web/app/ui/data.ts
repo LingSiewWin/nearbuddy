@@ -79,6 +79,8 @@ export type History = {
   said: { at: number; text: string }[];
   /** A sealed decision is in and not opened yet (commit-reveal). */
   sealed: boolean;
+  /** When each sealed decision went in, ms (the main arena's `commit` events). */
+  seals?: number[];
 };
 
 /** One agent's decisions on the main arena, from the arena's own `intent` events. The opening bet has no event: with
@@ -87,7 +89,7 @@ export type History = {
 export function mainHistory(
   pk: string,
   d: Pick<Duel, "open_at" | "close_at" | "last_intent_a" | "last_intent_b" | "a">,
-  ev: Events | null,
+  ev: Pick<Events, "oldest_ms" | "partial" | "events"> | null,
 ): History {
   const last = (pk === d.a ? d.last_intent_a : d.last_intent_b)?.side ?? null;
   const none = { reason: null, said: [], sealed: false };
@@ -95,12 +97,15 @@ export function mainHistory(
   const mine = (ev.events ?? []).filter((e) => e.agent_pk === pk).sort((x, y) => x.at_ms - y.at_ms);
   const decisions = mine.flatMap((e) => (e.event === "intent" && e.side ? [{ at: e.at_ms, side: e.side }] : []));
   const sealed = mine.at(-1)?.event === "commit";
+  const seals = mine.flatMap((e) => (e.event === "commit" ? [e.at_ms] : []));
   const open = nsMs(d.open_at);
   const whole = !ev.partial && ev.oldest_ms !== null && ev.oldest_ms <= open;
   const first = decisions[0];
-  if (first) return { decisions, loadedFrom: first.at > open ? first.at : null, current: last, ...none, sealed };
-  if (last && whole) return { decisions: [{ at: open, side: last }], loadedFrom: null, current: last, ...none, sealed };
-  return { decisions: [], loadedFrom: last || !whole ? nsMs(d.close_at) : null, current: last, ...none, sealed };
+  if (first) return { decisions, loadedFrom: first.at > open ? first.at : null, current: last, ...none, sealed, seals };
+  // sealed decisions before the first opened one: the bet at the open is not known, so nothing is placed there
+  if (last && whole && !seals.length)
+    return { decisions: [{ at: open, side: last }], loadedFrom: null, current: last, ...none, sealed };
+  return { decisions: [], loadedFrom: last || !whole ? nsMs(d.close_at) : null, current: last, ...none, sealed, seals };
 }
 
 /** One agent's decisions on the keyless arena, from the replies its keepers submitted (the feed reads every
@@ -151,6 +156,7 @@ export function traceOf(
     loadedFrom: h.loadedFrom,
     current: h.current,
     pins: pinsOf(d.chaos ?? [], pk, locked),
+    ...(h.seals?.length ? { seals: h.seals } : {}),
   };
 }
 

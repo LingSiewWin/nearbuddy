@@ -35,6 +35,8 @@ export type TraceIn = {
   /** The bet now, when it is known without the time it was made. */
   current?: Side | null;
   pins: PinIn[];
+  /** Times a sealed decision went in (commit-reveal): each is a tick between the rails, since its side is hidden. */
+  seals?: number[];
 };
 export type Box = { width: number; height: number; padL: number; padR: number };
 
@@ -52,6 +54,8 @@ export type TraceGeo = {
   /** Waiting: the hatched stretch from a pin to the head. */
   zones: { id: string; x1: number; x2: number; y: number; h: number; locked: boolean }[];
   head: { x: number; y: number; pulse: boolean } | null;
+  /** Sealed decisions up to the head, as x positions on the line between the rails. */
+  seals: { x: number; y: number }[];
   /** Rails only: no decision yet, and none missing. */
   empty: boolean;
 };
@@ -142,6 +146,7 @@ export function geometry(t: TraceIn, box: Box): TraceGeo {
         locked: !!p.locked,
       })),
     head: t.running && tip ? { x: x(head), y: y(tip), pulse: (t.staleAt ?? null) === null && head < t.to } : null,
+    seals: (t.seals ?? []).filter((s) => s >= t.from && s <= head).map((s) => ({ x: x(s), y: mid })),
     empty: !first && !missing && !t.current,
   };
 }

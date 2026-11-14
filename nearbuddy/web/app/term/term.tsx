@@ -1392,6 +1392,8 @@ export default function Term() {
           0000000000
         </span>
         <header className="bar">
+          <a href="/"> ← NearBuddy </a>
+          <span aria-hidden="true">│</span>
           <span>{two ? ` NEAR ${NETWORK_ID} ` : ` ${NETWORK_ID} `}</span>
           <span aria-hidden="true">│</span>
           <span>

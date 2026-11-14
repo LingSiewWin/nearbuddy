@@ -1,20 +1,20 @@
-/* The green terminal look, as it was before the Trace design: the old token values and the 13px mono body, scoped so
-   /terminal keeps them. .term-tokens carries the same tokens for the old pages that are not the terminal itself. */
+/* The terminal look in the control-room palette (same tokens as globals.css, dark), with its 13px mono body, scoped
+   so only /terminal carries it. .term-tokens carries the same tokens for the old pages that are not the terminal itself. */
 .term,
 .term-tokens {
-  --bg: #0b0f0c;
-  --fg: #c8f5c8;
-  --dim: #5f8a5f;
-  --hi: #eaffea;
-  --warn: #f5d76e;
-  --bad: #ff7b72;
-  --num: #f5d76e; /* btop box index digit */
-  --win: #7ee787;
-  --loss: #ff7b72;
-  --tie: #8fa38f;
-  --open: #f5d76e; /* duel outcomes */
-  --ok: #7ee787;
-  --unv: #f5d76e; /* enclave-verified / unverified tier */
+  --bg: #0a0b0c;
+  --fg: #d6d3cc;
+  --dim: #8b9096;
+  --hi: #f3f0e9;
+  --warn: #d9a05f;
+  --bad: #ff6447;
+  --num: #d9a05f; /* btop box index digit */
+  --win: #f3f0e9;
+  --loss: #ff6447;
+  --tie: #8b9096;
+  --open: #d9a05f; /* duel outcomes */
+  --ok: #6fa8f5;
+  --unv: #d9a05f; /* enclave-verified / unverified tier */
   background: var(--bg);
   color: var(--fg);
   font:
@@ -28,7 +28,7 @@
    own width, so the padding cannot sit on .term itself) */
 .site:has(.term, .term-tokens) > .site-main {
   padding: 16px;
-  background: #0b0f0c;
+  background: #0a0b0c;
 }
 @media (max-width: 600px) {
   .term,
@@ -42,22 +42,22 @@
 @media (prefers-color-scheme: light) {
   .term,
   .term-tokens {
-    --bg: #f4fbf4;
-    --fg: #163816;
-    --dim: #4a6e4a;
+    --bg: #f6f4ee;
+    --fg: #16181a;
+    --dim: #5c6166;
     --hi: #000;
-    --warn: #8a6d00;
-    --bad: #b3261e;
-    --num: #b35900;
-    --win: #1a7f37;
-    --loss: #b3261e;
-    --tie: #5c6b5c;
-    --open: #8a6d00;
-    --ok: #1a7f37;
-    --unv: #8a6d00;
+    --warn: #8a5a1c;
+    --bad: #c8321b;
+    --num: #8a5a1c;
+    --win: #000;
+    --loss: #c8321b;
+    --tie: #5c6166;
+    --open: #8a5a1c;
+    --ok: #1f5fa8;
+    --unv: #8a5a1c;
   }
   .site:has(.term, .term-tokens) > .site-main {
-    background: #f4fbf4;
+    background: #f6f4ee;
   }
 }
 /* The terminal screen. Every rule sits under .term: production merges client CSS into shared chunks, so an
@@ -277,7 +277,7 @@
 }
 @media (max-width: 700px) {
   .term {
-    padding-bottom: 8.5em;
+    padding-bottom: 13em; /* the fixed tab bar and command line must not cover the last pane */
   }
   .term .foot {
     padding: 0 10px 4px;
@@ -303,4 +303,7 @@
   .term .help {
     padding: 1em 10px;
   }
+}
+.term .bar a {
+  color: inherit;
 }

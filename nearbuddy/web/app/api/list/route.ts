@@ -4,7 +4,7 @@
 // at a time; the last good body beats a 502. A resolved duel and an agent's model never change, so both are read once.
 // ponytail: scans the newest SCAN duels of each arena; an indexer when "Show more" has to reach further back.
 import { isVoid } from "../../eras";
-import type { AgentView, Duel } from "../../lib/abi/arena";
+import type { AgentView, Chaos, Duel } from "../../lib/abi/arena";
 import { NETWORK_ID } from "../../network";
 import { chunked, readDuel } from "../duels";
 import { KEYLESS_ARENA, keylessView } from "../keyless";
@@ -23,6 +23,11 @@ export type DuelRow = {
   /** Resolved with no price: nobody won. */
   cancelled: boolean;
   headlines: number;
+  /** Each planted headline as its own record tells it (get_chaos): whom it was aimed at, the bet before and after,
+   *  and the verdict. Null when the duel has none or they could not be read this time. */
+  chaos: Pick<Chaos, "outcome" | "kind" | "prev" | "next">[] | null;
+  /** Which side each of those was aimed at, in the same order. */
+  chaos_at: ("a" | "b")[] | null;
   /** Both agents' bonds in yoctoNEAR, for a duel that is not resolved; null otherwise. */
   bond: string | null;
 };
@@ -40,6 +45,8 @@ const SCAN = 60;
 const TTL = 20_000;
 const keylessDone = new Map<string, Duel>();
 const models = new Map<string, string>();
+// a resolved duel's records keep their verdicts (only `claimed` changes later), so they are read once per process
+const records = new Map<string, Chaos[]>();
 let cache: { at: number; body: string } | null = null;
 let inflight: Promise<string> | null = null;
 
@@ -57,9 +64,24 @@ async function rows(arena: ArenaKind, view: typeof arenaView, duels: Duel[]): Pr
     bonds.set(pk, v.bond);
   });
   const side = (pk: string) => ({ pk, model: models.get(`${arena}:${pk}`) ?? "?" });
+  const count = (d: Duel) => (d.resolved && d.outcome ? d.outcome.injections : d.injections.length);
+  const unread = duels.filter((d) => count(d) > 0 && !records.has(`${arena}:${d.id}`));
+  const live = new Map<string, Chaos[]>();
+  const got = await chunked(
+    unread.map((d) => d.id),
+    8,
+    (id) => view("get_chaos", { duel_id: id }).catch(() => null),
+  );
+  got.forEach((c: Chaos[] | null, i) => {
+    const d = unread[i] as Duel;
+    if (!c) return;
+    if (d.resolved) records.set(`${arena}:${d.id}`, c);
+    else live.set(d.id, c);
+  });
   return duels.map((d) => {
     const o = d.resolved ? d.outcome : null;
     const [ba, bb] = [bonds.get(d.a), bonds.get(d.b)];
+    const chaos = (records.get(`${arena}:${d.id}`) ?? live.get(d.id) ?? null)?.filter((c) => c.kind !== "Placebo");
     return {
       arena,
       id: d.id,
@@ -71,6 +93,8 @@ async function rows(arena: ArenaKind, view: typeof arenaView, duels: Duel[]): Pr
       winner: o && !isVoid(o) ? (o.winner === null ? "Tie" : o.winner === d.a ? "A" : "B") : null,
       cancelled: d.resolved && (!o || isVoid(o)),
       headlines: o ? o.injections : d.injections.length,
+      chaos: chaos?.map(({ outcome, kind, prev, next }) => ({ outcome, kind, prev, next })) ?? null,
+      chaos_at: chaos?.map((c) => (c.target === d.a ? "a" : "b")) ?? null,
       bond: !d.resolved && ba && bb ? (BigInt(ba) + BigInt(bb)).toString() : null,
     };
   });

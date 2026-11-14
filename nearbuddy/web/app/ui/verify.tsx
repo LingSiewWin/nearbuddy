@@ -142,10 +142,10 @@ export function VerifyDrawer() {
             </p>
           ) : null}
           <p className="t-small dim">
-            {`Checked ${v.at ? hm(v.at) : ""}, from public chain data`}{" "}
-            <button type="button" className="btn-link" onClick={read.retry}>
-              Check again
-            </button>
+            {`Checked ${v.at ? `at ${hm(v.at)}` : ""} from public chain data. `}
+            {v.degraded
+              ? "Some data was missing, so it is checked again every minute."
+              : "A finished duel cannot change, so this result is kept. To check it again, run the command below on your own machine."}
           </p>
           {v.arena ? (
             <a href={addrHref(v.arena)} target="_blank" rel="noreferrer">

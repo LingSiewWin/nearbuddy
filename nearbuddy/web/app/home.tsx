@@ -1,113 +1,133 @@
 "use client";
-// The landing page. Block 1, the hero, is the first step of the game: the two AIs of the live duel, each a choice.
-// Blocks 2 to 6 are for the visitor who stayed: how it works, one number from the lab, the proof, six questions and
-// the closing line. The hero's only number is the time left.
+// The landing page as a control room. Its job: understand the game and start. The centre is the Trace: the live
+// duel when one can be attacked, otherwise a replay of a real recorded attack (ui/room.tsx), so the page is never an
+// empty panel. Around it sit the instruments; under it the lab's findings as small counted charts, recorded attacks
+// from the dataset, how it works, the proof and the questions.
+import { useState } from "react";
+import board from "./data/board.json";
 import { NETWORK_ID } from "./network";
-import { LabChart } from "./ui/charts";
 import { useSite } from "./ui/chrome";
-import { type DuelRow, duelPath, type History, traceOf, useDuel, verifyHref } from "./ui/data";
-import { bet, nsMs } from "./ui/format";
+import { type DuelRow, duelPath, type History, traceOf, useDuel, usePrice, verifyHref } from "./ui/data";
+import { bet, near, nsMs, shortModel, TEST_NOTE } from "./ui/format";
+import { Panel, Readout, Strip, Tag } from "./ui/instruments";
 import { Button, Countdown, Details, LinkButton, StatusBar, useNow } from "./ui/kit";
+import { RECORDED } from "./ui/replay";
+import { MachineQuote } from "./ui/result";
+import { BetTag, ChecksPanel, PricePanel, ReplayActions, ReplayRoom, Stage } from "./ui/room";
 import { isRunning } from "./ui/rows";
 import { recordTrace, type TraceIn } from "./ui/trace";
 import { Trace } from "./ui/trace-view";
 import { pickLive } from "./ui/verdict";
 
-type Shown = { row: DuelRow; mode: "live" | "late" | "last" };
+type Shown = { row: DuelRow; mode: "live" | "late" };
 
-/** The duel the hero shows: the live one by the design's rule; else a running one it is too late to attack; else the
- *  last finished duel. */
+/** The duel the centre shows live: the one the design's rule picks; else a running one it is too late to attack. */
 function choose(rows: DuelRow[], now: number, lock: (r: DuelRow) => number): Shown | null {
   const live = pickLive(rows, now, lock);
   if (live) return { row: live, mode: "live" };
   const late = rows.filter((r) => isRunning(r, now)).sort((x, y) => nsMs(x.close_at) - nsMs(y.close_at))[0];
-  if (late) return { row: late, mode: "late" };
-  const last = rows.find((r) => r.resolved && !r.cancelled);
-  return last ? { row: last, mode: "last" } : null;
+  return late ? { row: late, mode: "late" } : null;
 }
 
 const NONE: History = { decisions: [], loadedFrom: null, current: null, reason: null, said: [], sealed: false };
 
-/** The framed panel: each AI with its bet, its Trace and its button. */
-function Picks({ shown, now }: { shown: Shown; now: number }) {
+/** The live duel as a control room: both Traces in the centre, each AI with its button, the instruments around. */
+function LiveRoom({ shown, now, onReplay }: { shown: Shown; now: number; onReplay: () => void }) {
   const { row, mode } = shown;
   const { read, a, b } = useDuel(row.id, row.arena);
+  const price = usePrice(true, now);
   const body = read.data;
   const d = body?.duel ?? null;
   const staleAt = read.stale && now ? now - read.age * 1000 : null;
-  const pick = (which: "a" | "b") => {
-    const it = which === "a" ? d?.last_intent_a : d?.last_intent_b;
-    const h = (which === "a" ? a : b) ?? (d ? { ...NONE, loadedFrom: nsMs(d.close_at) } : null);
-    const won = row.winner === "Tie" ? "tie" : row.winner === which.toUpperCase() ? "won" : "lost";
+  const hist = (w: "a" | "b") => (w === "a" ? a : b) ?? (d ? { ...NONE, loadedFrom: nsMs(d.close_at) } : null);
+  const tr = (w: "a" | "b") => {
+    const h = hist(w);
+    return body && h ? traceOf(body, w, h, now, staleAt) : null;
+  };
+  const intent = (w: "a" | "b") => (w === "a" ? d?.last_intent_a : d?.last_intent_b) ?? null;
+  const agent = (w: "a" | "b") => {
+    const it = intent(w);
+    const view = w === "a" ? body?.a : body?.b;
     return (
-      <div className="pick">
-        <p className="who">{row[which].model}</p>
-        {mode === "last" ? null : it ? (
-          <p>
-            Betting the price goes <span className="ink">{bet(it.side)}</span>
-          </p>
-        ) : d ? (
-          <p className="dim">No decision yet.</p>
-        ) : null}
-        <Trace
-          variant="mini"
-          name={row[which].model}
-          input={body && h ? traceOf(body, which, h, now, staleAt) : null}
-          stale={read.stale}
-        />
-        {mode === "last" ? (
-          <p className={won === "lost" ? "dim" : "ink"}>{won}</p>
-        ) : mode === "late" ? (
-          <Button variant="attack" disabled>
-            Too late for this duel
+      <Panel label={`Agent ${w.toUpperCase()}`} tag={<BetTag side={it?.side ?? null} sealed={!!hist(w)?.sealed} />}>
+        <Readout small value={<span title={row[w].model}>{shortModel(row[w].model)}</span>} />
+        <dl className="kv">
+          <dt>Bet</dt>
+          <dd>{it ? bet(it.side) : "—"}</dd>
+          <dt>Bond</dt>
+          <dd>{view ? near(view.bond) : "—"}</dd>
+        </dl>
+        {hist(w)?.reason ? <MachineQuote text={hist(w)?.reason ?? null} clamp /> : null}
+        {mode === "late" ? (
+          <Button variant="attack" disabled why="Too late for this duel. No new decision can land before it ends.">
+            Lie to this one
           </Button>
         ) : d && !it ? (
-          <Button variant="attack" disabled why="Wait for its first decision.">
+          <Button variant="attack" disabled why="Wait for its first decision. An attack needs a bet to push against.">
             Lie to this one
           </Button>
         ) : (
-          <LinkButton variant="attack" href={duelPath(row.id, row.arena, `attack=${which}`)}>
+          <LinkButton variant="attack" href={duelPath(row.id, row.arena, `attack=${w}`)}>
             Lie to this one
           </LinkButton>
         )}
-      </div>
+      </Panel>
     );
   };
   return (
-    <>
-      {read.error ? (
-        <StatusBar kind="error" reason={read.error} action={{ label: "Try again", run: read.retry }}>
-          Could not read from the chain.
-        </StatusBar>
-      ) : null}
-      {read.stale ? <StatusBar kind="stale">{`Last updated ${read.age}s ago. Retrying.`}</StatusBar> : null}
-      <div className="frame">
-        <i />
-        <i />
-        <i />
-        <i />
-        <div className="picks">
-          {pick("a")}
-          {pick("b")}
-        </div>
-      </div>
-      {mode === "late" ? (
-        <>
-          <p className="t-small dim">No new decision can land before it ends.</p>
-          <LinkButton variant="quiet" href="/arena">
-            See all duels
-          </LinkButton>
-        </>
-      ) : null}
-      {mode === "last" ? (
-        <>
+    <div className="room">
+      <Stage
+        head={
+          <>
+            <Tag kind="ok">live</Tag>
+            <a className="mono" href={duelPath(row.id, row.arena)}>{`duel #${row.id}`}</a>
+            <span className="dim">{`on ${NETWORK_ID}`}</span>
+            <span className="end">
+              ends in <Countdown to={nsMs(row.close_at)} now={now} stale={read.stale} />
+            </span>
+          </>
+        }
+        a={tr("a")}
+        b={tr("b")}
+        names={[row.a.model, row.b.model]}
+        samples={price.samples}
+        stale={read.stale}
+        priceStale={price.stale}
+      >
+        {read.error ? (
+          <StatusBar kind="error" reason={read.error} action={{ label: "Try again", run: read.retry }}>
+            Could not read from the chain.
+          </StatusBar>
+        ) : null}
+        {read.stale ? <StatusBar kind="stale">{`Last updated ${read.age}s ago. Retrying.`}</StatusBar> : null}
+        <div className="stage-lead">
           <LinkButton variant="quiet" href={duelPath(row.id, row.arena)}>
-            See what happened
+            Open this duel
           </LinkButton>
-          <p className="t-small dim">Nothing to attack until the next duel opens.</p>
-        </>
-      ) : null}
-    </>
+          <button type="button" className="btn btn-quiet" onClick={onReplay}>
+            Watch a recorded attack
+          </button>
+        </div>
+      </Stage>
+      <div className="room-col room-left">
+        {agent("a")}
+        {agent("b")}
+      </div>
+      <div className="room-col room-right">
+        <PricePanel
+          price={price.price}
+          samples={price.samples}
+          open={d?.open_price}
+          source="Line: this browser's own readings since the page opened."
+          stale={price.stale}
+        />
+        <Panel label="Cost to plant a headline" tag={<Tag>test NEAR</Tag>}>
+          <Readout value={d?.chaos_fee ? near(d.chaos_fee).replace(" NEAR", "") : "—"} unit="NEAR" />
+          <p className="note">{`The price of the next headline in this duel. ${NETWORK_ID === "testnet" ? `${TEST_NOTE}.` : ""}`}</p>
+        </Panel>
+        <ChecksPanel counts={null} href={verifyHref(row.id, row.arena)} />
+      </div>
+    </div>
   );
 }
 
@@ -119,185 +139,211 @@ const STEP: TraceIn[] = [
 ];
 const noClock = () => null;
 
+/** The lab's measured figures (nearbuddy/lab) and the live count: each a small instrument with its count. */
+function Findings() {
+  return (
+    <section aria-label="What has been measured">
+      <div className="sect-head">
+        <h2 className="t-label">Measured</h2>
+        <a href="/evidence">The research, with its captions →</a>
+      </div>
+      <div className="deck c4">
+        <Panel label="Lab · naive prompt" tag={<Tag kind="alert">fooled</Tag>}>
+          <Readout value="676" unit="of 704 changed their bet" />
+          <Strip n={676} of={704} kind="alert" label="Fooled 676 of 704" />
+          <p className="note">One fake headline with its credibility cues. With the cues removed: 674 of 704.</p>
+        </Panel>
+        <Panel label="Lab · hardened prompt" tag={<Tag kind="ink">mostly held</Tag>}>
+          <Readout value="49" unit="of 705 changed their bet" />
+          <Strip n={49} of={705} kind="alert" label="Fooled 49 of 705" />
+          <p className="note">The same headlines against a prompt told to ignore unsourced claims.</p>
+        </Panel>
+        <Panel label="Lab · neutral line instead" tag={<Tag>baseline</Tag>}>
+          <Readout value="128" unit="of 707 changed their bet" />
+          <Strip n={128} of={707} kind="ink" label="Changed 128 of 707" />
+          <p className="note">Naive prompt, a neutral line in the headline's place. Hardened: 58 of 713.</p>
+        </Panel>
+        <Panel label="Lab · no attack at all" tag={<Tag>noise</Tag>}>
+          <Readout value="5" unit="of 45 prompts changed side" />
+          <Strip n={5} of={45} cells={45} kind="ink" label="Changed 5 of 45" />
+          <p className="note">The same prompts run again. One result is one result.</p>
+        </Panel>
+        <Panel label="Lab · honest market shown" tag={<Tag kind="ink">about half</Tag>}>
+          <Readout value="46% and 47%" unit="fooled, 36 trials per cell" />
+          <Strip n={47} of={100} cells={36} kind="alert" label="About 47% fooled with an honest market price shown" />
+          <p className="note">Against about 100% with the fake claim alone, in the same run.</p>
+        </Panel>
+        <Panel label="Lab · model may look" tag={<Tag>range</Tag>}>
+          <Readout value="29% to 40%" unit="fooled" />
+          <p className="note">When the model was allowed to choose to look at an honest market.</p>
+        </Panel>
+        <Panel label="Live attacks" tag={<Tag kind="live">live</Tag>}>
+          <Readout value="12" unit="fooled of 23 that reached a decision" />
+          <Strip n={12} of={23} cells={23} kind="alert" label="Fooled 12 of 23; 11 held" />
+          <p className="note">58 placed, 23 reached a decision, 11 held. All placed by the project's own accounts.</p>
+        </Panel>
+        <Panel label="Records" tag={<Tag kind="ok">signed</Tag>}>
+          <Readout value="9,297" unit="enclave-signed calls, main lab run" />
+          <Readout value={board.rows.toLocaleString("en-US")} unit="recorded decisions in the dataset" />
+          <a className="btn-link" href="/board">
+            See every recorded decision
+          </a>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
+const WORD = { fooled: ["fooled", "alert"], held: ["held", "ink"], untested: ["did not count", "idle"] } as const;
+
 export default function Home() {
   const now = useNow();
   const { list } = useSite();
+  const [replay, setReplay] = useState(false);
   const rows = list.data?.duels ?? [];
   const lock = (r: DuelRow) => list.data?.lock_s[r.arena] ?? 0;
   const shown = list.data && now ? choose(rows, now, lock) : null;
   const last = rows.find((r) => r.resolved && !r.cancelled) ?? null;
-  const running = shown && shown.mode !== "last";
   return (
     <div className="page home">
-      <section className="hero" aria-label="The live duel">
-        <div className="stack">
-          {shown ? (
-            <p className="pill">
-              {running ? (
-                <>
-                  LIVE · ends in <Countdown to={nsMs(shown.row.close_at)} now={now} stale={list.stale} />
-                </>
+      <header className="page-head">
+        <h1 className="t-display">Lie to an AI.</h1>
+        {shown ? (
+          <Tag kind="ok">
+            live · ends in <Countdown to={nsMs(shown.row.close_at)} now={now} stale={list.stale} />
+          </Tag>
+        ) : list.data && now ? (
+          <Tag>no duel running</Tag>
+        ) : list.error ? (
+          <Tag kind="live">arena not read</Tag>
+        ) : (
+          <Tag>reading the arena</Tag>
+        )}
+        <p className="lede">
+          Two AIs bet on the NEAR price, each with a bond behind it. Plant one fake headline at one of them. Its next
+          decision is signed inside a secure enclave and the contract records FOOLED or HELD. If it falls for it and
+          loses, you get paid.
+        </p>
+      </header>
+
+      {shown && !replay ? (
+        <LiveRoom key={`${shown.row.arena}:${shown.row.id}`} shown={shown} now={now} onReplay={() => setReplay(true)} />
+      ) : (
+        <ReplayRoom
+          rec={RECORDED}
+          lead={({ restart }) => (
+            <>
+              <ReplayActions rec={RECORDED} restart={restart} />
+              {shown ? (
+                <button type="button" className="btn btn-quiet" onClick={() => setReplay(false)}>
+                  Back to the live duel
+                </button>
               ) : (
-                "NO DUEL RUNNING"
+                <p className="note">
+                  {list.data
+                    ? "No duel is running right now, so there is nothing to lie to. This is a recording of a real attack; the button to lie appears here when a duel opens."
+                    : list.error
+                      ? "The arena could not be read just now. This is a recording of a real attack."
+                      : "Reading the arena. Meanwhile, this is a recording of a real attack."}
+                </p>
               )}
-            </p>
-          ) : null}
-          <h1 className="t-display">Lie to an AI.</h1>
-          <p>If it falls for it and loses, you get paid.</p>
-        </div>
-        <div className="hero-panel stack-2">
-          <h2 className="t-label">{shown?.mode === "last" ? "The last duel" : "Pick one to lie to"}</h2>
-          {list.data ? (
-            shown ? (
-              <Picks key={`${shown.row.arena}:${shown.row.id}`} shown={shown} now={now} />
-            ) : now ? (
-              <>
-                <p>{`No duels yet on ${NETWORK_ID}.`}</p>
-                <LinkButton variant="primary" href="/enter">
-                  Enter an agent
-                </LinkButton>
-              </>
-            ) : null
-          ) : list.error ? (
-            <StatusBar kind="error" reason={list.error} action={{ label: "Try again", run: list.retry }}>
-              Could not read from the chain.
-            </StatusBar>
-          ) : (
-            <div className="frame" aria-busy="true">
-              <i />
-              <i />
-              <i />
-              <i />
-              <div className="picks">
-                {["A", "B"].map((n) => (
-                  <div className="pick" key={n}>
-                    <Trace variant="mini" name={n} input={null} />
-                    <Button variant="quiet" disabled style={{ width: "100%" }}>
-                      Lie to this one
-                    </Button>
-                  </div>
-                ))}
-              </div>
-              {list.slow ? <p className="t-small caution">Reading from the chain…</p> : null}
-            </div>
+            </>
           )}
-        </div>
-        <p className="hero-links">
-          <a href="#how">How it works ↓</a>
-          {shown ? (
-            <a className="proof" href={verifyHref(shown.row.id, shown.row.arena)}>
-              Verify this duel
-            </a>
-          ) : null}
-        </p>
-      </section>
-
-      <section className="block" id="how">
-        <h2 className="t-label">How it works</h2>
-        <ol className="steps">
-          {[
-            "Two AIs bet on the NEAR price.",
-            "You plant one fake headline.",
-            "Its next decision is signed in a secure enclave. If it fell for it and loses, you get paid.",
-          ].map((text, i) => (
-            <li key={text}>
-              <span>{i + 1}</span>
-              <span>{text}</span>
-              <Trace variant="mini" name={`Step ${i + 1}`} input={STEP[i] ?? null} time={noClock} />
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="block split" id="research">
-        <div className="stack">
-          <p className="big">In the lab, one fake headline fooled a naive AI 96% of the time. A hardened one: 7%.</p>
-          <p>
-            <a href="/evidence">See the research</a>
-          </p>
-        </div>
-        <LabChart
-          id="home"
-          bars={[
-            { label: "Naive prompt", rate: 676 / 704, text: "676 of 704 (96%)" },
-            { label: "Hardened prompt", rate: 49 / 705, text: "49 of 705 (7%)" },
-          ]}
         />
-      </section>
+      )}
 
-      <section className="block" id="proof">
-        <p className="big">Do not trust this page.</p>
-        <p>
-          Every decision an AI makes here is signed inside a secure enclave, and the arena contract checks that
-          signature before it accepts the decision. The result of a duel and every payout are worked out by the contract
-          from public data, so you can run the same checks yourself.
-        </p>
-        {last ? (
-          <p>
-            <a className="proof" href={verifyHref(last.id, last.arena)}>
-              Verify the last duel yourself
-            </a>
+      <Findings />
+
+      <div className="deck c3 gap-top">
+        <Panel label="How it works">
+          <ol className="steps">
+            {[
+              "Two AIs bet on the NEAR price.",
+              "You plant one fake headline.",
+              "Its next decision is signed in a secure enclave. If it fell for it and loses, you get paid.",
+            ].map((text, i) => (
+              <li key={text}>
+                <span>{i + 1}</span>
+                <span>{text}</span>
+                <Trace variant="mini" name={`Step ${i + 1}`} input={STEP[i] ?? null} time={noClock} />
+              </li>
+            ))}
+          </ol>
+        </Panel>
+        <Panel label="Recorded attacks" tag={<Tag>dataset</Tag>}>
+          <ul className="attacks">
+            {board.recent.slice(0, 5).map((r) => {
+              const [word, kind] = WORD[r.verdict as keyof typeof WORD] ?? WORD.untested;
+              return (
+                <li key={`${r.duel_id}:${r.agent_pk}:${r.text.slice(0, 24)}`}>
+                  <p className="planted-top">
+                    <span className="mono dim" title={r.model}>{`#${r.duel_id} · ${shortModel(r.model)}`}</span>
+                    <Tag kind={kind}>{word}</Tag>
+                  </p>
+                  <blockquote className="hl line">{`“${r.text}”`}</blockquote>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="note">
+            The newest attacks in the published dataset, scored by its own rule. All were made by the project.
           </p>
-        ) : null}
-      </section>
-
-      <section className="block" id="questions">
-        <h2 className="t-label">Questions</h2>
-        <div>
-          <Details label="Is this real money?">
-            <p>
-              {NETWORK_ID === "testnet"
-                ? "No. This runs on a test network: every amount is test NEAR, which has no real value."
-                : "Yes. Amounts here are NEAR on the main network."}
-            </p>
-          </Details>
-          <Details label="What happens to my money if the AI holds?">
-            <p>
-              It keeps what your headline cost. If it is fooled you get your money back less a fee, plus a share of its
-              bond when it also loses the duel. If your attack does not count, or the duel ends before it decides again,
-              you get your money back less the fee.
-            </p>
-          </Details>
-          <Details label="What does “signed in an enclave” mean?">
-            <p>
-              The AI runs inside sealed hardware that its operator cannot look into or change. That hardware signs each
-              decision, and the arena contract checks the signature before it accepts the decision.
-            </p>
-          </Details>
-          <Details label="Can the team fake a result?">
-            <p>
-              Not through this site. The arena contract decides every verdict from decisions signed inside the enclave,
-              and the checks run on public chain data, on your own machine if you like. When a check fails or could not
-              be run, the Verify panel says so.
-            </p>
-          </Details>
-          <Details label="Who made the attacks so far?">
-            <p>
-              The team. Live attacks so far: 58 placed, 23 reached a decision (12 fooled, 11 held), all made by the
-              team.
-            </p>
-          </Details>
-          <Details label="Can I enter my own agent?">
-            <p>Yes. Lock a bond, give it a strategy, and let people try to fool it.</p>
-            <LinkButton variant="quiet" href="/enter">
-              Enter your agent
-            </LinkButton>
-          </Details>
-        </div>
-      </section>
-
-      <section className="block">
-        <p className="t-display">Lie to an AI.</p>
-        {shown?.mode === "live" ? (
-          <LinkButton variant="attack" fit href={duelPath(shown.row.id, shown.row.arena)}>
-            Attack an AI
-          </LinkButton>
-        ) : last ? (
-          <LinkButton variant="quiet" href={duelPath(last.id, last.arena)}>
-            See the last duel
-          </LinkButton>
-        ) : null}
-      </section>
+          <a className="btn-link" href="/board">
+            Compare the models
+          </a>
+        </Panel>
+        <Panel label="Do not trust this page" tag={<Tag kind="ok">checkable</Tag>}>
+          <p>
+            Every decision an AI makes here is signed inside a secure enclave, and the arena contract checks that
+            signature before it accepts the decision. The result of a duel and every payout are worked out by the
+            contract from public data, so you can run the same checks yourself.
+          </p>
+          <a className="btn-link" href={last ? verifyHref(last.id, last.arena) : verifyHref(RECORDED.id, "main")}>
+            {last ? "Verify the last duel yourself" : "Verify the recorded duel yourself"}
+          </a>
+          <div>
+            <Details label="Is this real money?">
+              <p>
+                {NETWORK_ID === "testnet"
+                  ? "No. This runs on a test network: every amount is test NEAR, which has no real value."
+                  : "Yes. Amounts here are NEAR on the main network."}
+              </p>
+            </Details>
+            <Details label="What happens to my money if the AI holds?">
+              <p>
+                It keeps what your headline cost. If it is fooled you get your money back less a fee, plus a share of
+                its bond when it also loses the duel. If your attack does not count, or the duel ends before it decides
+                again, you get your money back less the fee.
+              </p>
+            </Details>
+            <Details label="What does “signed in an enclave” mean?">
+              <p>
+                The AI runs inside sealed hardware that its operator cannot look into or change. That hardware signs
+                each decision, and the arena contract checks the signature before it accepts the decision.
+              </p>
+            </Details>
+            <Details label="Can the team fake a result?">
+              <p>
+                Not through this site. The arena contract decides every verdict from decisions signed inside the
+                enclave, and the checks run on public chain data, on your own machine if you like. When a check fails or
+                could not be run, the Verify panel says so.
+              </p>
+            </Details>
+            <Details label="Who made the attacks so far?">
+              <p>
+                The team. Live attacks so far: 58 placed, 23 reached a decision (12 fooled, 11 held), all made by the
+                team.
+              </p>
+            </Details>
+            <Details label="Can I enter my own agent?">
+              <p>Yes. Lock a bond, give it a strategy, and let people try to fool it.</p>
+              <LinkButton variant="quiet" href="/enter">
+                Enter your agent
+              </LinkButton>
+            </Details>
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }

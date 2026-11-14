@@ -35,6 +35,9 @@ export function useReducedMotion(): boolean {
 
 const FULL = { height: 72, padL: 36, padR: 10 };
 const MINI = { height: 48, padL: 6, padR: 10 };
+// the central object of a control room: the same Trace, drawn large
+const STAGE = { height: 112, padL: 36, padR: 10 };
+const BOX = { full: FULL, mini: MINI, stage: STAGE };
 /** The left and right padding of a full Trace, shared by the price line and the time axis above and below it. */
 export const TRACE_PAD = { left: FULL.padL, right: FULL.padR };
 
@@ -80,7 +83,7 @@ export function Trace({
   selected,
   titles,
 }: {
-  variant: "full" | "mini";
+  variant: "full" | "mini" | "stage";
   /** Who the line belongs to, for the text alternative ("A {model}"). */
   name: string;
   input: TraceIn | null;
@@ -97,7 +100,7 @@ export function Trace({
   const width = useWidth(ref);
   const reduced = useReducedMotion();
   const hatch = useId();
-  const box: Box = { width, ...(variant === "full" ? FULL : MINI) };
+  const box: Box = { width, ...BOX[variant] };
   // reduced motion: the zone still grows, because it is information, in 5 s steps
   const stepped = input && reduced ? { ...input, now: Math.floor(input.now / 5000) * 5000 || input.now } : input;
   const g = geometry(
@@ -115,7 +118,7 @@ export function Trace({
         </defs>
         <line className="rail" x1={g.x0} x2={g.x1} y1={g.railUp} y2={g.railUp} />
         <line className="rail" x1={g.x0} x2={g.x1} y1={g.railDown} y2={g.railDown} />
-        {variant === "full" ? (
+        {variant !== "mini" ? (
           <>
             <text className="rail-label" x={0} y={g.railUp + 4}>
               UP
@@ -126,6 +129,11 @@ export function Trace({
           </>
         ) : null}
         {g.gap ? <line className="gap" x1={g.gap.x1} x2={g.gap.x2} y1={g.gap.y} y2={g.gap.y} /> : null}
+        {g.seals.map((s) => (
+          <rect key={s.x} className="seal" x={s.x - 3} y={s.y - 3} width={6} height={6}>
+            <title>sealed decision</title>
+          </rect>
+        ))}
         {g.zones.map((z) => (
           <PendingZone key={z.id} z={z} hatch={hatch} />
         ))}
@@ -149,13 +157,13 @@ export function Trace({
         ) : null}
       </svg>
       {input && g.empty ? <p className="trace-note">no decision yet</p> : null}
-      {g.gap ? <p className="trace-note">earlier decisions not loaded</p> : null}
+      {g.gap && !input?.seals?.length ? <p className="trace-note">earlier decisions not loaded</p> : null}
     </div>
   );
 }
 
 /** The time axis under the full Traces: the open time, the middle, and "now" (or the close). */
-export function TimeAxis({ input }: { input: TraceIn }) {
+export function TimeAxis({ input, time = hm }: { input: TraceIn; time?: (ms: number) => string | null }) {
   const head = headTime(input);
   return (
     <div
@@ -163,9 +171,9 @@ export function TimeAxis({ input }: { input: TraceIn }) {
       style={{ paddingLeft: TRACE_PAD.left, paddingRight: TRACE_PAD.right }}
       aria-hidden="true"
     >
-      <span>{hm(input.from)}</span>
-      <span>{hm((input.from + input.to) / 2)}</span>
-      <span>{input.running && head < input.to ? "now" : hm(input.to)}</span>
+      <span>{time(input.from)}</span>
+      <span>{time((input.from + input.to) / 2)}</span>
+      <span>{input.running && head < input.to && time === hm ? "now" : time(input.to)}</span>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { NET, NETWORK_ID } from "../network";
 import { addrHref, REPO } from "../tui";
 import { guestLabel, shortId } from "./format";
 import { Button, type Read, Sheet, StatusBar, useNow, useRead } from "./kit";
+import { FOOT, NAV } from "./nav";
 import { pickLive } from "./verdict";
 import { VerifyDrawer } from "./verify";
 
@@ -300,7 +301,7 @@ export function Chrome({ children }: { children: ReactNode }) {
     </button>
   );
   const link = (href: string, label: string) => (
-    <a href={href} aria-current={at === href ? "page" : undefined}>
+    <a key={href} href={href} aria-current={at === href ? "page" : undefined}>
       {label}
     </a>
   );
@@ -313,9 +314,9 @@ export function Chrome({ children }: { children: ReactNode }) {
               NearBuddy
             </a>
             <nav className="site-nav" aria-label="Main">
-              {link("/board", "Scoreboard")}
-              {link("/evidence", "Research")}
+              {NAV.map((l) => link(l.href, l.label))}
             </nav>
+            <span className="tag net-tag">{NETWORK_ID}</span>
             <div className="account">{control}</div>
             {cta}
             <button type="button" className="btn btn-quiet menu-button" aria-label="Menu" onClick={() => setNav(true)}>
@@ -332,7 +333,7 @@ export function Chrome({ children }: { children: ReactNode }) {
               <div>
                 <h2 className="t-label">Play</h2>
                 {live ? <a href={path(live)}>Live duel</a> : null}
-                <a href="/arena">All duels</a>
+                {FOOT.play.map((l) => link(l.href, l.label))}
                 {mine ? (
                   <button type="button" className="btn-link" onClick={() => setHeadlines(myHeadlines())}>
                     Your headlines
@@ -341,14 +342,12 @@ export function Chrome({ children }: { children: ReactNode }) {
               </div>
               <div>
                 <h2 className="t-label">Proof</h2>
-                <a href="/evidence">Evidence</a>
-                <a href="/board">Scoreboard</a>
+                {FOOT.proof.map((l) => link(l.href, l.label))}
                 {last ? <a href={verifyOf(last)}>Verify the last duel</a> : null}
               </div>
               <div>
                 <h2 className="t-label">Build</h2>
-                <a href="/enter">Enter an agent</a>
-                <a href="/api/mcp">Agent API (MCP)</a>
+                {FOOT.build.map((l) => link(l.href, l.label))}
                 <a href={`${REPO}/tree/HEAD/nearbuddy/dataset#readme`} target="_blank" rel="noreferrer">
                   Dataset
                 </a>
@@ -358,7 +357,7 @@ export function Chrome({ children }: { children: ReactNode }) {
                 <a href={REPO} target="_blank" rel="noreferrer">
                   Source code
                 </a>
-                <a href="/terminal">Terminal</a>
+                {FOOT.project.map((l) => link(l.href, l.label))}
               </div>
             </div>
             <div className="foot-line">
@@ -382,10 +381,7 @@ export function Chrome({ children }: { children: ReactNode }) {
       </div>
       <Sheet open={nav} onClose={() => setNav(false)} title="Menu" kind="drawer">
         <nav className="menu-list" aria-label="Menu">
-          {link("/board", "Scoreboard")}
-          {link("/evidence", "Research")}
-          {link("/arena", "All duels")}
-          {link("/enter", "Enter an agent")}
+          {NAV.map((l) => link(l.href, l.label))}
         </nav>
         <div className="menu-foot">
           {control}
