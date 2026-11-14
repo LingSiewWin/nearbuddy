@@ -85,10 +85,10 @@ export default function Page() {
         <section className="sect stack">
           <h2 className="t-title">Live attacks are few so far.</h2>
           <p>
-            Live attacks so far: 38, all made by the team. The live record is too small to confirm or contradict the
+            Live attacks so far: 58, all made by the team. The live record is too small to confirm or contradict the
             lab.
           </p>
-          <p className="mono">38 placed · 11 reached a decision (5 fooled, 6 held)</p>
+          <p className="mono">58 placed · 23 reached a decision (12 fooled, 11 held)</p>
         </section>
       </div>
     </div>

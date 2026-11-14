@@ -273,7 +273,8 @@ export default function Home() {
           </Details>
           <Details label="Who made the attacks so far?">
             <p>
-              The team. Live attacks so far: 38 placed, 11 reached a decision (5 fooled, 6 held), all made by the team.
+              The team. Live attacks so far: 58 placed, 23 reached a decision (12 fooled, 11 held), all made by the
+              team.
             </p>
           </Details>
           <Details label="Can I enter my own agent?">
