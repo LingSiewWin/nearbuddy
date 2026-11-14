@@ -2186,3 +2186,75 @@ table.board tbody th {
     width: auto;
   }
 }
+
+/* ---------------------------------------------------------------- agents page, enter, agent */
+.copyable {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  padding: var(--s-2) var(--s-3);
+}
+.copyable pre {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+}
+.copyable .btn {
+  flex: none;
+  min-height: 32px;
+  font-size: 13px;
+}
+.tools > li {
+  border-top: 1px solid var(--rule);
+  padding: var(--s-4) 0;
+}
+.tools > li > * + * {
+  margin-top: var(--s-2);
+}
+.tools p {
+  max-width: 80ch;
+  font: var(--t-small);
+}
+.tool-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+}
+.tool-head h3 {
+  font: 500 17px / 1.2 var(--mono);
+  color: var(--hi);
+}
+.enter-grid {
+  display: grid;
+  gap: var(--s-5);
+}
+.enter-grid form > * + * {
+  margin-top: var(--s-5);
+}
+.next-steps li {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr);
+  gap: var(--s-2);
+  padding: 3px 0;
+}
+.next-steps li > span:first-child {
+  font-family: var(--mono);
+  color: var(--live);
+}
+.site .page.enter {
+  max-width: 1360px;
+}
+.agent-model {
+  font-size: 28px;
+}
+@media (min-width: 960px) {
+  .enter-grid {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    align-items: start;
+  }
+}
