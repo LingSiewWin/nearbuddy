@@ -8,7 +8,7 @@ import { NETWORK_ID } from "../network";
 import { duelPath, verifyHref } from "./data";
 import { bet, clock, near, nsMs, price8, type Side, shortModel, TEST_NOTE, utcTime } from "./format";
 import { Panel, Readout, Sparkline, Strip, Tag } from "./instruments";
-import { LinkButton } from "./kit";
+import { Details, LinkButton } from "./kit";
 import { answeredAt, checkCounts, frameAt, HOLD_MS, PLAY_MS, type ReplayRecord, timeline } from "./replay";
 import { Headline } from "./result";
 import type { PinMark, TraceIn } from "./trace";
@@ -34,7 +34,10 @@ export function Stage({
   selected,
   children,
   stageRef,
+  quiet,
 }: {
+  /** The calm first view: no price line and no legend (the caller folds both away with the instruments). */
+  quiet?: boolean;
   head: ReactNode;
   a: TraceIn | null;
   b: TraceIn | null;
@@ -76,20 +79,26 @@ export function Stage({
   return (
     <section className="panel stage" aria-label="The Trace: what each AI has decided" ref={stageRef}>
       <div className="stage-head">{head}</div>
-      {a ? <PriceLine samples={samples} from={a.from} to={a.to} {...(priceStale ? { stale: true } : {})} /> : null}
+      {a && !quiet ? (
+        <PriceLine samples={samples} from={a.from} to={a.to} {...(priceStale ? { stale: true } : {})} />
+      ) : null}
       {row(0, a)}
       {row(1, b)}
       {a ? <TimeAxis input={a} {...(time ? { time } : {})} /> : null}
-      <p className="stage-key" aria-hidden="true">
-        <span>□ sealed decision, side hidden until opened</span>
-        <span>● headline waiting</span>
-        <span>○ held</span>
-        <span className="signal">◆ fooled</span>
-      </p>
+      {quiet ? null : <StageKey />}
       {children}
     </section>
   );
 }
+
+const StageKey = () => (
+  <p className="stage-key" aria-hidden="true">
+    <span>□ sealed decision, side hidden until opened</span>
+    <span>● headline waiting</span>
+    <span>○ held</span>
+    <span className="signal">◆ fooled</span>
+  </p>
+);
 
 /** What an agent is doing, as the tag beside its name. */
 export const BetTag = ({ side, sealed }: { side: Side | null; sealed?: boolean }) =>
@@ -290,7 +299,11 @@ const recordedOn = (ms: number) => `${new Date(ms).toISOString().slice(0, 16).re
 export function ReplayRoom({
   rec,
   lead,
+  quiet,
 }: {
+  /** The home page's calm first view: the Traces, one line of checks and the planted headlines; every instrument
+   *  panel sits in one closed "Instruments" row under it. Nothing is removed. */
+  quiet?: boolean;
   rec: ReplayRecord;
   lead?: (replay: { restart: () => void }) => ReactNode;
 }) {
@@ -338,52 +351,141 @@ export function ReplayRoom({
       </Panel>
     );
   };
+  // quiet: the one tag an agent carries, its bet while the duel runs and how it ended once it has
+  const tagOf = (w: "a" | "b") =>
+    quiet && f.done ? (
+      <Tag key={w} kind={won(w) === "lost" ? "idle" : "ink"}>
+        {won(w)}
+      </Tag>
+    ) : (
+      <BetTag key={w} side={f.bet[w]} sealed={f.sealed[w] > 0} />
+    );
+  const happened = (
+    <WhatHappened
+      items={[
+        { name: `A ${rec.a.model}`, input: frameAt(rec, rec.to).a, time: (ms) => utcTime(ms).slice(0, 5) },
+        { name: `B ${rec.b.model}`, input: frameAt(rec, rec.to).b, time: (ms) => utcTime(ms).slice(0, 5) },
+      ]}
+    />
+  );
   const shown = rec.chaos.flatMap((c, i) => (c.kind !== "Placebo" && nsMs(c.at) <= f.t ? [{ c, i }] : []));
+  const transport = (
+    <div className="transport">
+      <button
+        type="button"
+        className="btn btn-quiet"
+        aria-label={r.playing ? "Pause the replay" : "Play the replay"}
+        onClick={r.toggle}
+      >
+        {r.playing ? "❚❚ Pause" : "▶ Play"}
+      </button>
+      <input
+        type="range"
+        aria-label="Position in the recording"
+        aria-valuetext={`${clock(elapsed)} of ${clock(span / 1000)}`}
+        min={rec.from}
+        max={rec.to}
+        step={1000}
+        value={Math.round(f.t)}
+        onChange={(e) => r.scrub(Number(e.target.value))}
+      />
+      <span className="mono">{`${clock(elapsed)} / ${clock(span / 1000)}`}</span>
+    </div>
+  );
+  const left = (
+    <>
+      {agent("a")}
+      {agent("b")}
+      <Panel label="Money in this duel" tag={<Tag>test NEAR</Tag>}>
+        <dl className="kv">
+          {rec.chaos.map((c, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a record's index is its identity on chain
+            <div key={i} style={{ display: "contents" }}>
+              <dt>{`Headline at ${c.target === rec.a.pk ? "A" : "B"} cost`}</dt>
+              <dd>{near(c.stake)}</dd>
+              {f.t >= answeredAt(rec, c) && c.outcome === "Flipped" ? (
+                <>
+                  <dt>Paid back to its planter</dt>
+                  <dd>{near(c.payout)}</dd>
+                </>
+              ) : null}
+            </div>
+          ))}
+          {f.done ? (
+            <>
+              <dt>Loser paid from its bond</dt>
+              <dd>{near(rec.outcome.slashed)}</dd>
+            </>
+          ) : null}
+        </dl>
+        <p className="note">{`${TEST_NOTE}. Both headlines were planted by one of the project's own accounts.`}</p>
+      </Panel>
+      <Panel label="Recorded time" tag={<Tag kind={f.done ? "idle" : "live"}>{f.done ? "closed" : "playing"}</Tag>}>
+        <Readout value={clock(elapsed)} unit={`of ${clock(span / 1000)}`} />
+        <Strip
+          n={Math.round(elapsed)}
+          of={Math.round(span / 1000)}
+          cells={30}
+          label={`${clock(elapsed)} of ${clock(span / 1000)} played`}
+        />
+        <p className="note">{`A recording, played about ${Math.round(span / PLAY_MS)} times faster than it happened.`}</p>
+      </Panel>
+    </>
+  );
+  const right = (
+    <>
+      <PricePanel
+        price={f.price}
+        samples={f.samples}
+        of={rec.price.samples.length}
+        open={rec.outcome.open_price}
+        close={f.done ? rec.outcome.close_price : null}
+        source={`Line: ${rec.price.source}. The duel settled on the oracle's prices.`}
+      />
+      <ChecksPanel counts={counts} href={verifyHref(rec.id, "main")} />
+      <Panel label="Event log" tag={<Tag>{`${f.moments.length} of ${all.length}`}</Tag>}>
+        <ol className="log">
+          {all.map((m, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: the log is positional
+            <li key={i} className={`${m.at <= f.t ? "" : "later"}${m.kind === "verdict" ? " v" : ""}`}>
+              <span className="mono">{utcTime(m.at)}</span>
+              <span>{m.text}</span>
+            </li>
+          ))}
+        </ol>
+      </Panel>
+    </>
+  );
   return (
-    <div className="room">
+    <div className={`room${quiet ? " quiet" : ""}`}>
       <Stage
         stageRef={r.ref}
         head={
           <>
             <Tag kind="live">replay</Tag>
             <span className="mono">{`duel #${rec.id}`}</span>
-            <span className="dim">{`recorded ${recordedOn(rec.from)} on ${NETWORK_ID}`}</span>
+            {quiet ? null : <span className="dim">{`recorded ${recordedOn(rec.from)} on ${NETWORK_ID}`}</span>}
             <span className="mono end">{`${utcTime(f.t)} UTC`}</span>
           </>
         }
         a={f.a}
         b={f.b}
         names={[rec.a.model, rec.b.model]}
-        tags={[
-          <BetTag key="a" side={f.bet.a} sealed={f.sealed.a > 0} />,
-          <BetTag key="b" side={f.bet.b} sealed={f.sealed.b > 0} />,
-        ]}
+        tags={[tagOf("a"), tagOf("b")]}
+        {...(quiet ? { quiet } : {})}
         time={(ms) => utcTime(ms).slice(0, 5)}
         samples={f.samples}
         titles={Object.fromEntries(rec.chaos.map((c, i) => [String(i), c.headline]))}
       >
-        <div className="transport">
-          <button
-            type="button"
-            className="btn btn-quiet"
-            aria-label={r.playing ? "Pause the replay" : "Play the replay"}
-            onClick={r.toggle}
-          >
-            {r.playing ? "❚❚ Pause" : "▶ Play"}
-          </button>
-          <input
-            type="range"
-            aria-label="Position in the recording"
-            aria-valuetext={`${clock(elapsed)} of ${clock(span / 1000)}`}
-            min={rec.from}
-            max={rec.to}
-            step={1000}
-            value={Math.round(f.t)}
-            onChange={(e) => r.scrub(Number(e.target.value))}
-          />
-          <span className="mono">{`${clock(elapsed)} / ${clock(span / 1000)}`}</span>
-        </div>
-        {lead ? <div className="stage-lead">{lead({ restart: r.restart })}</div> : null}
+        {quiet ? null : transport}
+        {quiet ? (
+          <p className="stage-checks">
+            <Tag kind={counts.fail ? "alert" : "ok"}>{counts.fail ? `${counts.fail} failed` : "verified"}</Tag>
+            <span className="mono">{`${counts.pass} of ${counts.total} checks passed`}</span>
+            <a href={verifyHref(rec.id, "main")}>Run the checks yourself</a>
+          </p>
+        ) : null}
+        {lead && !quiet ? <div className="stage-lead">{lead({ restart: r.restart })}</div> : null}
         <div className="stage-planted">
           {shown.length ? (
             shown.map(({ c, i }) => {
@@ -393,17 +495,23 @@ export function ReplayRoom({
               return (
                 <div key={i} className={`planted${judged && c.outcome === "Flipped" ? " fooled" : ""}`}>
                   <p className="planted-top">
-                    <span className="t-label">{`Planted at ${w.toUpperCase()} · ${utcTime(nsMs(c.at))}`}</span>
+                    <span className="t-label">
+                      {quiet
+                        ? `Planted at ${w.toUpperCase()}`
+                        : `Planted at ${w.toUpperCase()} · ${utcTime(nsMs(c.at))}`}
+                    </span>
                     {mark ? <MarkTag mark={mark.mark} locked={!!mark.locked} /> : null}
                   </p>
                   <Headline text={c.headline} />
-                  <p className="note">
-                    {judged && c.outcome !== "Pending"
-                      ? `${VERDICT[c.outcome].word}. ${sentence(c, "public", shortModel(rec[w].model)) ?? ""}`
-                      : mark?.locked
-                        ? "Its next decision is locked in. The result follows when it is opened."
-                        : `Waiting for ${shortModel(rec[w].model)}'s next decision.`}
-                  </p>
+                  {quiet && !judged ? null : (
+                    <p className="note">
+                      {judged && c.outcome !== "Pending"
+                        ? `${VERDICT[c.outcome].word}. ${sentence(c, "public", shortModel(rec[w].model)) ?? ""}`
+                        : mark?.locked
+                          ? "Its next decision is locked in. The result follows when it is opened."
+                          : `Waiting for ${shortModel(rec[w].model)}'s next decision.`}
+                    </p>
+                  )}
                 </div>
               );
             })
@@ -411,80 +519,38 @@ export function ReplayRoom({
             <p className="note">No headline has been planted yet at this point of the recording.</p>
           )}
         </div>
-        <details className="details">
-          <summary>
-            <span className="t-label">What happened, as text</span>
-          </summary>
-          <div className="details-body">
-            <WhatHappened
-              items={[
-                { name: `A ${rec.a.model}`, input: frameAt(rec, rec.to).a, time: (ms) => utcTime(ms).slice(0, 5) },
-                { name: `B ${rec.b.model}`, input: frameAt(rec, rec.to).b, time: (ms) => utcTime(ms).slice(0, 5) },
-              ]}
-            />
-          </div>
-        </details>
+        {quiet ? transport : null}
+        {lead && quiet ? <div className="stage-lead">{lead({ restart: r.restart })}</div> : null}
+        {quiet ? null : (
+          <details className="details">
+            <summary>
+              <span className="t-label">What happened, as text</span>
+            </summary>
+            <div className="details-body">{happened}</div>
+          </details>
+        )}
       </Stage>
-      <div className="room-col room-left">
-        {agent("a")}
-        {agent("b")}
-        <Panel label="Money in this duel" tag={<Tag>test NEAR</Tag>}>
-          <dl className="kv">
-            {rec.chaos.map((c, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: a record's index is its identity on chain
-              <div key={i} style={{ display: "contents" }}>
-                <dt>{`Headline at ${c.target === rec.a.pk ? "A" : "B"} cost`}</dt>
-                <dd>{near(c.stake)}</dd>
-                {f.t >= answeredAt(rec, c) && c.outcome === "Flipped" ? (
-                  <>
-                    <dt>Paid back to its planter</dt>
-                    <dd>{near(c.payout)}</dd>
-                  </>
-                ) : null}
-              </div>
-            ))}
-            {f.done ? (
-              <>
-                <dt>Loser paid from its bond</dt>
-                <dd>{near(rec.outcome.slashed)}</dd>
-              </>
-            ) : null}
-          </dl>
-          <p className="note">{`${TEST_NOTE}. Both headlines were planted by one of the project's own accounts.`}</p>
-        </Panel>
-        <Panel label="Recorded time" tag={<Tag kind={f.done ? "idle" : "live"}>{f.done ? "closed" : "playing"}</Tag>}>
-          <Readout value={clock(elapsed)} unit={`of ${clock(span / 1000)}`} />
-          <Strip
-            n={Math.round(elapsed)}
-            of={Math.round(span / 1000)}
-            cells={30}
-            label={`${clock(elapsed)} of ${clock(span / 1000)} played`}
-          />
-          <p className="note">{`A recording, played about ${Math.round(span / PLAY_MS)} times faster than it happened.`}</p>
-        </Panel>
-      </div>
-      <div className="room-col room-right">
-        <PricePanel
-          price={f.price}
-          samples={f.samples}
-          of={rec.price.samples.length}
-          open={rec.outcome.open_price}
-          close={f.done ? rec.outcome.close_price : null}
-          source={`Line: ${rec.price.source}. The duel settled on the oracle's prices.`}
-        />
-        <ChecksPanel counts={counts} href={verifyHref(rec.id, "main")} />
-        <Panel label="Event log" tag={<Tag>{`${f.moments.length} of ${all.length}`}</Tag>}>
-          <ol className="log">
-            {all.map((m, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the log is positional
-              <li key={i} className={`${m.at <= f.t ? "" : "later"}${m.kind === "verdict" ? " v" : ""}`}>
-                <span className="mono">{utcTime(m.at)}</span>
-                <span>{m.text}</span>
-              </li>
-            ))}
-          </ol>
-        </Panel>
-      </div>
+      {quiet ? (
+        <div className="panel instruments">
+          <Details id="instruments" label="Instruments">
+            <p className="note">{`Recorded ${recordedOn(rec.from)} on ${NETWORK_ID}.`}</p>
+            <div className="deck c3">
+              {left}
+              {right}
+            </div>
+            <StageKey />
+            {happened}
+            <LinkButton variant="quiet" href={duelPath(rec.id, "main")}>
+              Open the recorded duel
+            </LinkButton>
+          </Details>
+        </div>
+      ) : (
+        <>
+          <div className="room-col room-left">{left}</div>
+          <div className="room-col room-right">{right}</div>
+        </>
+      )}
     </div>
   );
 }

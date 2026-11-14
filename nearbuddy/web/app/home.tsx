@@ -221,17 +221,8 @@ export default function Home({ practice }: { practice: boolean }) {
         ) : (
           <Tag>reading the arena</Tag>
         )}
-        {!shown ? (
-          <span className="practice-jump">
-            <LinkButton variant={list.data ? "attack" : "quiet"} href="#practice">
-              Lie to a practice agent now
-            </LinkButton>
-          </span>
-        ) : null}
         <p className="lede">
-          Two AIs bet on the NEAR price, each with a bond behind it. Plant one fake headline at one of them. Its next
-          decision is signed inside a secure enclave and the contract records FOOLED or HELD. If it falls for it and
-          loses, you get paid.
+          Plant one fake headline at an AI trading agent and see if it changes its bet. <a href="#how">How it works</a>
         </p>
       </header>
 
@@ -247,25 +238,26 @@ export default function Home({ practice }: { practice: boolean }) {
           />
         ) : (
           <ReplayRoom
+            quiet
             rec={RECORDED}
-            lead={({ restart }) => (
-              <>
-                <ReplayActions rec={RECORDED} restart={restart} />
-                {shown ? (
+            lead={({ restart }) =>
+              shown ? (
+                <>
+                  <ReplayActions rec={RECORDED} restart={restart} />
                   <button type="button" className="btn btn-quiet" onClick={() => setReplay(false)}>
                     Back to the live duel
                   </button>
-                ) : (
-                  <p className="note">
-                    {list.data
-                      ? "No duel is running right now, so there is nothing to lie to. This is a recording of a real attack; the button to lie appears here when a duel opens."
-                      : list.error
-                        ? "The arena could not be read just now. This is a recording of a real attack."
-                        : "Reading the arena. Meanwhile, this is a recording of a real attack."}
-                  </p>
-                )}
-              </>
-            )}
+                </>
+              ) : (
+                <p className="note">
+                  {list.data
+                    ? "No duel is running, so this is a recording of a real attack."
+                    : list.error
+                      ? "The arena could not be read just now. This is a recording of a real attack."
+                      : "Reading the arena. Meanwhile, this is a recording of a real attack."}
+                </p>
+              )
+            }
           />
         )}
         <PracticePanel enabled={practice} second={!!shown} />
@@ -273,7 +265,7 @@ export default function Home({ practice }: { practice: boolean }) {
 
       <Findings />
 
-      <div className="deck c3 gap-top">
+      <div id="how" className="deck c3 gap-top">
         <Panel label="How it works">
           <ol className="steps">
             {[

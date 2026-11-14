@@ -101,6 +101,7 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
   const [tally, setTally] = useState({ fooled: 0, tries: 0 });
   const reduced = useReducedMotion();
   const field = useRef<HTMLDivElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
 
   // the tally lives in this tab's session storage and is never sent anywhere
   useEffect(() => {
@@ -111,6 +112,11 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
   }, []);
 
   const waiting = phase.at === "waiting";
+  // the answer appears under the form: bring it on screen when a round starts and when it ends
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on each change of phase
+  useEffect(() => {
+    stage.current?.scrollIntoView({ block: "nearest" });
+  }, [phase.at]);
   useEffect(() => {
     if (!waiting) return;
     const t0 = performance.now();
@@ -171,27 +177,38 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
   const input = traceOf(phase, reduced ? Math.floor(seconds / 5) * 5 : seconds);
   const [open, now] = [Number(SNAPSHOT.open_price) / 1e8, Number(SNAPSHOT.price) / 1e8];
 
+  const about = (
+    <p className="note">
+      {`Market shown to it, recorded from duel #${SNAPSHOT.duel}: NEAR at ${now.toFixed(4)} USD, ${open.toFixed(4)} at the open, ${SNAPSHOT.seconds_left} s left. The same for every practice round. `}
+      Two real model calls: one without your headline, one with it. Nothing is saved.
+    </p>
+  );
+  const oneTry = (
+    <p className="note">
+      One try proves nothing: a model can answer differently when asked again. The lab's counted results are on the{" "}
+      <a href="/evidence">Research page</a>.
+    </p>
+  );
+
   return (
     <section id="practice" className="practice" aria-label="Practice round">
       <header className="practice-head">
         <h2 className="t-label">{second ? "Or practise first" : "Practice round"}</h2>
         <Tag kind="live">practice</Tag>
-        <span className="practice-terms">not on chain · no money · not counted in any score</span>
         {tally.tries ? (
           <span className="practice-tally mono">{`You: ${tally.fooled} fooled of ${tally.tries} ${tally.tries === 1 ? "try" : "tries"}`}</span>
         ) : null}
+        <span className="practice-terms">not on chain · no money · not counted in any score</span>
       </header>
       <div className="practice-body">
         <div className="practice-form" ref={field}>
-          <p>
-            Lie to a real AI model right now. It answers in a few seconds. Nothing here touches the arena, and nothing
-            is saved.
-          </p>
           {off ? (
             <p className="practice-off" role="status">
               Practice is switched off here: it needs the server's model key, and this server has none.
             </p>
-          ) : null}
+          ) : (
+            <p>Lie to a real AI model. It answers in seconds.</p>
+          )}
           <Segmented
             label="Who to lie to"
             value={target}
@@ -199,11 +216,10 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
             onChange={setTarget}
             disabled={off || waiting}
           />
-          <p className="note">{defender?.line}</p>
           <Field
             label="Your fake headline"
             face="serif"
-            multiline={3}
+            multiline={2}
             placeholder="Write a headline it might believe"
             value={text}
             disabled={off || waiting}
@@ -215,23 +231,6 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
             error={error ?? (touched && bad && text ? headlineError(bad, over) : null)}
             count={{ text: `${-over} left`, over: over > 0 }}
           />
-          <div className="practice-examples">
-            <span className="t-label">Or start from one</span>
-            {EXAMPLES.map((e) => (
-              <button
-                key={e}
-                type="button"
-                className="hl"
-                disabled={off || waiting}
-                onClick={() => {
-                  setText(e);
-                  setError(null);
-                }}
-              >
-                {e}
-              </button>
-            ))}
-          </div>
           <Button
             variant={second ? "quiet" : "attack"}
             onClick={run}
@@ -240,62 +239,86 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
           >
             Lie to it
           </Button>
-        </div>
-
-        <div className={`practice-stage${done ? " result fresh" : ""}`} aria-live="polite">
-          {done ? <VerdictWord outcome={flipped ? "Flipped" : "Held"} size="stamp" fresh /> : null}
-          {phase.at !== "write" ? <blockquote className="hl">{`“${phase.headline}”`}</blockquote> : null}
-          <div className="practice-trace">
-            <p className="stage-who">
-              <Tag kind="live">practice</Tag>
-              <span>{`${defender?.name} · ${shortModel(done?.round.model ?? "")}`.replace(/ · $/, "")}</span>
-            </p>
-            <Trace variant="stage" name={`Practice, ${defender?.name}`} input={input} time={noClock} />
-          </div>
           {phase.at === "write" ? (
-            <p className="note">
-              The line will show its bet before your headline, a pin where the headline lands, and whether the bet
-              crosses to the other side.
-            </p>
-          ) : null}
-          {waiting ? (
-            <p role="status">
-              Asking the model twice: once without your headline, once with it.{" "}
-              <span className="mono">{`${seconds.toFixed(1)} s`}</span>
-            </p>
-          ) : null}
-          {done ? (
             <>
-              <p className="practice-sentence">
-                {sentence(
-                  {
-                    outcome: flipped ? "Flipped" : "Held",
-                    prev: done.round.baseline.side,
-                    next: done.round.attacked.side,
-                    kind: done.round.attacked.side,
-                  },
-                  "attacker",
-                )}
-              </p>
-              <div>
-                <p className="t-label">What the AI said</p>
-                <MachineQuote text={done.round.attacked.reason} />
-                <p className="note">{`Without your headline it bet ${bet(done.round.baseline.side)}:`}</p>
-                <MachineQuote text={done.round.baseline.reason} />
-              </div>
-              <Signature round={done.round} />
-              <p className="note mono">{`${done.took.toFixed(1)} s · ${done.round.model}`}</p>
-              <Button variant="quiet" fit onClick={again}>
-                Try another
-              </Button>
+              <Details label="Example headlines">
+                <div className="practice-examples">
+                  {EXAMPLES.map((e) => (
+                    <button
+                      key={e}
+                      type="button"
+                      className="hl"
+                      disabled={off || waiting}
+                      onClick={() => {
+                        setText(e);
+                        setError(null);
+                      }}
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              </Details>
+              <Details label="About practice">
+                <ul className="practice-who">
+                  {DEFENDERS.map((d) => (
+                    <li key={d.id}>
+                      <b>{d.name}.</b> {d.line}
+                    </li>
+                  ))}
+                </ul>
+                {about}
+                {oneTry}
+              </Details>
             </>
           ) : null}
-          <p className="note">
-            {`Market shown to it, recorded from duel #${SNAPSHOT.duel}: NEAR at ${now.toFixed(4)} USD, ${open.toFixed(4)} at the open, ${SNAPSHOT.seconds_left} s left. The same for every practice round. `}
-            One try proves nothing: a model can answer differently when asked again. The lab's counted results are on
-            the <a href="/evidence">Research page</a>.
-          </p>
         </div>
+
+        {phase.at === "write" ? null : (
+          <div ref={stage} className={`practice-stage${done ? " result fresh" : ""}`} aria-live="polite">
+            {done ? <VerdictWord outcome={flipped ? "Flipped" : "Held"} size="stamp" fresh /> : null}
+            <blockquote className="hl">{`“${phase.headline}”`}</blockquote>
+            <div className="practice-trace">
+              <p className="stage-who">
+                <Tag kind="live">practice</Tag>
+                <span>{`${defender?.name} · ${shortModel(done?.round.model ?? "")}`.replace(/ · $/, "")}</span>
+              </p>
+              <Trace variant="stage" name={`Practice, ${defender?.name}`} input={input} time={noClock} />
+            </div>
+            {waiting ? (
+              <p role="status">
+                Asking the model twice: once without your headline, once with it.{" "}
+                <span className="mono">{`${seconds.toFixed(1)} s`}</span>
+              </p>
+            ) : null}
+            {done ? (
+              <>
+                <p className="practice-sentence">
+                  {sentence(
+                    {
+                      outcome: flipped ? "Flipped" : "Held",
+                      prev: done.round.baseline.side,
+                      next: done.round.attacked.side,
+                      kind: done.round.attacked.side,
+                    },
+                    "attacker",
+                  )}
+                </p>
+                <MachineQuote text={done.round.attacked.reason} />
+                <Signature round={done.round} />
+                <Details label="What it said without your headline">
+                  <p className="note">{`It bet ${bet(done.round.baseline.side)}:`}</p>
+                  <MachineQuote text={done.round.baseline.reason} />
+                  <p className="note mono">{`${done.took.toFixed(1)} s · ${done.round.model}`}</p>
+                </Details>
+                <Button variant="quiet" fit onClick={again}>
+                  Try another
+                </Button>
+                {oneTry}
+              </>
+            ) : null}
+          </div>
+        )}
       </div>
     </section>
   );
