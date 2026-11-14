@@ -2,19 +2,19 @@
    so only /terminal carries it. .term-tokens carries the same tokens for the old pages that are not the terminal itself. */
 .term,
 .term-tokens {
-  --bg: #0a0b0c;
-  --fg: #d6d3cc;
-  --dim: #8b9096;
-  --hi: #f3f0e9;
-  --warn: #d9a05f;
-  --bad: #ff6447;
-  --num: #d9a05f; /* btop box index digit */
-  --win: #f3f0e9;
-  --loss: #ff6447;
-  --tie: #8b9096;
-  --open: #d9a05f; /* duel outcomes */
-  --ok: #6fa8f5;
-  --unv: #d9a05f; /* enclave-verified / unverified tier */
+  --bg: #06070f;
+  --fg: #dfe3f5;
+  --dim: #9299ba;
+  --hi: #ffffff;
+  --warn: #c6f432;
+  --bad: #ff3d7f;
+  --num: #c6f432; /* btop box index digit */
+  --win: #ffffff;
+  --loss: #ff3d7f;
+  --tie: #9299ba;
+  --open: #c6f432; /* duel outcomes */
+  --ok: #6f8cff;
+  --unv: #c6f432; /* enclave-verified / unverified tier */
   background: var(--bg);
   color: var(--fg);
   font:
@@ -28,7 +28,7 @@
    own width, so the padding cannot sit on .term itself) */
 .site:has(.term, .term-tokens) > .site-main {
   padding: 16px;
-  background: #0a0b0c;
+  background: #06070f;
 }
 @media (max-width: 600px) {
   .term,
@@ -42,22 +42,22 @@
 @media (prefers-color-scheme: light) {
   .term,
   .term-tokens {
-    --bg: #f6f4ee;
-    --fg: #16181a;
-    --dim: #5c6166;
+    --bg: #f5f7ff;
+    --fg: #14172b;
+    --dim: #565c7d;
     --hi: #000;
-    --warn: #8a5a1c;
-    --bad: #c8321b;
-    --num: #8a5a1c;
+    --warn: #3443b8;
+    --bad: #d81e5b;
+    --num: #3443b8;
     --win: #000;
-    --loss: #c8321b;
-    --tie: #5c6166;
-    --open: #8a5a1c;
-    --ok: #1f5fa8;
-    --unv: #8a5a1c;
+    --loss: #d81e5b;
+    --tie: #565c7d;
+    --open: #3443b8;
+    --ok: #2f43c4;
+    --unv: #3443b8;
   }
   .site:has(.term, .term-tokens) > .site-main {
-    background: #f6f4ee;
+    background: #f5f7ff;
   }
 }
 /* The terminal screen. Every rule sits under .term: production merges client CSS into shared chunks, so an

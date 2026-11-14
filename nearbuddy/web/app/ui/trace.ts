@@ -160,7 +160,11 @@ export function story(t: TraceIn, time: (ms: number) => string | null): string[]
     const s = time(ms);
     return s ? `${lead} ${s}` : lead;
   };
-  if (t.loadedFrom !== null && t.loadedFrom > t.from) out.push("Earlier decisions not loaded.");
+  const loaded = t.loadedFrom;
+  if (loaded !== null && loaded > t.from) {
+    // sealed decisions before the first opened one are known to exist: say so, instead of "not loaded"
+    out.push(t.seals?.some((s) => s < loaded) ? "First decisions sealed." : "Earlier decisions not loaded.");
+  }
   type Ev = { at: number; d?: Decision; p?: PinIn };
   const evs = [...ds.map((d): Ev => ({ at: d.at, d })), ...t.pins.map((p): Ev => ({ at: p.at, p }))].sort(
     (a, b) => a.at - b.at || (a.d ? -1 : 1),

@@ -64,7 +64,8 @@ export async function POST(req: Request) {
   const input = checkPractice(body);
   if ("error" in input) return refuse(400, "bad_input", input.error);
   // no headline: the defender's bet before anyone lies to it. Cached, so it spends a model call only when cold.
-  if (input.headline === null) {
+  // a visitor's own strategy has no shared cached baseline, so even its baseline spends a call and is counted
+  if (input.headline === null && input.strategy === undefined) {
     try {
       const baseline = await baselineOf(key, input.target, cache);
       const body: PracticeBaseline = {
@@ -83,8 +84,9 @@ export async function POST(req: Request) {
   // a counter that cannot be read refuses the round: the limit is what protects the model credit
   const wait = await limit(address, bump, Math.floor(Date.now() / 1000)).catch(() => 60);
   if (wait > 0) return refuse(429, "limited", "too many practice rounds from here for now", { wait_s: wait });
+  if (input.headline === null) return refuse(400, "bad_input", "headline empty");
   try {
-    return answer(await playRound(key, input.target, input.headline, cache));
+    return answer(await playRound(key, input.target, input.headline, cache, undefined, input.strategy));
   } catch {
     return refuse(502, "model_failed", "the model did not answer with a decision: try again");
   }

@@ -82,11 +82,17 @@ export type Cache = {
 export const BASELINE_TTL_S = 6 * 3600;
 
 /** One completion and its signature. Throws ModelFailed; a missing signature is not a failure, it is reported. */
-async function call(key: string, target: Target, headline: string | null, deps: Deps): Promise<PracticeCall> {
+async function call(
+  key: string,
+  target: Target,
+  headline: string | null,
+  deps: Deps,
+  strategy?: string,
+): Promise<PracticeCall> {
   const { fetchFn, wait } = deps;
   const started = Date.now();
   const headers = { Authorization: `Bearer ${key}`, accept: "application/json" };
-  const body = practiceRequest(target, headline);
+  const body = practiceRequest(target, headline, strategy);
   const r = await fetchFn(`${NEAR_AI_BASE}/chat/completions`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
@@ -141,15 +147,21 @@ const inflight = new Map<string, Promise<PracticeCall>>();
  *  asked share the one call.
  *  ponytail: a failed call is not remembered, so each request retries while the model is down; cache the failure for
  *  a minute if that ever matters. */
-export async function baselineOf(key: string, target: Target, cache: Cache, deps: Deps = DEPS): Promise<PracticeCall> {
-  const k = `nb:practice:base:${hex(sha256(practiceRequest(target, null))).slice(0, 24)}`;
+export async function baselineOf(
+  key: string,
+  target: Target,
+  cache: Cache,
+  deps: Deps = DEPS,
+  strategy?: string,
+): Promise<PracticeCall> {
+  const k = `nb:practice:base:${hex(sha256(practiceRequest(target, null, strategy))).slice(0, 24)}`;
   try {
     const hit = await cache.get(k);
     if (hit) return JSON.parse(hit) as PracticeCall;
   } catch {}
   let asking = inflight.get(k);
   if (!asking) {
-    asking = call(key, target, null, deps)
+    asking = call(key, target, null, deps, strategy)
       .then(async (c) => {
         await cache.set(k, JSON.stringify(c), BASELINE_TTL_S).catch(() => {});
         return c;
@@ -168,10 +180,14 @@ export async function playRound(
   headline: string,
   cache: Cache,
   deps: Deps = DEPS,
+  strategy?: string,
 ): Promise<PracticeRound> {
   const started = Date.now();
-  const baseline = await baselineOf(key, target, cache, deps);
-  const [control, attacked] = await Promise.all([call(key, target, null, deps), call(key, target, headline, deps)]);
+  const baseline = await baselineOf(key, target, cache, deps, strategy);
+  const [control, attacked] = await Promise.all([
+    call(key, target, null, deps, strategy),
+    call(key, target, headline, deps, strategy),
+  ]);
   return {
     practice: true,
     target,

@@ -35,6 +35,10 @@ const Ctx = createContext<Site>({
   announce: () => {},
   list: { data: null, error: null, loading: true, slow: false, stale: false, age: 0, retry: () => {} },
 });
+/** What the product is, in one line: the README, the page descriptions and the footer say the same thing. */
+const TAGLINE =
+  "A public stress test for AI trading agents: bonded, open to attack by anyone, every decision signed in an enclave.";
+
 export const useSite = () => useContext(Ctx);
 
 // ---------------------------------------------------------------- headlines planted from this browser
@@ -316,7 +320,6 @@ export function Chrome({ children }: { children: ReactNode }) {
             <nav className="site-nav" aria-label="Main">
               {NAV.map((l) => link(l.href, l.label))}
             </nav>
-            <span className="tag net-tag">{NETWORK_ID}</span>
             <div className="account">{control}</div>
             {cta}
             <button type="button" className="btn btn-quiet menu-button" aria-label="Menu" onClick={() => setNav(true)}>
@@ -328,7 +331,7 @@ export function Chrome({ children }: { children: ReactNode }) {
         <footer className="site-footer">
           <div className="bar">
             <p className="wordmark">NearBuddy</p>
-            <p>A market that puts a price on how hard an AI is to deceive.</p>
+            <p>{TAGLINE}</p>
             <div className="foot-cols">
               <div>
                 <h2 className="t-label">Play</h2>
@@ -364,7 +367,7 @@ export function Chrome({ children }: { children: ReactNode }) {
                 <a href="https://x.com/siewwwin" target="_blank" rel="noreferrer">
                   X
                 </a>
-                <a href="https://www.linkedin.com/in/lingsiewwin" target="_blank" rel="noreferrer">
+                <a href="https://www.linkedin.com/in/ling-siew-win/" target="_blank" rel="noreferrer">
                   LinkedIn
                 </a>
                 <a href="mailto:siewwwin@gmail.com">Email</a>
@@ -382,7 +385,6 @@ export function Chrome({ children }: { children: ReactNode }) {
               </span>
               <ThemeToggle />
             </div>
-            {NETWORK_ID === "testnet" ? <p>Test network. Money here is test NEAR with no real value.</p> : null}
           </div>
         </footer>
         <div className="sr" aria-live="polite">

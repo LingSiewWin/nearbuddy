@@ -2450,3 +2450,195 @@ table.board tbody th {
   flex-wrap: wrap;
   gap: var(--s-2);
 }
+
+/* ---------------------------------------------------------------- home: tile field, hero carousel */
+/* back layer: fixed behind the page; everything else on the home page sits above it */
+.tiles {
+  position: fixed;
+  inset: -10px;
+  width: calc(100% + 20px);
+  height: calc(100% + 20px);
+  z-index: 0;
+  pointer-events: none;
+  transition: transform 600ms var(--m-ease);
+  /* the field is faint where the words sit and full strength beside them (below them on a phone) */
+  mask-image: linear-gradient(180deg, rgb(0 0 0 / 0.14) 0 82%, #000 98%);
+}
+@media (min-width: 960px) {
+  .tiles {
+    mask-image: linear-gradient(90deg, rgb(0 0 0 / 0.16) 0 40%, #000 64%);
+  }
+}
+.home > :not(.tiles) {
+  position: relative;
+  z-index: 1;
+}
+.site:has(.tiles) > .site-footer {
+  position: relative;
+  z-index: 1;
+  background: var(--bg);
+}
+/* a chapter: rule, number and title, rule, content */
+.chapter {
+  scroll-margin-top: 56px;
+  padding-bottom: var(--s-8);
+}
+.chapter-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  padding: var(--s-3) 0;
+  margin-bottom: var(--s-5);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+.chapter-no {
+  font: 500 clamp(22px, 2.6vw, 34px) / 1 var(--mono);
+  color: var(--live);
+}
+.chapter-title {
+  font: 600 clamp(22px, 2.6vw, 34px) / 1.1 var(--sans);
+  letter-spacing: -0.02em;
+  color: var(--hi);
+}
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .chapter {
+      animation: chapter-in linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 40%;
+    }
+    @keyframes chapter-in {
+      from {
+        opacity: 0;
+        transform: translateY(48px);
+      }
+      to {
+        opacity: 1;
+        transform: none;
+      }
+    }
+  }
+}
+/* the words keep their contrast over the moving field: a soft patch of the page colour behind them */
+.hero-copy {
+  max-width: 900px;
+  min-height: calc(100vh - 48px - 120px - var(--s-8));
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: var(--s-4);
+}
+.hero-title {
+  font: 600 clamp(38px, 6.2vw, 84px) / 0.98 var(--sans);
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+  color: var(--hi);
+}
+.hero-lede {
+  font: 400 clamp(17px, 1.6vw, 21px) / 1.45 var(--sans);
+  color: var(--fg);
+  max-width: 52ch;
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+.hero-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-6);
+  margin: 0;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--rule);
+}
+.hero-facts dt {
+  font: var(--t-label);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+.hero-facts dd {
+  margin: 0;
+  font: var(--t-mono);
+  color: var(--hi);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tiles {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------- buttons: one colour everywhere */
+/* a pale periwinkle pill with cobalt words; hover goes one step darker. Low-emphasis buttons are the same hue, thin */
+.btn {
+  border-radius: 999px;
+  padding: 0 var(--s-5);
+}
+.btn-attack,
+.btn-primary,
+.site a.btn-attack,
+.site a.btn-primary {
+  background: var(--btn);
+  color: var(--btn-ink);
+}
+.btn-attack:hover:not(:disabled),
+.btn-primary:hover:not(:disabled) {
+  background: var(--btn-hover);
+  opacity: 1;
+}
+.btn-quiet,
+.btn-proof,
+.site a.btn-quiet,
+.site a.btn-proof {
+  background: var(--btn-soft);
+  color: var(--btn-soft-ink);
+  border-color: transparent;
+}
+.btn-quiet:hover:not(:disabled),
+.btn-proof:hover:not(:disabled) {
+  background: var(--btn-soft-hover);
+}
+
+/* ---------------------------------------------------------------- enter: starter strategies */
+.starters {
+  display: grid;
+  gap: var(--s-2);
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.starters legend {
+  padding-bottom: var(--s-2);
+  color: var(--dim);
+}
+@media (min-width: 720px) {
+  .starters {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.starter {
+  display: grid;
+  gap: var(--s-1);
+  text-align: left;
+  padding: var(--s-3);
+  font: var(--t-small);
+  color: var(--dim);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  cursor: pointer;
+}
+.starter b {
+  font: var(--t-title);
+  color: var(--hi);
+}
+.starter:hover,
+.starter[aria-pressed="true"] {
+  border-color: var(--live);
+}
+.strategy-tips {
+  margin: 0;
+  padding-left: var(--s-4);
+}

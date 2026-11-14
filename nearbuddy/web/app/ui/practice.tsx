@@ -252,12 +252,12 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
   return (
     <section id="practice" className="practice" aria-label="Practice round">
       <header className="practice-head">
-        <h2 className="t-label">{second ? "Or practise first" : "Practice round"}</h2>
-        <Tag kind="live">practice</Tag>
+        <h2 className="t-label">{second ? "Or fool one right now" : "Fool a model now"}</h2>
+        <Tag kind="live">off chain</Tag>
         {tally.tries ? (
           <span className="practice-tally mono">{`You: ${tally.fooled} fooled of ${tally.tries} ${tally.tries === 1 ? "try" : "tries"}`}</span>
         ) : null}
-        <span className="practice-terms">not on chain · no money · not counted in any score</span>
+        <span className="practice-terms">free · a real model answers in about five seconds</span>
       </header>
       <div className="practice-body">
         <div className="practice-form" ref={field}>
@@ -346,7 +346,7 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
                   </div>
                 </Details>
               ) : null}
-              <Details label="About practice">
+              <Details label="How this works">
                 <ul className="practice-who">
                   {DEFENDERS.map((d) => (
                     <li key={d.id}>
@@ -360,9 +360,8 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
                   the difference.
                 </p>
                 <p className="note">
-                  {`Market shown to it, recorded from duel #${SNAPSHOT.duel}: NEAR at ${now.toFixed(4)} USD, ${open.toFixed(4)} at the open, ${SNAPSHOT.seconds_left} s left. The same for every practice round. Nothing is saved.`}
+                  {`Market shown to it, recorded from duel #${SNAPSHOT.duel}: NEAR at ${now.toFixed(4)} USD, ${open.toFixed(4)} at the open, ${SNAPSHOT.seconds_left} s left. Nothing is saved.`}
                 </p>
-                {oneTry}
               </Details>
             </>
           ) : null}

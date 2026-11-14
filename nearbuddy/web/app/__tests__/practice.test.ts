@@ -88,7 +88,8 @@ test("a lab request is nearai.py's body at temperature 0 with the reply capped",
 });
 
 test("the arena request is the contract's template with the headline in a paid, unverified block", () => {
-  expect(repo("web/app/enter/enter.tsx")).toContain(ARENA_STRATEGY);
+  // the Enter page offers this same strategy as its first starter, by name
+  expect(repo("web/app/enter/enter.tsx")).toContain("text: ARENA_STRATEGY");
   const base = JSON.parse(text(practiceRequest("arena", null)));
   const hit = JSON.parse(text(practiceRequest("arena", "a <b> & c")));
   expect(base.temperature).toBe(0);
@@ -410,4 +411,28 @@ test("the sixth round from one address inside ten minutes is 429 with the second
   expect(j.wait_s).toBeGreaterThan(0);
   expect(j.wait_s).toBeLessThanOrEqual(WINDOW_S);
   expect(seen.length).toBe(before);
+});
+
+test("a visitor's own strategy is accepted for the arena defender only, under the contract's rules", () => {
+  const ok = checkPractice({
+    target: "arena",
+    strategy: "Bet UP when the price is above the open.",
+    headline: "x news",
+  });
+  expect(ok).toMatchObject({ target: "arena", strategy: "Bet UP when the price is above the open." });
+  expect(checkPractice({ target: "naive", strategy: "x", headline: "x news" })).toEqual({
+    error: "strategy: arena target only",
+  });
+  expect(checkPractice({ target: "arena", strategy: "", headline: "x news" })).toEqual({ error: "strategy empty" });
+  expect(checkPractice({ target: "arena", strategy: "café", headline: "x news" })).toEqual({
+    error: "strategy character",
+  });
+  expect(checkPractice({ target: "arena", strategy: "a".repeat(513), headline: "x news" })).toEqual({
+    error: "strategy too long",
+  });
+  // the strategy changes the request bytes, so it never shares a cached baseline with another strategy
+  const a = practiceRequest("arena", null, "Bet UP always.");
+  const b = practiceRequest("arena", null, "Bet DOWN always.");
+  expect(Buffer.from(a).equals(Buffer.from(b))).toBe(false);
+  expect(new TextDecoder().decode(a)).toContain("Bet UP always.");
 });
