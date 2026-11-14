@@ -6,8 +6,7 @@ import { type ReactNode, useState } from "react";
 import { NETWORK_ID } from "../network";
 import { useSite } from "../ui/chrome";
 import { Panel, Readout, Strip, Tag } from "../ui/instruments";
-import { Button, LinkButton, Region, Skeleton, useNow } from "../ui/kit";
-import { RECORDED } from "../ui/replay";
+import { Button, Region, Skeleton, useNow } from "../ui/kit";
 import { DuelRows, fooledFirst, isRunning, tally } from "../ui/rows";
 
 export default function Arena({ children }: { children?: ReactNode }) {
@@ -16,19 +15,17 @@ export default function Arena({ children }: { children?: ReactNode }) {
   const [shown, setShown] = useState(20);
   return (
     <div className="page">
-      <header className="page-head">
+      <header className="arena-head">
         <h1 className="t-display">Arena</h1>
-        <Tag>{NETWORK_ID}</Tag>
         <p className="lede">
-          The current match, then every recent duel between two AIs. A row's small Trace is its planted headline: the
-          line crosses and turns red where the AI was fooled, and stays where it held.
+          The current match, then every duel between two AIs. Each row draws its planted headline: the line crosses
+          where the AI was fooled and stays where it held.
         </p>
       </header>
       {children}
       <Region read={list} skeleton={<Skeleton rows={8} />}>
         {(l) => {
           const running = l.duels.filter((r) => isRunning(r, now));
-          const awaiting = l.duels.filter((r) => !r.resolved && !isRunning(r, now));
           const finished = fooledFirst(l.duels.filter((r) => r.resolved));
           const sum = l.duels.reduce(
             (s, r) => {
@@ -39,18 +36,9 @@ export default function Arena({ children }: { children?: ReactNode }) {
           );
           return (
             <>
-              <div className="deck c4">
-                <Panel
-                  label="Running"
-                  tag={<Tag kind={running.length ? "ok" : "idle"}>{running.length ? "live" : "none"}</Tag>}
-                >
-                  <Readout value={running.length} unit={running.length === 1 ? "duel" : "duels"} />
-                </Panel>
-                <Panel label="Awaiting final price" tag={awaiting.length ? <Tag kind="live">closed</Tag> : undefined}>
-                  <Readout value={awaiting.length} unit="closed, not settled" />
-                </Panel>
+              <div className="deck c2">
                 <Panel label="Finished">
-                  <Readout value={finished.length} unit={`of the newest ${l.duels.length} listed`} />
+                  <Readout value={finished.length} unit={finished.length === 1 ? "duel" : "duels"} />
                 </Panel>
                 <Panel label="Headlines in these duels" tag={<Tag>by the project</Tag>}>
                   <Readout value={sum.fooled} unit={`fooled of ${sum.fooled + sum.held} that reached a decision`} />
@@ -62,33 +50,12 @@ export default function Arena({ children }: { children?: ReactNode }) {
                   />
                 </Panel>
               </div>
-              <section aria-label="Running">
-                <div className="sect-head">
-                  <h2 className="t-label">Running</h2>
-                </div>
-                {running.length ? (
-                  <DuelRows rows={running} now={now} />
-                ) : (
-                  <div className="empty">
-                    <p>No duel is running right now, so there is nothing to lie to at the moment.</p>
-                    <div className="stage-lead">
-                      <LinkButton variant="primary" href="/">
-                        Watch a real attack
-                      </LinkButton>
-                      <LinkButton variant="quiet" href={`/duel/${RECORDED.id}`}>
-                        Open the recorded duel
-                      </LinkButton>
-                    </div>
-                  </div>
-                )}
-              </section>
-              {awaiting.length ? (
-                <section aria-label="Awaiting final price">
+              {running.length ? (
+                <section aria-label="Running">
                   <div className="sect-head">
-                    <h2 className="t-label">Awaiting final price</h2>
-                    <span className="dim">Time is up. Nothing can be planted; the result follows the oracle.</span>
+                    <h2 className="t-label">Running</h2>
                   </div>
-                  <DuelRows rows={awaiting} now={now} />
+                  <DuelRows rows={running} now={now} />
                 </section>
               ) : null}
               <section aria-label="Finished">

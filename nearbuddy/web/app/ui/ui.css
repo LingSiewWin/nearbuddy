@@ -3915,3 +3915,10 @@ dialog.wallet-gate[open] {
     transition: none;
   }
 }
+
+/* ---------------------------------------------------------------- /arena: heading over the live match */
+.arena-head {
+  display: grid;
+  gap: var(--s-2);
+  padding-bottom: var(--s-4);
+}
