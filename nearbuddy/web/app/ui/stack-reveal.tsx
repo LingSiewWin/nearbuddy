@@ -222,12 +222,6 @@ export function StackReveal() {
           </div>
         </div>
       )}
-      <p className="stack-reveal-foot mono dim">
-        arena{" "}
-        <a href={`${NET.explorer}/address/${NET.arena}`} target="_blank" rel="noreferrer">
-          {NET.arena} ↗
-        </a>
-      </p>
     </div>
   );
 }

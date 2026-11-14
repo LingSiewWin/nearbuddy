@@ -3410,10 +3410,6 @@ table.board tbody th {
   transform: none;
   color: var(--dim);
 }
-.stack-reveal-foot {
-  margin: var(--s-4) 0 0;
-  font: var(--t-mono);
-}
 @media (prefers-reduced-motion: no-preference) {
   @supports (animation-timeline: view()) {
     /* on the row, not the list item: an animation's opacity would override the dimming of the other items */
