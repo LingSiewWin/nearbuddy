@@ -8,7 +8,7 @@ import { duelPath, verifyHref } from "./data";
 import { bet, clock, near, nsMs, price8, type Side, shortModel, utcTime } from "./format";
 import { Panel, Readout, Sparkline, Strip, Tag } from "./instruments";
 import { Details, LinkButton } from "./kit";
-import { answeredAt, checkCounts, frameAt, HOLD_MS, PLAY_MS, type ReplayRecord, timeline } from "./replay";
+import { answeredAt, checkCounts, frameAt, HOLD_MS, PLAY_MS, type ReplayRecord, timeline, waveOf } from "./replay";
 import { Headline } from "./result";
 import type { PinMark, TraceIn } from "./trace";
 import { PriceLine, TimeAxis, Trace, WhatHappened } from "./trace-view";
@@ -34,7 +34,10 @@ export function Stage({
   children,
   stageRef,
   quiet,
+  wave,
 }: {
+  /** The market as -1 to 1 across the width: both Traces flow with it instead of running in steps. */
+  wave?: number[];
   /** The calm first view: no price line and no legend (the caller folds both away with the instruments). */
   quiet?: boolean;
   head: ReactNode;
@@ -72,6 +75,7 @@ export function Stage({
         {...(onPin ? { onPin } : {})}
         {...(titles ? { titles } : {})}
         {...(selected === undefined ? {} : { selected })}
+        {...(wave ? { wave } : {})}
       />
     </div>
   );
@@ -225,7 +229,7 @@ export function ChecksPanel({
  *  only while the stage is on screen and the tab is visible; with reduced motion it stays on the finished picture
  *  until the visitor presses play or moves the scrubber. Before the page's script runs, `t` is the end: the whole
  *  record is on screen without it. */
-export function useReplay(rec: ReplayRecord) {
+export function useReplay(rec: ReplayRecord, playMs: number = PLAY_MS) {
   const [t, setT] = useState(rec.to);
   const [playing, setPlaying] = useState(false);
   const ref = useRef<HTMLElement>(null);
@@ -260,7 +264,7 @@ export function useReplay(rec: ReplayRecord) {
             held = 0;
             at.current = rec.from;
           }
-        } else at.current = Math.min(rec.to, at.current + (dt * (rec.to - rec.from)) / PLAY_MS);
+        } else at.current = Math.min(rec.to, at.current + (dt * (rec.to - rec.from)) / playMs);
         setT(at.current);
       }
       raf = requestAnimationFrame(tick);
@@ -270,7 +274,7 @@ export function useReplay(rec: ReplayRecord) {
       cancelAnimationFrame(raf);
       io.disconnect();
     };
-  }, [playing, rec]);
+  }, [playing, rec, playMs]);
   return {
     t,
     playing,
@@ -299,14 +303,19 @@ export function ReplayRoom({
   rec,
   lead,
   quiet,
+  playMs = PLAY_MS,
 }: {
+  /** How long one playthrough takes. The home page passes two seconds. */
+  playMs?: number;
   /** The home page's calm first view: the Traces, one line of checks and the planted headlines; every instrument
    *  panel sits in one closed "Instruments" row under it. Nothing is removed. */
   quiet?: boolean;
   rec: ReplayRecord;
   lead?: (replay: { restart: () => void }) => ReactNode;
 }) {
-  const r = useReplay(rec);
+  const r = useReplay(rec, playMs);
+  // the home view draws both Traces as flowing lines that ride the duel's own price
+  const wave = quiet ? waveOf(rec) : undefined;
   const f = frameAt(rec, r.t);
   const all = timeline(rec);
   const counts = checkCounts(rec);
@@ -422,7 +431,7 @@ export function ReplayRoom({
           cells={30}
           label={`${clock(elapsed)} of ${clock(span / 1000)} played`}
         />
-        <p className="note">{`Played at ${Math.round(span / PLAY_MS)}× speed.`}</p>
+        <p className="note">{`Played at ${Math.round(span / playMs)}× speed.`}</p>
       </Panel>
     </>
   );
@@ -466,6 +475,7 @@ export function ReplayRoom({
         names={[rec.a.model, rec.b.model]}
         tags={[tagOf("a"), tagOf("b")]}
         {...(quiet ? { quiet } : {})}
+        {...(wave ? { wave } : {})}
         time={(ms) => utcTime(ms).slice(0, 5)}
         samples={f.samples}
         titles={Object.fromEntries(rec.chaos.map((c, i) => [String(i), c.headline]))}

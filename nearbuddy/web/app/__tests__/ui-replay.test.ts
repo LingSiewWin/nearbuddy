@@ -2,7 +2,7 @@
 // scripts/replay-fixture.ts) turned into frames. A frame may only show what the record holds at that moment.
 import { expect, test } from "bun:test";
 import { nsMs } from "../ui/format";
-import { answeredAt, checkCounts, frameAt, RECORDED as rec, timeline, traceAt } from "../ui/replay";
+import { answeredAt, checkCounts, frameAt, RECORDED as rec, timeline, traceAt, waveOf } from "../ui/replay";
 import { geometry, story } from "../ui/trace";
 
 const box = { width: 400, height: 96, padL: 36, padR: 10 };
@@ -101,4 +101,35 @@ test("the finished frame reads as the story of the attack", () => {
   expect(story(frameAt(rec, rec.to).b, utc).join(" ")).toBe(
     "First decisions sealed. Headline planted 11:08. Betting UP since 11:09. Next decision 11:16: betting DOWN. Fooled.",
   );
+});
+
+test("the price wave is the recorded price scaled to -1..1, and flat for a flat series", () => {
+  const w = waveOf(rec, 64);
+  expect(w).toHaveLength(64);
+  // the low falls inside the duel; the series' high is a candle after the close, so the wave stops short of 1
+  expect(Math.min(...w)).toBeLessThan(-0.5);
+  expect(Math.max(...w)).toBeGreaterThan(0.3);
+  // no notch: two readings a second apart must not show as a step between neighbouring values
+  for (let i = 1; i < w.length; i++) expect(Math.abs((w[i] ?? 0) - (w[i - 1] ?? 0))).toBeLessThan(0.15);
+  for (const v of w) {
+    expect(v).toBeGreaterThanOrEqual(-1);
+    expect(v).toBeLessThanOrEqual(1);
+  }
+  // it moves both ways: the recorded price fell, then rose
+  const turns = w
+    .slice(1)
+    .filter((v, i) => i > 0 && Math.sign(v - (w[i] ?? v)) !== Math.sign((w[i] ?? v) - (w[i - 1] ?? v)));
+  expect(turns.length).toBeGreaterThan(2);
+  const flat = {
+    from: 0,
+    to: 10,
+    price: {
+      ...rec.price,
+      samples: [
+        { t: 0, p: 3 },
+        { t: 10, p: 3 },
+      ],
+    },
+  };
+  expect(waveOf(flat, 8)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
 });

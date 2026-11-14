@@ -16,7 +16,7 @@ import { InteractiveGrid } from "./ui/interactive-grid";
 import { Button, Countdown, Details, LinkButton, StatusBar, useNow } from "./ui/kit";
 import { OceanArena } from "./ui/ocean";
 import { PracticePanel } from "./ui/practice";
-import { RECORDED } from "./ui/replay";
+import { QUICK_PLAY_MS, RECORDED } from "./ui/replay";
 import { MachineQuote } from "./ui/result";
 import { BetTag, ChecksPanel, PricePanel, ReplayActions, ReplayRoom, Stage } from "./ui/room";
 import { isRunning } from "./ui/rows";
@@ -234,6 +234,7 @@ export default function Home({ practice }: { practice: boolean }) {
               ) : (
                 <ReplayRoom
                   quiet
+                  playMs={QUICK_PLAY_MS}
                   rec={RECORDED}
                   lead={({ restart }) =>
                     shown ? (

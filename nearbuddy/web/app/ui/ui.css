@@ -739,6 +739,12 @@ dialog.sheet[open] {
   stroke-width: 2;
   stroke-linejoin: miter;
 }
+/* a flowing line (trace-view flow): many short segments, so the joins must be round */
+.trace .line.flow {
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
 .trace .line.red {
   stroke: var(--signal);
   stroke-width: 3;

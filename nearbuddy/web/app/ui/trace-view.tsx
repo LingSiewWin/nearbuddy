@@ -73,6 +73,47 @@ const WORD: Record<PinMark, string> = {
 };
 
 /** One agent's decisions over a duel. `input` null draws the loading state: rails without a line. */
+type Pt = [number, number];
+const parse = (points: string): Pt[] =>
+  points ? points.split(" ").map((q) => q.split(",").map(Number) as unknown as Pt) : [];
+const smooth = (u: number) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+
+/** The step line as a flowing one. `y(x)`: a soft S-bend where the bet changes side instead of a vertical step, and
+ *  the line rides its rail up and down with `wave` (the market, -1 to 1 across the width). The bet is still read from
+ *  which rail the line keeps to; the ride is two fifths of the gap between the rails, so the two never meet. */
+function flow(g: TraceGeo, wave: number[], height: number) {
+  const pts = [...parse(g.ink), ...parse(g.red)];
+  const first = pts[0];
+  if (!first) return null;
+  const jumps: { x: number; dy: number }[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const [x, y1] = pts[i] as Pt;
+    const y0 = (pts[i - 1] as Pt)[1];
+    if (y1 !== y0) jumps.push({ x, dy: y1 - y0 });
+  }
+  const bend = Math.min(44, (g.x1 - g.x0) * 0.06);
+  const amp = (g.railDown - g.railUp) * 0.4;
+  const y = (x: number) => {
+    let v = first[1];
+    for (const j of jumps) v += j.dy * smooth((x - j.x + bend / 2) / bend);
+    const u = Math.min(1, Math.max(0, (x - g.x0) / Math.max(1, g.x1 - g.x0))) * (wave.length - 1);
+    const i = Math.floor(u);
+    const w = (wave[i] ?? 0) + ((wave[Math.min(wave.length - 1, i + 1)] ?? 0) - (wave[i] ?? 0)) * (u - i);
+    return Math.min(height - 3, Math.max(3, v - amp * w));
+  };
+  const dense = (points: string) => {
+    const q = parse(points);
+    const from = q[0]?.[0];
+    const to = q[q.length - 1]?.[0];
+    if (from === undefined || to === undefined || to <= from) return "";
+    const out: string[] = [];
+    for (let x = from; x < to; x += 3) out.push(`${x.toFixed(1)},${y(x).toFixed(1)}`);
+    out.push(`${to.toFixed(1)},${y(to).toFixed(1)}`);
+    return out.join(" ");
+  };
+  return { y, ink: dense(g.ink), red: dense(g.red) };
+}
+
 export function Trace({
   variant,
   name,
@@ -82,7 +123,10 @@ export function Trace({
   onPin,
   selected,
   titles,
+  wave,
 }: {
+  /** The market as -1 to 1 across the width (replay.ts waveOf): the line flows with it instead of running in steps. */
+  wave?: number[];
   variant: "full" | "mini" | "stage";
   /** Who the line belongs to, for the text alternative ("A {model}"). */
   name: string;
@@ -108,6 +152,8 @@ export function Trace({
     box,
   );
   const alt = input ? altText(name, story(input, time)) : `${name}: loading.`;
+  const f = wave ? flow(g, wave, box.height) : null;
+  const yAt = (x: number, y: number) => (f ? f.y(x) : y);
   return (
     <div ref={ref} className={`trace ${variant}${stale ? " is-stale" : ""}`}>
       <svg role="img" aria-label={alt} width={width} height={box.height} viewBox={`0 0 ${width} ${box.height}`}>
@@ -137,22 +183,22 @@ export function Trace({
         {g.zones.map((z) => (
           <PendingZone key={z.id} z={z} hatch={hatch} />
         ))}
-        {g.ink ? <polyline className="line" points={g.ink} /> : null}
-        {g.red ? <polyline className="line red" points={g.red} /> : null}
+        {g.ink ? <polyline className={f ? "line flow" : "line"} points={f ? f.ink : g.ink} /> : null}
+        {g.red ? <polyline className={f ? "line red flow" : "line red"} points={f ? f.red : g.red} /> : null}
         {g.pins.map((p) => (
           // biome-ignore lint/a11y/noStaticElementInteractions: a pointer shortcut; the headline rows below are the keyboard path
           <g key={p.id} className={onPin ? "pin-hit" : undefined} onClick={onPin ? () => onPin(p.id) : undefined}>
             <title>{titles?.[p.id] ? `“${titles[p.id]}” · ${WORD[p.mark]}` : WORD[p.mark]}</title>
-            {onPin ? <circle cx={p.x} cy={p.y} r={22} fill="transparent" /> : null}
-            <Pin x={p.x} y={p.y} mark={p.mark} selected={selected === p.id} />
+            {onPin ? <circle cx={p.x} cy={yAt(p.x, p.y)} r={22} fill="transparent" /> : null}
+            <Pin x={p.x} y={yAt(p.x, p.y)} mark={p.mark} selected={selected === p.id} />
           </g>
         ))}
         {g.head ? (
           <>
             {g.head.pulse && !stale && !reduced ? (
-              <circle className="head-ring" cx={g.head.x} cy={g.head.y} r={3} />
+              <circle className="head-ring" cx={g.head.x} cy={yAt(g.head.x, g.head.y)} r={3} />
             ) : null}
-            <circle className="head" cx={g.head.x} cy={g.head.y} r={3} />
+            <circle className="head" cx={g.head.x} cy={yAt(g.head.x, g.head.y)} r={3} />
           </>
         ) : null}
       </svg>

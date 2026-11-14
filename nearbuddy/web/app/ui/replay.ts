@@ -49,6 +49,40 @@ export const RECORDED = data as unknown as ReplayRecord;
 /** One full playback takes this long, and the finished picture is held this long before it starts again. */
 export const PLAY_MS = 22_000;
 export const HOLD_MS = 5_000;
+/** The home page plays the same duel in two seconds: a visitor scrolling past sees the whole fight. */
+export const QUICK_PLAY_MS = 2_000;
+
+/** The duel's recorded price as `n` evenly spaced values from -1 (its lowest) to 1 (its highest), open to close.
+ *  A Trace drawn with it rides its rail up and down with the market (ui/trace-view.tsx). A flat or empty series is 0. */
+export function waveOf(rec: Pick<ReplayRecord, "from" | "to" | "price">, n = 160): number[] {
+  const s = rec.price.samples;
+  const lo = Math.min(...s.map((x) => x.p));
+  const hi = Math.max(...s.map((x) => x.p));
+  if (s.length < 2 || hi === lo) return Array.from({ length: n }, () => 0);
+  const raw = Array.from({ length: n }, (_, i) => {
+    const t = rec.from + ((rec.to - rec.from) * i) / (n - 1);
+    const k = s.findIndex((x) => x.t >= t);
+    const b = s[k === -1 ? s.length - 1 : k] ?? { t, p: lo };
+    const a = s[k <= 0 ? (k === -1 ? s.length - 1 : 0) : k - 1] ?? b;
+    // eased between two readings, so the wave passes through each real price as a smooth turn, not a corner
+    const u = b.t === a.t ? 1 : (t - a.t) / (b.t - a.t);
+    const p = a.p + (b.p - a.p) * ((1 - Math.cos(Math.PI * u)) / 2);
+    return (2 * (Math.min(hi, Math.max(lo, p)) - lo)) / (hi - lo) - 1;
+  });
+  // two readings a second apart (one candle's close, the next one's open) would draw a notch: average each value with
+  // its neighbours, twice, so the wave keeps its shape and loses the notches
+  const soften = (w: number[]) =>
+    w.map((_, i) => {
+      let sum = 0;
+      for (let k = -5; k <= 5; k++) sum += w[Math.min(w.length - 1, Math.max(0, i + k))] ?? 0;
+      return sum / 11;
+    });
+  const soft = soften(soften(raw));
+  // averaging flattens the swing: scale it back to the widest reading, kept inside -1..1
+  const peak = Math.max(...soft.map(Math.abs)) || 1;
+  const k = Math.max(...raw.map(Math.abs)) / peak;
+  return soft.map((v) => Math.max(-1, Math.min(1, v * k)));
+}
 
 const of = (rec: ReplayRecord, pk: string) => rec.events.filter((e) => e.agent_pk === pk);
 

@@ -19,6 +19,7 @@ import {
 import { bet, clock, type Side, shortModel } from "./format";
 import { Tag } from "./instruments";
 import { Button, Details, Field, Segmented } from "./kit";
+import { RECORDED, waveOf } from "./replay";
 import { MachineQuote, VerdictWord } from "./result";
 import type { TraceIn } from "./trace";
 import { Trace, useReducedMotion } from "./trace-view";
@@ -40,6 +41,8 @@ const PIN = 30;
 /** Where the head is `s` seconds into the wait: the right end stands for 20 s. */
 const head = (s: number) => PIN + Math.min(1, s / 20) * 62;
 const noClock = () => null;
+// the market the model is shown comes from the recorded duel, so the line rides that duel's price
+const WAVE = waveOf(RECORDED);
 const OUTCOME = { FOOLED: "Flipped", HELD: "Held", "DID NOT COUNT": "NoTrial" } as const;
 const MARK = { FOOLED: "fooled", HELD: "held", "DID NOT COUNT": "nocount" } as const;
 
@@ -329,7 +332,13 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
           {phase.at === "write" ? (
             <>
               <div className="practice-trace">
-                <Trace variant="mini" name={defender?.name ?? "Open telemetry"} input={input} time={noClock} />
+                <Trace
+                  variant="mini"
+                  name={defender?.name ?? "Open telemetry"}
+                  input={input}
+                  time={noClock}
+                  wave={WAVE}
+                />
               </div>
               {push ? (
                 <Details label="Example headlines">
@@ -380,7 +389,13 @@ export function PracticePanel({ enabled, second }: { enabled: boolean; second?: 
               <p className="stage-who">
                 <span>{`${defender?.name} · ${shortModel(done?.round.model ?? "")}`.replace(/ · $/, "")}</span>
               </p>
-              <Trace variant="stage" name={defender?.name ?? "Open telemetry"} input={input} time={noClock} />
+              <Trace
+                variant="stage"
+                name={defender?.name ?? "Open telemetry"}
+                input={input}
+                time={noClock}
+                wave={WAVE}
+              />
             </div>
             {waiting ? (
               <p role="status">
