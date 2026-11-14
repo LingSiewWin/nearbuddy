@@ -3594,3 +3594,116 @@ dialog.wallet-gate[open] {
   }
 }
 
+/* ---------------------------------------------------------------- /agents: docs shell (TOC + reading column) */
+.page.agents-docs {
+  max-width: 1080px;
+}
+.docs-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+.docs-toc {
+  padding-bottom: var(--s-2);
+  border-bottom: 1px solid var(--rule);
+}
+.docs-toc-label {
+  margin-bottom: var(--s-2);
+}
+.docs-toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--s-1);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.docs-toc-list a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--s-1);
+  white-space: nowrap;
+  color: var(--dim);
+  text-decoration: none;
+  font: var(--t-small);
+  border-bottom: 2px solid transparent;
+}
+.docs-toc-list a:hover {
+  color: var(--hi);
+}
+.docs-toc-list a:focus-visible {
+  outline: 2px solid var(--proof);
+  outline-offset: 2px;
+}
+.docs-head {
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--rule);
+}
+.docs-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.docs-title-row h1 {
+  margin-right: var(--s-1);
+}
+.docs-prose {
+  max-width: 68ch;
+}
+.docs-sect {
+  scroll-margin-top: 72px;
+}
+.docs-sect .sect-head {
+  margin-top: var(--s-5);
+}
+.docs-kv {
+  margin: var(--s-3) 0;
+  max-width: 40ch;
+}
+.agents-docs .tools > li {
+  scroll-margin-top: 72px;
+}
+.agents-docs .tools p {
+  max-width: 68ch;
+}
+.agents-docs .copyable {
+  width: 100%;
+}
+@media (min-width: 960px) {
+  .docs-layout {
+    display: grid;
+    grid-template-columns: 168px minmax(0, 1fr);
+    gap: var(--s-6);
+    align-items: start;
+  }
+  .docs-toc {
+    position: sticky;
+    top: 72px;
+    border: 0;
+    border-right: 1px solid var(--rule);
+    padding: 0 var(--s-3) 0 0;
+  }
+  .docs-toc-list {
+    display: block;
+    overflow: visible;
+  }
+  .docs-toc-list li + li {
+    margin-top: 2px;
+  }
+  .docs-toc-list a {
+    display: block;
+    min-height: 32px;
+    padding: 4px 0;
+    white-space: normal;
+    border-bottom: 0;
+  }
+  .docs-sect .sect-head {
+    margin-top: var(--s-6);
+  }
+}
