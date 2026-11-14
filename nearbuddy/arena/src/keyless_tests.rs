@@ -2350,3 +2350,28 @@ fn chaos_open_closes_when_a_keyless_slot_carries_the_headline() {
     );
     assert!(!c.chaos_open(U64(d), 0).unwrap().open);
 }
+
+/// Deploy 19: a paid headline drawn into the placebo arm reaches the model as the neutral line,
+/// in the same unverified block, and the reply is recorded (`prev`, `next`) as `NoTrial`.
+#[test]
+fn a_placebo_arm_request_carries_the_neutral_line_not_the_headline() {
+    let (mut c, d, a, _, tee) = kl_setup();
+    decide(&mut c, &tee, d, &a, LONG, NOW + SEC);
+    let lie = "Exchange halts NEAR withdrawals";
+    plant(&mut c, d, &a, ChaosKind::Short, lie, NOW + 2 * SEC);
+    c.chaos.get_mut(&d).unwrap()[0].arm = Arm::Placebo;
+    ctx_at(KEEPER, KD, NOW + 3 * SEC);
+    let s = c.open_slot(U64(d), b(&a));
+    let req = String::from_utf8(c.keyless_request(U64(d), b(&a)).unwrap().0).unwrap();
+    assert!(!req.contains(lie));
+    assert!(req.contains(&format!(
+        "paid third-party injection, unverified\\\">\\n{}",
+        crate::chaos::placebo_line(lie)
+    )));
+    submit(&mut c, &tee, d, &a, &s, SHORT, NOW + 4 * SEC);
+    let r = &c.get_chaos(U64(d))[0];
+    assert_eq!(
+        (r.outcome, r.prev, r.next),
+        (ChaosOutcome::NoTrial, Some(Side::Long), Some(Side::Short))
+    );
+}

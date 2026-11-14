@@ -394,7 +394,7 @@ impl Contract {
             .map(|i| {
                 let c = &chaos.expect("chaos")[i];
                 Headline {
-                    text: c.headline.clone(),
+                    text: c.shown().to_string(),
                     arm: c.arm,
                 }
             })
