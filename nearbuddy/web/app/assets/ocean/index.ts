@@ -44,13 +44,9 @@ export {
   cellFill,
   cellHash,
   cellInk,
-  EDGE_LIGHT,
-  FIN_RAMP,
-  glyphAt,
   MOSAIC,
   MOSAIC_RAMP,
   mosaicGlyph,
-  SKIN_RAMP,
 } from "./ramp";
 export { type Part, samplePrey, sampleReef, sampleShark, toLocal } from "./shapes";
 export {
@@ -73,7 +69,6 @@ export {
   TIER_CUTS,
   TIERS,
   type TierId,
-  tierIndex,
   tierOf,
   wilson,
 } from "./tiers";

@@ -58,7 +58,3 @@ export function mayEat(a: Resistance, b: Resistance): boolean {
   const B = wilson(heldOf(b), b.tested);
   return A.lo > B.hi;
 }
-
-export function tierIndex(t: TierId): number {
-  return TIERS.indexOf(t);
-}

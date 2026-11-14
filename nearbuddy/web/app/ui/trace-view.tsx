@@ -221,19 +221,6 @@ export function PriceLine({
   );
 }
 
-/** The Trace as a row of verdict marks, oldest first: fooled diamond, held ring. */
-export function TraceMarks({ marks, label }: { marks: ("fooled" | "held")[]; label: string }) {
-  const STEP = 16;
-  return (
-    <svg className="trace-marks" role="img" aria-label={label} width={marks.length * STEP} height={16}>
-      {marks.map((m, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: marks are positional
-        <Pin key={i} x={i * STEP + 8} y={8} mark={m} />
-      ))}
-    </svg>
-  );
-}
-
 /** The Traces' sentences as visible text. */
 export function WhatHappened({
   items,

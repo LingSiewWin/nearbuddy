@@ -966,7 +966,7 @@ export function DoodleCrewFooter({
       s.w = r.width;
       s.h = r.height;
       if (s.floaters.length !== doodleList.length || !ow) {
-        s.floaters = doodleList.map((d, k) => ({
+        s.floaters = doodleList.map((_, k) => ({
           x: (0.04 + 0.92 * ((k + hash(k * 9.1) * 0.8) / Math.max(1, doodleList.length))) * r.width,
           y: (0.02 + hash(k * 3.3) * 0.56) * r.height,
           vx: 0,
