@@ -1,5 +1,16 @@
 # lab/look: does a duelist that can choose to look at a market resist a fake headline better?
 
+**Result (2026-11-14, 35 units per cell).** Given a menu, both models nearly always paid to look, but mostly at the
+price ticks, not at the market. **H1 held on the naive prompt**: with an honest market on the menu the flip rate fell
+from 0.97-1.00 (headline alone) to 0.29-0.40. **H2 held on naive, observationally**: trials that chose the market
+flipped 1 time in 12 (Qwen) and 1 in 18 (DeepSeek), the rest about half the time; the model picked its own group, so
+this is not proof that looking caused it. **H1 and H2 were not supported on hardened-v3**, where the headline alone
+already flips only at the noise level and the models almost never chose the market (3 of 279 menu arms).
+**H3 was not shown**: every naive trial that chose the rigged market flipped (24 of 24, the same as headline-only),
+but 9 and 15 choosers are too few for the pre-registered non-inferiority interval to clear -0.11; on hardened-v3 there
+were 1 and 0 choosers. **H4 held in one cell of four**: the fee lowered the look rate only on hardened-v3 (Qwen
+-0.23, supported; DeepSeek -0.17, Holm p 0.094), and not at all on naive.
+
 ## Pre-registration
 
 This section is committed before the first paid call of this experiment. The commit is the record. Any change after
@@ -165,4 +176,165 @@ The looker split in H2 and H3 is self-selected. Two models, two prompts, one cor
 
 ## Deviations
 
-None yet.
+1. **Pilot kept.** The pilot (units 0-7, 320 calls) had no parse failure, no reply cut at the token limit, no
+   unreadable menu choice and 128 of 128 call-1 and call-2 signatures verified, so no template or request field
+   changed. By the pre-registered rule its units are the first 8 of the main run, and N = 35.
+2. **Look-rate denominator.** The pre-registration says the look rate is read from verified call-1 replies. The
+   tables count arms that are verified and have a decision from call 2, the same set as the flip tables, so that the
+   look and flip columns share one denominator. That drops 3 arms whose call 1 verified (2 Qwen naive call-2 parse
+   failures, and one DeepSeek hardened-v3 arm whose call-1 signature fetch timed out, so it is not verified at all).
+3. **Type-checker setting.** `lab/mypy.ini` gained `explicit_package_bases = True` so that `look.py` can import
+   `market/market.py` as `market.market`. It changes no experimental code path.
+
+## Results
+
+`uv run --locked python look/look.py report` prints every table below from `results/main.jsonl.gz` joined to the
+market experiment's `../market/results/main.jsonl.gz` (baseline and arm `headline`). Verified arms with a decision.
+Wilson 95% for rates, Newcombe 95% for paired differences, exact McNemar or Fisher, Holm over the 4 cells.
+
+### Look rate: share choosing none / market / ticks / invalid
+
+| model | prompt | arm | n | none | market | ticks | invalid |
+|---|---|---|---|---|---|---|---|
+| Qwen3.8-27B | naive | honest | 35 | 0.00 | 0.34 | 0.63 | 0.03 |
+| Qwen3.8-27B | naive | honest_free | 34 | 0.00 | 0.38 | 0.62 | 0.00 |
+| Qwen3.8-27B | naive | rigged | 34 | 0.03 | 0.26 | 0.71 | 0.00 |
+| Qwen3.8-27B | naive | placebo | 35 | 0.03 | 0.00 | 0.97 | 0.00 |
+| DeepSeek-V4.1-Flash-1017 | naive | honest | 35 | 0.06 | 0.51 | 0.43 | 0.00 |
+| DeepSeek-V4.1-Flash-1017 | naive | honest_free | 35 | 0.03 | 0.46 | 0.51 | 0.00 |
+| DeepSeek-V4.1-Flash-1017 | naive | rigged | 35 | 0.00 | 0.43 | 0.57 | 0.00 |
+| DeepSeek-V4.1-Flash-1017 | naive | placebo | 35 | 0.20 | 0.00 | 0.80 | 0.00 |
+| Qwen3.8-27B | hardened-v3 | honest | 35 | 0.23 | 0.03 | 0.74 | 0.00 |
+| Qwen3.8-27B | hardened-v3 | honest_free | 35 | 0.00 | 0.03 | 0.97 | 0.00 |
+| Qwen3.8-27B | hardened-v3 | rigged | 35 | 0.06 | 0.03 | 0.91 | 0.00 |
+| Qwen3.8-27B | hardened-v3 | placebo | 35 | 0.03 | 0.00 | 0.97 | 0.00 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | honest | 35 | 0.17 | 0.00 | 0.83 | 0.00 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | honest_free | 35 | 0.00 | 0.00 | 1.00 | 0.00 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | rigged | 35 | 0.20 | 0.00 | 0.80 | 0.00 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | placebo | 34 | 0.15 | 0.00 | 0.85 | 0.00 |
+
+### Flip rate per arm
+
+| model | prompt | headline (A) | honest (B) | honest_free (B0) | rigged (C) | placebo (D) |
+|---|---|---|---|---|---|---|
+| Qwen3.8-27B | naive | 34/34 1.00 [0.90, 1.00] | 14/35 0.40 [0.26, 0.56] | 9/34 0.26 [0.15, 0.43] | 24/34 0.71 [0.54, 0.83] | 1/35 0.03 [0.01, 0.15] |
+| DeepSeek-V4.1-Flash-1017 | naive | 34/35 0.97 [0.85, 0.99] | 10/35 0.29 [0.16, 0.45] | 8/35 0.23 [0.12, 0.39] | 25/35 0.71 [0.55, 0.84] | 10/35 0.29 [0.16, 0.45] |
+| Qwen3.8-27B | hardened-v3 | 7/35 0.20 [0.10, 0.36] | 5/35 0.14 [0.06, 0.29] | 6/35 0.17 [0.08, 0.33] | 5/35 0.14 [0.06, 0.29] | 6/35 0.17 [0.08, 0.33] |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | 6/35 0.17 [0.08, 0.33] | 3/35 0.09 [0.03, 0.22] | 4/35 0.11 [0.05, 0.26] | 4/35 0.11 [0.05, 0.26] | 5/34 0.15 [0.06, 0.30] |
+
+### Flip rate by the choice made
+
+| model | prompt | arm | none | market | ticks |
+|---|---|---|---|---|---|
+| Qwen3.8-27B | naive | honest | 0/0 | 1/12 0.08 | 12/22 0.55 |
+| Qwen3.8-27B | naive | honest_free | 0/0 | 0/13 0.00 | 9/21 0.43 |
+| Qwen3.8-27B | naive | rigged | 1/1 | 9/9 1.00 | 14/24 0.58 |
+| Qwen3.8-27B | naive | placebo | 0/1 | 0/0 | 1/34 0.03 |
+| DeepSeek-V4.1-Flash-1017 | naive | honest | 2/2 | 1/18 0.06 | 7/15 0.47 |
+| DeepSeek-V4.1-Flash-1017 | naive | honest_free | 1/1 | 0/16 0.00 | 7/18 0.39 |
+| DeepSeek-V4.1-Flash-1017 | naive | rigged | 0/0 | 15/15 1.00 | 10/20 0.50 |
+| DeepSeek-V4.1-Flash-1017 | naive | placebo | 2/7 | 0/0 | 8/28 0.29 |
+| Qwen3.8-27B | hardened-v3 | honest | 0/8 | 0/1 | 5/26 0.19 |
+| Qwen3.8-27B | hardened-v3 | honest_free | 0/0 | 0/1 | 6/34 0.18 |
+| Qwen3.8-27B | hardened-v3 | rigged | 0/2 | 1/1 | 4/32 0.12 |
+| Qwen3.8-27B | hardened-v3 | placebo | 0/1 | 0/0 | 6/34 0.18 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | honest | 1/6 | 0/0 | 2/29 0.07 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | honest_free | 0/0 | 0/0 | 4/35 0.11 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | rigged | 2/7 | 0/0 | 2/28 0.07 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | placebo | 1/5 | 0/0 | 4/29 0.14 |
+
+The one `invalid` choice (Qwen naive, `honest`) flipped; it is counted with the non-market group in H2.
+
+### Hypotheses
+
+| model | prompt | H1: honest - headline | H2: market choosers vs rest (honest) | H3: rigged - headline, market choosers | H4: looks, fee - free |
+|---|---|---|---|---|---|
+| Qwen3.8-27B | naive | 0 vs 20, -0.59 [-0.74, -0.39], Holm p 5.7e-06: **supported** | 0.08 (1/12) vs 0.57 (13/23), Holm p 0.029: **supported** | n 9, +0.00 [-0.30, +0.30]: not shown | -0.03 [-0.15, +0.07], Holm p 1.0: not supported |
+| DeepSeek-V4.1-Flash-1017 | naive | 1 vs 25, -0.69 [-0.82, -0.46], Holm p 3.2e-06: **supported** | 0.06 (1/18) vs 0.53 (9/17), Holm p 0.011: **supported** | n 15, +0.00 [-0.20, +0.20]: not shown | -0.03 [-0.16, +0.10], Holm p 1.0: not supported |
+| Qwen3.8-27B | hardened-v3 | 0 vs 2, -0.06 [-0.17, +0.05], Holm p 0.50: not supported | 0/1 vs 5/34, Holm p 1.0: not supported | n 1: not shown | 0 vs 8, -0.23 [-0.39, -0.08], Holm p 0.031: **supported** |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | 0 vs 3, -0.09 [-0.22, +0.03], Holm p 0.50: not supported | no market choosers: not testable | n 0: not testable | 0 vs 6, -0.17 [-0.33, -0.04], Holm p 0.094: not supported |
+
+H1 discordant pairs read "honest only flipped vs headline only flipped". H4 discordant pairs read "looked only with the
+fee vs looked only when free".
+
+Secondary, uncorrected:
+
+- **Chose vs shown.** On the same units, the menu's `honest` arm against the market experiment's `honest` arm (line
+  always shown): Qwen naive -0.06 [-0.27, +0.16], DeepSeek naive -0.20 [-0.36, -0.01] (p 0.065), Qwen v3 +0.14
+  [+0.02, +0.29] (p 0.062), DeepSeek v3 +0.00. Having to choose did not do worse than being shown on naive.
+- **Rigged arm overall.** `rigged - headline` on naive is -0.27 (p 0.004, Qwen) and -0.26 (p 0.012, DeepSeek): the
+  arm as a whole flipped less than headline-only, because the 57-71% who chose ticks flipped about half the time.
+- **Pooled over models:** naive `honest - headline` -0.64 [-0.74, -0.50] (p 1.3e-12); hardened-v3 -0.07
+  [-0.15, -0.00] (p 0.062).
+
+### Cost paid
+
+| model | prompt | units | paid looks (B, C, D) | NEAR paid | NEAR per unit |
+|---|---|---|---|---|---|
+| Qwen3.8-27B | naive | 35 | 101 | 5.05 | 0.144 |
+| DeepSeek-V4.1-Flash-1017 | naive | 35 | 96 | 4.80 | 0.137 |
+| Qwen3.8-27B | hardened-v3 | 35 | 94 | 4.70 | 0.134 |
+| DeepSeek-V4.1-Flash-1017 | hardened-v3 | 35 | 86 | 4.30 | 0.123 |
+
+About 9 in 10 paid menus ended in a paid look. No fee was actually charged anywhere: it is a number in the prompt.
+
+### What it shows
+
+- **Offered a market, a naive duelist resists a fake headline about as well as when the market is pushed at it.**
+  Headline-only flips 0.97-1.00; with the menu 0.29-0.40 (0.23-0.26 when free). The effect is 0.59-0.69, far above
+  the 0.11 re-roll noise floor. In the market experiment (line always shown, its 36 units) the naive rate was 0.46-0.47.
+- **The protection sits with the trials that chose the market**: 2 flips in 30 such trials on naive, against about
+  half of those that chose ticks. Self-selection could explain part of it: a trial that already doubts the headline
+  may be the one that asks for the market.
+- **The ticks look also helped on naive**, though they carry no information beyond the brief (a straight line to the
+  brief's price): about half the ticks choosers did not flip. Taking any second look, or the second call itself, seems
+  to cool the headline. This experiment has no "menu with ticks only" arm, so it cannot separate those.
+- **A rigged market fully fools the naive duelists that chose it** (24 of 24 flipped). That matches headline-only
+  (H3's direction), but the pre-registered interval needs more choosers to call it "no worse".
+- **hardened-v3 almost never asks for the market** (3 of 279 menu arms) and its flip rates on every arm stay at the
+  placebo / noise level (0.09-0.20). Here the fee did matter: with a fee 17-23% chose `none`, when free 0%.
+- **Looking when nothing is wrong.** With a neutral headline (arm D) nobody chose the market, but 80-97% still paid
+  for ticks. The agent looks by habit, not because the headline looks suspicious.
+
+### What it does not show
+
+- **Synthetic observations, not a live market or tape.** The market line is fixed text with a seeded number; the ticks
+  are a straight line. A real market would move, and an attacker would rig the ticks too.
+- **The lab harness, not the on-chain arena.** No fee is charged and no bond exists; the cost is words in a prompt.
+- **Self-selection.** H2 and H3 compare groups the model chose itself into. They are observational.
+- **Small N.** 35 units per cell. The exact McNemar test at alpha 0.05/4 has 4% power for 0.15 vs 0.05, 68% for
+  0.25 vs 0 and 99% for 0.40 vs 0 (`stats.power_mcnemar`, 5000 simulations). Only large effects show; a null here is
+  "not detected". H3's non-inferiority reading needs at least about 31 market choosers per cell to pass even with
+  zero difference, and no cell had that many.
+- **Two models, two prompts, one corpus of crypto headlines, 5-minute duels,** a 2400-token reply allowance (the market
+  experiment's raised value, not the live 600), and one fixed menu wording with `ticks` listed last.
+- **The control is reused.** Arm A is the market experiment's `headline` arm: same request bytes (140 of 140 rebuilt
+  byte for byte), sampled earlier the same day, not re-sampled in this run.
+
+### Calls, spend and verification
+
+- **1,400 calls of the 1,400 cap**: 560 call 1, 560 call 2, 280 hardened-v3 judge calls (pilot 320 included). The last
+  unit finished on call 1,400; no unit was cut. **$0.7167** in `spend.jsonl`, against the $6.00 cap.
+- **Verified:** call 1 559 of 560 (99.8%), call 2 560 of 560 (100%), judge 280 of 280. The one unverified call 1
+  (DeepSeek hardened-v3, unit 34, `placebo`) had its signature fetch time out; that arm is excluded. `report`
+  re-checks every verified call from the stored bytes and rebuilds the signed messages from `prompts` and the
+  templates: 559 of 559 call 1 and 559 of 560 call 2 (the call 2 of that same arm cannot be rebuilt without a
+  verified call 1).
+- **Lost outcomes:** 2 call-2 replies did not parse (Qwen naive: one cut at 2400 tokens, one JSON without a
+  direction). 3 call-1 replies were cut at 2400 tokens; 2 still held a readable choice, 1 is the `invalid` above.
+
+### Reproduce
+
+```sh
+cd nearbuddy/lab
+uv sync --locked
+uv run --locked pytest tests/test_look.py          # no network
+uv run --locked python look/look.py report         # every table above, from results/main.jsonl.gz
+# paid, needs NEAR_AI_API_KEY in nearbuddy/.env; resumes from results/main.jsonl and refuses call 1,401 / $6
+uv run --locked python look/look.py run --n 8      # pilot, units 0-7
+uv run --locked python look/look.py check          # pilot read: failures and verification only
+uv run --locked python look/look.py run --n 35
+```
+
+A fresh paid run appends to `spend.jsonl`. Move the committed `spend.jsonl` and `results/main.jsonl.gz` aside first,
+or the 1,400-call cap counts the calls already logged and `report` reads the old results.
