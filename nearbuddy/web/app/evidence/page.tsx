@@ -1,11 +1,12 @@
 // /evidence ("Research" in the header): does lying to an AI actually work? Its job: the research as small multiples.
-// A row of counted instruments first, then four findings, each a sentence, its chart and an honest caption. Static:
-// every figure is a measured count from nearbuddy/lab, printed with its chart.
+// A row of counted sharp proportion bars first, then four findings, each a sentence, its chart and an honest caption.
+// Static: every figure is a measured count from nearbuddy/lab, printed with its chart. Method/source lives in one
+// frosted drawer — not per-chart tables or particle sandboxes.
 import type { Metadata } from "next";
 import board from "../data/board.json";
-import { REPO } from "../tui";
 import { LabChart } from "../ui/charts";
-import { Panel, Readout, Strip, Tag } from "../ui/instruments";
+import { MeterBar, Panel, Readout, Tag } from "../ui/instruments";
+import { MethodDrawer } from "./method-drawer";
 
 export const metadata: Metadata = {
   title: "What the lab found",
@@ -13,21 +14,14 @@ export const metadata: Metadata = {
     "Controlled runs: how often one fake headline changes an AI's bet, under a naive and a hardened prompt, with the counts behind each figure.",
 };
 
-const DATA = `${REPO}/tree/HEAD/nearbuddy/lab`;
-const data = (
-  <a href={DATA} target="_blank" rel="noreferrer">
-    The data
-  </a>
-);
-
-// each cell of the small multiples: label, changed, total, strip colour ("alert": fooled by a headline)
-const CELLS: [string, number, number, "alert" | "ink"][] = [
+// each cell: label, changed, total, bar colour ("alert" = fooled → rose; "live" = held/stable → lime)
+const CELLS: [string, number, number, "alert" | "live"][] = [
   ["Naive · headline with cues", 676, 704, "alert"],
   ["Naive · cues removed", 674, 704, "alert"],
-  ["Naive · neutral line", 128, 707, "ink"],
+  ["Naive · neutral line", 128, 707, "live"],
   ["Hardened · headline", 49, 705, "alert"],
-  ["Hardened · neutral line", 58, 713, "ink"],
-  ["No attack · asked again", 5, 45, "ink"],
+  ["Hardened · neutral line", 58, 713, "live"],
+  ["No attack · asked again", 5, 45, "live"],
 ];
 
 export default function Page() {
@@ -39,12 +33,13 @@ export default function Page() {
         <p className="lede">
           {`Controlled runs, not live play: 9,297 enclave-signed calls in the main lab run. Separately, ${board.rows.toLocaleString("en-US")} recorded AI decisions feed the scoreboard.`}
         </p>
+        <MethodDrawer />
       </header>
       <div className="deck c3">
         {CELLS.map(([label, n, of, kind]) => (
           <Panel key={label} label={`Lab · ${label}`}>
             <Readout value={n} unit={`of ${of} changed their bet`} />
-            <Strip n={n} of={of} cells={of <= 45 ? of : 36} kind={kind} label={`${n} of ${of} changed their bet`} />
+            <MeterBar n={n} of={of} kind={kind} label={`${n} of ${of} changed their bet`} />
           </Panel>
         ))}
       </div>
@@ -62,7 +57,7 @@ export default function Page() {
           <p className="note">
             In the lab, pooled across models, the headline shown with its credibility cues. With the cues removed: 674
             of 704 (96%). With a neutral line in its place: 128 of 707 (18%) under the naive prompt, 58 of 713 (8%)
-            under the hardened one. The dashed line is the 11% that changes with no attack. {data}
+            under the hardened one. The dashed line is the 11% that changes with no attack.
           </p>
         </Panel>
         <Panel label="Finding 2" tag={<Tag kind="ink">about half</Tag>}>
@@ -83,7 +78,7 @@ export default function Page() {
           <p className="note">
             A different run from the first chart, so the two naive rates differ slightly. In the lab, naive prompt, 36
             trials per cell, two cells. With a rigged market price instead: 100% and 94%. When the model was allowed to
-            choose to look at an honest market: 29% to 40% fooled. {data}
+            choose to look at an honest market: 29% to 40% fooled.
           </p>
         </Panel>
         <Panel label="Finding 3" tag={<Tag>noise</Tag>}>
@@ -101,13 +96,13 @@ export default function Page() {
           />
           <p className="note">
             In the lab, the same prompts run again at fixed settings: 5 of 45 changed side. The true share likely sits
-            between 5% and 23%. {data}
+            between 5% and 23%.
           </p>
         </Panel>
-        <Panel label="Finding 4" tag={<Tag kind="live">live</Tag>}>
-          <h2 className="t-title">Live attacks are few so far.</h2>
+        <Panel label="Finding 4" tag={<Tag kind="ink">on-chain</Tag>}>
+          <h2 className="t-title">On-chain attacks so far are few.</h2>
           <Readout value="12" unit="fooled of 23 that reached a decision" />
-          <Strip n={12} of={23} cells={23} kind="alert" label="Fooled 12 of 23; 11 held" />
+          <MeterBar n={12} of={23} kind="alert" label="Fooled 12 of 23; 11 held" />
           <dl className="kv">
             <dt>Placed</dt>
             <dd>58</dd>
@@ -119,8 +114,8 @@ export default function Page() {
             <dd>11</dd>
           </dl>
           <p className="note">
-            Live attacks so far: 58, all made by the team. The live record is too small to confirm or contradict the
-            lab. <a href="/arena">See the duels they were planted in</a>
+            On-chain attacks so far: 58, all made by the team. The sample is too small to confirm or contradict the lab.{" "}
+            <a href="/arena">See the duels they were planted in</a>
           </p>
         </Panel>
       </div>

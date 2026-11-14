@@ -165,6 +165,7 @@ export function Sheet({
   title,
   locked,
   kind = "sheet",
+  className,
   children,
 }: {
   open: boolean;
@@ -173,6 +174,8 @@ export function Sheet({
   locked?: boolean;
   /** `tall`: full height minus 48px on phone (the attack box). `drawer`: a 480px right panel on desktop. */
   kind?: "sheet" | "tall" | "drawer";
+  /** Extra classes on the dialog (e.g. `frost` for the Research method drawer). */
+  className?: string;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -187,7 +190,7 @@ export function Sheet({
     // biome-ignore lint/a11y/useKeyWithClickEvents: the click is the scrim's; the keyboard closes with Esc (onCancel)
     <dialog
       ref={ref}
-      className={`sheet${kind === "sheet" ? "" : ` ${kind}`}`}
+      className={`sheet${kind === "sheet" ? "" : ` ${kind}`}${className ? ` ${className}` : ""}`}
       aria-label={title}
       onCancel={(e) => {
         e.preventDefault(); // Esc: this component decides, so a locked sheet stays

@@ -54,6 +54,13 @@ export function stripCells(n: number, of: number, cells: number): number {
   return Math.min(cells - 1, Math.max(1, Math.round((n / of) * cells)));
 }
 
+/** Fill width % for a Research meter: proportional, never empty when n > 0 and never full when n < of. */
+export function meterPct(n: number, of: number): number {
+  if (of <= 0 || n <= 0) return 0;
+  if (n >= of) return 100;
+  return Math.min(99.5, Math.max(0.5, (n / of) * 100));
+}
+
 /** A count out of a total as a row of cells. With a total of `cells` or fewer, one cell is one item. */
 export function Strip({
   n,
@@ -77,6 +84,26 @@ export function Strip({
         // biome-ignore lint/suspicious/noArrayIndexKey: cells are positional
         <i key={i} className={i < lit ? "on" : undefined} />
       ))}
+    </span>
+  );
+}
+
+/** A sharp rectangular proportion bar for Research meters. `alert` = fooled/rose; `live`/`ok` = held/stable lime or blue. */
+export function MeterBar({
+  n,
+  of,
+  kind = "alert",
+  label,
+}: {
+  n: number;
+  of: number;
+  kind?: "live" | "alert" | "ink" | "ok";
+  label: string;
+}) {
+  const pct = meterPct(n, of);
+  return (
+    <span className={`meter-bar ${kind}`} role="img" aria-label={label}>
+      <span className="meter-bar-fill" style={{ width: `${pct}%` }} />
     </span>
   );
 }

@@ -3,7 +3,6 @@
 // findings) and IntervalBar (a rate with its uncertainty, for the scoreboard). Bars are ink, never red; no animation.
 import { useId, useRef } from "react";
 import { wilson } from "../lib/fool";
-import { Details } from "./kit";
 import { useWidth } from "./trace-view";
 
 /** One bar: `rate` from 0 to 1, `text` printed at its end ("676 of 704 (96%)"). `approx`: the source figure is
@@ -13,11 +12,11 @@ export type Bar = { label: string; rate: number; text: string; approx?: boolean 
 export function LabChart({
   bars,
   noise,
-  id,
 }: {
   bars: Bar[] /** A dashed line at this rate: the no-attack noise. */;
   noise?: number;
-  id: string;
+  /** Kept for stable call sites; the per-chart table moved to the Research method drawer. */
+  id?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const width = useWidth(ref);
@@ -72,18 +71,6 @@ export function LabChart({
           100%
         </text>
       </svg>
-      <Details id={`table-${id}`} label="Show as table">
-        <table className="plain">
-          <tbody>
-            {bars.map((b) => (
-              <tr key={b.label}>
-                <th scope="row">{b.label}</th>
-                <td className="mono">{b.text}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Details>
     </div>
   );
 }
