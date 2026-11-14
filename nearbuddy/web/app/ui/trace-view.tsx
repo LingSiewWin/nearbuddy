@@ -36,7 +36,7 @@ export function useReducedMotion(): boolean {
 const FULL = { height: 72, padL: 36, padR: 10 };
 const MINI = { height: 48, padL: 6, padR: 10 };
 // the central object of a control room: the same Trace, drawn large
-const STAGE = { height: 112, padL: 36, padR: 10 };
+const STAGE = { height: 136, padL: 36, padR: 10 };
 const BOX = { full: FULL, mini: MINI, stage: STAGE };
 /** The left and right padding of a full Trace, shared by the price line and the time axis above and below it. */
 export const TRACE_PAD = { left: FULL.padL, right: FULL.padR };

@@ -139,7 +139,7 @@
     margin-right: var(--s-6);
   }
   .foot-cols {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
   }
 }
 
@@ -2263,4 +2263,190 @@ table.board tbody th {
 }
 .kv dd {
   max-width: 22ch;
+}
+
+/* ---------------------------------------------------------------- practice round: dashed, never a duel's record */
+.practice {
+  margin-top: var(--s-4);
+  border: 1px dashed var(--live);
+  background: var(--bg);
+  scroll-margin-top: var(--s-7);
+}
+.practice-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1) var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px dashed var(--live);
+}
+.practice-terms {
+  font: 500 10.5px / 1.4 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--live);
+}
+.practice-tally {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--hi);
+}
+.practice-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.practice-form,
+.practice-stage {
+  padding: var(--s-3);
+  min-width: 0;
+}
+.practice-form > * + *,
+.practice-stage > * + * {
+  margin-top: var(--s-3);
+}
+.practice-stage {
+  border-top: 1px dashed var(--rule);
+}
+.practice p {
+  font: var(--t-small);
+}
+.practice .t-verdict {
+  font: var(--t-verdict);
+}
+.practice .practice-sentence {
+  font: var(--t-body);
+  color: var(--hi);
+}
+.practice-off {
+  border-left: 2px solid var(--caution);
+  padding-left: var(--s-3);
+  color: var(--caution);
+}
+.practice-examples {
+  display: grid;
+  gap: var(--s-1);
+}
+.practice-examples button {
+  min-height: 44px;
+  padding: var(--s-2) var(--s-3);
+  text-align: left;
+  font: 500 15px / 1.3 var(--serif);
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-1);
+  cursor: pointer;
+}
+.practice-examples button:hover:not(:disabled) {
+  border-color: var(--dim);
+  color: var(--hi);
+}
+.practice-examples button:disabled {
+  color: var(--dim);
+  cursor: default;
+}
+.practice-trace {
+  border: 1px dashed var(--rule);
+  padding: var(--s-2) var(--s-3);
+}
+.practice-call {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.practice-sig .tag {
+  margin-right: var(--s-1);
+}
+.practice-terms {
+  flex-basis: 100%;
+}
+.practice-who {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--t-small);
+  color: var(--dim);
+}
+.practice-who b {
+  color: var(--fg);
+  font-weight: 500;
+}
+.practice .details-body {
+  padding-bottom: var(--s-3);
+}
+/* ---------------------------------------------------------------- the quiet home: Trace, headlines, practice */
+.home-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+}
+.home-main .practice {
+  margin-top: 0;
+}
+.room.quiet .stage {
+  padding: var(--s-5);
+}
+.room.quiet .stage > * + * {
+  margin-top: var(--s-4);
+}
+.room.quiet .stage-row + .stage-row {
+  padding-top: var(--s-4);
+}
+.stage-checks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1) var(--s-3);
+  font: var(--t-small);
+}
+.room.quiet .stage-planted {
+  min-height: 0;
+}
+.instruments {
+  padding: 0 var(--s-3);
+}
+.instruments .details {
+  border-top: 0;
+}
+@media (max-width: 1099px) {
+  .home-main.practice-first .practice {
+    order: -1;
+  }
+  .room.quiet .stage {
+    padding: var(--s-4) var(--s-3);
+  }
+}
+@media (min-width: 1100px) {
+  .home-main {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
+    gap: var(--s-5);
+  }
+  .room.quiet {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .room.quiet .stage {
+    grid-column: 1;
+  }
+  .room.quiet .stage-planted {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.instruments .deck > :last-child {
+  grid-column: 1 / -1;
+}
+.practice-stage {
+  scroll-margin-top: var(--s-8);
+}
+.practice .practice-ask {
+  font: var(--t-body);
+  color: var(--hi);
+}
+.practice .practice-ask.dim {
+  color: var(--dim);
+}
+.practice-next {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
 }

@@ -9,6 +9,7 @@ export const metadata: Metadata = {
   description: `Plant one fake headline in a live duel between two AIs on NEAR ${NETWORK_ID}. If it falls for it and loses, you get paid. Every decision is signed inside a secure enclave.`,
 };
 
+// Practice needs the server's model key; the page only learns whether one is set, read when the page is built.
 export default function Page() {
-  return <Home />;
+  return <Home practice={!!process.env.NEAR_AI_API_KEY} />;
 }

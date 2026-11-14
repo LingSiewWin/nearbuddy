@@ -2,7 +2,8 @@
 // The landing page as a control room. Its job: understand the game and start. The centre is the Trace: the live
 // duel when one can be attacked, otherwise a replay of a real recorded attack (ui/room.tsx), so the page is never an
 // empty panel. Around it sit the instruments; under it the lab's findings as small counted charts, recorded attacks
-// from the dataset, how it works, the proof and the questions.
+// from the dataset, how it works, the proof and the questions. Directly under the centre: the practice round
+// (ui/practice.tsx), which works at any hour; it is offered second while a duel is live.
 import { useState } from "react";
 import board from "./data/board.json";
 import { NETWORK_ID } from "./network";
@@ -11,6 +12,7 @@ import { type DuelRow, duelPath, type History, traceOf, useDuel, usePrice, verif
 import { bet, near, nsMs, shortModel, TEST_NOTE } from "./ui/format";
 import { Panel, Readout, Strip, Tag } from "./ui/instruments";
 import { Button, Countdown, Details, LinkButton, StatusBar, useNow } from "./ui/kit";
+import { PracticePanel } from "./ui/practice";
 import { RECORDED } from "./ui/replay";
 import { MachineQuote } from "./ui/result";
 import { BetTag, ChecksPanel, PricePanel, ReplayActions, ReplayRoom, Stage } from "./ui/room";
@@ -196,7 +198,7 @@ function Findings() {
 
 const WORD = { fooled: ["fooled", "alert"], held: ["held", "ink"], untested: ["did not count", "idle"] } as const;
 
-export default function Home() {
+export default function Home({ practice }: { practice: boolean }) {
   const now = useNow();
   const { list } = useSite();
   const [replay, setReplay] = useState(false);
@@ -220,41 +222,50 @@ export default function Home() {
           <Tag>reading the arena</Tag>
         )}
         <p className="lede">
-          Two AIs bet on the NEAR price, each with a bond behind it. Plant one fake headline at one of them. Its next
-          decision is signed inside a secure enclave and the contract records FOOLED or HELD. If it falls for it and
-          loses, you get paid.
+          Plant one fake headline at an AI trading agent and see if it changes its bet. <a href="#how">How it works</a>
         </p>
       </header>
 
-      {shown && !replay ? (
-        <LiveRoom key={`${shown.row.arena}:${shown.row.id}`} shown={shown} now={now} onReplay={() => setReplay(true)} />
-      ) : (
-        <ReplayRoom
-          rec={RECORDED}
-          lead={({ restart }) => (
-            <>
-              <ReplayActions rec={RECORDED} restart={restart} />
-              {shown ? (
-                <button type="button" className="btn btn-quiet" onClick={() => setReplay(false)}>
-                  Back to the live duel
-                </button>
+      {/* on a phone with no live duel the practice round is shown above the recording (CSS order), so the page's
+          main action is near the top; on desktop it sits directly under the centre */}
+      <div className={`home-main${shown ? "" : " practice-first"}`}>
+        {shown && !replay ? (
+          <LiveRoom
+            key={`${shown.row.arena}:${shown.row.id}`}
+            shown={shown}
+            now={now}
+            onReplay={() => setReplay(true)}
+          />
+        ) : (
+          <ReplayRoom
+            quiet
+            rec={RECORDED}
+            lead={({ restart }) =>
+              shown ? (
+                <>
+                  <ReplayActions rec={RECORDED} restart={restart} />
+                  <button type="button" className="btn btn-quiet" onClick={() => setReplay(false)}>
+                    Back to the live duel
+                  </button>
+                </>
               ) : (
                 <p className="note">
                   {list.data
-                    ? "No duel is running right now, so there is nothing to lie to. This is a recording of a real attack; the button to lie appears here when a duel opens."
+                    ? "No duel is running, so this is a recording of a real attack."
                     : list.error
                       ? "The arena could not be read just now. This is a recording of a real attack."
                       : "Reading the arena. Meanwhile, this is a recording of a real attack."}
                 </p>
-              )}
-            </>
-          )}
-        />
-      )}
+              )
+            }
+          />
+        )}
+        <PracticePanel enabled={practice} second={!!shown} />
+      </div>
 
       <Findings />
 
-      <div className="deck c3 gap-top">
+      <div id="how" className="deck c3 gap-top">
         <Panel label="How it works">
           <ol className="steps">
             {[
