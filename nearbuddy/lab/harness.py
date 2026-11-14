@@ -299,7 +299,10 @@ LAB_DUEL0 = 900_000  # lab trials are not arena duels; this offset keeps the jud
 
 def bind(meta: dict[str, Any]) -> tuple[str, str]:
     """hardened-v3 (judge prompt version 2) binds the judge call to a (duel_id, intent nonce). A lab trial has no
-    duel: duel_id is LAB_DUEL0 + trial index and the nonce is the arm's index in ARMS."""
+    duel: duel_id is LAB_DUEL0 + trial index and the nonce is the arm's index in ARMS. An extension with its own arms
+    passes its own (duel_id, nonce) as meta["bind"]."""
+    if "bind" in meta:
+        return str(meta["bind"][0]), str(meta["bind"][1])
     return str(LAB_DUEL0 + int(meta.get("trial", 0))), str(ARMS.index(meta["arm"]))
 
 
