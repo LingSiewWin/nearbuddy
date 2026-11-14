@@ -149,8 +149,12 @@ The same request at temperature 0 with a seed changed side on 5 of 45 real duel 
 | Batch | Placed | `Flipped` | `Held` | No result |
 |---|---|---|---|---|
 | Up to 2026-11-13 | 38 | 5 | 6 | 27 (19 expired, 7 no trial, 1 pending) |
-| House battle test, 2026-11-14 (`nb-battle-9d5b.testnet`) | 20 | 7 | 5 | 8 expired |
+| House battle test, 2026-11-14 (`nb-battle-9d5b.testnet`) | 20 | 7 | 5 | 8 (2 expired, 6 still pending in duels the oracle outage left unresolved) |
 | Total | 58 | 12 | 11 | 35 |
+
+The totals were re-counted on 2026-11-14 from `get_chaos` on both live arenas (keyed 53, keyless 5): 12 `Flipped`,
+11 `Held`, 21 `Expired`, 7 `NoTrial`, 7 `Pending`. Every injector account in those records is one the project
+created.
 
 - In the first batch all 5 flips were Long lies against a Short call, and all 5 Short lies held. Long lies moved
   the model more often than its own call-to-call drift (exact stratified p = 0.008, 6 trials). Eleven trials are
