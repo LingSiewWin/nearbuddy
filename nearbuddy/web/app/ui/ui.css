@@ -1952,3 +1952,127 @@ table.dense tr:hover th {
   font: 400 11px / 1.4 var(--sans);
   color: var(--dim);
 }
+.planted.picked {
+  background: var(--surface);
+  outline: 1px solid var(--rule);
+  outline-offset: 6px;
+}
+.controls-list {
+  border-bottom: 1px solid var(--rule);
+}
+.duel-head a {
+  font: var(--t-small);
+  color: var(--dim);
+}
+.panel.attack-panel {
+  background: var(--surface);
+}
+.readout .v a {
+  text-decoration-color: var(--dim);
+}
+.planted.picked {
+  background: var(--surface);
+  outline: 1px solid var(--rule);
+  outline-offset: 6px;
+}
+.controls-list {
+  border-bottom: 1px solid var(--rule);
+}
+.duel-head a {
+  font: var(--t-small);
+  color: var(--dim);
+}
+.panel.attack-panel {
+  background: var(--surface);
+}
+.readout .v a {
+  text-decoration-color: var(--dim);
+}
+
+/* ---------------------------------------------------------------- duel list */
+.drows {
+  border: 1px solid var(--rule);
+}
+.drows li + li {
+  border-top: 1px solid var(--rule);
+}
+.drows a {
+  display: grid;
+  grid-template-columns: 6ch minmax(0, 1fr);
+  gap: var(--s-1) var(--s-3);
+  align-items: center;
+  padding: var(--s-2) var(--s-3);
+  min-height: 56px;
+  text-decoration: none;
+  font: var(--t-small);
+}
+.drows a:hover {
+  background: var(--surface);
+}
+.drows .id {
+  color: var(--dim);
+  grid-row: span 2;
+  align-self: start;
+}
+.drows .who {
+  color: var(--hi);
+}
+.drows .mini,
+.drows .marks,
+.drows .state {
+  grid-column: 2;
+}
+.drows .marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+.drows .state {
+  color: var(--dim);
+}
+.drows .who {
+  grid-row: 1;
+  grid-column: 2;
+}
+.empty {
+  border: 1px solid var(--rule);
+  padding: var(--s-4);
+}
+.empty > * + * {
+  margin-top: var(--s-3);
+}
+@media (min-width: 960px) {
+  .drows a {
+    grid-template-columns: 6ch 200px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
+    min-height: 60px;
+  }
+  .drows .id,
+  .drows .who,
+  .drows .mini,
+  .drows .marks,
+  .drows .state {
+    grid-column: auto;
+    grid-row: auto;
+    align-self: center;
+  }
+  .drows .state {
+    text-align: right;
+  }
+}
+
+/* ---------------------------------------------------------------- a footer shorter than the pages it closes */
+.site-footer .bar {
+  padding: var(--s-5) var(--s-4);
+}
+.foot-cols {
+  padding: var(--s-2) 0;
+}
+@media (min-width: 960px) {
+  .site-footer a,
+  .site-footer button {
+    min-height: 28px;
+  }
+  .site-footer .bar > .wordmark {
+    min-height: 0;
+  }
+}
