@@ -1,4 +1,4 @@
-import { mayEat, tierOf, type Resistance } from "../../assets/ocean";
+import { mayEat, type Resistance, tierOf } from "../../assets/ocean";
 
 export type EatVerdict =
   | { ok: true; predator: Resistance; prey: Resistance; predatorTier: string; preyTier: string }

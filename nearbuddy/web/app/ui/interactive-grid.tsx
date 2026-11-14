@@ -98,10 +98,17 @@ export function InteractiveGrid({ cellSize = 32 }: Props) {
   return (
     <div ref={layer} className="interactive-grid" aria-hidden="true">
       {size.w > 0 && size.h > 0 ? (
-        <svg className="interactive-grid-svg" width={size.w} height={size.h} viewBox={`0 0 ${size.w} ${size.h}`}>
+        <svg
+          className="interactive-grid-svg"
+          width={size.w}
+          height={size.h}
+          viewBox={`0 0 ${size.w} ${size.h}`}
+          aria-hidden="true"
+        >
           {Array.from({ length: rows }, (_, row) =>
             Array.from({ length: cols }, (_, col) => (
               <rect
+                // biome-ignore lint/suspicious/noArrayIndexKey: a grid cell is its column and row; the cells are never reordered
                 key={`${col}:${row}`}
                 className="interactive-grid-cell"
                 x={col * cellSize}

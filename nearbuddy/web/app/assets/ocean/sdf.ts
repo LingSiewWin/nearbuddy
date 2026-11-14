@@ -77,10 +77,10 @@ function getSpineSpec(creature: CreatureBody): SpineSpec {
 }
 
 function bodyRadiusAt(s: number, maxRadius: number): number {
-  if (s < 0.22) return Math.pow(Math.sin((s / 0.22) * (Math.PI * 0.5)), 0.72) * maxRadius;
+  if (s < 0.22) return Math.sin((s / 0.22) * (Math.PI * 0.5)) ** 0.72 * maxRadius;
   if (s < 0.82) {
     const t = (s - 0.22) / 0.6;
-    return maxRadius * (1 - 0.82 * Math.pow(t, 1.15));
+    return maxRadius * (1 - 0.82 * t ** 1.15);
   }
   const tailT = (s - 0.82) / 0.18;
   return maxRadius * (0.18 + 0.52 * Math.sin(tailT * Math.PI * 0.85));
@@ -162,11 +162,7 @@ export function rasterizeOceanField(
 
     for (let i = 0; i <= SEGMENTS; i++) {
       const s = i / SEGMENTS;
-      const wave =
-        Math.sin(creature.swimPhase - s * spec.waveFrequency) *
-        spec.tailAmplitude *
-        Math.pow(s, 1.45) *
-        jitterScale;
+      const wave = Math.sin(creature.swimPhase - s * spec.waveFrequency) * spec.tailAmplitude * s ** 1.45 * jitterScale;
       const x = creature.x - fx * (s * spec.length) + nx * wave;
       const y = creature.y - fy * (s * spec.length) + ny * wave;
       const r = bodyRadiusAt(s, spec.maxRadius);

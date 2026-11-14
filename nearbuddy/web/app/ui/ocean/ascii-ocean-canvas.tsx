@@ -1,14 +1,14 @@
 "use client";
 // 3D Gaussian → ASCII grid canvas. Theme-aware; board-seeded sim; no fake LIVE feed.
-import { useEffect, useRef, type MouseEvent, type MutableRefObject } from "react";
+import { type MouseEvent, type MutableRefObject, useEffect, useRef } from "react";
+import type { ArenaTheme, ModelAgentState } from "../../assets/ocean/arena-types";
 import {
   ASCII_RAMP,
-  CELL_SIZE,
   allocBuffers,
-  rasterizeOceanField,
+  CELL_SIZE,
   type GridBuffers,
+  rasterizeOceanField,
 } from "../../assets/ocean/gaussian3d";
-import type { ArenaTheme, ModelAgentState } from "../../assets/ocean/arena-types";
 import type { ArenaSimulation } from "../../assets/ocean/simulation";
 import { useReducedMotion } from "../trace-view";
 
@@ -152,13 +152,7 @@ export function AsciiOceanCanvas({
             ctx.fillStyle = `rgb(${lum},${lum},${lum + 3})`;
           }
           ctx.fillRect(x + 1, y + 1, CELL_SIZE - 1, CELL_SIZE - 1);
-          ctx.fillStyle = isDark
-            ? lum > 100
-              ? "#090A0F"
-              : "#E8EEF8"
-            : lum < 138
-              ? "#F9F9FB"
-              : "#26262B";
+          ctx.fillStyle = isDark ? (lum > 100 ? "#090A0F" : "#E8EEF8") : lum < 138 ? "#F9F9FB" : "#26262B";
           ctx.fillText(glyph, x + CELL_SIZE * 0.5, y + CELL_SIZE * 0.5 + 0.5);
         }
       }

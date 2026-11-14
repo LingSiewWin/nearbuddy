@@ -1,14 +1,7 @@
 // Reynolds seek/flee + 2-slot duel sim. Board models for duelists; AmbientFauna for ecosystem fillers.
-import type {
-  CreatureBody,
-  DecisionTick,
-  ModelSeed,
-  ModelSpec,
-  PredationRipple,
-  SimStake,
-} from "./arena-types";
+import type { CreatureBody, DecisionTick, ModelSeed, ModelSpec, PredationRipple, SimStake } from "./arena-types";
 import { AmbientFauna } from "./fauna";
-import { heldOf, mayEat, rateOf, tierOf, type Resistance } from "./tiers";
+import { heldOf, mayEat, type Resistance, rateOf, tierOf } from "./tiers";
 
 export type BoardModelRow = {
   model: string;
@@ -44,12 +37,7 @@ export function seedFromBoard(models: BoardModelRow[]): ModelSeed[] {
   });
 }
 
-export function tickFromRecent(row: {
-  duel_id: string;
-  model: string;
-  verdict: string;
-  text?: string;
-}): DecisionTick {
+export function tickFromRecent(row: { duel_id: string; model: string; verdict: string; text?: string }): DecisionTick {
   const wasFooled = row.verdict === "fooled";
   const hint = row.text?.slice(0, 96);
   return {
@@ -152,12 +140,8 @@ export class ArenaSimulation {
 
   private bodyFromSeed(s: ModelSeed, slot: number, field: boolean): CreatureBody {
     const angle = field ? (slot / Math.max(1, 4)) * Math.PI * 2 : 0;
-    const x = field
-      ? this.width * (0.5 + Math.cos(angle) * 0.28)
-      : this.width * (slot === 0 ? 0.34 : 0.68);
-    const y = field
-      ? this.height * (0.5 + Math.sin(angle) * 0.2)
-      : this.height * (slot === 0 ? 0.42 : 0.52);
+    const x = field ? this.width * (0.5 + Math.cos(angle) * 0.28) : this.width * (slot === 0 ? 0.34 : 0.68);
+    const y = field ? this.height * (0.5 + Math.sin(angle) * 0.2) : this.height * (slot === 0 ? 0.42 : 0.52);
     const liq = 200 + s.held * 40;
     return {
       ...s,

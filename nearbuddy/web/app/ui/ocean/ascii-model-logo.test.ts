@@ -1,12 +1,7 @@
 import { expect, test } from "bun:test";
-import {
-  LOGO_SIZE,
-  logoStateOf,
-  modelFamilyOf,
-  renderLogoGrid,
-} from "../../assets/ocean/ascii-model-logo";
-import { ArenaSimulation, seedFromBoard } from "../../assets/ocean/simulation";
+import { LOGO_SIZE, logoStateOf, modelFamilyOf, renderLogoGrid } from "../../assets/ocean/ascii-model-logo";
 import { catalogFromBoard } from "../../assets/ocean/catalog";
+import { ArenaSimulation, seedFromBoard } from "../../assets/ocean/simulation";
 
 test("modelFamilyOf maps arena ids to deepseek / qwen / glm / gemini / claude / generic", () => {
   expect(modelFamilyOf("deepseek-ai/DeepSeek-V4.1-Flash-1017")).toBe("deepseek");

@@ -1,14 +1,7 @@
 // Smoke for the doodle footer pure helpers and board-held ASCII bars.
 import { expect, test } from "bun:test";
 import board from "../data/board.json";
-import {
-  boardHeldBars,
-  clamp,
-  hash,
-  layoutWord,
-  seatPoint,
-  timeline,
-} from "./doodle-crew-footer";
+import { boardHeldBars, clamp, hash, layoutWord, seatPoint, timeline } from "./doodle-crew-footer";
 
 test("hash is stable in [0, 1)", () => {
   expect(hash(1)).toBeGreaterThanOrEqual(0);

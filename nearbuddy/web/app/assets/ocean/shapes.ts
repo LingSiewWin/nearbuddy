@@ -11,9 +11,9 @@ function smoothstep(a: number, b: number, x: number): number {
 
 /** Classic shark half-width along the body (fraction of length). */
 function sharkHalf(s: number): number {
-  if (s < 0.1) return 0.09 * Math.pow(Math.sin(((s / 0.1) * Math.PI) / 2), 0.85);
+  if (s < 0.1) return 0.09 * Math.sin(((s / 0.1) * Math.PI) / 2) ** 0.85;
   if (s < 0.28) return 0.09 + 0.045 * smoothstep(0.1, 0.28, s);
-  if (s < 0.78) return 0.135 * Math.pow(1 - (s - 0.28) / 0.5, 1.05);
+  if (s < 0.78) return 0.135 * (1 - (s - 0.28) / 0.5) ** 1.05;
   const k = (s - 0.78) / 0.22;
   return 0.028 * (1 - k) + 0.02 * Math.sin(k * Math.PI);
 }
@@ -52,8 +52,7 @@ export function sampleShark(s: number, n: number, wave = 0): Part {
 /** Mid prey fish, snout at s=0 — clearer oval + dorsal + V-tail. */
 export function samplePrey(s: number, n: number): Part {
   if (s < 0 || s > 1) return "empty";
-  const hw =
-    s < 0.12 ? 0.32 * (s / 0.12) : s > 0.72 ? 0.32 * Math.max(0, 1 - (s - 0.72) / 0.28) : 0.32;
+  const hw = s < 0.12 ? 0.32 * (s / 0.12) : s > 0.72 ? 0.32 * Math.max(0, 1 - (s - 0.72) / 0.28) : 0.32;
   const ay = Math.abs(n);
   // small dorsal nub
   if (s > 0.35 && s < 0.52 && n > hw * 0.5) {

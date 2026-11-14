@@ -28,6 +28,7 @@ export function Creature({ tier, size = 0.85, tone = "lime", flip = false, label
   return (
     <pre
       className={className}
+      role="img"
       aria-label={aria}
       title={aria}
       style={{

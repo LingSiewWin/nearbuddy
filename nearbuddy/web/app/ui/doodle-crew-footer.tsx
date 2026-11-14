@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import boardData from "../data/board.json"
+import * as React from "react";
+import boardData from "../data/board.json";
 
 /**
  * Doodle Crew Footer — a site footer drawn like the last page of a sketchbook.
@@ -30,11 +30,11 @@ import boardData from "../data/board.json"
 
 /** A small deterministic hash → [0, 1), so every render lays the scene out the same way. */
 export const hash = (n: number): number => {
-  const s = Math.sin(n * 127.1 + 311.7) * 43758.5453
-  return s - Math.floor(s)
-}
+  const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return s - Math.floor(s);
+};
 
-export const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v)
+export const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
 /**
  * Lays the wordmark out from per-letter advances (in font units): the left edge
@@ -42,22 +42,26 @@ export const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo
  * width. A non-finite or negative advance counts as zero so one bad glyph can't
  * throw the whole word off the page.
  */
-export const layoutWord = (advances: number[], tracking: number, fontSize: number): { x: number[]; w: number[]; width: number } => {
-  const x: number[] = []
-  const w: number[] = []
-  let at = 0
-  const gap = (Number.isFinite(tracking) ? tracking : 0) * fontSize
+export const layoutWord = (
+  advances: number[],
+  tracking: number,
+  fontSize: number,
+): { x: number[]; w: number[]; width: number } => {
+  const x: number[] = [];
+  const w: number[] = [];
+  let at = 0;
+  const gap = (Number.isFinite(tracking) ? tracking : 0) * fontSize;
   for (let i = 0; i < advances.length; i++) {
-    const raw = advances[i]
-    const a = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0
-    x.push(at)
-    w.push(a)
-    at += a + (i < advances.length - 1 ? gap : 0)
+    const raw = advances[i];
+    const a = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0;
+    x.push(at);
+    w.push(a);
+    at += a + (i < advances.length - 1 ? gap : 0);
   }
-  return { x, w, width: Math.max(0, at) }
-}
+  return { x, w, width: Math.max(0, at) };
+};
 
-export type Seat = "front" | "top" | "behind"
+export type Seat = "front" | "top" | "behind";
 
 /**
  * Where a crew member stands, in wordmark units (baseline at y = 0, up is
@@ -65,39 +69,53 @@ export type Seat = "front" | "top" | "behind"
  * the letter's top edge, `behind` rises from behind the letter so only its top
  * shows above the edge. `offset` slides it along the letter, in letter widths.
  */
-export const seatPoint = (seat: Seat, letterX: number, letterW: number, cap: number, offset: number, scale: number): { x: number; y: number } => {
-  const x = letterX + letterW * (0.5 + (Number.isFinite(offset) ? offset : 0))
-  if (seat === "top") return { x, y: -cap }
-  if (seat === "behind") return { x, y: -cap + 30 * scale }
-  return { x, y: 0 }
-}
+export const seatPoint = (
+  seat: Seat,
+  letterX: number,
+  letterW: number,
+  cap: number,
+  offset: number,
+  scale: number,
+): { x: number; y: number } => {
+  const x = letterX + letterW * (0.5 + (Number.isFinite(offset) ? offset : 0));
+  if (seat === "top") return { x, y: -cap };
+  if (seat === "behind") return { x, y: -cap + 30 * scale };
+  return { x, y: 0 };
+};
 
 /**
  * Where a pupil sits inside its eye: pointed at the target, never further than
  * `max` from the centre, and easing off as the target comes close so the eye
  * doesn't snap when the pointer sits right on the face.
  */
-export const lookAt = (ex: number, ey: number, tx: number, ty: number, max: number, reach: number): { x: number; y: number } => {
-  const dx = tx - ex
-  const dy = ty - ey
-  const d = Math.hypot(dx, dy)
-  if (!Number.isFinite(d) || d < 1e-6 || max <= 0) return { x: 0, y: 0 }
-  const k = (max * Math.min(1, d / Math.max(1e-6, reach))) / d
-  return { x: dx * k, y: dy * k }
-}
+export const lookAt = (
+  ex: number,
+  ey: number,
+  tx: number,
+  ty: number,
+  max: number,
+  reach: number,
+): { x: number; y: number } => {
+  const dx = tx - ex;
+  const dy = ty - ey;
+  const d = Math.hypot(dx, dy);
+  if (!Number.isFinite(d) || d < 1e-6 || max <= 0) return { x: 0, y: 0 };
+  const k = (max * Math.min(1, d / Math.max(1e-6, reach))) / d;
+  return { x: dx * k, y: dy * k };
+};
 
 export type Floater = {
-  x: number
-  y: number
-  vx: number
-  vy: number
-  rot: number
-  vr: number
-  fall: number
-  phase: number
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  rot: number;
+  vr: number;
+  fall: number;
+  phase: number;
   /** Seconds left in a pop; 0 means alive. */
-  pop: number
-}
+  pop: number;
+};
 
 /**
  * One step of a doodle's drift: it falls at its own speed and sways, the
@@ -117,48 +135,48 @@ export const stepFloater = (
   radius: number,
   rand: () => number,
 ): Floater => {
-  const step = clamp(Number.isFinite(dt) ? dt : 0, 0, 0.05)
-  const m = 40
+  const step = clamp(Number.isFinite(dt) ? dt : 0, 0, 0.05);
+  const m = 40;
   if (f.pop > 0) {
-    f.pop -= step
+    f.pop -= step;
     if (f.pop <= 0) {
-      f.pop = 0
-      f.x = rand() * w
-      f.y = -m
-      f.vx = 0
-      f.vy = f.fall
+      f.pop = 0;
+      f.x = rand() * w;
+      f.y = -m;
+      f.vx = 0;
+      f.vy = f.fall;
     }
-    return f
+    return f;
   }
-  const sway = Math.sin(t * 0.7 + f.phase) * 14
+  const sway = Math.sin(t * 0.7 + f.phase) * 14;
   if (Number.isFinite(px) && Number.isFinite(py) && radius > 0) {
-    const dx = f.x - px
-    const dy = f.y - py
-    const d = Math.hypot(dx, dy)
+    const dx = f.x - px;
+    const dy = f.y - py;
+    const d = Math.hypot(dx, dy);
     if (d < radius && d > 0.01) {
-      const k = (1 - d / radius) * (1 - d / radius) * 2400
-      f.vx += (dx / d) * k * step
-      f.vy += (dy / d) * k * step
-      f.vr += (dx > 0 ? 1 : -1) * k * 0.004 * step
+      const k = (1 - d / radius) * (1 - d / radius) * 2400;
+      f.vx += (dx / d) * k * step;
+      f.vy += (dy / d) * k * step;
+      f.vr += (dx > 0 ? 1 : -1) * k * 0.004 * step;
     }
   }
-  const ease = Math.min(1, step * 2.4)
-  f.vx += (sway - f.vx) * ease
-  f.vy += (f.fall - f.vy) * ease
-  f.vr += (Math.sin(f.phase * 3) * 18 - f.vr) * Math.min(1, step * 0.8)
-  f.x += f.vx * step
-  f.y += f.vy * step
-  f.rot = (f.rot + f.vr * step) % 360
+  const ease = Math.min(1, step * 2.4);
+  f.vx += (sway - f.vx) * ease;
+  f.vy += (f.fall - f.vy) * ease;
+  f.vr += (Math.sin(f.phase * 3) * 18 - f.vr) * Math.min(1, step * 0.8);
+  f.x += f.vx * step;
+  f.y += f.vy * step;
+  f.rot = (f.rot + f.vr * step) % 360;
   if (f.y > h + m) {
-    f.y = -m
-    f.x = rand() * w
+    f.y = -m;
+    f.x = rand() * w;
   } else if (f.y < -m * 3) {
-    f.y = h + m
+    f.y = h + m;
   }
-  if (f.x < -m) f.x = w + m
-  else if (f.x > w + m) f.x = -m
-  return f
-}
+  if (f.x < -m) f.x = w + m;
+  else if (f.x > w + m) f.x = -m;
+  return f;
+};
 
 /**
  * The storyboard, in ms from the moment the footer comes into view: the ground
@@ -166,105 +184,109 @@ export const stepFloater = (
  * down, then the doodles, the line of copy word by word, and the buttons.
  */
 export const timeline = (letters: number, crew: number, words: number, actions: number) => {
-  const L = Math.max(0, Math.floor(letters) || 0)
-  const C = Math.max(0, Math.floor(crew) || 0)
-  const W = Math.max(0, Math.floor(words) || 0)
-  const A = Math.max(0, Math.floor(actions) || 0)
-  const letter = (i: number) => 160 + i * 80
-  const crewStart = letter(Math.max(0, L - 1)) + 420
-  const member = (j: number) => crewStart + j * 130
-  const doodles = crewStart + Math.max(0, C - 1) * 130 * 0.5
-  const copy = crewStart + 260
-  const word = (k: number) => copy + k * 45
-  const actionsStart = word(W) + 120
-  const action = (k: number) => actionsStart + k * 110
-  const total = Math.max(member(Math.max(0, C - 1)) + 720, action(Math.max(0, A - 1)) + 600, letter(Math.max(0, L - 1)) + 560)
-  return { ground: 60, letter, crewStart, member, doodles, word, action, total }
-}
+  const L = Math.max(0, Math.floor(letters) || 0);
+  const C = Math.max(0, Math.floor(crew) || 0);
+  const W = Math.max(0, Math.floor(words) || 0);
+  const A = Math.max(0, Math.floor(actions) || 0);
+  const letter = (i: number) => 160 + i * 80;
+  const crewStart = letter(Math.max(0, L - 1)) + 420;
+  const member = (j: number) => crewStart + j * 130;
+  const doodles = crewStart + Math.max(0, C - 1) * 130 * 0.5;
+  const copy = crewStart + 260;
+  const word = (k: number) => copy + k * 45;
+  const actionsStart = word(W) + 120;
+  const action = (k: number) => actionsStart + k * 110;
+  const total = Math.max(
+    member(Math.max(0, C - 1)) + 720,
+    action(Math.max(0, A - 1)) + 600,
+    letter(Math.max(0, L - 1)) + 560,
+  );
+  return { ground: 60, letter, crewStart, member, doodles, word, action, total };
+};
 
 // #endregion
 
-export type CrewKind = "yeti" | "kid" | "bird" | "cat" | "ghost" | "mushroom"
-export type DoodleKind = "flame" | "sandwich" | "star" | "heart" | "bolt" | "sparkle" | "spiral" | "plane"
-export type DoodleCrewPreset = "auto" | "paper" | "night" | "riso" | "sunny"
+export type CrewKind = "yeti" | "kid" | "bird" | "cat" | "ghost" | "mushroom";
+export type DoodleKind = "flame" | "sandwich" | "star" | "heart" | "bolt" | "sparkle" | "spiral" | "plane";
+export type DoodleCrewPreset = "auto" | "paper" | "night" | "riso" | "sunny";
 
 export interface CrewMember {
-  kind: CrewKind
+  kind: CrewKind;
   /** Index of the wordmark letter it lives on. */
-  letter: number
+  letter: number;
   /** `front` stands before the letter, `top` sits on it, `behind` peeks over it. Defaults per kind. */
-  seat?: Seat
+  seat?: Seat;
   /** Slides it along the letter, in letter widths. 0 is centred. */
-  offset?: number
+  offset?: number;
   /** Size relative to the letter. Defaults to 1. */
-  scale?: number
+  scale?: number;
   /** Faces the other way. */
-  flip?: boolean
+  flip?: boolean;
   /** Used in its accessible label. */
-  name?: string
+  name?: string;
   /** What it says when clicked. */
-  says?: string
+  says?: string;
 }
 
 export interface FooterLink {
-  label: string
-  href?: string
+  label: string;
+  href?: string;
 }
 
 export interface FooterColumn {
-  title: string
-  links: FooterLink[]
+  title: string;
+  links: FooterLink[];
 }
 
 export interface FooterAction {
-  label: string
-  href?: string
-  icon?: DoodleKind
-  variant?: "solid" | "outline"
-  onClick?: () => void
+  label: string;
+  href?: string;
+  icon?: DoodleKind;
+  variant?: "solid" | "outline";
+  onClick?: () => void;
 }
 
 export interface DoodleCrewFooterProps {
   /** The giant word. Short, upper case, 4–9 letters reads best. */
-  wordmark?: string
+  wordmark?: string;
   /** Brand name, top left. */
-  brand?: string
+  brand?: string;
   /** One or two sentences under the brand. */
-  blurb?: string
+  blurb?: string;
   /** The line under the wordmark. */
-  tagline?: string
-  columns?: FooterColumn[]
+  tagline?: string;
+  columns?: FooterColumn[];
   /** The pill buttons under the tagline. */
-  actions?: FooterAction[]
+  actions?: FooterAction[];
   /** Bottom bar, left. */
-  copyright?: string
-  legal?: FooterLink[]
-  socials?: FooterLink[]
+  copyright?: string;
+  legal?: FooterLink[];
+  socials?: FooterLink[];
   /** Shows a back-to-top button in the bottom bar. Defaults to true. */
-  backToTop?: boolean
-  crew?: CrewMember[]
+  backToTop?: boolean;
+  crew?: CrewMember[];
   /** Which doodles drift around the word. An empty list turns them off. */
-  doodles?: DoodleKind[]
+  doodles?: DoodleKind[];
   /** How many doodles at a time. Defaults to 12. */
-  doodleCount?: number
+  doodleCount?: number;
   /** `auto` follows the page's --color-background / --color-foreground tokens. */
-  preset?: DoodleCrewPreset
-  palette?: { background?: string; ink?: string; accent?: string }
+  preset?: DoodleCrewPreset;
+  palette?: { background?: string; ink?: string; accent?: string };
   /** Display face for the wordmark. Heavy grotesks stamp best. */
-  fontFamily?: string
+  fontFamily?: string;
   /** Face for the tagline and blurb. */
-  serifFamily?: string
+  serifFamily?: string;
   /** Letter spacing of the wordmark, in em. Defaults to -0.02. */
-  tracking?: number
+  tracking?: number;
   /** Pointer, hover and click play. Defaults to true. */
-  interactive?: boolean
+  interactive?: boolean;
   /** Minimum height, a definite length. The footer grows past it if its content needs to. */
-  height?: string
-  className?: string
+  height?: string;
+  className?: string;
   /** Extra nodes in the bottom bar (theme toggle, arena contract, etc.). */
-  barExtra?: React.ReactNode
+  barExtra?: React.ReactNode;
   /** Full-bleed ASCII held-rate bars behind the wordmark world. Defaults to on. */
-  asciiBackdrop?: boolean
+  asciiBackdrop?: boolean;
 }
 
 const PRESETS = {
@@ -274,17 +296,25 @@ const PRESETS = {
   night: { background: "#06070f", ink: "#f4f1ea", accent: "#c6f432" },
   riso: { background: "#f4f2ff", ink: "#2433c9", accent: "#ff4f8b" },
   sunny: { background: "#ffd94a", ink: "#141414", accent: "#e8402a" },
-}
+};
 
 /** NEARBUDDY is 9 letters: N0 E1 A2 R3 B4 U5 D6 D7 Y8 */
 const DEFAULT_CREW: CrewMember[] = [
   { kind: "yeti", letter: 0, seat: "front", offset: -0.32, name: "Bond", says: "Bond posted. Try me." },
   { kind: "bird", letter: 1, seat: "top", offset: 0.02, name: "Scout", says: "Headline inbound!" },
-  { kind: "mushroom", letter: 3, seat: "front", offset: 0.12, scale: 0.95, name: "Oracle", says: "Price first. Noise later." },
+  {
+    kind: "mushroom",
+    letter: 3,
+    seat: "front",
+    offset: 0.12,
+    scale: 0.95,
+    name: "Oracle",
+    says: "Price first. Noise later.",
+  },
   { kind: "kid", letter: 4, seat: "top", offset: -0.05, name: "Enclave", says: "Signed in sealed hardware." },
   { kind: "ghost", letter: 6, seat: "behind", offset: 0, name: "Slash", says: "Fooled? The bond pays." },
   { kind: "cat", letter: 8, seat: "front", offset: 0.42, flip: true, name: "Keeper", says: "Every decision on chain." },
-]
+];
 
 const DEFAULT_COLUMNS: FooterColumn[] = [
   {
@@ -318,34 +348,44 @@ const DEFAULT_COLUMNS: FooterColumn[] = [
       { label: "Email", href: "mailto:siewwwin@gmail.com" },
     ],
   },
-]
+];
 
 const DEFAULT_ACTIONS: FooterAction[] = [
   { label: "Enter an agent", href: "/enter", icon: "bolt", variant: "outline" },
   { label: "Try to fool one", href: "/#practice", icon: "flame", variant: "solid" },
-]
+];
 
-const DEFAULT_DOODLES: DoodleKind[] = ["bolt", "star", "sparkle", "flame", "heart", "spiral", "plane", "bolt"]
+const DEFAULT_DOODLES: DoodleKind[] = ["bolt", "star", "sparkle", "flame", "heart", "spiral", "plane", "bolt"];
 
 // NearBuddy doodle accents: lime + alert rose (no picnic orange/copper).
-const ACCENT = { flame: "#c6f432", flameCore: "#e8ff8a", gold: "#c6f432", heart: "#ff3d7f", bread: "#d6dcfa", crumb: "#f4f1ea", leaf: "#6f8cff", beak: "#c6f432", cap: "#ff3d7f" }
+const ACCENT = {
+  flame: "#c6f432",
+  flameCore: "#e8ff8a",
+  gold: "#c6f432",
+  heart: "#ff3d7f",
+  bread: "#d6dcfa",
+  crumb: "#f4f1ea",
+  leaf: "#6f8cff",
+  beak: "#c6f432",
+  cap: "#ff3d7f",
+};
 
 // ---- the crew's drawings --------------------------------------------------------
 // Each kind is drawn in its own units: base centre at (0, 0), up is negative,
 // about 144 units to a letter's cap height. Eyes are listed separately so the
 // renderer can aim and blink them.
 
-type Eye = { x: number; y: number; r: number; pupil: number; max: number }
+type Eye = { x: number; y: number; r: number; pupil: number; max: number };
 type Art = {
   /** Size against the letters, before the member's own scale. */
-  k: number
-  box: { l: number; r: number; t: number; b: number }
-  eyes: Eye[]
-  seat: Seat
-  body: (hatch: string) => React.ReactNode
-  front?: () => React.ReactNode
-  idle?: string
-}
+  k: number;
+  box: { l: number; r: number; t: number; b: number };
+  eyes: Eye[];
+  seat: Seat;
+  body: (hatch: string) => React.ReactNode;
+  front?: () => React.ReactNode;
+  idle?: string;
+};
 
 const ART: { [k: string]: Art } = {
   yeti: {
@@ -479,7 +519,11 @@ const ART: { [k: string]: Art } = {
     body: (hatch) => (
       <>
         <path d="M-23 -14 L-23 -40 C-23 -59 -12 -67 0 -67 C12 -67 23 -59 23 -40 L23 -14 C12 -10 -12 -10 -23 -14 Z" />
-        <path d="M13 -61 C21 -54 23 -46 23 -36 L23 -15 L15 -13 L15 -36 C15 -46 15 -54 13 -61 Z" fill={hatch} stroke="none" />
+        <path
+          d="M13 -61 C21 -54 23 -46 23 -36 L23 -15 L15 -13 L15 -36 C15 -46 15 -54 13 -61 Z"
+          fill={hatch}
+          stroke="none"
+        />
         <path className="n thin" d="M-16 -56 C-12 -61 -6 -63 -2 -63" />
         <path className="k" d="M-5 -33 C-3 -27 4 -27 6 -33 Z" />
         <path className="n thin" d="M-17 -35 l3 -2 M-14 -34 l3 -2 M14 -35 l3 -2 M17 -34 l3 -2" />
@@ -516,7 +560,7 @@ const ART: { [k: string]: Art } = {
       </>
     ),
   },
-}
+};
 
 /** Each doodle in a 32-unit box centred on (0, 0). */
 const Doodle = ({ kind }: { kind: DoodleKind }) => {
@@ -524,167 +568,186 @@ const Doodle = ({ kind }: { kind: DoodleKind }) => {
     case "flame":
       return (
         <>
-          <path fill={ACCENT.flame} d="M0 14 C-9 14 -12 6 -10 0 C-8 -5 -4 -6 -4 -12 C1 -9 3 -5 2 -1 C4 -3 5 -6 5 -8 C10 -3 11 4 8 9 C6 12 3 14 0 14 Z" />
-          <path fill={ACCENT.flameCore} d="M0 11.5 C-4 11.5 -6 8 -5 5 C-4 2 -1 1 -1 -3 C2 -1 4 3 3 6 C4 5 5 4 5 3 C7 6 5 11.5 0 11.5 Z" />
+          <path
+            fill={ACCENT.flame}
+            d="M0 14 C-9 14 -12 6 -10 0 C-8 -5 -4 -6 -4 -12 C1 -9 3 -5 2 -1 C4 -3 5 -6 5 -8 C10 -3 11 4 8 9 C6 12 3 14 0 14 Z"
+          />
+          <path
+            fill={ACCENT.flameCore}
+            d="M0 11.5 C-4 11.5 -6 8 -5 5 C-4 2 -1 1 -1 -3 C2 -1 4 3 3 6 C4 5 5 4 5 3 C7 6 5 11.5 0 11.5 Z"
+          />
         </>
-      )
+      );
     case "sandwich":
       return (
         <>
           <path fill={ACCENT.bread} d="M-13 5 L13 5 L12.5 9.5 C4 11 -4 11 -12.5 9.5 Z" />
           <path fill={ACCENT.gold} d="M-12 2 L12 2 L11 5 L5 5 L3 9 L1 5 L-12 5 Z" />
-          <path fill="none" stroke={ACCENT.leaf} strokeWidth="2.6" d="M-13 1 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0" />
+          <path
+            fill="none"
+            stroke={ACCENT.leaf}
+            strokeWidth="2.6"
+            d="M-13 1 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0 q2.2 2.4 4.4 0"
+          />
           <path fill={ACCENT.bread} d="M-13 -1 C-14 -8 -10 -11 -6 -10 C-3 -13.5 3 -13.5 6 -10 C10 -11 14 -8 13 -1 Z" />
           <path fill="none" strokeWidth="1.2" d="M-6 -6 l1.5 -1 M0 -8 l1.5 -1 M6 -6 l1.5 -1" />
         </>
-      )
+      );
     case "star":
-      return <path fill={ACCENT.gold} d="M0 -13 L3.6 -4.4 L13 -4 L5.8 2.2 L8.2 12 L0 6.6 L-8.2 12 L-5.8 2.2 L-13 -4 L-3.6 -4.4 Z" />
+      return (
+        <path
+          fill={ACCENT.gold}
+          d="M0 -13 L3.6 -4.4 L13 -4 L5.8 2.2 L8.2 12 L0 6.6 L-8.2 12 L-5.8 2.2 L-13 -4 L-3.6 -4.4 Z"
+        />
+      );
     case "heart":
-      return <path fill={ACCENT.heart} d="M0 11 C-6 6 -13 1 -13 -5 C-13 -10 -8 -13 -4 -11 C-2 -10 -1 -8 0 -6 C1 -8 2 -10 4 -11 C8 -13 13 -10 13 -5 C13 1 6 6 0 11 Z" />
+      return (
+        <path
+          fill={ACCENT.heart}
+          d="M0 11 C-6 6 -13 1 -13 -5 C-13 -10 -8 -13 -4 -11 C-2 -10 -1 -8 0 -6 C1 -8 2 -10 4 -11 C8 -13 13 -10 13 -5 C13 1 6 6 0 11 Z"
+        />
+      );
     case "bolt":
-      return <path fill={ACCENT.gold} d="M3 -14 L-8 2 L-1 2 L-4 14 L8 -3 L1 -3 Z" />
+      return <path fill={ACCENT.gold} d="M3 -14 L-8 2 L-1 2 L-4 14 L8 -3 L1 -3 Z" />;
     case "sparkle":
-      return <path fill="#8fdcff" d="M0 -13 C1 -4 4 -1 13 0 C4 1 1 4 0 13 C-1 4 -4 1 -13 0 C-4 -1 -1 -4 0 -13 Z" />
+      return <path fill="#8fdcff" d="M0 -13 C1 -4 4 -1 13 0 C4 1 1 4 0 13 C-1 4 -4 1 -13 0 C-4 -1 -1 -4 0 -13 Z" />;
     case "spiral":
-      return <path fill="none" d="M0 0 C2 -2 4 0 3 3 C1 6 -4 5 -5 1 C-6 -4 -1 -8 4 -7 C9 -5 10 2 7 6" />
+      return <path fill="none" d="M0 0 C2 -2 4 0 3 3 C1 6 -4 5 -5 1 C-6 -4 -1 -8 4 -7 C9 -5 10 2 7 6" />;
     case "plane":
       return (
         <>
           <path className="dcf-paperfill" d="M-13 -1 L13 -10 L4 12 L0 3 Z" />
           <path fill="none" d="M0 3 L13 -10 M0 3 L-2 9 L2 5" />
         </>
-      )
+      );
   }
-  return null
-}
+  return null;
+};
 
 const DoodleIcon = ({ kind, size = 18 }: { kind: DoodleKind; size?: number }) => (
   <svg className="dcf-icon" viewBox="-16 -16 32 32" width={size} height={size} aria-hidden="true">
     <Doodle kind={kind} />
   </svg>
-)
+);
 
-type Metrics = { advances: number[]; cap: number }
+type Metrics = { advances: number[]; cap: number };
 
-const FONT_SIZE = 200
-const DEFAULT_FONT = '"Arial Black", "Inter Display", Inter, "Helvetica Neue", Helvetica, Arial, sans-serif'
-const DEFAULT_SERIF = '"Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif'
+const FONT_SIZE = 200;
+const DEFAULT_FONT = '"Arial Black", "Inter Display", Inter, "Helvetica Neue", Helvetica, Arial, sans-serif';
+const DEFAULT_SERIF = '"Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif';
 
 const estimate = (word: string): Metrics => ({
-  advances: Array.from(word).map((c) => (c === " " ? 0.3 : /[IJ1]/.test(c) ? 0.42 : /[MW]/.test(c) ? 0.98 : 0.76) * FONT_SIZE),
+  advances: Array.from(word).map(
+    (c) => (c === " " ? 0.3 : /[IJ1]/.test(c) ? 0.42 : /[MW]/.test(c) ? 0.98 : 0.76) * FONT_SIZE,
+  ),
   cap: 0.73 * FONT_SIZE,
-})
+});
 
 const measure = (word: string, family: string): Metrics | null => {
-  if (typeof document === "undefined") return null
-  const ctx = document.createElement("canvas").getContext("2d")
-  if (!ctx) return null
-  ctx.font = "900 " + FONT_SIZE + "px " + family
-  const chars = Array.from(word)
-  const advances: number[] = []
-  let prev = 0
+  if (typeof document === "undefined") return null;
+  const ctx = document.createElement("canvas").getContext("2d");
+  if (!ctx) return null;
+  ctx.font = "900 " + FONT_SIZE + "px " + family;
+  const chars = Array.from(word);
+  const advances: number[] = [];
+  let prev = 0;
   for (let i = 0; i < chars.length; i++) {
-    const wNow = ctx.measureText(chars.slice(0, i + 1).join("")).width
-    advances.push(wNow - prev)
-    prev = wNow
+    const wNow = ctx.measureText(chars.slice(0, i + 1).join("")).width;
+    advances.push(wNow - prev);
+    prev = wNow;
   }
-  const m = ctx.measureText(word.replace(/\s/g, "") || "H")
-  const cap = m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : 0.73 * FONT_SIZE
-  return { advances, cap }
-}
+  const m = ctx.measureText(word.replace(/\s/g, "") || "H");
+  const cap = m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : 0.73 * FONT_SIZE;
+  return { advances, cap };
+};
 
-const useIso = typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect
+const useIso = typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect;
 
 const Link = ({ link, className }: { link: FooterLink; className?: string }) => {
-  if (!link.href) return <span className={className}>{link.label}</span>
-  const external = /^https?:\/\//.test(link.href) || link.href.startsWith("mailto:")
+  if (!link.href) return <span className={className}>{link.label}</span>;
+  const external = /^https?:\/\//.test(link.href) || link.href.startsWith("mailto:");
   return (
-    <a
-      className={className}
-      href={link.href}
-      {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
-    >
+    <a className={className} href={link.href} {...(external ? { target: "_blank", rel: "noreferrer" } : {})}>
       <span>{link.label}</span>
       <svg className="dcf-squiggle" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true">
         <path pathLength={1} d="M1 5 C10 1 16 7 25 4 S40 1 50 4 S66 7 75 4 S90 1 99 4" />
       </svg>
     </a>
-  )
-}
+  );
+};
 
 /** Held-rate ASCII bars from board.json — low-opacity full-bleed backdrop behind the doodle world. */
-const ASCII_RAMP = " .:-=+*#%@"
+const ASCII_RAMP = " .:-=+*#%@";
 function AsciiBarBackdrop({ reduced, ink }: { reduced: boolean; ink: string }) {
-  const wrap = React.useRef(null as HTMLDivElement | null)
-  const canvasRef = React.useRef(null as HTMLCanvasElement | null)
+  const wrap = React.useRef(null as HTMLDivElement | null);
+  const canvasRef = React.useRef(null as HTMLCanvasElement | null);
   React.useEffect(() => {
-    const el = canvasRef.current
-    const box = wrap.current
-    if (!el || !box) return
-    const ctx = el.getContext("2d")
-    if (!ctx) return
-    let raf = 0
-    let start = performance.now()
-    const bars = BOARD_BARS
+    const el = canvasRef.current;
+    const box = wrap.current;
+    if (!el || !box) return;
+    const ctx = el.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    const start = performance.now();
+    const bars = BOARD_BARS;
     const paint = (now: number) => {
-      const r = box.getBoundingClientRect()
-      const dpr = Math.min(2, window.devicePixelRatio || 1)
-      const w = Math.max(1, Math.floor(r.width))
-      const h = Math.max(1, Math.floor(r.height))
+      const r = box.getBoundingClientRect();
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const w = Math.max(1, Math.floor(r.width));
+      const h = Math.max(1, Math.floor(r.height));
       if (el.width !== Math.round(w * dpr) || el.height !== Math.round(h * dpr)) {
-        el.width = Math.round(w * dpr)
-        el.height = Math.round(h * dpr)
-        el.style.width = w + "px"
-        el.style.height = h + "px"
+        el.width = Math.round(w * dpr);
+        el.height = Math.round(h * dpr);
+        el.style.width = w + "px";
+        el.style.height = h + "px";
       }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      ctx.clearRect(0, 0, w, h)
-      const cell = 10
-      const cols = Math.ceil(w / cell)
-      const rows = Math.ceil(h / cell)
-      const t = reduced ? 0 : (now - start) / 1000
-      ctx.font = "600 " + Math.floor(cell * 0.9) + "px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-      ctx.textAlign = "center"
-      ctx.textBaseline = "middle"
-      const n = Math.max(1, bars.length)
-      const gap = cols / n
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      const cell = 10;
+      const cols = Math.ceil(w / cell);
+      const rows = Math.ceil(h / cell);
+      const t = reduced ? 0 : (now - start) / 1000;
+      ctx.font = "600 " + Math.floor(cell * 0.9) + "px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const n = Math.max(1, bars.length);
+      const gap = cols / n;
       for (let i = 0; i < n; i++) {
-        const rate = bars[i]!.rate
-        const pulse = reduced ? 0 : Math.sin(t * 1.2 + i * 0.9) * 0.04
-        const height = clamp(rate + pulse, 0.05, 1)
-        const cx = (i + 0.5) * gap
-        const barW = Math.max(3, Math.floor(gap * 0.55))
-        const barH = Math.max(1, Math.floor(rows * height))
+        const rate = bars[i]!.rate;
+        const pulse = reduced ? 0 : Math.sin(t * 1.2 + i * 0.9) * 0.04;
+        const height = clamp(rate + pulse, 0.05, 1);
+        const cx = (i + 0.5) * gap;
+        const barW = Math.max(3, Math.floor(gap * 0.55));
+        const barH = Math.max(1, Math.floor(rows * height));
         for (let dy = 0; dy < barH; dy++) {
-          const gy = rows - 1 - dy
-          const dens = dy / Math.max(1, barH - 1)
-          const glyph = ASCII_RAMP[Math.min(ASCII_RAMP.length - 1, Math.floor(dens * (ASCII_RAMP.length - 1)))]!
-          const alpha = 0.18 + dens * 0.55
-          ctx.fillStyle = ink
-          ctx.globalAlpha = alpha
+          const gy = rows - 1 - dy;
+          const dens = dy / Math.max(1, barH - 1);
+          const glyph = ASCII_RAMP[Math.min(ASCII_RAMP.length - 1, Math.floor(dens * (ASCII_RAMP.length - 1)))]!;
+          const alpha = 0.18 + dens * 0.55;
+          ctx.fillStyle = ink;
+          ctx.globalAlpha = alpha;
           for (let dx = 0; dx < barW; dx++) {
-            const gx = Math.floor(cx - barW / 2 + dx)
-            if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) continue
-            ctx.fillText(glyph, gx * cell + cell / 2, gy * cell + cell / 2)
+            const gx = Math.floor(cx - barW / 2 + dx);
+            if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) continue;
+            ctx.fillText(glyph, gx * cell + cell / 2, gy * cell + cell / 2);
           }
         }
         // short model label under each bar
-        const label = bars[i]!.label
-        ctx.globalAlpha = 0.35
-        ctx.fillText(label.slice(0, Math.max(3, Math.floor(barW))), cx * cell, h - cell * 0.6)
+        const label = bars[i]!.label;
+        ctx.globalAlpha = 0.35;
+        ctx.fillText(label.slice(0, Math.max(3, Math.floor(barW))), cx * cell, h - cell * 0.6);
       }
-      ctx.globalAlpha = 1
-      if (!reduced) raf = requestAnimationFrame(paint)
-    }
-    paint(performance.now())
-    return () => cancelAnimationFrame(raf)
-  }, [reduced, ink])
+      ctx.globalAlpha = 1;
+      if (!reduced) raf = requestAnimationFrame(paint);
+    };
+    paint(performance.now());
+    return () => cancelAnimationFrame(raf);
+  }, [reduced, ink]);
   return (
     <div className="dcf-ascii" ref={wrap} aria-hidden="true">
       <canvas ref={canvasRef} />
     </div>
-  )
+  );
 }
 
 /** Short labels + held rates for the ASCII backdrop (pure, testable). */
@@ -694,15 +757,13 @@ export const boardHeldBars = (
   models
     .filter((m) => m.tested > 0)
     .map((m) => {
-      const held = Math.max(0, m.tested - m.fooled)
-      const short = (m.model.split("/").pop() || m.model).replace(/[^A-Za-z0-9]+/g, "").slice(0, 6)
-      return { label: short.toUpperCase() || "MODEL", rate: held / m.tested, held, tested: m.tested }
+      const held = Math.max(0, m.tested - m.fooled);
+      const short = (m.model.split("/").pop() || m.model).replace(/[^A-Za-z0-9]+/g, "").slice(0, 6);
+      return { label: short.toUpperCase() || "MODEL", rate: held / m.tested, held, tested: m.tested };
     })
-    .sort((a, b) => b.rate - a.rate || b.tested - a.tested)
+    .sort((a, b) => b.rate - a.rate || b.tested - a.tested);
 
-const BOARD_BARS = boardHeldBars(
-  (boardData as { models: { model: string; tested: number; fooled: number }[] }).models,
-)
+const BOARD_BARS = boardHeldBars((boardData as { models: { model: string; tested: number; fooled: number }[] }).models);
 
 export function DoodleCrewFooter({
   wordmark = "NEARBUDDY",
@@ -733,112 +794,152 @@ export function DoodleCrewFooter({
   barExtra,
   asciiBackdrop = true,
 }: DoodleCrewFooterProps) {
-  const uid = React.useId().replace(/[^a-zA-Z0-9_-]/g, "")
-  const word = wordmark.toUpperCase()
-  const chars = React.useMemo(() => Array.from(word), [word])
-  const colors = { ...(PRESETS[preset] || PRESETS.auto), ...(palette || {}) }
+  const uid = React.useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const word = wordmark.toUpperCase();
+  const chars = React.useMemo(() => Array.from(word), [word]);
+  const colors = { ...(PRESETS[preset] || PRESETS.auto), ...(palette || {}) };
 
-  const rootRef = React.useRef(null as HTMLElement | null)
-  const svgRef = React.useRef(null as SVGSVGElement | null)
-  const worldRef = React.useRef(null as HTMLDivElement | null)
-  const crewLayerRefs = React.useRef([] as (SVGGElement | null)[])
-  const eyeRefs = React.useRef([] as { blink: SVGGElement | null; pupil: SVGGElement | null }[][])
-  const doodleRefs = React.useRef([] as (HTMLDivElement | null)[])
+  const rootRef = React.useRef(null as HTMLElement | null);
+  const svgRef = React.useRef(null as SVGSVGElement | null);
+  const worldRef = React.useRef(null as HTMLDivElement | null);
+  const crewLayerRefs = React.useRef([] as (SVGGElement | null)[]);
+  const eyeRefs = React.useRef([] as { blink: SVGGElement | null; pupil: SVGGElement | null }[][]);
+  const doodleRefs = React.useRef([] as (HTMLDivElement | null)[]);
 
-  const [metrics, setMetrics] = React.useState(() => estimate(word))
-  const [play, setPlay] = React.useState(false)
-  const [reduced, setReduced] = React.useState(false)
-  const [talking, setTalking] = React.useState(-1)
-  const [hopping, setHopping] = React.useState(-1)
-  const talkTimer = React.useRef(0)
+  const [metrics, setMetrics] = React.useState(() => estimate(word));
+  const [play, setPlay] = React.useState(false);
+  const [reduced, setReduced] = React.useState(false);
+  const [talking, setTalking] = React.useState(-1);
+  const [hopping, setHopping] = React.useState(-1);
+  const talkTimer = React.useRef(0);
 
   // ---- measure the real face, again once late web fonts land ----
   useIso(() => {
     const run = () => {
-      const m = measure(word, fontFamily)
-      if (m) setMetrics(m)
-    }
-    run()
-    const fonts = typeof document !== "undefined" ? document.fonts : undefined
-    if (!fonts) return
-    let alive = true
-    fonts.ready.then(() => alive && run())
-    fonts.addEventListener?.("loadingdone", run)
+      const m = measure(word, fontFamily);
+      if (m) setMetrics(m);
+    };
+    run();
+    const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+    if (!fonts) return;
+    let alive = true;
+    fonts.ready.then(() => alive && run());
+    fonts.addEventListener?.("loadingdone", run);
     return () => {
-      alive = false
-      fonts.removeEventListener?.("loadingdone", run)
-    }
-  }, [word, fontFamily])
+      alive = false;
+      fonts.removeEventListener?.("loadingdone", run);
+    };
+  }, [word, fontFamily]);
 
-  const layout = React.useMemo(() => layoutWord(metrics.advances, tracking, FONT_SIZE), [metrics, tracking])
-  const cap = metrics.cap
+  const layout = React.useMemo(() => layoutWord(metrics.advances, tracking, FONT_SIZE), [metrics, tracking]);
+  const cap = metrics.cap;
 
   const placed = React.useMemo(
     () =>
       crew
         .map((m, i) => {
-          const art = ART[m.kind]
-          if (!art || !chars.length) return null
-          const li = clamp(Math.floor(m.letter) || 0, 0, chars.length - 1)
-          const scale = (cap / 144) * art.k * (m.scale ?? 1)
-          const seat = m.seat || art.seat
-          const p = seatPoint(seat, layout.x[li] ?? 0, layout.w[li] ?? 0, cap, m.offset ?? 0, scale)
-          return { i, m, art, seat, scale, ...p, flip: m.flip ? -1 : 1 }
+          const art = ART[m.kind];
+          if (!art || !chars.length) return null;
+          const li = clamp(Math.floor(m.letter) || 0, 0, chars.length - 1);
+          const scale = (cap / 144) * art.k * (m.scale ?? 1);
+          const seat = m.seat || art.seat;
+          const p = seatPoint(seat, layout.x[li] ?? 0, layout.w[li] ?? 0, cap, m.offset ?? 0, scale);
+          return { i, m, art, seat, scale, ...p, flip: m.flip ? -1 : 1 };
         })
-        .filter(Boolean) as { i: number; m: CrewMember; art: Art; seat: Seat; scale: number; x: number; y: number; flip: number }[],
+        .filter(Boolean) as {
+        i: number;
+        m: CrewMember;
+        art: Art;
+        seat: Seat;
+        scale: number;
+        x: number;
+        y: number;
+        flip: number;
+      }[],
     [crew, chars.length, layout, cap],
-  )
+  );
 
   // The viewBox hugs the word, the crew and the ground.
   const view = React.useMemo(() => {
-    let l = 0
-    let r = layout.width
-    let t = -cap
-    let b = 30
+    let l = 0;
+    let r = layout.width;
+    let t = -cap;
+    let b = 30;
     for (const p of placed) {
-      const bl = p.flip > 0 ? p.art.box.l : -p.art.box.r
-      const br = p.flip > 0 ? p.art.box.r : -p.art.box.l
-      l = Math.min(l, p.x + bl * p.scale)
-      r = Math.max(r, p.x + br * p.scale)
-      t = Math.min(t, p.y + p.art.box.t * p.scale)
-      b = Math.max(b, p.y + p.art.box.b * p.scale)
+      const bl = p.flip > 0 ? p.art.box.l : -p.art.box.r;
+      const br = p.flip > 0 ? p.art.box.r : -p.art.box.l;
+      l = Math.min(l, p.x + bl * p.scale);
+      r = Math.max(r, p.x + br * p.scale);
+      t = Math.min(t, p.y + p.art.box.t * p.scale);
+      b = Math.max(b, p.y + p.art.box.b * p.scale);
     }
-    const pad = 24
-    return { x: l - pad, y: t - pad, w: r - l + pad * 2, h: b - t + pad * 2 }
-  }, [layout, placed, cap])
+    const pad = 24;
+    return { x: l - pad, y: t - pad, w: r - l + pad * 2, h: b - t + pad * 2 };
+  }, [layout, placed, cap]);
 
-  const words = tagline.split(/\s+/).filter(Boolean)
-  const tl = timeline(chars.length, placed.length, words.length, actions.length)
+  const words = tagline.split(/\s+/).filter(Boolean);
+  const tl = timeline(chars.length, placed.length, words.length, actions.length);
 
   const ground = React.useMemo(() => {
-    const x0 = view.x + 6
-    const x1 = view.x + view.w - 6
-    let d = "M" + x0.toFixed(1) + " 6"
-    const n = 14
+    const x0 = view.x + 6;
+    const x1 = view.x + view.w - 6;
+    let d = "M" + x0.toFixed(1) + " 6";
+    const n = 14;
     for (let k = 1; k <= n; k++) {
-      const x = x0 + ((x1 - x0) * k) / n
-      d += " Q" + (x - (x1 - x0) / n / 2).toFixed(1) + " " + (6 + (hash(k * 3.1) - 0.5) * 5).toFixed(1) + " " + x.toFixed(1) + " " + (6 + (hash(k * 7.7) - 0.5) * 2).toFixed(1)
+      const x = x0 + ((x1 - x0) * k) / n;
+      d +=
+        " Q" +
+        (x - (x1 - x0) / n / 2).toFixed(1) +
+        " " +
+        (6 + (hash(k * 3.1) - 0.5) * 5).toFixed(1) +
+        " " +
+        x.toFixed(1) +
+        " " +
+        (6 + (hash(k * 7.7) - 0.5) * 2).toFixed(1);
     }
-    let tufts = ""
+    let tufts = "";
     for (let k = 0; k < 22; k++) {
-      const x = x0 + 20 + hash(k * 11.3) * (x1 - x0 - 40)
-      const s = 0.7 + hash(k * 5.9) * 0.6
-      tufts += "M" + x.toFixed(1) + " 6 l" + (2 * s).toFixed(1) + " " + (-9 * s).toFixed(1) + " M" + (x + 3 * s).toFixed(1) + " 6 l" + (1 * s).toFixed(1) + " " + (-12 * s).toFixed(1) + " M" + (x + 6 * s).toFixed(1) + " 6 l" + (-1 * s).toFixed(1) + " " + (-7 * s).toFixed(1) + " "
+      const x = x0 + 20 + hash(k * 11.3) * (x1 - x0 - 40);
+      const s = 0.7 + hash(k * 5.9) * 0.6;
+      tufts +=
+        "M" +
+        x.toFixed(1) +
+        " 6 l" +
+        (2 * s).toFixed(1) +
+        " " +
+        (-9 * s).toFixed(1) +
+        " M" +
+        (x + 3 * s).toFixed(1) +
+        " 6 l" +
+        (1 * s).toFixed(1) +
+        " " +
+        (-12 * s).toFixed(1) +
+        " M" +
+        (x + 6 * s).toFixed(1) +
+        " 6 l" +
+        (-1 * s).toFixed(1) +
+        " " +
+        (-7 * s).toFixed(1) +
+        " ";
     }
-    const pebbles = Array.from({ length: 9 }, (_, k) => ({ x: x0 + 40 + hash(k * 17.1) * (x1 - x0 - 80), y: 14 + hash(k * 2.3) * 8, r: 2 + hash(k * 9.4) * 2.6 }))
-    return { d, tufts, pebbles }
-  }, [view])
+    const pebbles = Array.from({ length: 9 }, (_, k) => ({
+      x: x0 + 40 + hash(k * 17.1) * (x1 - x0 - 80),
+      y: 14 + hash(k * 2.3) * 8,
+      r: 2 + hash(k * 9.4) * 2.6,
+    }));
+    return { d, tufts, pebbles };
+  }, [view]);
 
   // ---- doodles ----
   const doodleList = React.useMemo(() => {
-    const kinds = doodles.length ? doodles : []
-    const n = kinds.length ? clamp(Math.floor(doodleCount) || 0, 0, 40) : 0
+    const kinds = doodles.length ? doodles : [];
+    const n = kinds.length ? clamp(Math.floor(doodleCount) || 0, 0, 40) : 0;
     return Array.from({ length: n }, (_, k) => ({
       kind: (kinds[k % kinds.length] ?? "star") as DoodleKind,
       size: 22 + hash(k * 4.7) * 14,
       seed: k,
-    }))
-  }, [doodles, doodleCount])
+    }));
+  }, [doodles, doodleCount]);
 
   const sim = React.useRef({
     floaters: [] as Floater[],
@@ -851,19 +952,19 @@ export function DoodleCrewFooter({
     gaze: [] as { x: number; y: number; tx: number; ty: number; next: number; blinkAt: number; blink: number }[],
     seed: 1,
     start: 0,
-  })
+  });
 
   // Lay the doodles out once the world has a size; keep them when it resizes.
   useIso(() => {
-    const el = worldRef.current
-    if (!el) return
-    const s = sim.current
+    const el = worldRef.current;
+    if (!el) return;
+    const s = sim.current;
     const size = () => {
-      const r = el.getBoundingClientRect()
-      const ow = s.w
-      const oh = s.h
-      s.w = r.width
-      s.h = r.height
+      const r = el.getBoundingClientRect();
+      const ow = s.w;
+      const oh = s.h;
+      s.w = r.width;
+      s.h = r.height;
       if (s.floaters.length !== doodleList.length || !ow) {
         s.floaters = doodleList.map((d, k) => ({
           x: (0.04 + 0.92 * ((k + hash(k * 9.1) * 0.8) / Math.max(1, doodleList.length))) * r.width,
@@ -875,220 +976,238 @@ export function DoodleCrewFooter({
           fall: 9 + hash(k * 2.9) * 16,
           phase: hash(k * 8.3) * Math.PI * 2,
           pop: 0,
-        }))
+        }));
       } else if (ow && oh) {
         for (const f of s.floaters) {
-          f.x *= r.width / ow
-          f.y *= r.height / oh
+          f.x *= r.width / ow;
+          f.y *= r.height / oh;
         }
       }
-      paintDoodles()
-    }
-    size()
-    if (typeof ResizeObserver === "undefined") return
-    const ro = new ResizeObserver(size)
-    ro.observe(el)
-    return () => ro.disconnect()
+      paintDoodles();
+    };
+    size();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(size);
+    ro.observe(el);
+    return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doodleList])
+  }, [doodleList]);
 
   const paintDoodles = () => {
-    const s = sim.current
-    const k = clamp(s.w / 1100, 0.5, 1)
+    const s = sim.current;
+    const k = clamp(s.w / 1100, 0.5, 1);
     for (let i = 0; i < s.floaters.length; i++) {
-      const el = doodleRefs.current[i]
-      const f = s.floaters[i]
-      if (!el || !f) continue
-      let sc = k
-      let op = 1
+      const el = doodleRefs.current[i];
+      const f = s.floaters[i];
+      if (!el || !f) continue;
+      let sc = k;
+      let op = 1;
       if (f.pop > 0) {
-        const age = 1.4 - f.pop
-        sc = k * (1 + Math.min(1, age / 0.3) * 0.7)
-        op = Math.max(0, 1 - age / 0.3)
+        const age = 1.4 - f.pop;
+        sc = k * (1 + Math.min(1, age / 0.3) * 0.7);
+        op = Math.max(0, 1 - age / 0.3);
       }
-      el.style.transform = "translate3d(" + f.x.toFixed(1) + "px," + f.y.toFixed(1) + "px,0) rotate(" + f.rot.toFixed(1) + "deg) scale(" + sc.toFixed(3) + ")"
-      el.style.opacity = String(op)
+      el.style.transform =
+        "translate3d(" +
+        f.x.toFixed(1) +
+        "px," +
+        f.y.toFixed(1) +
+        "px,0) rotate(" +
+        f.rot.toFixed(1) +
+        "deg) scale(" +
+        sc.toFixed(3) +
+        ")";
+      el.style.opacity = String(op);
     }
-  }
+  };
 
   // ---- reduced motion ----
   React.useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)")
-    const on = () => setReduced(mq.matches)
-    on()
-    mq.addEventListener?.("change", on)
-    return () => mq.removeEventListener?.("change", on)
-  }, [])
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const on = () => setReduced(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, []);
 
   // ---- the storyboard starts when the footer comes into view; the loop sleeps off-screen ----
   React.useEffect(() => {
-    const root = rootRef.current
-    if (!root) return
-    const s = sim.current
+    const root = rootRef.current;
+    if (!root) return;
+    const s = sim.current;
     if (typeof IntersectionObserver === "undefined") {
-      s.visible = true
-      setPlay(true)
-      return
+      s.visible = true;
+      setPlay(true);
+      return;
     }
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
-          s.visible = e.isIntersecting
-          if (e.isIntersecting && e.intersectionRatio > 0.12) setPlay(true)
+          s.visible = e.isIntersecting;
+          if (e.isIntersecting && e.intersectionRatio > 0.12) setPlay(true);
         }
       },
       { threshold: [0, 0.12, 0.3] },
-    )
-    io.observe(root)
-    return () => io.disconnect()
-  }, [])
+    );
+    io.observe(root);
+    return () => io.disconnect();
+  }, []);
 
   React.useEffect(() => {
-    if (play && !sim.current.start) sim.current.start = performance.now()
-  }, [play])
+    if (play && !sim.current.start) sim.current.start = performance.now();
+  }, [play]);
 
   // ---- the living loop: eyes, blinks, doodles, line boil ----
+  // biome-ignore lint/correctness/useExhaustiveDependencies: paintDoodles reads only refs and is made anew each render; listing it would restart the frame loop on every render
   React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const s = sim.current
-    let raf = 0
-    let last = performance.now()
-    let boilAt = 0
-    let boil = 0
+    if (typeof window === "undefined") return;
+    const s = sim.current;
+    let raf = 0;
+    let last = performance.now();
+    let boilAt = 0;
+    let boil = 0;
     const rand = () => {
-      s.seed = (s.seed * 16807) % 2147483647
-      return s.seed / 2147483647
-    }
+      s.seed = (s.seed * 16807) % 2147483647;
+      return s.seed / 2147483647;
+    };
     const svgPoint = (svg: SVGSVGElement, cx: number, cy: number) => {
-      const m = svg.getScreenCTM()
-      if (!m) return null
-      const inv = m.inverse()
-      return { x: inv.a * cx + inv.c * cy + inv.e, y: inv.b * cx + inv.d * cy + inv.f }
-    }
+      const m = svg.getScreenCTM();
+      if (!m) return null;
+      const inv = m.inverse();
+      return { x: inv.a * cx + inv.c * cy + inv.e, y: inv.b * cx + inv.d * cy + inv.f };
+    };
     const frame = (now: number) => {
-      raf = requestAnimationFrame(frame)
+      raf = requestAnimationFrame(frame);
       if (!s.visible || document.hidden) {
-        last = now
-        return
+        last = now;
+        return;
       }
-      const dt = Math.min(0.05, (now - last) / 1000)
-      last = now
-      const t = now / 1000
-      const svg = svgRef.current
-      const world = worldRef.current
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const t = now / 1000;
+      const svg = svgRef.current;
+      const world = worldRef.current;
 
       // eyes
-      let target = null as null | { x: number; y: number }
-      if (svg && s.inside && interactive) target = svgPoint(svg, s.px, s.py)
+      let target = null as null | { x: number; y: number };
+      if (svg && s.inside && interactive) target = svgPoint(svg, s.px, s.py);
       for (let c = 0; c < placed.length; c++) {
-        const p = placed[c]
-        if (!p) continue
-        const g = (s.gaze[c] ||= { x: 0, y: 0, tx: 0, ty: 0, next: 0, blinkAt: t + 1 + hash(c * 3.7) * 3, blink: 0 })
+        const p = placed[c];
+        if (!p) continue;
+        let g = s.gaze[c];
+        if (!g) {
+          g = { x: 0, y: 0, tx: 0, ty: 0, next: 0, blinkAt: t + 1 + hash(c * 3.7) * 3, blink: 0 };
+          s.gaze[c] = g;
+        }
         if (!target && t > g.next) {
           // idle: glance somewhere, now and then at a neighbour
-          const other = placed[(c + 1 + Math.floor(rand() * Math.max(1, placed.length - 1))) % placed.length]
+          const other = placed[(c + 1 + Math.floor(rand() * Math.max(1, placed.length - 1))) % placed.length];
           if (other && rand() < 0.45) {
-            g.tx = other.x
-            g.ty = other.y - 60 * other.scale
+            g.tx = other.x;
+            g.ty = other.y - 60 * other.scale;
           } else {
-            g.tx = p.x + (rand() - 0.5) * 900
-            g.ty = p.y - 80 * p.scale + (rand() - 0.5) * 500
+            g.tx = p.x + (rand() - 0.5) * 900;
+            g.ty = p.y - 80 * p.scale + (rand() - 0.5) * 500;
           }
-          g.next = t + 1.4 + rand() * 2.6
+          g.next = t + 1.4 + rand() * 2.6;
         }
         if (t > g.blinkAt) {
-          g.blink = 0.16
-          g.blinkAt = t + 2.2 + rand() * 4
+          g.blink = 0.16;
+          g.blinkAt = t + 2.2 + rand() * 4;
         }
-        g.blink = Math.max(0, g.blink - dt)
-        const lid = g.blink > 0 ? 0.12 + Math.abs(g.blink - 0.08) / 0.08 * 0.88 : 1
-        const eyes = eyeRefs.current[c] || []
+        g.blink = Math.max(0, g.blink - dt);
+        const lid = g.blink > 0 ? 0.12 + (Math.abs(g.blink - 0.08) / 0.08) * 0.88 : 1;
+        const eyes = eyeRefs.current[c] || [];
         for (let e = 0; e < p.art.eyes.length; e++) {
-          const eye = p.art.eyes[e]
-          if (!eye) continue
-          const ex = p.x + eye.x * p.scale * p.flip
-          const ey = p.y + eye.y * p.scale
-          const tx = target ? target.x : g.tx
-          const ty = target ? target.y : g.ty
-          const o = lookAt(ex, ey, tx, ty, eye.max, 220)
-          const ref = eyes[e]
-          if (!ref) continue
-          const key = "_o" + e
-          const prev = (g as unknown as { [k: string]: { x: number; y: number } })[key] || { x: 0, y: 0 }
-          const ease = Math.min(1, dt * (target ? 14 : 6))
-          const nx = prev.x + (o.x * p.flip - prev.x) * ease
-          const ny = prev.y + (o.y - prev.y) * ease
-          ;(g as unknown as { [k: string]: { x: number; y: number } })[key] = { x: nx, y: ny }
-          if (ref.pupil) ref.pupil.setAttribute("transform", "translate(" + nx.toFixed(2) + " " + ny.toFixed(2) + ")")
-          if (ref.blink) ref.blink.setAttribute("transform", "translate(0 " + (eye.y * (1 - lid)).toFixed(2) + ") scale(1 " + lid.toFixed(3) + ")")
+          const eye = p.art.eyes[e];
+          if (!eye) continue;
+          const ex = p.x + eye.x * p.scale * p.flip;
+          const ey = p.y + eye.y * p.scale;
+          const tx = target ? target.x : g.tx;
+          const ty = target ? target.y : g.ty;
+          const o = lookAt(ex, ey, tx, ty, eye.max, 220);
+          const ref = eyes[e];
+          if (!ref) continue;
+          const key = "_o" + e;
+          const prev = (g as unknown as { [k: string]: { x: number; y: number } })[key] || { x: 0, y: 0 };
+          const ease = Math.min(1, dt * (target ? 14 : 6));
+          const nx = prev.x + (o.x * p.flip - prev.x) * ease;
+          const ny = prev.y + (o.y - prev.y) * ease;
+          (g as unknown as { [k: string]: { x: number; y: number } })[key] = { x: nx, y: ny };
+          if (ref.pupil) ref.pupil.setAttribute("transform", "translate(" + nx.toFixed(2) + " " + ny.toFixed(2) + ")");
+          if (ref.blink)
+            ref.blink.setAttribute(
+              "transform",
+              "translate(0 " + (eye.y * (1 - lid)).toFixed(2) + ") scale(1 " + lid.toFixed(3) + ")",
+            );
         }
       }
 
       // doodles
       if (world && s.floaters.length) {
-        const started = play && s.start ? now - s.start > tl.doodles || reduced : false
+        const started = play && s.start ? now - s.start > tl.doodles || reduced : false;
         if (started) {
-          const r = world.getBoundingClientRect()
-          const px = s.inside && interactive ? s.px - r.left : NaN
-          const py = s.inside && interactive ? s.py - r.top : NaN
-          if (!reduced) for (const f of s.floaters) stepFloater(f, dt, t, s.w, s.h, px, py, 110, rand)
-          paintDoodles()
+          const r = world.getBoundingClientRect();
+          const px = s.inside && interactive ? s.px - r.left : NaN;
+          const py = s.inside && interactive ? s.py - r.top : NaN;
+          if (!reduced) for (const f of s.floaters) stepFloater(f, dt, t, s.w, s.h, px, py, 110, rand);
+          paintDoodles();
         }
       }
 
       // line boil: three hand-drawn takes swapped at 8 fps
       if (!reduced && now - boilAt > 125) {
-        boilAt = now
-        boil = (boil + 1) % 3
-        const f = "url(#" + uid + "-boil" + boil + ")"
-        for (const el of crewLayerRefs.current) if (el) el.setAttribute("filter", f)
+        boilAt = now;
+        boil = (boil + 1) % 3;
+        const f = "url(#" + uid + "-boil" + boil + ")";
+        for (const el of crewLayerRefs.current) if (el) el.setAttribute("filter", f);
       }
-    }
-    raf = requestAnimationFrame(frame)
-    return () => cancelAnimationFrame(raf)
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placed, play, reduced, interactive, uid, tl.doodles])
+  }, [placed, play, reduced, interactive, uid, tl.doodles]);
 
-  React.useEffect(() => () => window.clearTimeout(talkTimer.current), [])
+  React.useEffect(() => () => window.clearTimeout(talkTimer.current), []);
 
   const onPointerMove = (e: React.PointerEvent) => {
-    const s = sim.current
-    s.px = e.clientX
-    s.py = e.clientY
-    s.inside = true
-  }
+    const s = sim.current;
+    s.px = e.clientX;
+    s.py = e.clientY;
+    s.inside = true;
+  };
   const onPointerLeave = () => {
-    sim.current.inside = false
-  }
+    sim.current.inside = false;
+  };
 
   const poke = (c: number) => {
-    if (!interactive) return
-    setTalking(c)
-    setHopping(-1)
-    requestAnimationFrame(() => setHopping(c))
-    window.clearTimeout(talkTimer.current)
+    if (!interactive) return;
+    setTalking(c);
+    setHopping(-1);
+    requestAnimationFrame(() => setHopping(c));
+    window.clearTimeout(talkTimer.current);
     talkTimer.current = window.setTimeout(() => {
-      setTalking(-1)
-      setHopping(-1)
-    }, 2600)
-  }
+      setTalking(-1);
+      setHopping(-1);
+    }, 2600);
+  };
 
   const popDoodle = (k: number) => {
-    if (!interactive) return
-    const f = sim.current.floaters[k]
+    if (!interactive) return;
+    const f = sim.current.floaters[k];
     if (f && f.pop <= 0) {
-      f.pop = 1.4
-      paintDoodles()
+      f.pop = 1.4;
+      paintDoodles();
     }
-  }
+  };
 
   const toTop = () => {
-    if (typeof window === "undefined") return
-    window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" })
-  }
+    if (typeof window === "undefined") return;
+    window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });
+  };
 
-  const hatch = "url(#" + uid + "-hatch)"
+  const hatch = "url(#" + uid + "-hatch)";
   const vars = {
     "--dcf-bg": colors.background,
     "--dcf-ink": colors.ink,
@@ -1096,12 +1215,25 @@ export function DoodleCrewFooter({
     "--dcf-serif": serifFamily,
     "--dcf-display": fontFamily,
     minHeight: height,
-  } as React.CSSProperties
+  } as React.CSSProperties;
 
-  const pct = (v: number, base: number, span: number) => (((v - base) / span) * 100).toFixed(3) + "%"
+  const pct = (v: number, base: number, span: number) => (((v - base) / span) * 100).toFixed(3) + "%";
 
   const renderCrew = (p: (typeof placed)[number], part: "body" | "front") => (
-    <g key={p.i + part} transform={"translate(" + p.x.toFixed(2) + " " + p.y.toFixed(2) + ") scale(" + (p.scale * p.flip).toFixed(4) + " " + p.scale.toFixed(4) + ")"}>
+    <g
+      key={p.i + part}
+      transform={
+        "translate(" +
+        p.x.toFixed(2) +
+        " " +
+        p.y.toFixed(2) +
+        ") scale(" +
+        (p.scale * p.flip).toFixed(4) +
+        " " +
+        p.scale.toFixed(4) +
+        ")"
+      }
+    >
       <g className={"dcf-arrive dcf-arrive-" + p.seat} style={{ "--d": tl.member(p.i) + "ms" } as React.CSSProperties}>
         <g className={"dcf-hopper" + (hopping === p.i ? " is-hop" : "")}>
           <g className={"dcf-art" + (p.art.idle ? " " + p.art.idle : "")} style={{ "--i": p.i } as React.CSSProperties}>
@@ -1110,19 +1242,29 @@ export function DoodleCrewFooter({
                 {p.art.body(hatch)}
                 {p.art.eyes.map((eye, e) => (
                   <g
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list drawn in order; it is never reordered or filtered, so the position is the identity
                     key={e}
                     ref={(el) => {
-                      ;(eyeRefs.current[p.i] ||= [])[e] = { ...(eyeRefs.current[p.i]?.[e] || { pupil: null }), blink: el }
+                      const row = eyeRefs.current[p.i] ?? [];
+                      eyeRefs.current[p.i] = row;
+                      row[e] = { ...(row[e] || { pupil: null }), blink: el };
                     }}
                   >
                     {eye.r > 0 && <circle cx={eye.x} cy={eye.y} r={eye.r} />}
                     <g
                       ref={(el) => {
-                        ;(eyeRefs.current[p.i] ||= [])[e] = { ...(eyeRefs.current[p.i]?.[e] || { blink: null }), pupil: el }
+                        const row = eyeRefs.current[p.i] ?? [];
+                        eyeRefs.current[p.i] = row;
+                        row[e] = { ...(row[e] || { blink: null }), pupil: el };
                       }}
                     >
                       <circle className="k" cx={eye.x} cy={eye.y} r={eye.pupil} />
-                      <circle className="dcf-glint" cx={eye.x + eye.pupil * 0.35} cy={eye.y - eye.pupil * 0.4} r={eye.pupil * 0.32} />
+                      <circle
+                        className="dcf-glint"
+                        cx={eye.x + eye.pupil * 0.35}
+                        cy={eye.y - eye.pupil * 0.4}
+                        r={eye.pupil * 0.32}
+                      />
                     </g>
                   </g>
                 ))}
@@ -1134,7 +1276,7 @@ export function DoodleCrewFooter({
         </g>
       </g>
     </g>
-  )
+  );
 
   return (
     <footer
@@ -1153,7 +1295,7 @@ export function DoodleCrewFooter({
       <div className="dcf-top dcf-rise" style={{ "--d": "0ms" } as React.CSSProperties}>
         <div className="dcf-brand">
           <span className="dcf-logo" aria-hidden="true">
-            <svg viewBox="-60 -150 120 120" width="30" height="30">
+            <svg viewBox="-60 -150 120 120" width="30" height="30" aria-hidden="true">
               <g className="dcf-art">
                 <path d="M-30 -104 C-40 -112 -44 -124 -40 -138 C-32 -129 -22 -122 -13 -114 Z" />
                 <path d="M18 -114 C26 -124 36 -130 47 -133 C45 -120 41 -110 32 -101 Z" />
@@ -1174,6 +1316,7 @@ export function DoodleCrewFooter({
                 <h3 className="dcf-coltitle">{col.title}</h3>
                 <ul>
                   {col.links.map((l, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list drawn in order; it is never reordered or filtered, so the position is the identity
                     <li key={(l.href || l.label) + ":" + i}>
                       <Link link={l} className="dcf-link" />
                     </li>
@@ -1188,6 +1331,7 @@ export function DoodleCrewFooter({
       <div className="dcf-world" ref={worldRef}>
         <div className="dcf-stage">
           <h2 className="dcf-sr">{wordmark}</h2>
+          {/* biome-ignore lint/a11y/useSemanticElements: an svg cannot be a fieldset; the group role labels the drawing */}
           <svg
             ref={svgRef}
             className="dcf-svg"
@@ -1197,7 +1341,13 @@ export function DoodleCrewFooter({
             aria-label={wordmark + " — meet the crew"}
           >
             <defs>
-              <pattern id={uid + "-hatch"} width="4.6" height="4.6" patternUnits="userSpaceOnUse" patternTransform="rotate(38)">
+              <pattern
+                id={uid + "-hatch"}
+                width="4.6"
+                height="4.6"
+                patternUnits="userSpaceOnUse"
+                patternTransform="rotate(38)"
+              >
                 <line x1="0" y1="0" x2="0" y2="4.6" style={{ stroke: "var(--dcf-ink)" }} strokeWidth="1.25" />
               </pattern>
               {[0, 1, 2].map((k) => (
@@ -1208,60 +1358,138 @@ export function DoodleCrewFooter({
               ))}
               <filter id={uid + "-ink"} x="-4%" y="-6%" width="108%" height="112%">
                 <feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="3" seed="11" result="edge" />
-                <feDisplacementMap in="SourceGraphic" in2="edge" scale="5" xChannelSelector="R" yChannelSelector="G" result="rough" />
+                <feDisplacementMap
+                  in="SourceGraphic"
+                  in2="edge"
+                  scale="5"
+                  xChannelSelector="R"
+                  yChannelSelector="G"
+                  result="rough"
+                />
                 <feTurbulence type="fractalNoise" baseFrequency="0.018 0.32" numOctaves="2" seed="4" result="streak" />
-                <feColorMatrix in="streak" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -16 5.6" result="streakA" />
+                <feColorMatrix
+                  in="streak"
+                  type="matrix"
+                  values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -16 5.6"
+                  result="streakA"
+                />
                 <feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="1" seed="9" result="speck" />
-                <feColorMatrix in="speck" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -24 7.0" result="speckA" />
-                <feComposite in="streakA" in2="speckA" operator="arithmetic" k1="0" k2="1" k3="1" k4="0" result="holes" />
+                <feColorMatrix
+                  in="speck"
+                  type="matrix"
+                  values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -24 7.0"
+                  result="speckA"
+                />
+                <feComposite
+                  in="streakA"
+                  in2="speckA"
+                  operator="arithmetic"
+                  k1="0"
+                  k2="1"
+                  k3="1"
+                  k4="0"
+                  result="holes"
+                />
                 <feComposite in="rough" in2="holes" operator="out" />
               </filter>
             </defs>
 
-            <g ref={(el) => void (crewLayerRefs.current[0] = el)}>
+            <g
+              ref={(el) => {
+                crewLayerRefs.current[0] = el;
+              }}
+            >
               <g className="dcf-ground">
-                <path className="dcf-draw" pathLength={1} d={ground.d} style={{ "--d": tl.ground + "ms" } as React.CSSProperties} />
-                <path className="dcf-tufts dcf-fade" d={ground.tufts} style={{ "--d": tl.ground + 500 + "ms" } as React.CSSProperties} />
+                <path
+                  className="dcf-draw"
+                  pathLength={1}
+                  d={ground.d}
+                  style={{ "--d": tl.ground + "ms" } as React.CSSProperties}
+                />
+                <path
+                  className="dcf-tufts dcf-fade"
+                  d={ground.tufts}
+                  style={{ "--d": tl.ground + 500 + "ms" } as React.CSSProperties}
+                />
                 {ground.pebbles.map((pb, k) => (
-                  <ellipse key={k} className="dcf-pebble dcf-fade" cx={pb.x} cy={pb.y} rx={pb.r * 1.5} ry={pb.r} style={{ "--d": tl.ground + 600 + "ms" } as React.CSSProperties} />
+                  <ellipse
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list drawn in order; it is never reordered or filtered, so the position is the identity
+                    key={k}
+                    className="dcf-pebble dcf-fade"
+                    cx={pb.x}
+                    cy={pb.y}
+                    rx={pb.r * 1.5}
+                    ry={pb.r}
+                    style={{ "--d": tl.ground + 600 + "ms" } as React.CSSProperties}
+                  />
                 ))}
               </g>
               {placed.filter((p) => p.seat === "behind").map((p) => renderCrew(p, "body"))}
             </g>
 
             {chars.map((c, i) => {
-              if (c === " ") return null
-              const xi = layout.x[i] ?? 0
-              const wi = layout.w[i] ?? 0
+              if (c === " ") return null;
+              const xi = layout.x[i] ?? 0;
+              const wi = layout.w[i] ?? 0;
               return (
-                <g key={i} className="dcf-letter" style={{ "--d": tl.letter(i) + "ms", "--r": ((hash(i * 2.3) - 0.5) * 9).toFixed(2) + "deg" } as React.CSSProperties}>
+                <g
+                  // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list drawn in order; it is never reordered or filtered, so the position is the identity
+                  key={i}
+                  className="dcf-letter"
+                  style={
+                    {
+                      "--d": tl.letter(i) + "ms",
+                      "--r": ((hash(i * 2.3) - 0.5) * 9).toFixed(2) + "deg",
+                    } as React.CSSProperties
+                  }
+                >
                   <g className="dcf-glyph">
-                    <text x={xi} y={0} fontSize={FONT_SIZE} fontWeight={900} style={{ fontFamily }} filter={"url(#" + uid + "-ink)"}>
+                    <text
+                      x={xi}
+                      y={0}
+                      fontSize={FONT_SIZE}
+                      fontWeight={900}
+                      style={{ fontFamily }}
+                      filter={"url(#" + uid + "-ink)"}
+                    >
                       {c}
                     </text>
                   </g>
                   <path
                     className="dcf-dust"
                     d={
-                      "M" + (xi - 6) + " -6 l-16 -6 M" + (xi - 4) + " -16 l-12 -12 M" + (xi + wi + 6) + " -6 l16 -6 M" + (xi + wi + 4) + " -16 l12 -12"
+                      "M" +
+                      (xi - 6) +
+                      " -6 l-16 -6 M" +
+                      (xi - 4) +
+                      " -16 l-12 -12 M" +
+                      (xi + wi + 6) +
+                      " -6 l16 -6 M" +
+                      (xi + wi + 4) +
+                      " -16 l12 -12"
                     }
                   />
                 </g>
-              )
+              );
             })}
 
-            <g ref={(el) => void (crewLayerRefs.current[1] = el)}>
+            <g
+              ref={(el) => {
+                crewLayerRefs.current[1] = el;
+              }}
+            >
               {placed.filter((p) => p.seat === "behind").map((p) => renderCrew(p, "front"))}
               {placed.filter((p) => p.seat !== "behind").map((p) => renderCrew(p, "body"))}
             </g>
 
             {interactive &&
               placed.map((p) => {
-                const bl = p.flip > 0 ? p.art.box.l : -p.art.box.r
-                const br = p.flip > 0 ? p.art.box.r : -p.art.box.l
-                const top = p.seat === "behind" ? p.art.box.t : p.art.box.t
-                const bottom = p.seat === "behind" ? -30 : p.art.box.b
+                const bl = p.flip > 0 ? p.art.box.l : -p.art.box.r;
+                const br = p.flip > 0 ? p.art.box.r : -p.art.box.l;
+                const top = p.seat === "behind" ? p.art.box.t : p.art.box.t;
+                const bottom = p.seat === "behind" ? -30 : p.art.box.b;
                 return (
+                  // biome-ignore lint/a11y/useSemanticElements: a shape inside an svg cannot be a button element; it takes focus and keys itself
                   <rect
                     key={"hit" + p.i}
                     className="dcf-hit"
@@ -1276,12 +1504,12 @@ export function DoodleCrewFooter({
                     onClick={() => poke(p.i)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault()
-                        poke(p.i)
+                        e.preventDefault();
+                        poke(p.i);
                       }
                     }}
                   />
-                )
+                );
               })}
           </svg>
 
@@ -1304,14 +1532,17 @@ export function DoodleCrewFooter({
           <div className="dcf-doodles" aria-hidden="true">
             {doodleList.map((d, k) => (
               <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list drawn in order; it is never reordered or filtered, so the position is the identity
                 key={k}
                 className="dcf-doodle"
-                ref={(el) => void (doodleRefs.current[k] = el)}
+                ref={(el) => {
+                  doodleRefs.current[k] = el;
+                }}
                 style={{ width: d.size, height: d.size, marginLeft: -d.size / 2, marginTop: -d.size / 2 }}
                 onPointerDown={() => popDoodle(k)}
               >
                 <span className="dcf-doodle-in" style={{ "--d": tl.doodles + k * 70 + "ms" } as React.CSSProperties}>
-                  <svg viewBox="-16 -16 32 32" width={d.size} height={d.size}>
+                  <svg viewBox="-16 -16 32 32" width={d.size} height={d.size} aria-hidden="true">
                     <Doodle kind={d.kind} />
                   </svg>
                 </span>
@@ -1323,6 +1554,7 @@ export function DoodleCrewFooter({
         <div className="dcf-cta">
           <p className="dcf-tagline">
             {words.map((w, k) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list drawn in order; it is never reordered or filtered, so the position is the identity
               <span key={k} className="dcf-word" style={{ "--d": tl.word(k) + "ms" } as React.CSSProperties}>
                 {w}{" "}
               </span>
@@ -1336,9 +1568,9 @@ export function DoodleCrewFooter({
                     {a.icon && <DoodleIcon kind={a.icon} />}
                     <span>{a.label}</span>
                   </>
-                )
-                const cls = "dcf-btn dcf-pop " + (a.variant === "outline" ? "is-outline" : "is-solid")
-                const st = { "--d": tl.action(k) + "ms" } as React.CSSProperties
+                );
+                const cls = "dcf-btn dcf-pop " + (a.variant === "outline" ? "is-outline" : "is-solid");
+                const st = { "--d": tl.action(k) + "ms" } as React.CSSProperties;
                 return a.href ? (
                   <a key={a.label} className={cls} style={st} href={a.href} onClick={a.onClick}>
                     {inner}
@@ -1347,7 +1579,7 @@ export function DoodleCrewFooter({
                   <button key={a.label} type="button" className={cls} style={st} onClick={a.onClick}>
                     {inner}
                   </button>
-                )
+                );
               })}
             </div>
           )}
@@ -1356,9 +1588,10 @@ export function DoodleCrewFooter({
 
       <div className="dcf-bar dcf-rise" style={{ "--d": "120ms" } as React.CSSProperties}>
         <p className="dcf-copy">{copyright}</p>
-          {legal.length > 0 && (
+        {legal.length > 0 && (
           <ul className="dcf-inline">
             {legal.map((l, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list drawn in order; it is never reordered or filtered, so the position is the identity
               <li key={"legal:" + (l.href || l.label) + ":" + i}>
                 <Link link={l} className="dcf-link" />
               </li>
@@ -1369,6 +1602,7 @@ export function DoodleCrewFooter({
         {socials.length > 0 && (
           <ul className="dcf-inline dcf-socials">
             {socials.map((l, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list drawn in order; it is never reordered or filtered, so the position is the identity
               <li key={"social:" + (l.href || l.label) + ":" + i}>
                 <Link link={l} className="dcf-link" />
               </li>
@@ -1385,10 +1619,10 @@ export function DoodleCrewFooter({
         )}
       </div>
     </footer>
-  )
+  );
 }
 
-export default DoodleCrewFooter
+export default DoodleCrewFooter;
 
 const CSS =
   ".dcf{position:relative;isolation:isolate;overflow:hidden;overflow:clip;width:100%;box-sizing:border-box;display:flex;flex-direction:column;background:var(--dcf-bg);color:var(--dcf-ink);font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Inter,Roboto,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;--dcf-soft:color-mix(in oklab,var(--dcf-ink) 62%,var(--dcf-bg));--dcf-line:color-mix(in oklab,var(--dcf-ink) 14%,var(--dcf-bg));--dcf-pad:clamp(16px,4vw,56px)}" +
@@ -1520,4 +1754,4 @@ const CSS =
   "@keyframes dcf-up{0%,100%{transform:none}50%{transform:translateY(-3px)}}" +
   "@media (max-width:860px){.dcf-top{grid-template-columns:1fr;grid-template-rows:auto}.dcf-brand,.dcf-blurb,.dcf-cols{grid-column:1;grid-row:auto}.dcf-cols{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:14px;row-gap:22px}.dcf-copy{width:100%;margin-right:0}}" +
   "@media (max-width:480px){.dcf-btn{height:42px;font-size:13.5px;padding:0 16px 0 13px}.dcf-bubble{font-size:12px;padding:6px 10px}.dcf-totop span{display:none}}" +
-  "@media (prefers-reduced-motion:reduce){.dcf *,.dcf *::before,.dcf *::after{animation:none!important;transition:none!important}.dcf .dcf-letter,.dcf .dcf-arrive,.dcf .dcf-word,.dcf .dcf-pop,.dcf .dcf-rise,.dcf .dcf-fade,.dcf .dcf-doodle-in{opacity:1!important}.dcf .dcf-draw{stroke-dashoffset:0!important}.dcf .dcf-dust{opacity:0!important}}"
+  "@media (prefers-reduced-motion:reduce){.dcf *,.dcf *::before,.dcf *::after{animation:none!important;transition:none!important}.dcf .dcf-letter,.dcf .dcf-arrive,.dcf .dcf-word,.dcf .dcf-pop,.dcf .dcf-rise,.dcf .dcf-fade,.dcf .dcf-doodle-in{opacity:1!important}.dcf .dcf-draw{stroke-dashoffset:0!important}.dcf .dcf-dust{opacity:0!important}}";

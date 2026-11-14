@@ -2,12 +2,12 @@
 // Reactive ASCII model-family logo for the duel dock / audit drawer.
 import { useEffect, useState } from "react";
 import {
+  type LogoSignal,
+  type LogoState,
   logoStateOf,
   logoTimerOf,
   modelFamilyOf,
   renderLogoGrid,
-  type LogoSignal,
-  type LogoState,
 } from "../../assets/ocean/ascii-model-logo";
 import { useReducedMotion } from "../trace-view";
 
@@ -57,6 +57,7 @@ export function AsciiModelLogo({ modelId, label, signal, className }: AsciiModel
   return (
     <pre
       className={`ascii-model-logo ${STATE_CLASS[state]}${className ? ` ${className}` : ""}`}
+      role="img"
       aria-label={aria}
       title={aria}
       data-state={state}

@@ -3,7 +3,7 @@
 // Choreography only — no network, no model ids. Shapes/ramp/noise in app/assets/ocean.
 import { useEffect, useRef } from "react";
 import { useReducedMotion } from "../trace-view";
-import { actorsAt, paintField, type Pointer } from "./field-paint";
+import { actorsAt, type Pointer, paintField } from "./field-paint";
 
 const LOOP_S = 8;
 

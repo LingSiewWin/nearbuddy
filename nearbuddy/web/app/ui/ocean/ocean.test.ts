@@ -2,22 +2,22 @@ import { expect, test } from "bun:test";
 import {
   FAUNA_CAPS,
   FAUNA_CAPS_CALM,
+  forceApexEntrance,
   GLYPHS,
   MOSAIC_RAMP,
-  TIERS,
-  forceApexEntrance,
   mayEat,
   mosaicGlyph,
   ribbonDensity,
   samplePrey,
   sampleReef,
   sampleShark,
+  TIERS,
+  type TierId,
   tierOf,
   wilson,
-  type TierId,
 } from "../../assets/ocean";
-import { actorsAt } from "./field-paint";
-import { eatVerdict } from "./eat";
+import { catalogFromBoard } from "../../assets/ocean/catalog";
+import { ASCII_RAMP, allocBuffers, CELL_SIZE, gaussianCount, rasterizeOceanField } from "../../assets/ocean/gaussian3d";
 import {
   ArenaSimulation,
   multiplierOf,
@@ -25,14 +25,8 @@ import {
   shortModelLabel,
   tickFromRecent,
 } from "../../assets/ocean/simulation";
-import { catalogFromBoard } from "../../assets/ocean/catalog";
-import {
-  allocBuffers,
-  rasterizeOceanField,
-  CELL_SIZE,
-  ASCII_RAMP,
-  gaussianCount,
-} from "../../assets/ocean/gaussian3d";
+import { eatVerdict } from "./eat";
+import { actorsAt } from "./field-paint";
 
 const BOARD = [
   { model: "z-ai/glm-5.3-flash", tested: 22, fooled: 5 },

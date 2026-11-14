@@ -22,9 +22,7 @@ export const FOOT: Record<"play" | "proof" | "build" | "project", NavLink[]> = {
     { href: "/board", label: "Scoreboard" },
     { href: "/evidence", label: "Evidence" },
   ],
-  build: [
-    { href: "/agents", label: "Agents / MCP" },
-  ],
+  build: [{ href: "/agents", label: "Agents / MCP" }],
   project: [{ href: "/terminal", label: "Terminal" }],
 };
 

@@ -1,7 +1,7 @@
 // Model catalog for the duel dock — seeded only from board.json rows.
 import type { ModelSpec } from "./arena-types";
+import { type BoardModelRow, shortModelLabel } from "./simulation";
 import { heldOf, rateOf } from "./tiers";
-import { shortModelLabel, type BoardModelRow } from "./simulation";
 
 /** Build the selectable catalog from real board models. No fictional NEAR AI ids. */
 export function catalogFromBoard(models: BoardModelRow[]): ModelSpec[] {

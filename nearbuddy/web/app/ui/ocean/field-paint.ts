@@ -1,14 +1,8 @@
 // Architectural ASCII mosaic: light grid + density tiles; sharks/prey carved from the field.
-import {
-  accentRgb,
-  cellFill,
-  cellHash,
-  cellInk,
-  mosaicGlyph,
-  MOSAIC,
-} from "../../assets/ocean/ramp";
+
 import { ribbonDensity } from "../../assets/ocean/noise";
-import { samplePrey, sampleShark, toLocal, type Part } from "../../assets/ocean/shapes";
+import { accentRgb, cellFill, cellHash, cellInk, MOSAIC, mosaicGlyph } from "../../assets/ocean/ramp";
+import { type Part, samplePrey, sampleShark, toLocal } from "../../assets/ocean/shapes";
 
 export type FieldActor =
   | { kind: "shark"; x: number; y: number; length: number; heading: number; phase: number; depth: number }

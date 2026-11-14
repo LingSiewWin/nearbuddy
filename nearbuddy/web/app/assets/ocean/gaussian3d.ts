@@ -3,7 +3,7 @@
 // Ambient fauna (school / roamers) stamp as 2D silhouettes for FPS; duelists stay Gaussian.
 import type { CreatureBody, PredationRipple } from "./arena-types";
 import type { AmbientCreature } from "./fauna";
-import { samplePrey, sampleShark, type Part } from "./shapes";
+import { type Part, samplePrey, sampleShark } from "./shapes";
 import type { TierId } from "./tiers";
 
 export const CELL_SIZE = 10;
@@ -24,17 +24,71 @@ type SpeciesParams = {
 function speciesParams(tier: TierId): SpeciesParams {
   switch (tier) {
     case "shrimp":
-      return { length: 96, maxRad: 16, rings: 9, ringSamples: 5, hammerhead: false, bigFins: false, skipBodyFins: true, tailAmp: 9 };
+      return {
+        length: 96,
+        maxRad: 16,
+        rings: 9,
+        ringSamples: 5,
+        hammerhead: false,
+        bigFins: false,
+        skipBodyFins: true,
+        tailAmp: 9,
+      };
     case "crab":
-      return { length: 140, maxRad: 22, rings: 12, ringSamples: 7, hammerhead: false, bigFins: false, skipBodyFins: true, tailAmp: 12 };
+      return {
+        length: 140,
+        maxRad: 22,
+        rings: 12,
+        ringSamples: 7,
+        hammerhead: false,
+        bigFins: false,
+        skipBodyFins: true,
+        tailAmp: 12,
+      };
     case "fish":
-      return { length: 200, maxRad: 28, rings: 16, ringSamples: 8, hammerhead: false, bigFins: false, skipBodyFins: false, tailAmp: 18 };
+      return {
+        length: 200,
+        maxRad: 28,
+        rings: 16,
+        ringSamples: 8,
+        hammerhead: false,
+        bigFins: false,
+        skipBodyFins: false,
+        tailAmp: 18,
+      };
     case "dolphin":
-      return { length: 270, maxRad: 36, rings: 20, ringSamples: 9, hammerhead: false, bigFins: true, skipBodyFins: false, tailAmp: 26 };
+      return {
+        length: 270,
+        maxRad: 36,
+        rings: 20,
+        ringSamples: 9,
+        hammerhead: false,
+        bigFins: true,
+        skipBodyFins: false,
+        tailAmp: 26,
+      };
     case "shark":
-      return { length: 360, maxRad: 48, rings: 24, ringSamples: 9, hammerhead: true, bigFins: true, skipBodyFins: false, tailAmp: 34 };
+      return {
+        length: 360,
+        maxRad: 48,
+        rings: 24,
+        ringSamples: 9,
+        hammerhead: true,
+        bigFins: true,
+        skipBodyFins: false,
+        tailAmp: 34,
+      };
     case "megalodon":
-      return { length: 520, maxRad: 74, rings: 28, ringSamples: 10, hammerhead: false, bigFins: true, skipBodyFins: false, tailAmp: 48 };
+      return {
+        length: 520,
+        maxRad: 74,
+        rings: 28,
+        ringSamples: 10,
+        hammerhead: false,
+        bigFins: true,
+        skipBodyFins: false,
+        tailAmp: 48,
+      };
   }
 }
 
@@ -206,8 +260,8 @@ function getSpeciesGaussians(tier: TierId): GaussianPrimitive[] {
   for (let i = 0; i <= rings; i++) {
     const s = i / rings;
     let profile: number;
-    if (s < 0.24) profile = Math.pow(Math.sin((s / 0.24) * (Math.PI * 0.5)), 0.72);
-    else if (s < 0.84) profile = 1 - 0.84 * Math.pow((s - 0.24) / 0.6, 1.15);
+    if (s < 0.24) profile = Math.sin((s / 0.24) * (Math.PI * 0.5)) ** 0.72;
+    else if (s < 0.84) profile = 1 - 0.84 * ((s - 0.24) / 0.6) ** 1.15;
     else profile = 0.16;
 
     const rLat = maxRad * profile * (isHammerhead && s < 0.12 ? 1.25 : 0.92);
@@ -454,7 +508,7 @@ export function rasterizeOceanField(
 
     for (let gIdx = 0; gIdx < gaussians.length; gIdx++) {
       const g = gaussians[gIdx]!;
-      const swimWave = Math.sin(c.swimPhase - g.s * 6.4) * tailAmp * Math.pow(g.s, 1.45);
+      const swimWave = Math.sin(c.swimPhase - g.s * 6.4) * tailAmp * g.s ** 1.45;
       const localFwd = -g.s * spineLen + g.scatterX * dispersion * 65;
       const localLat = g.lat + swimWave + g.scatterZ * dispersion * 75;
       const localVert = g.vert + g.scatterY * dispersion * 65;
