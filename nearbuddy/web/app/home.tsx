@@ -9,7 +9,8 @@ import board from "./data/board.json";
 import { NETWORK_ID } from "./network";
 import { useSite } from "./ui/chrome";
 import { type DuelRow, duelPath, type History, traceOf, useDuel, usePrice, verifyHref } from "./ui/data";
-import { bet, near, nsMs, shortModel, TEST_NOTE } from "./ui/format";
+import { bet, near, nsMs, shortModel } from "./ui/format";
+import { Carousel } from "./ui/hero";
 import { Panel, Readout, Strip, Tag } from "./ui/instruments";
 import { Button, Countdown, Details, LinkButton, StatusBar, useNow } from "./ui/kit";
 import { PracticePanel } from "./ui/practice";
@@ -17,6 +18,7 @@ import { RECORDED } from "./ui/replay";
 import { MachineQuote } from "./ui/result";
 import { BetTag, ChecksPanel, PricePanel, ReplayActions, ReplayRoom, Stage } from "./ui/room";
 import { isRunning } from "./ui/rows";
+import { TileField } from "./ui/tiles-view";
 import { recordTrace, type TraceIn } from "./ui/trace";
 import { Trace } from "./ui/trace-view";
 import { pickLive } from "./ui/verdict";
@@ -123,9 +125,9 @@ function LiveRoom({ shown, now, onReplay }: { shown: Shown; now: number; onRepla
           source="Line: this browser's own readings since the page opened."
           stale={price.stale}
         />
-        <Panel label="Cost to plant a headline" tag={<Tag>test NEAR</Tag>}>
+        <Panel label="Cost to plant a headline">
           <Readout value={d?.chaos_fee ? near(d.chaos_fee).replace(" NEAR", "") : "—"} unit="NEAR" />
-          <p className="note">{`The price of the next headline in this duel. ${NETWORK_ID === "testnet" ? `${TEST_NOTE}.` : ""}`}</p>
+          <p className="note">The price of the next headline in this duel.</p>
         </Panel>
         <ChecksPanel counts={null} href={verifyHref(row.id, row.arena)} />
       </div>
@@ -147,48 +149,26 @@ function Findings() {
     <section aria-label="What has been measured">
       <div className="sect-head">
         <h2 className="t-label">Measured</h2>
-        <a href="/evidence">The research, with its captions →</a>
+        <a href="/evidence">All the research →</a>
       </div>
-      <div className="deck c4">
-        <Panel label="Lab · naive prompt" tag={<Tag kind="alert">fooled</Tag>}>
+      <div className="deck c3">
+        <Panel label="Unguarded model" tag={<Tag kind="alert">fooled</Tag>}>
           <Readout value="676" unit="of 704 changed their bet" />
           <Strip n={676} of={704} kind="alert" label="Fooled 676 of 704" />
-          <p className="note">One fake headline with its credibility cues. With the cues removed: 674 of 704.</p>
+          <p className="note">
+            One fake headline, a prompt with no warning. With the credibility cues removed: 674 of 704.
+          </p>
         </Panel>
-        <Panel label="Lab · hardened prompt" tag={<Tag kind="ink">mostly held</Tag>}>
+        <Panel label="Guarded model" tag={<Tag kind="ink">mostly held</Tag>}>
           <Readout value="49" unit="of 705 changed their bet" />
           <Strip n={49} of={705} kind="alert" label="Fooled 49 of 705" />
           <p className="note">The same headlines against a prompt told to ignore unsourced claims.</p>
         </Panel>
-        <Panel label="Lab · neutral line instead" tag={<Tag>baseline</Tag>}>
-          <Readout value="128" unit="of 707 changed their bet" />
-          <Strip n={128} of={707} kind="ink" label="Changed 128 of 707" />
-          <p className="note">Naive prompt, a neutral line in the headline's place. Hardened: 58 of 713.</p>
-        </Panel>
-        <Panel label="Lab · no attack at all" tag={<Tag>noise</Tag>}>
-          <Readout value="5" unit="of 45 prompts changed side" />
-          <Strip n={5} of={45} cells={45} kind="ink" label="Changed 5 of 45" />
-          <p className="note">The same prompts run again. One result is one result.</p>
-        </Panel>
-        <Panel label="Lab · honest market shown" tag={<Tag kind="ink">about half</Tag>}>
-          <Readout value="46% and 47%" unit="fooled, 36 trials per cell" />
-          <Strip n={47} of={100} cells={36} kind="alert" label="About 47% fooled with an honest market price shown" />
-          <p className="note">Against about 100% with the fake claim alone, in the same run.</p>
-        </Panel>
-        <Panel label="Lab · model may look" tag={<Tag>range</Tag>}>
-          <Readout value="29% to 40%" unit="fooled" />
-          <p className="note">When the model was allowed to choose to look at an honest market.</p>
-        </Panel>
-        <Panel label="Live attacks" tag={<Tag kind="live">live</Tag>}>
-          <Readout value="12" unit="fooled of 23 that reached a decision" />
-          <Strip n={12} of={23} cells={23} kind="alert" label="Fooled 12 of 23; 11 held" />
-          <p className="note">58 placed, 23 reached a decision, 11 held. All placed by the project's own accounts.</p>
-        </Panel>
         <Panel label="Records" tag={<Tag kind="ok">signed</Tag>}>
-          <Readout value="9,297" unit="enclave-signed calls, main lab run" />
-          <Readout value={board.rows.toLocaleString("en-US")} unit="recorded decisions in the dataset" />
+          <Readout value="9,297" unit="enclave-signed calls in the lab run" />
+          <Readout value={board.rows.toLocaleString("en-US")} unit="decisions in the dataset" />
           <a className="btn-link" href="/board">
-            See every recorded decision
+            See every decision
           </a>
         </Panel>
       </div>
@@ -208,62 +188,79 @@ export default function Home({ practice }: { practice: boolean }) {
   const last = rows.find((r) => r.resolved && !r.cancelled) ?? null;
   return (
     <div className="page home">
-      <header className="page-head">
-        <h1 className="t-display">Lie to an AI.</h1>
-        {shown ? (
-          <Tag kind="ok">
-            live · ends in <Countdown to={nsMs(shown.row.close_at)} now={now} stale={list.stale} />
-          </Tag>
-        ) : list.data && now ? (
-          <Tag>no duel running</Tag>
-        ) : list.error ? (
-          <Tag kind="live">arena not read</Tag>
-        ) : (
-          <Tag>reading the arena</Tag>
-        )}
-        <p className="lede">
-          Plant one fake headline at an AI trading agent and see if it changes its bet. <a href="#how">How it works</a>
-        </p>
-      </header>
-
-      {/* on a phone with no live duel the practice round is shown above the recording (CSS order), so the page's
-          main action is near the top; on desktop it sits directly under the centre */}
-      <div className={`home-main${shown ? "" : " practice-first"}`}>
-        {shown && !replay ? (
-          <LiveRoom
-            key={`${shown.row.arena}:${shown.row.id}`}
-            shown={shown}
-            now={now}
-            onReplay={() => setReplay(true)}
-          />
-        ) : (
-          <ReplayRoom
-            quiet
-            rec={RECORDED}
-            lead={({ restart }) =>
-              shown ? (
-                <>
-                  <ReplayActions rec={RECORDED} restart={restart} />
-                  <button type="button" className="btn btn-quiet" onClick={() => setReplay(false)}>
-                    Back to the live duel
-                  </button>
-                </>
-              ) : (
-                <p className="note">
-                  {list.data
-                    ? "No duel is running, so this is a recording of a real attack."
-                    : list.error
-                      ? "The arena could not be read just now. This is a recording of a real attack."
-                      : "Reading the arena. Meanwhile, this is a recording of a real attack."}
+      <TileField />
+      <Carousel
+        label="What you can do here"
+        slides={[
+          {
+            label: "The game",
+            node: (go) => (
+              <div className="hero-copy">
+                {shown ? (
+                  <Tag kind="ok">
+                    live · ends in <Countdown to={nsMs(shown.row.close_at)} now={now} stale={list.stale} />
+                  </Tag>
+                ) : null}
+                <h1 className="hero-title">Lie to an AI.</h1>
+                <p className="hero-lede">
+                  Plant one fake headline at an AI trading agent and see if it changes its bet. Every decision is signed
+                  inside a secure enclave and checked on chain.
                 </p>
-              )
-            }
-          />
-        )}
-        <PracticePanel enabled={practice} second={!!shown} />
-      </div>
-
-      <Findings />
+                <div className="hero-actions">
+                  <Button variant="attack" fit onClick={() => go(2)}>
+                    Try to fool one now
+                  </Button>
+                  <Button fit onClick={() => go(1)}>
+                    {shown ? "Watch the live duel" : "Watch one get fooled"}
+                  </Button>
+                </div>
+                <dl className="hero-facts">
+                  <div>
+                    <dt>Unguarded model</dt>
+                    <dd>fooled 676 of 704</dd>
+                  </div>
+                  <div>
+                    <dt>Guarded model</dt>
+                    <dd>fooled 49 of 705</dd>
+                  </div>
+                  <div>
+                    <dt>Signed decisions on record</dt>
+                    <dd>{board.rows.toLocaleString("en-US")}</dd>
+                  </div>
+                </dl>
+              </div>
+            ),
+          },
+          {
+            label: shown && !replay ? "Live duel" : `Duel #${RECORDED.id}`,
+            node: () =>
+              shown && !replay ? (
+                <LiveRoom
+                  key={`${shown.row.arena}:${shown.row.id}`}
+                  shown={shown}
+                  now={now}
+                  onReplay={() => setReplay(true)}
+                />
+              ) : (
+                <ReplayRoom
+                  quiet
+                  rec={RECORDED}
+                  lead={({ restart }) =>
+                    shown ? (
+                      <>
+                        <ReplayActions rec={RECORDED} restart={restart} />
+                        <button type="button" className="btn btn-quiet" onClick={() => setReplay(false)}>
+                          Back to the live duel
+                        </button>
+                      </>
+                    ) : null
+                  }
+                />
+              ),
+          },
+          { label: "Try it", node: () => <PracticePanel enabled={practice} second={!!shown} /> },
+        ]}
+      />
 
       <div id="how" className="deck c3 gap-top">
         <Panel label="How it works">
@@ -281,7 +278,7 @@ export default function Home({ practice }: { practice: boolean }) {
             ))}
           </ol>
         </Panel>
-        <Panel label="Recorded attacks" tag={<Tag>dataset</Tag>}>
+        <Panel label="Latest attacks" tag={<Tag>dataset</Tag>}>
           <ul className="attacks">
             {board.recent.slice(0, 5).map((r) => {
               const [word, kind] = WORD[r.verdict as keyof typeof WORD] ?? WORD.untested;
@@ -296,9 +293,6 @@ export default function Home({ practice }: { practice: boolean }) {
               );
             })}
           </ul>
-          <p className="note">
-            The newest attacks in the published dataset, scored by its own rule. All were made by the project.
-          </p>
           <a className="btn-link" href="/board">
             Compare the models
           </a>
@@ -313,13 +307,6 @@ export default function Home({ practice }: { practice: boolean }) {
             {last ? "Verify the last duel yourself" : "Verify the recorded duel yourself"}
           </a>
           <div>
-            <Details label="Is this real money?">
-              <p>
-                {NETWORK_ID === "testnet"
-                  ? "No. This runs on a test network: every amount is test NEAR, which has no real value."
-                  : "Yes. Amounts here are NEAR on the main network."}
-              </p>
-            </Details>
             <Details label="What happens to my money if the AI holds?">
               <p>
                 It keeps what your headline cost. If it is fooled you get your money back less a fee, plus a share of
@@ -340,12 +327,6 @@ export default function Home({ practice }: { practice: boolean }) {
                 could not be run, the Verify panel says so.
               </p>
             </Details>
-            <Details label="Who made the attacks so far?">
-              <p>
-                The team. Live attacks so far: 58 placed, 23 reached a decision (12 fooled, 11 held), all made by the
-                team.
-              </p>
-            </Details>
             <Details label="Can I enter my own agent?">
               <p>Yes. Lock a bond, give it a strategy, and let people try to fool it.</p>
               <LinkButton variant="quiet" href="/enter">
@@ -355,6 +336,7 @@ export default function Home({ practice }: { practice: boolean }) {
           </div>
         </Panel>
       </div>
+      <Findings />
     </div>
   );
 }
